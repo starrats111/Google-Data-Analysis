@@ -101,7 +101,6 @@ export async function syncUserCampaignStatuses(userId: bigint): Promise<SyncResu
           id: true,
           google_campaign_id: true,
           google_status: true,
-          status: true,
           customer_id: true,
           campaign_name: true,
         },
@@ -116,31 +115,18 @@ export async function syncUserCampaignStatuses(userId: bigint): Promise<SyncResu
 
         if (existing) {
           // 每次同步都更新 last_google_sync_at，确保时间戳准确反映最近同步时间
-          // D-040 修复（2026-05-28 12:55）：cron 同步 GAds → CRM 时，
-          //   同时反向写 `status` 字段，确保 CRM 内部「用户期望状态」与
-          //   GAds 实际状态一致。旧代码只刷 google_status 不刷 status，
-          //   导致 SSH 实证 9812 条 status != google_status 不一致。
-          //   映射规则：GAds 'PAUSED'/'REMOVED' → CRM 'paused'；'ENABLED' → 'active'。
-          //   除特殊 hotfix（如 wj11 8246/3810 用户已发起暂停但 GAds 失败的 case，
-          //   由 scripts/d040-hotfix-wj11-pause.ts 在部署后一次性 mutate 暂停修复）外，
-          //   始终以 GAds 真实状态为准。
-          const expectedStatus = s.status === "ENABLED" ? "active" : "paused";
           const statusChanged = existing.google_status !== s.status;
-          const internalStatusInconsistent = existing.status !== expectedStatus;
           const cidFilling = !existing.customer_id && s.customer_id;
           const updateData: Record<string, unknown> = {
             last_google_sync_at: new Date(),
           };
           if (statusChanged) updateData.google_status = s.status;
-          if (statusChanged || internalStatusInconsistent) {
-            updateData.status = expectedStatus;
-          }
           if (cidFilling) updateData.customer_id = s.customer_id;
           await prisma.campaigns.update({
             where: { id: existing.id },
             data: updateData,
           });
-          if (statusChanged || internalStatusInconsistent || cidFilling) {
+          if (statusChanged || cidFilling) {
             updated++;
           }
         } else {

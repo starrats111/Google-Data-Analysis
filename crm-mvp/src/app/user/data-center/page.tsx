@@ -155,23 +155,7 @@ export default function DataCenterPage() {
       const digits = head.replace(/^[a-zA-Z]+/, "");
       return /^\d+$/.test(digits) ? parseInt(digits, 10) : -1;
     };
-    const rawRows = campaignData?.rows || [];
-    // D-040 BUG-2 兜底防御（2026-05-28 12:55）：
-    //   07 反馈截图里 BRUNTWorkwear / TA3 同 campaign_name 被拆 2 行，DB+API 均确认
-    //   wj07 名下这两个 campaign 都只有 1 条记录、ads_daily_stats 也无 (campaign_id, date)
-    //   重复。但保险起见，前端在排序前先按 row.id 去重，杜绝任何后端 dedupe 漏网导致的
-    //   重复展示。如果未来发现确认是后端 bug，可移除此兜底改为 console.warn 上报。
-    const seenIds = new Set<string>();
-    const dedupedRows: IndexedRow[] = [];
-    for (const r of rawRows) {
-      if (seenIds.has(r.id)) {
-        console.warn(`[DataCenter] duplicate row detected id=${r.id} name=${r.campaign_name}`);
-        continue;
-      }
-      seenIds.add(r.id);
-      dedupedRows.push(r);
-    }
-    return dedupedRows
+    return (campaignData?.rows || [])
       .map((r: IndexedRow) => statusOverrides[r.id] ? { ...r, status: statusOverrides[r.id] } : r)
       .sort((a, b) => {
         if (a.status === "ENABLED" && b.status !== "ENABLED") return -1;

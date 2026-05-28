@@ -85,17 +85,9 @@ export async function POST(req: NextRequest) {
       console.error(`[CampaignToggle] D-029 反查失败 campaign_id=${campaign.id} mcc=${mcc.mcc_id} customer=${campaign.customer_id} err=${verifyError}`);
     }
 
-    // D-040 修复（2026-05-28 12:55）：toggle 成功后同时更新 CRM 内部 status 字段
-    //   旧代码只更新 google_status，导致 cron 反向同步时把 status 又改回去（race）；
-    //   新逻辑：mutate 验证成功 → 同时把 status 同步为相同方向，与 GAds 完全一致。
-    const newInternalStatus = confirmedStatus === "ENABLED" ? "active" : "paused";
     await prisma.campaigns.update({
       where: { id: campaign.id },
-      data: {
-        google_status: confirmedStatus,
-        status: newInternalStatus,
-        last_google_sync_at: new Date(),
-      },
+      data: { google_status: confirmedStatus, last_google_sync_at: new Date() },
     });
 
     const { syncMerchantStatusForUser } = await import("@/lib/campaign-merchant-link");
