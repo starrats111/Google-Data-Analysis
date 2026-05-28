@@ -11,6 +11,7 @@ import {
   AppstoreOutlined,
   SafetyCertificateOutlined,
   AuditOutlined,
+  RobotOutlined,
   GlobalOutlined,
 } from "@ant-design/icons";
 import { useRouter, usePathname } from "next/navigation";
@@ -48,6 +49,7 @@ const menuItems: MenuItem[] = [
       { key: "/admin/merchant-sheet", icon: <SafetyCertificateOutlined />, label: "商家黑名单" },
       { key: "/admin/policy-categories", icon: <AuditOutlined />, label: "政策类别管理" },
       { key: "/admin/policy-violations", icon: <AuditOutlined />, label: "Google Ads 政策违规" },
+      { key: "/admin/ai-profiles", icon: <RobotOutlined />, label: "AI 商家画像" },
     ],
   },
   {

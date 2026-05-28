@@ -7,6 +7,7 @@ import { PLATFORMS, BIDDING_STRATEGIES, ALL_COUNTRIES } from "@/lib/constants";
 import MerchantNameCell from "@/components/MerchantNameCell";
 import type { ConnectionAccount } from "@/components/MerchantNameCell";
 import AppPageHeader from "@/components/AppPageHeader";
+import AIProfileForm from "@/components/AIProfileForm";
 import { useApiWithParams, useStaleApi, useApi, mutateApi, refreshApi } from "@/lib/swr";
 import { useRouter, useSearchParams } from "next/navigation";
 import dayjs, { type Dayjs } from "dayjs";
@@ -542,6 +543,14 @@ export default function MerchantsPage() {
   const [mccAccounts, setMccAccounts] = useState<{ id: string; mcc_id: string; mcc_name: string }[]>([]);
   const [rModal, setRModal] = useState(false); const [rTitle, setRTitle] = useState(""); const [rContent, setRContent] = useState("");
   const [aiModalOpen, setAiModalOpen] = useState(false);
+  // D-046.A / C-109 商家智能画像 Modal
+  const [aiProfileModal, setAiProfileModal] = useState<{ open: boolean; merchantId: string }>({ open: false, merchantId: "" });
+  const openAiProfile = useCallback((m: Merchant) => {
+    setAiProfileModal({ open: true, merchantId: m.id });
+  }, []);
+  const closeAiProfile = useCallback(() => {
+    setAiProfileModal((p) => ({ ...p, open: false }));
+  }, []);
   // 人设库管理
   const [personaProfile, setPersonaProfile] = useState<AiRuleProfile | null>(null);
   const [personaTab, setPersonaTab] = useState<"library" | "new">("library");
@@ -810,8 +819,13 @@ export default function MerchantsPage() {
     { title: "ATC竞争度", width: 180, render: renderAtcCompetitionCol },
     { title: "在投人数", dataIndex: "active_advertisers", width: 90, align: "center" as const, render: (v: number, rec: Merchant) => { const n = v || 0; return n > 0 ? <Button size="small" type="link" style={{ padding: 0, fontWeight: 600 }} onClick={() => showActiveAdv(rec)}>{n} 人</Button> : <span style={{ color: "#bfbfbf" }}>0</span>; } },
     { title: "标签", width: 120, render: (_: unknown, rec: any) => { const labels = rec.labels || []; if (labels.length === 0) return <span style={{ color: "#ccc" }}>-</span>; return <Space size={4} wrap>{labels.map((l: any, i: number) => <Tooltip key={i} title={l.detail}><Tag color={l.color} style={{ cursor: "pointer" }}>{l.text}</Tag></Tooltip>)}</Space>; } },
-    { title: "操作", width: 100, render: (_: unknown, rec: Merchant) => <Popconfirm title="确认取消领取？" onConfirm={() => doRelease(rec.id)}><Button size="small" danger>取消领取</Button></Popconfirm> },
-  ], [doRelease, showActiveAdv, sortField, sortOrder, renderAtcCompetitionCol]);
+    { title: "操作", width: 170, render: (_: unknown, rec: Merchant) => (
+      <Space size={4}>
+        <Tooltip title="编辑商家智能画像（IntelliCenter）"><Button size="small" icon={<RobotOutlined />} onClick={() => openAiProfile(rec)}>AI 画像</Button></Tooltip>
+        <Popconfirm title="确认取消领取？" onConfirm={() => doRelease(rec.id)}><Button size="small" danger>取消领取</Button></Popconfirm>
+      </Space>
+    ) },
+  ], [doRelease, showActiveAdv, sortField, sortOrder, renderAtcCompetitionCol, openAiProfile]);
   const availCols = useMemo(() => [
     { title: "商家名称", dataIndex: "merchant_name", width: 280, sorter: true, sortOrder: colSortOrder("merchant_name"), render: (_: string, rec: Merchant) => {
       const hitRate = chargebackHitMap.get(`${rec.platform}-${rec.merchant_id}`);
@@ -836,8 +850,13 @@ export default function MerchantsPage() {
     { title: "ATC竞争度", width: 180, render: renderAtcCompetitionCol },
     { title: "在投人数", dataIndex: "active_advertisers", width: 90, align: "center" as const, render: (v: number, rec: Merchant) => { const n = v || 0; return n > 0 ? <Button size="small" type="link" style={{ padding: 0, fontWeight: 600 }} onClick={() => showActiveAdv(rec)}>{n} 人</Button> : <span style={{ color: "#bfbfbf" }}>0</span>; } },
     { title: "标签", width: 140, render: (_: unknown, rec: any) => { const labels = rec.labels || []; if (labels.length === 0) return <span style={{ color: "#ccc" }}>-</span>; return <Space size={4} wrap>{labels.map((l: any, i: number) => <Tooltip key={i} title={l.detail}><Tag color={l.color} style={{ cursor: "pointer" }}>{l.text}</Tag></Tooltip>)}</Space>; } },
-    { title: "操作", width: 100, render: (_: unknown, rec: Merchant) => rec.policy_status === "prohibited" ? <Button size="small" disabled>禁止领取</Button> : <Button type="primary" size="small" icon={<CheckOutlined />} onClick={() => doClaim(rec)}>{rec.policy_status === "restricted" ? "领取(限制)" : "领取"}</Button> },
-  ], [doClaim, showActiveAdv, sortField, sortOrder, chargebackHitMap, renderAtcCompetitionCol]);
+    { title: "操作", width: 170, render: (_: unknown, rec: Merchant) => (
+      <Space size={4}>
+        <Tooltip title="编辑商家智能画像（IntelliCenter）"><Button size="small" icon={<RobotOutlined />} onClick={() => openAiProfile(rec)}>AI 画像</Button></Tooltip>
+        {rec.policy_status === "prohibited" ? <Button size="small" disabled>禁止领取</Button> : <Button type="primary" size="small" icon={<CheckOutlined />} onClick={() => doClaim(rec)}>{rec.policy_status === "restricted" ? "领取(限制)" : "领取"}</Button>}
+      </Space>
+    ) },
+  ], [doClaim, showActiveAdv, sortField, sortOrder, chargebackHitMap, renderAtcCompetitionCol, openAiProfile]);
   // C-019 拒付商家 Tab 的列定义
   const chargebackCols = useMemo(() => [
     { title: "平台", dataIndex: "platform", width: 80, render: (v: string) => <Tag color={PC[v] || "default"} style={{ fontWeight: 600 }}>{v}</Tag> },
@@ -1622,5 +1641,13 @@ export default function MerchantsPage() {
         );
       })()}
     </Modal>
+    {/* D-046.A / C-109 商家智能画像 Modal */}
+    <AIProfileForm
+      merchantId={aiProfileModal.merchantId}
+      scope="user"
+      open={aiProfileModal.open}
+      onClose={closeAiProfile}
+      onSaved={() => refreshApi(/\/api\/user\/merchants/)}
+    />
   </div>);
 }
