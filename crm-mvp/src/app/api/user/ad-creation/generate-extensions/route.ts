@@ -19,7 +19,6 @@ import {
   sanitizeAdText,
 } from "@/lib/crawl-pipeline";
 import { buildCrawlKey, withCrawlInflightLock } from "@/lib/crawl-inflight-lock";
-import { isHostChallenged, getHostKey } from "@/lib/crawl-host-cache";
 import { humanizeAdCopyBatch, AD_COPY_ANTI_AI_BLOCK } from "@/lib/humanizer";
 import { autoExpandSitelinks } from "@/lib/sitelink-auto-expand";
 import { generateSitelinkTexts } from "@/lib/sitelink-ai-writer";
@@ -556,38 +555,33 @@ export async function POST(req: NextRequest) {
           console.log(`[Extensions] crawl_cache ${reason}，重新爬取... forcePuppeteer=${cacheNeedsRefreshForPromo}`);
           // C-027 FIX-B：同一 merchantUrl × country 并发去重（共享同一个 Promise）
           const crawlKey = buildCrawlKey(merchantUrl, country);
-          // D-031 (C-090)：修复 v9.4 「外层 timeout < 内层单策略 timeout」 致命数学错误
-          //   实证现象（kiehls.com.sg/lovevery/mustelausa/lancome 等 6 商家 15:39-15:51）：
-          //     外层 60s/90s 超时砍断 → stub cache(crawlFailed=true) → L2 守门 emit context_insufficient
-          //     → 前端 UI 渲染「网站爬取失败」提示，用户即"爬取失败"现象。
-          //   核心数学错误（Read 代码确认）：
-          //     - 外层 TIMEOUT_MS = 60s(普通) / 90s(challenged)（本处 route.ts:567）
-          //     - 内层 STRATEGY_BUDGET_MS = 160s(有代理) / 90s(无代理)（crawl-pipeline.ts:1784）
-          //     - 内层单 puppeteer 策略 SINGLE_STRATEGY_TIMEOUT_MS = 75s（crawl-pipeline.ts:1801）
-          //   ===> 外层 60s/90s < 内层 75s 单策略！第一个策略刚开始就被外层强制砍断！
-          //   D-031b2 修复 spec（D-031 遗留 bug：只修了 challenged 路径，普通 host 有代理时仍超时）：
-          //     内层 STRATEGY_BUDGET_MS（crawl-pipeline.ts）= 有代理 160s / 无代理 90s
-          //     外层必须 > 内层最大值才不会提前截断：
-          //     - 普通 host：180s（= 内层有代理 160s + 20s safety，无代理 90s 也被覆盖）
-          //     - challenged host：200s（= 内层有代理 160s + 40s safety，已足够）
-          //   附带：起始打 timer，记录 buildCrawlCache 实际耗时方便后续调参。
-          let merchantHostForTimeout = "";
-          try {
-            merchantHostForTimeout = new URL(merchantUrl).hostname.toLowerCase();
-          } catch {}
-          const hostKey = merchantHostForTimeout ? getHostKey(merchantHostForTimeout) : "";
-          const hostChallengedForTimeout = hostKey ? isHostChallenged(hostKey) : false;
-          const TIMEOUT_MS = hostChallengedForTimeout ? 200000 : 180000;
-          // lock 强制释放时间稍长于 producer timeout，确保 inflight caller 一定能
-          // 拿到 producer 的最终结果（stub or real cache），不会被 lock 提前释放。
-          const LOCK_TIMEOUT_MS_LOCAL = TIMEOUT_MS + 10000;
-          console.log(`[Extensions] D-031b2：buildCrawlCache 启动 timeout=${TIMEOUT_MS / 1000}s host=${merchantHostForTimeout} challenged=${hostChallengedForTimeout}`);
+          // D-038b（2026-05-28，方案 G）：删除 D-028 v9 / D-031 / D-031b2 引入的外层 Promise.race
+          // 强制砍切 + timeout-stub 占位 cache 的"假成功"机制。
+          //
+          // 删除原因：
+          // ①D-031b2 把外层 timeout 调到 180s/200s 后，buildCrawlCache 内层 puppeteer 跑完
+          //  自然 60-120s，本来正常完成，但 race 机制制造了"timeout-stub"占位 cache
+          //  伪装成功（crawlFailed=true），再被 L2 守门 emit context_insufficient 拦截，
+          //  形成"全员看到网站爬取失败"假象。
+          // ②真实失败（puppeteer 全死 / 网络挂）应该走 buildCrawlCache 内部错误处理，
+          //  throw 真实错误后被外层 catch 设为 crawlFailed=true，而不是 race timeout 后
+          //  伪造一个看似 schema 完整的 stub cache 让下游误认为"爬到了什么"。
+          // ③5/25 之前（D-028/D-031 commit 链之前）没有外层 race 也跑得通，91.7% 成功率。
+          //
+          // 现行为：
+          //   - buildCrawlCache 自然完成 → 真实返回（无论 ok 还是 partial）
+          //   - 内部抛错 → 外层 catch 设 crawlFailed=true 走真实失败路径
+          //   - 极端 hang 兜底：300s（5 分钟）防 puppeteer 死锁，仅作 safety net
+          //     不再当作"业务超时降级"，hang 触发时直接 throw 真实错误
+          const HANG_SAFETY_MS = 300000;
+          const LOCK_TIMEOUT_MS_LOCAL = HANG_SAFETY_MS + 10000;
           const buildStartedAt = Date.now();
+          console.log(`[Extensions] D-038b：buildCrawlCache 启动 hang_safety=${HANG_SAFETY_MS / 1000}s（无业务砍切）merchantUrl=${merchantUrl}`);
           const newCache: CrawlCache = await withCrawlInflightLock(crawlKey, async () => {
-            const timeout = new Promise<CrawlCache>((_, reject) =>
+            const hangSafety = new Promise<CrawlCache>((_, reject) =>
               setTimeout(
-                () => reject(new Error("buildCrawlCache-timeout")),
-                TIMEOUT_MS,
+                () => reject(new Error("buildCrawlCache-hang-safety")),
+                HANG_SAFETY_MS,
               ).unref?.(),
             );
             try {
@@ -595,38 +589,20 @@ export async function POST(req: NextRequest) {
                 buildCrawlCache(merchantUrl, merchantName, country, undefined, {
                   forcePuppeteer: cacheNeedsRefreshForPromo,
                 }),
-                timeout,
+                hangSafety,
               ]);
               const elapsedMs = Date.now() - buildStartedAt;
-              console.log(`[Extensions] D-031：buildCrawlCache 完成耗时=${elapsedMs}ms timeout=${TIMEOUT_MS}ms host=${merchantHostForTimeout}`);
+              console.log(`[Extensions] D-038b：buildCrawlCache 自然完成 elapsedMs=${elapsedMs}ms merchantUrl=${merchantUrl}`);
               return result;
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
               const elapsedMs = Date.now() - buildStartedAt;
-              if (msg === "buildCrawlCache-timeout") {
-                console.warn(`[Extensions] D-031b2：buildCrawlCache ${TIMEOUT_MS / 1000}s 超时降级，使用完整占位 cache：merchantUrl=${merchantUrl} elapsedMs=${elapsedMs}`);
-                const stub: CrawlCache = {
-                  links: [],
-                  images: [],
-                  pageText: "",
-                  features: [],
-                  navItems: [],
-                  phoneCandidates: [],
-                  sitelinkCandidates: [],
-                  semrushTitles: [],
-                  semrushDescriptions: [],
-                  promoRegex: null,
-                  priceRegex: [],
-                  crawledProducts: [],
-                  crawledAt: new Date().toISOString(),
-                  crawlMethod: "timeout-stub",
-                  crawlFailed: true,
-                  crawlQualityScore: 0,
-                  crawlQualityIssues: [`timeout_${TIMEOUT_MS / 1000}s`],
-                  navLinks: [],
-                };
-                return stub;
+              if (msg === "buildCrawlCache-hang-safety") {
+                // 5 分钟 hang 兜底触发 = puppeteer 死锁等极端情况，真实错误不再造 stub cache
+                console.error(`[Extensions] D-038b：buildCrawlCache HANG 兜底触发（${HANG_SAFETY_MS / 1000}s）elapsedMs=${elapsedMs}ms merchantUrl=${merchantUrl}`);
+                throw new Error(`商家网站爬取超过 ${HANG_SAFETY_MS / 1000}s 仍未完成，可能是 puppeteer 死锁或网络异常，请稍后重试`);
               }
+              console.warn(`[Extensions] D-038b：buildCrawlCache 真实失败 elapsedMs=${elapsedMs}ms msg=${msg}`);
               throw err;
             }
           }, LOCK_TIMEOUT_MS_LOCAL);

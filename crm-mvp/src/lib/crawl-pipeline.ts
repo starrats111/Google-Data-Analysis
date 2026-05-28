@@ -12,7 +12,7 @@ import { getAdMarketConfig } from "@/lib/ad-market";
 import { getProxyUrlForCountry, getHttpProxyUrlForCountry, ensureCountryEgressHttpProxy } from "@/lib/crawl-proxy";
 import { isLowValueSitelink } from "@/lib/sitelink-filter";
 import { hostMatchesCountryTld } from "@/lib/country-url-resolver";
-import { isHostChallenged, getHostKey, markHostChallenged } from "@/lib/crawl-host-cache";
+import { getHostKey } from "@/lib/crawl-host-cache";
 // C-016: ccTLD 切换逻辑移出 crawl-pipeline，改由 country-url-resolver 在 route 层调度
 
 // 全局爬取并发控制：最多 2 个同时执行
@@ -1208,21 +1208,15 @@ async function discoverSitelinkCandidates(
 
     const metaResults: MetaEntry[] = [...probeResults];
     if (probeShortCircuit) {
-      console.warn(`[Sitelinks] HTTP L0 probe ${probeLinks.length}/${probeLinks.length} 全灭，短路跳过剩余 ${remainingLinks.length} 条，直接进 Puppeteer 兜底（CF 保护站快速路径）`);
-      // D-028 v5：probe 4/4 全灭强证据 host 是 CF/DataDome 强反爬站，立即 markChallenged，
-      // 让本次 navLinks 兜底 + sitelink-auto-expand + 下次该 host 的爬取直接走 v3 短路路径，
-      // 避免重复跑 puppeteer 兜底浪费 30s+。实证 alohas.com 12:58 trace：5 次重复兜底。
-      const merchantHost = (() => {
-        try {
-          return new URL(merchantUrl).hostname.toLowerCase();
-        } catch {
-          return "";
-        }
-      })();
-      if (merchantHost) {
-        markHostChallenged(merchantHost);
-        console.warn(`[Sitelinks] D-028 v5：probe 全灭强证据 → markHostChallenged(${merchantHost})，后续走快速路径`);
-      }
+      // D-038b（2026-05-28，方案 G）：删除 D-028 v5 引入的"L0 全灭立即 markHostChallenged"
+      // 激进规则。原规则把"一次代理抖动/CF temporary challenge"也当作"永久 hard-block"，
+      // 配合 30 分钟 TTL（已改 5 分钟）+ buildCrawlCache 主路径不读 challenged 短路，
+      // 5/27 起整体成功率从 91.7% 暴跌至 38.6%。
+      //
+      // 现行为：probe 全灭仍跳过 remainingLinks 的 HTTP fetch（节省 4-15s 探测时间是合理优化，
+      // D-028 v3 真改进保留），但不再 markHostChallenged 全局缓存——让后续 Puppeteer 兜底
+      // 真实跑完，按 puppeteer 真实结果决定是否标记。
+      console.warn(`[Sitelinks] HTTP L0 probe ${probeLinks.length}/${probeLinks.length} 全灭，短路跳过剩余 ${remainingLinks.length} 条 HTTP fetch，直接进 Puppeteer 兜底（不再自动 markChallenged，D-038b/方案G）`);
       for (const link of remainingLinks) {
         metaResults.push({ link, meta: { title: "", description: "", ok: false, finalUrl: link.url, isSoft404: false } });
       }
@@ -1247,55 +1241,41 @@ async function discoverSitelinkCandidates(
   // C-014 §2.2：HTTP 代理识别导致 ok=false 的 URL，用共享 browser 的 Puppeteer 批量真实访问兜底
   // 这是 L0 的一部分（真实访问，不是降级），只是换用更重的浏览器栈绕过指纹识别。
   //
-  // D-028 v3：商家 host 已 challenged（CF hard-block）时跳过 puppeteer 17 URL batch。
-  // 实证 trace（agentprovocateur.com）：17 URL × 12s × concurrency=2 + 代理 fallback
-  // = 130 秒。puppeteer 在 hard-block 站点 ok 率极低（trace 显示 5/17 全败），耗时
-  // 不成正比。改为：信任 link.text + url path 直接生成 candidate（牺牲 title 精度），
-  // 整体节省 100~130s。
+  // D-038b（2026-05-28，方案 G）：删除 D-028 v3 引入的 challenged host 短路分支。
+  // 原 D-028 v3 设计目的：agentprovocateur.com 等 CF hard-block 站 Puppeteer 17 URL × 12s
+  // ≈ 130s 但 ok 率极低（5/17 全败）→ 改为信任 link.text 跳过 puppeteer 节省 130s。
+  // 实际后果：把 D-028 v5 错误标记的"临时抖动 host"也短路，5/25 之前 5/5 Puppeteer 兜底
+  // 全成功的工作模式被破坏，5/27+ 成功率从 91.7% 暴跌至 38.6%。
+  // 回滚后：所有 host 一律走 Puppeteer 真实兜底（D-028 v2 的 perPageTimeoutMs:12000 优化保留），
+  // 真 CF hard-block 站接受 130s 慢但能跑通的代价（用户体验通过方案 C 前端阶梯提示安抚）。
+  // 注：merchantHostKey 变量保留供后续日志诊断使用，但不再用作业务短路条件。
   // ══════════════════════════════════════════════════════
   const merchantHostKey = getHostKey(merchantUrl);
-  const merchantHostChallenged = merchantHostKey ? isHostChallenged(merchantHostKey) : false;
 
   if (pageLinkDeferred.length < 6 && httpFailedLinks.length > 0) {
-    if (merchantHostChallenged) {
-      // 强反爬站：跳过 puppeteer 兜底，用 link.text + url path 直接生成 deferred entry。
-      // tryPushCandidate 内部会用 link.text / titleFromUrlPath 做 title fallback，
-      // 这里把 meta 设为最小可用对象，让下游正常推 candidate（title 来自 link.text）。
-      let added = 0;
-      for (const link of httpFailedLinks) {
-        if (pageLinkDeferred.length >= 6) break;
-        pageLinkDeferred.push({
-          link,
-          meta: { title: "", description: "", ok: true, finalUrl: link.url, isSoft404: false },
-        });
-        added++;
+    const needed = Math.min(httpFailedLinks.length, 8);
+    const retryUrls = httpFailedLinks.slice(0, needed).map(l => l.url);
+    console.warn(`[Sitelinks] HTTP L0 失败 ${httpFailedLinks.length} 条，Puppeteer 共享 browser 兜底验证前 ${needed} 条 host=${merchantHostKey}`);
+    try {
+      // D-028 v2 优化保留：单条 timeout 25s → 12s。强反爬站 puppeteer 兜底常常 25s 也救不回，
+      // 缩短到 12s 让失败站快速放弃，把 slot 让给后面的请求，避免 normalQ 排队雪崩。
+      const puppeteerMetas = await batchFetchMetaViaPuppeteer(retryUrls, puppeteerProxyUrl, {
+        concurrency: 2,
+        perPageTimeoutMs: 12000,
+      });
+      const linkByUrl = new Map(httpFailedLinks.map(l => [l.url, l]));
+      let puppeteerOk = 0;
+      for (const [url, meta] of puppeteerMetas.entries()) {
+        const link = linkByUrl.get(url);
+        if (!link) continue;
+        if (!meta.ok) continue;
+        puppeteerOk++;
+        if (isHomeRedirect(link, meta)) botBlockSignals++;
+        pageLinkDeferred.push({ link, meta });
       }
-      console.warn(`[Sitelinks] host=${merchantHostKey} 已 challenged，跳过 17 URL Puppeteer 兜底，直接用 link.text 信任 ${added} 条候选（D-028 v3 短路，节省 ~130s）`);
-    } else {
-      const needed = Math.min(httpFailedLinks.length, 8);
-      const retryUrls = httpFailedLinks.slice(0, needed).map(l => l.url);
-      console.warn(`[Sitelinks] HTTP L0 失败 ${httpFailedLinks.length} 条，Puppeteer 共享 browser 兜底验证前 ${needed} 条`);
-      try {
-        // D-028 v2：单条 timeout 25s → 12s。强反爬站 puppeteer 兜底常常 25s 也救不回，
-        // 缩短到 12s 让失败站快速放弃，把 slot 让给后面的请求，避免 normalQ 排队雪崩。
-        const puppeteerMetas = await batchFetchMetaViaPuppeteer(retryUrls, puppeteerProxyUrl, {
-          concurrency: 2,
-          perPageTimeoutMs: 12000,
-        });
-        const linkByUrl = new Map(httpFailedLinks.map(l => [l.url, l]));
-        let puppeteerOk = 0;
-        for (const [url, meta] of puppeteerMetas.entries()) {
-          const link = linkByUrl.get(url);
-          if (!link) continue;
-          if (!meta.ok) continue;
-          puppeteerOk++;
-          if (isHomeRedirect(link, meta)) botBlockSignals++;
-          pageLinkDeferred.push({ link, meta });
-        }
-        console.warn(`[Sitelinks] Puppeteer 兜底完成: 尝试=${puppeteerMetas.size} ok=${puppeteerOk} signals=${botBlockSignals}`);
-      } catch (e) {
-        console.warn(`[Sitelinks] Puppeteer 批量兜底异常:`, e instanceof Error ? e.message : e);
-      }
+      console.warn(`[Sitelinks] Puppeteer 兜底完成: 尝试=${puppeteerMetas.size} ok=${puppeteerOk} signals=${botBlockSignals}`);
+    } catch (e) {
+      console.warn(`[Sitelinks] Puppeteer 批量兜底异常:`, e instanceof Error ? e.message : e);
     }
   }
 
@@ -1325,27 +1305,21 @@ async function discoverSitelinkCandidates(
         .map(l => country ? { ...l, url: normalizeLocaleInUrl(l.url, country) } : l)
         .slice(0, 20);
 
-      // D-028 v6：challenged host 上跳过对 navLinksFiltered 的 fetchUrlMeta 调用。
-      // 实证 trace（narscosmetics.co.uk 13:12:44）：v3 sitelinks 主流程已短路，
-      // 但本段仍对 20 条 navLinks 逐个 fetchUrlMeta，进入 coalescedPuppeteerFetch
-      // 合并成 17 URL Puppeteer batch × concurrency 2 ≈ 30s 浪费。
-      // 改为：challenged host 直接全部标记 ok=false 跳到下面的 v3 短路（信任 link.text）。
-      const navMetaResults = merchantHostChallenged
-        ? navLinksFiltered.map((link) => ({
-            link,
-            meta: { title: "", description: "", ok: false, finalUrl: link.url, isSoft404: false },
-          }))
-        : await Promise.all(
-            navLinksFiltered.map(async (link) => {
-              try {
-                // C-014 §2.1：同第一段，传 country 启用 IP 轮换
-                const meta = await fetchUrlMeta(link.url, proxyUrl, country);
-                return { link, meta };
-              } catch {
-                return { link, meta: { title: "", description: "", ok: false, finalUrl: link.url, isSoft404: false } };
-              }
-            }),
-          );
+      // D-038b（2026-05-28，方案 G）：删除 D-028 v6 challenged 短路（原会让 challenged host
+      // 的 navLinks 全标 ok=false 跳过 fetchUrlMeta 直接进 v3 短路）。
+      // 现在统一走 Promise.all 并行 fetchUrlMeta（D-028 v3 的真改进：顺序 await → Promise.all
+      // 并行优化保留），所有 host 一律真实探查。
+      const navMetaResults = await Promise.all(
+        navLinksFiltered.map(async (link) => {
+          try {
+            // C-014 §2.1：同第一段，传 country 启用 IP 轮换
+            const meta = await fetchUrlMeta(link.url, proxyUrl, country);
+            return { link, meta };
+          } catch {
+            return { link, meta: { title: "", description: "", ok: false, finalUrl: link.url, isSoft404: false } };
+          }
+        }),
+      );
 
       // C-017：navLinks 分支同样改为两阶段（收集 → 决策 → 统一 push），
       // botBlockSignals 与 pageLinks 分支共享（同一商家同一批探查视为一批）。

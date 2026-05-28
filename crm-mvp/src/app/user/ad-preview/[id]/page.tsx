@@ -43,6 +43,42 @@ function formatCid(cid: string): string {
   return cid;
 }
 
+// D-038b（方案 C）：爬取进度阶梯提示子组件
+// 独立 setInterval 每秒重渲染，仅自身 re-render 不影响父组件
+function CrawlProgressTip({ active, label = "正在爬取商家网站" }: { active: boolean; label?: string }) {
+  const [elapsed, setElapsed] = useState(0);
+  const startedRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!active) {
+      startedRef.current = null;
+      setElapsed(0);
+      return;
+    }
+    startedRef.current = Date.now();
+    const tick = () => {
+      if (startedRef.current == null) return;
+      setElapsed(Math.floor((Date.now() - startedRef.current) / 1000));
+    };
+    tick();
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, [active]);
+  if (!active) return null;
+  let tip = `${label}获取站内链接...（${elapsed}s）`;
+  if (elapsed >= 90) {
+    tip = `${label}（已 ${elapsed}s，部分网站反爬严格，可能需 2-3 分钟，您可继续操作其它字段或选择手动填写）`;
+  } else if (elapsed >= 60) {
+    tip = `${label}（已 ${elapsed}s，正在使用 Puppeteer 真人浏览器模式探查...）`;
+  } else if (elapsed >= 30) {
+    tip = `${label}（已 ${elapsed}s，网站反爬较严，正在重试...）`;
+  }
+  return (
+    <div style={{ textAlign: "center", padding: "24px 0" }}>
+      <Spin tip={tip} />
+    </div>
+  );
+}
+
 // Google Ads 支持的语言列表
 const GOOGLE_ADS_LANGUAGES = [
   { code: "en", name: "English" }, { code: "fr", name: "Français" },
@@ -1066,11 +1102,27 @@ export default function AdPreviewPage() {
       }
 
       // L2 守门：上下文不足，AI 文案被跳过
+      // D-038b（方案 C）：从被动 toast 提示改为主动 Modal 选择，让员工明确知道下一步操作
       if (type === "context_insufficient") {
         const d = data as { reason?: string; suggestion?: string; page_text_len?: number; semrush_titles?: number; products?: number };
-        message.warning({
-          content: `无法自动生成文案：${d?.reason || "网站内容无法解析"}（pageText=${d?.page_text_len ?? 0}, SemRush=${d?.semrush_titles ?? 0}, 商品=${d?.products ?? 0}）。${d?.suggestion || "请手动填写或重新爬取"}`,
-          duration: 12,
+        const reason = d?.reason || "网站内容无法解析";
+        const stats = `pageText=${d?.page_text_len ?? 0} / SemRush=${d?.semrush_titles ?? 0} / 商品=${d?.products ?? 0}`;
+        modal.warning({
+          title: "无法自动生成文案",
+          content: (
+            <div>
+              <p style={{ marginBottom: 8 }}><strong>原因：</strong>{reason}</p>
+              <p style={{ marginBottom: 8, color: "#888", fontSize: 12 }}><strong>实证：</strong>{stats}</p>
+              <p style={{ marginBottom: 0 }}>
+                建议下一步操作：
+                <br />① <strong>手动填写标题/描述</strong> — 在下方文案区直接输入（推荐，避免反复爬取浪费时间）；
+                <br />② <strong>在『商家库』补充商家描述</strong>后回来重新生成；
+                <br />③ 点击右上角『重新爬取』再试一次（仅当确认是临时网络抖动时）。
+              </p>
+            </div>
+          ),
+          okText: "我知道了，去手动填写",
+          width: 520,
         });
         return;
       }
@@ -2015,9 +2067,7 @@ export default function AdPreviewPage() {
               )}
               <div style={{ marginTop: 12, marginLeft: 24 }}>
                 {sitelinksLoading ? (
-                    <div style={{ textAlign: "center", padding: "24px 0" }}>
-                      <Spin tip="正在爬取商家网站获取站内链接..." />
-                    </div>
+                    <CrawlProgressTip active={sitelinksLoading} />
                   ) : (
                     <>
                       {sitelinks.length > 0 && (

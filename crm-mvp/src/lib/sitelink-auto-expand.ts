@@ -9,7 +9,6 @@
 
 import { getProxyUrlForCountry, fetchViaProxy } from "@/lib/crawl-proxy";
 import { fetchUrlMeta } from "@/lib/crawler";
-import { isHostChallenged, getHostKey } from "@/lib/crawl-host-cache";
 import {
   isBadSitelinkUrl,
   titleFromUrlPath,
@@ -279,43 +278,29 @@ export async function autoExpandSitelinks(opts: {
     console.warn(`[SitelinkExpand] sitemap+robots 均未抽到候选，merchantUrl=${merchantUrl} → 放弃 sitelinks（不再用 COMMON_PATHS 编造，避免 Google Ads 拒登）`);
   }
 
-  // D-028 v3：判断商家 host 是否已 challenged（CF/DataDome 强反爬）。
-  // 若是，跳过 HEAD/fetchUrlMeta 的网络验证，直接用 url path 生成 title 即可——
-  // 反正 puppeteer 兜底 12s 也救不回，每个 url 顺序跑 80s+ 是在浪费用户时间。
-  // 牺牲：sitelinks title 不那么精准（用 /lingerie → "Lingerie"），但能在 5s 内出 6 条。
-  const merchantHost = getHostKey(merchantUrl);
-  const merchantChallenged = merchantHost ? isHostChallenged(merchantHost) : false;
-
-  // 过滤 + HEAD 验证（D-028 v3：并行化 + challenged 短路）
+  // D-038b（方案 G）：删除 D-028 v3 引入的 challenged host 跳过 HEAD 验证短路。
+  // 原 D-028 v3 设计：跳过 HEAD 信任候选 url，5s 内出 6 条 — 但导致编造路径被采纳
+  // （D-031b/C-091 已修复 COMMON_PATHS 编造问题，但 sitemap+robots 抽到的真候选
+  // 也被无脑信任，CF temporary challenge 时整批不验证就发布，Google Ads 拒登）。
+  // 现在统一所有 host 走 Promise.all 并行 HEAD 验证（D-028 v3 真改进：并行 5s 上限保留）。
   const toVerify = [...candidates].filter((u) => !usedUrls.has(u)).slice(0, 20);
-  let verified: string[];
-  if (merchantChallenged) {
-    // 强反爬站：信任候选 url，不做 HEAD 验证
-    verified = toVerify.slice(0, targetCount + 2);
-    console.warn(`[SitelinkExpand] host=${merchantHost} 已 challenged，跳过 HEAD 验证（信任候选 url），verified=${verified.length}`);
-  } else {
-    // 正常站：并行 HEAD 验证（之前是顺序 await，N 次 × 5s = 25s+，改并行 = 5s 上限）
-    const headResults = await Promise.all(
-      toVerify.map(async (u) => ({ u, ok: await headIsOk(u, proxyUrl) })),
-    );
-    verified = headResults.filter((r) => r.ok).map((r) => r.u).slice(0, targetCount + 2);
-  }
+  const headResults = await Promise.all(
+    toVerify.map(async (u) => ({ u, ok: await headIsOk(u, proxyUrl) })),
+  );
+  const verified: string[] = headResults.filter((r) => r.ok).map((r) => r.u).slice(0, targetCount + 2);
 
   // 拉 meta 构造 SitelinkItem，同时记录同源子域名重定向目标
   const results: SitelinkItem[] = [];
   const discoveredSubdomainRoots = new Set<string>(); // e.g. "https://knowledge.carolina.com"
   const origHostBase = (() => { try { return new URL(merchantUrl).hostname.replace(/^www\./, "").toLowerCase(); } catch { return ""; } })();
 
-  // D-028 v3：并行 fetchUrlMeta（之前是顺序 await，每条 challenged host 走 puppeteer
-  // ≈ 20s，N 条顺序 = 80s+；改并行后整体 ≈ 一次 puppeteer batch 的耗时，且 challenged
-  // 站点直接用 url path 不再启 puppeteer，省 0~80s）
+  // D-038b（方案 G）：删除 D-028 v3 引入的 challenged host 跳过 fetchUrlMeta 短路。
+  // 保留 D-028 v3 的 Promise.all 并行优化（顺序 await → 并行真改进）。
+  // 现行为：所有 host 一律走 fetchUrlMeta 真实抓 meta，让 sitelinks title/description
+  // 来自页面真实内容而非 url path 拼凑，质量与 Google Ads 通过率都更高。
   const verifiedToFetch = verified.slice(0, targetCount + 2);
   const fetchResults = await Promise.all(
     verifiedToFetch.map(async (u) => {
-      // D-028 v3：challenged host 不调 fetchUrlMeta，直接用 url path 兜底 title
-      if (merchantChallenged) {
-        return { u, item: toSitelinkItem(u, titleFromUrlPath(u)), meta: null as null | { ok: boolean; finalUrl: string } };
-      }
       try {
         const meta = await fetchUrlMeta(u, proxyUrl ?? undefined, country);
         const item = toSitelinkItem(u, titleFromUrlPath(u), meta.ok ? { title: meta.title, description: meta.description } : undefined);

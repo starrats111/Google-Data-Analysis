@@ -27,14 +27,22 @@
  *   descriptions/callouts/promotion 全部 type 都没出来，UX 比原版还差。
  *   修复：inflight 复用时直接 await 原 promise，不再 race + fail-fast。
  *   原 promise 最坏在 60s 锁强制释放时被清理，本次 await 最多等 60s。
- *   challenged host 跳过复用逻辑保留（正确的，独立 producer 不受影响）。
+ *
+ * D-038b（2026-05-28，方案 B 统一 inflight 复用）：
+ *   ①删除 D-028 v4 引入的"challenged host 跳过复用直接重新执行 producer"分支：
+ *     原意是避免被前次卡死的 promise 拖累，但实际效果是：
+ *     - 4 个并发 caller 命中 challenged host → 4 个独立 producer 各跑 180s
+ *     - puppeteer slot 被瓜分到饥饿，CPU load avg 飙到 3.x
+ *     - 同一 host 重复 8 次实证（istyle.ae 5/28 08:00-09:25）。
+ *     回滚后所有 caller 统一 await 同一 promise，资源不再被并发瓜分。
+ *   ②LOCK_TIMEOUT_MS 60s → 360s：D-028 系列删除外层 race 后 buildCrawlCache 内部
+ *     自然完成 60-180s（CF 强反爬站偶尔到 180s），LOCK 60s 会让原 producer 还没跑完
+ *     就被强制清理 map，后来的 caller 又重新发起，产生雪崩。360s 给真实爬取充足时间。
  *
  * 环境变量 CRAWL_INFLIGHT_LOCK_OFF=1 可一键 bypass。
  */
 
-import { isHostChallenged, getHostKey } from "@/lib/crawl-host-cache";
-
-const LOCK_TIMEOUT_MS = 60_000; // D-028 v4：90s → 60s
+const LOCK_TIMEOUT_MS = 360_000; // D-038b：60s → 360s（覆盖 buildCrawlCache 5min hang_safety + 60s safety）
 
 const _inflight = new Map<string, { promise: Promise<unknown>; startedAt: number }>();
 
@@ -79,30 +87,15 @@ export async function withCrawlInflightLock<T>(
   if (existing) {
     const age = Date.now() - existing.startedAt;
 
-    // D-028 v4：若锁对应的 host 已被标记为 challenged（CF/DataDome 强反爬），
-    // 前次主爬大概率失败/超时，本次直接放弃 inflight 复用，自己走快速路径，
-    // 避免被前次卡死的 promise 拖累 60s+。
-    let challengedSkip = false;
-    try {
-      const merchantPart = key.split("::")[0];
-      const host = getHostKey(merchantPart);
-      if (host && isHostChallenged(host)) {
-        challengedSkip = true;
-      }
-    } catch {}
-
-    if (challengedSkip) {
-      console.warn(`[CrawlInflightLock] 命中去重但 host 已 challenged，跳过复用直接重新执行：key=${key} age=${age}ms`);
-      // 不删原 promise（它仍在跑），让本次 producer 独立运行
-      return producer();
-    }
-
+    // D-038b（方案 B）：删除 D-028 v4 引入的 challenged host 跳过复用分支。
+    // 统一所有 host 走 await existing.promise 复用路径，避免并发 caller 各自跑
+    // 独立 producer 制造 puppeteer slot 瓜分 + CPU 雪崩。
     if (age < timeoutMs) {
-      console.warn(`[CrawlInflightLock] 命中去重：key=${key} age=${age}ms 复用现有 Promise（最长等锁 ${timeoutMs}ms 强制释放）`);
+      console.warn(`[CrawlInflightLock] 命中去重：key=${key} age=${age}ms 复用现有 Promise（最长等锁 ${timeoutMs}ms 强制释放，D-038b 统一复用）`);
       // D-028 v7：直接 await 原 promise，不再 race 超时也不 fail-fast。
       // 原因：v5 fail-fast 在用户首次访问商家时 cache=null 导致 SSE 流崩溃，比原版还差。
-      // 原 promise 最坏在 timeoutMs (60s) 时被锁的 setTimeout 强制清理 map（虽然原 promise
-      // 仍在跑），本次 await 最多被拖到原 promise settle，通常远少于 60s。
+      // 原 promise 最坏在 timeoutMs (360s) 时被锁的 setTimeout 强制清理 map（虽然原 promise
+      // 仍在跑），本次 await 最多被拖到原 promise settle，通常远少于 360s。
       return existing.promise as Promise<T>;
     }
     // 过期则强制清理，重新发起
