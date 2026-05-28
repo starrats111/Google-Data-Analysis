@@ -32,6 +32,7 @@ import { loadEnvFromProjectRoot } from "./load-env-from-dotenv-file";
 
 const DRY_RUN = process.env.CONFIRM !== "1";
 const SINCE_DATE = process.env.SINCE || "2026-01-01"; // GAds REMOVED 历史回溯起点
+const UNTIL_DATE = process.env.UNTIL || new Date().toISOString().slice(0, 10); // 至今
 const ONLY_USER = process.env.USER_ID ? BigInt(process.env.USER_ID) : null;
 
 interface BackfillStats {
@@ -62,7 +63,7 @@ async function main() {
   console.log("=".repeat(80));
   console.log("D-040 v2 — 全业务 republish historical cost backfill");
   console.log("DRY_RUN =", DRY_RUN, DRY_RUN ? "(set CONFIRM=1 to write)" : "");
-  console.log("SINCE_DATE =", SINCE_DATE);
+  console.log("DATE_RANGE =", SINCE_DATE, "~", UNTIL_DATE);
   console.log("ONLY_USER =", ONLY_USER || "(全部 user)");
   console.log("=".repeat(80));
 
@@ -142,6 +143,7 @@ async function main() {
       for (const cid of customerIds) {
         stats.cids_scanned++;
         try {
+          // GAQL 要求 segments.date 必须 BETWEEN 有限范围（finite date range）
           const removedRows = await queryGoogleAds(credentials, cid, `
             SELECT
               campaign.id, campaign.name, campaign.status,
@@ -150,7 +152,7 @@ async function main() {
               metrics.cost_micros, metrics.clicks, metrics.impressions
             FROM campaign
             WHERE campaign.status = 'REMOVED'
-              AND segments.date >= '${SINCE_DATE}'
+              AND segments.date BETWEEN '${SINCE_DATE}' AND '${UNTIL_DATE}'
           `) as GAdsRow[];
 
           if (removedRows.length === 0) continue;
