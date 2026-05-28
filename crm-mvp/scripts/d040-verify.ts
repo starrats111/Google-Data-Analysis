@@ -14,6 +14,8 @@
  *   npx tsx scripts/d040-verify.ts
  */
 
+import { loadEnvFromProjectRoot } from "./load-env-from-dotenv-file";
+loadEnvFromProjectRoot();
 import prisma from "../src/lib/prisma";
 
 (async () => {

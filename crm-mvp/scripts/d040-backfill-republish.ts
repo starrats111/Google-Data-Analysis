@@ -28,6 +28,8 @@
  *      不会创建新 campaign，不会删除任何数据。脚本 dry-run 优先。
  */
 
+import { loadEnvFromProjectRoot } from "./load-env-from-dotenv-file";
+loadEnvFromProjectRoot();
 import prisma from "../src/lib/prisma";
 
 const DRY_RUN = process.env.CONFIRM !== "1";

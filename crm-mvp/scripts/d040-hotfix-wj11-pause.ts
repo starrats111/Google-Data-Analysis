@@ -15,6 +15,8 @@
  * 风险：调用 GAds mutateCampaign 真实写操作。脚本会先 dry-run 打印 plan，再询问确认 (env CONFIRM=1)。
  */
 
+import { loadEnvFromProjectRoot } from "./load-env-from-dotenv-file";
+loadEnvFromProjectRoot();
 import prisma from "../src/lib/prisma";
 
 const TARGET_IDS = [8246n, 3810n];
