@@ -15,7 +15,22 @@ const nextConfig: NextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
-  serverExternalPackages: ["bcryptjs", "jsonwebtoken", "ssh2", "google-ads-api", "google-auth-library"],
+  // C-111 v3：切回 webpack 后必须把 puppeteer 链等含动态 require 的 server-only
+  // 包外部化，否则 webpack 静态分析失败 ("Cannot statically analyse require(…, …)")。
+  serverExternalPackages: [
+    "bcryptjs",
+    "jsonwebtoken",
+    "ssh2",
+    "google-ads-api",
+    "google-auth-library",
+    "puppeteer",
+    "puppeteer-core",
+    "puppeteer-extra",
+    "puppeteer-extra-plugin",
+    "puppeteer-extra-plugin-stealth",
+    "clone-deep",
+    "merge-deep",
+  ],
 
   // ─── 安全头部 ───
   async headers() {
