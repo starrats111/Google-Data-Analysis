@@ -56,7 +56,15 @@ jobs:
             echo "===== 4. Generate Prisma Client ====="
             npx prisma generate 2>&1 | tail -5
 
-            echo "===== 5. Build (service keeps running) ====="
+            echo "===== 5a. Clean stale .next chunks (C-111 fix) ====="
+            # 真因：next build 是增量编译，旧 chunk 文件残留在 .next/static/chunks/，
+            # 当 next.config 改动（如本次移除 optimizePackageImports）后 chunks 重新生成，
+            # 但旧 hash 文件不删，造成新旧混合 + Cloudflare 边缘缓存旧 chunk 1 年。
+            # 删除整个 .next 强制完全 rebuild，所有 chunk hash 重新生成。
+            rm -rf .next 2>/dev/null || true
+            echo ".next cleaned, size before: $(du -sh .next 2>/dev/null || echo 0)"
+
+            echo "===== 5b. Build (service keeps running on old code) ====="
             NODE_OPTIONS="--max-old-space-size=512" npx next build 2>&1 | tail -20
 
             echo "===== 6. Verify build ====="
