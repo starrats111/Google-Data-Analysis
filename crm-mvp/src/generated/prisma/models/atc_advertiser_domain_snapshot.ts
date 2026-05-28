@@ -598,20 +598,24 @@ export type $atc_advertiser_domain_snapshotPayload<ExtArgs extends runtime.Types
     advertiser_name: string | null
     unique_domain_count: number
     /**
-     * * C-094.1：满足「单广告持续 ≥30 天」的 domain 数（判定 peer 的核心字段）
+     * *
+     *    * C-094.1：满足「单广告持续 ≥30 天」的 domain 数（判定 peer 的核心字段）
      */
     qualifying_domain_count: number
     ad_count: number
     /**
-     * * C-094.1 后存 DomainCreativeStat[]；C-093 旧数据是 string[]；空数组+ad_count>0 视为旧 bug 重算
+     * *
+     *    * C-094.1 后存 DomainCreativeStat[]；C-093 旧数据是 string[]；空数组+ad_count>0 视为旧 bug 重算
      */
     domains_json: runtime.JsonValue | null
     /**
-     * * C-094.2：本快照写入时是否仍有 OCR 任务未完成（true 时 service 重读应返回 pending）
+     * *
+     *    * C-094.2：本快照写入时是否仍有 OCR 任务未完成（true 时 service 重读应返回 pending）
      */
     ocr_pending: number
     /**
-     * * C-094.3：本次 SerpApi 采样的图片 URL + first_shown/last_shown，OCR 跑完后供 cache 命中时重算分类，避免重复调 SerpApi
+     * *
+     *    * C-094.3：本次 SerpApi 采样的图片 URL + first_shown/last_shown，OCR 跑完后供 cache 命中时重算分类，避免重复调 SerpApi
      */
     sampled_ads_json: runtime.JsonValue | null
     fetched_at: Date

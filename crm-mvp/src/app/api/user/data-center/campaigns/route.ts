@@ -397,7 +397,9 @@ export async function GET(req: NextRequest) {
   const filteredForDisplay = showRemoved
     ? dedupedCampaigns
     : dedupedCampaigns.filter((c) => c.google_status !== "REMOVED");
-  const displayCampaigns = filteredForDisplay.slice(0, 200);
+  // D-040 v2 BUG-3：取消 200 行硬截断，让 wj07（264 个广告系列）等用户能看到全部数据
+  // 性能：MCC 维度的 campaign 量级在数百至数千之间，前端表格分页足够，后端不再切片
+  const displayCampaigns = filteredForDisplay;
   const merchantWritten = new Set<string>();
 
   const rows = displayCampaigns.map((c) => {
@@ -452,7 +454,8 @@ export async function GET(req: NextRequest) {
     rowMeta: {
       displayedCount: displayCampaigns.length,
       totalCount: filteredForDisplay.length,
-      isLimited: filteredForDisplay.length > 200,
+      // D-040 v2 BUG-3：后端不再切片，永远 false（前端分页处理大量数据）
+      isLimited: false,
     },
   }));
 }

@@ -540,7 +540,8 @@ export type $user_atc_watchlistPayload<ExtArgs extends runtime.Types.Extensions.
     region: string
     min_days: number
     /**
-     * * C-094.6：是否分享给同事（出现在「推荐广告主」列表）
+     * *
+     *    * C-094.6：是否分享给同事（出现在「推荐广告主」列表）
      */
     is_shared: number
     is_deleted: number

@@ -263,3 +263,13 @@ export type user_atc_watchlist = Prisma.user_atc_watchlistModel
  * 
  */
 export type user_atc_alert_log = Prisma.user_atc_alert_logModel
+/**
+ * Model semrush_keyword_cache
+ * 
+ */
+export type semrush_keyword_cache = Prisma.semrush_keyword_cacheModel
+/**
+ * Model semrush_health_logs
+ * 
+ */
+export type semrush_health_logs = Prisma.semrush_health_logsModel

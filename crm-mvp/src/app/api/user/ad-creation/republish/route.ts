@@ -69,7 +69,14 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 3. 重置本地记录
+  // 3. D-040 v2: 旧 gcid push 到 previous_gcids JSON 数组（去重），再清空当前 gcid
+  // 用途: cron status-sync / daily-sync 拉 GAds REMOVED 旧广告时能找回原 campaign，
+  //       cost 合并到 ads_daily_stats（同 campaign_id），与 GAds 后台对账长期对齐
+  const existingPrev = Array.isArray(campaign.previous_gcids) ? (campaign.previous_gcids as string[]) : [];
+  const nextPrev = campaign.google_campaign_id && !existingPrev.includes(campaign.google_campaign_id)
+    ? [...existingPrev, campaign.google_campaign_id]
+    : existingPrev;
+
   await prisma.campaigns.update({
     where: { id: campaign.id },
     data: {
@@ -77,6 +84,7 @@ export async function POST(req: NextRequest) {
       customer_id: null,
       google_status: "ENABLED",
       campaign_name: newCampaignName,
+      previous_gcids: nextPrev,
     },
   });
 

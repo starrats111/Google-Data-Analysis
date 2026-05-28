@@ -304,6 +304,10 @@ model campaigns {
   status                     String    @default("active") @db.VarChar(16)
   google_status              String    @default("ENABLED") @db.VarChar(16) // Google Ads 侧真实状态: ENABLED / PAUSED / REMOVED
   last_google_sync_at        DateTime? @db.DateTime(0) // 最后一次从 Google 同步状态的时间
+  // D-040 v2: 重发广告历史 gcid 列表（含旧 gcid 数组），用于 cost 合并 + GAds REMOVED 数据补救
+  // 格式: ["23663238670", "23864905107"] — 不含 current google_campaign_id
+  // 用途: status-sync / daily-sync 拉 GAds REMOVED 广告时按 previous_gcids 匹配回原 campaign，cost 合并不丢
+  previous_gcids             Json      @default("[]") // 历史重发广告的 Google Ads gcid 数组
   // Google Ads 网址选项
   final_url_suffix           String?   @db.VarChar(500) // 最终到达网址后缀（附加到落地页 URL 末尾的 UTM 参数等）
   // 换链接相关字段

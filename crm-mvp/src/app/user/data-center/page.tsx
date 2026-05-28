@@ -155,7 +155,22 @@ export default function DataCenterPage() {
       const digits = head.replace(/^[a-zA-Z]+/, "");
       return /^\d+$/.test(digits) ? parseInt(digits, 10) : -1;
     };
-    return (campaignData?.rows || [])
+    // D-040 v2 BUG-2 兜底：前端按 campaign id 去重防御（后端 dedupe + previous_gcids 已合并 cost，
+    //                      此处只防御任何意外重复 row 被前端表格展示两次）
+    const seenIds = new Set<string>();
+    const deduped: IndexedRow[] = [];
+    for (const r of (campaignData?.rows || [])) {
+      const key = String(r.id);
+      if (seenIds.has(key)) {
+        if (process.env.NODE_ENV !== "production") {
+          console.warn(`[DataCenter] D-040 v2 detected duplicate row id=${key} name=${r.campaign_name}`);
+        }
+        continue;
+      }
+      seenIds.add(key);
+      deduped.push(r);
+    }
+    return deduped
       .map((r: IndexedRow) => statusOverrides[r.id] ? { ...r, status: statusOverrides[r.id] } : r)
       .sort((a, b) => {
         if (a.status === "ENABLED" && b.status !== "ENABLED") return -1;

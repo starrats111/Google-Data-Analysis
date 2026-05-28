@@ -85,9 +85,17 @@ export async function POST(req: NextRequest) {
       console.error(`[CampaignToggle] D-029 反查失败 campaign_id=${campaign.id} mcc=${mcc.mcc_id} customer=${campaign.customer_id} err=${verifyError}`);
     }
 
+    // D-040 v2 BUG-1: 双向同步 — 把 CRM 内部 status 字段一起更新，避免与 google_status 长期不一致
+    // 旧逻辑只写 google_status，cron status-sync 也不刷 status，导致 9810 条历史 status!=google_status 漂移
+    const confirmedStatusStr = String(confirmedStatus);
+    const newInternalStatus = confirmedStatusStr === "PAUSED" || confirmedStatusStr === "REMOVED" ? "paused" : "active";
     await prisma.campaigns.update({
       where: { id: campaign.id },
-      data: { google_status: confirmedStatus, last_google_sync_at: new Date() },
+      data: {
+        status: newInternalStatus,
+        google_status: confirmedStatus,
+        last_google_sync_at: new Date(),
+      },
     });
 
     const { syncMerchantStatusForUser } = await import("@/lib/campaign-merchant-link");

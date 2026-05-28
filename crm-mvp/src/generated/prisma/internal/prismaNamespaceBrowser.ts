@@ -94,7 +94,9 @@ export const ModelName = {
   user_serpapi_keys: 'user_serpapi_keys',
   merchant_monitor_rules: 'merchant_monitor_rules',
   user_atc_watchlist: 'user_atc_watchlist',
-  user_atc_alert_log: 'user_atc_alert_log'
+  user_atc_alert_log: 'user_atc_alert_log',
+  semrush_keyword_cache: 'semrush_keyword_cache',
+  semrush_health_logs: 'semrush_health_logs'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -368,6 +370,7 @@ export const CampaignsScalarFieldEnum = {
   status: 'status',
   google_status: 'google_status',
   last_google_sync_at: 'last_google_sync_at',
+  previous_gcids: 'previous_gcids',
   final_url_suffix: 'final_url_suffix',
   suffix_exchange_enabled: 'suffix_exchange_enabled',
   suffix_last_content: 'suffix_last_content',
@@ -946,6 +949,33 @@ export const User_atc_alert_logScalarFieldEnum = {
 export type User_atc_alert_logScalarFieldEnum = (typeof User_atc_alert_logScalarFieldEnum)[keyof typeof User_atc_alert_logScalarFieldEnum]
 
 
+export const Semrush_keyword_cacheScalarFieldEnum = {
+  id: 'id',
+  domain: 'domain',
+  database: 'database',
+  payload: 'payload',
+  raw_kw_cnt: 'raw_kw_cnt',
+  cached_at: 'cached_at',
+  expires_at: 'expires_at',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Semrush_keyword_cacheScalarFieldEnum = (typeof Semrush_keyword_cacheScalarFieldEnum)[keyof typeof Semrush_keyword_cacheScalarFieldEnum]
+
+
+export const Semrush_health_logsScalarFieldEnum = {
+  id: 'id',
+  checked_at: 'checked_at',
+  overall: 'overall',
+  error_type: 'error_type',
+  details: 'details',
+  alerted: 'alerted'
+} as const
+
+export type Semrush_health_logsScalarFieldEnum = (typeof Semrush_health_logsScalarFieldEnum)[keyof typeof Semrush_health_logsScalarFieldEnum]
+
+
 export const SortOrder = {
   asc: 'asc',
   desc: 'desc'
@@ -1450,4 +1480,22 @@ export const user_atc_alert_logOrderByRelevanceFieldEnum = {
 } as const
 
 export type user_atc_alert_logOrderByRelevanceFieldEnum = (typeof user_atc_alert_logOrderByRelevanceFieldEnum)[keyof typeof user_atc_alert_logOrderByRelevanceFieldEnum]
+
+
+export const semrush_keyword_cacheOrderByRelevanceFieldEnum = {
+  domain: 'domain',
+  database: 'database',
+  payload: 'payload'
+} as const
+
+export type semrush_keyword_cacheOrderByRelevanceFieldEnum = (typeof semrush_keyword_cacheOrderByRelevanceFieldEnum)[keyof typeof semrush_keyword_cacheOrderByRelevanceFieldEnum]
+
+
+export const semrush_health_logsOrderByRelevanceFieldEnum = {
+  overall: 'overall',
+  error_type: 'error_type',
+  details: 'details'
+} as const
+
+export type semrush_health_logsOrderByRelevanceFieldEnum = (typeof semrush_health_logsOrderByRelevanceFieldEnum)[keyof typeof semrush_health_logsOrderByRelevanceFieldEnum]
 

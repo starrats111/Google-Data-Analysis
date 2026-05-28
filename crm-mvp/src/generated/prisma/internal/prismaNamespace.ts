@@ -427,7 +427,9 @@ export const ModelName = {
   user_serpapi_keys: 'user_serpapi_keys',
   merchant_monitor_rules: 'merchant_monitor_rules',
   user_atc_watchlist: 'user_atc_watchlist',
-  user_atc_alert_log: 'user_atc_alert_log'
+  user_atc_alert_log: 'user_atc_alert_log',
+  semrush_keyword_cache: 'semrush_keyword_cache',
+  semrush_health_logs: 'semrush_health_logs'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -443,7 +445,7 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
     omit: GlobalOmitOptions
   }
   meta: {
-    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "holiday_calendar" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "google_mcc_accounts" | "affiliate_transactions" | "notifications" | "notification_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "user_serpapi_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log"
+    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "holiday_calendar" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "google_mcc_accounts" | "affiliate_transactions" | "notifications" | "notification_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "user_serpapi_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log" | "semrush_keyword_cache" | "semrush_health_logs"
     txIsolationLevel: TransactionIsolationLevel
   }
   model: {
@@ -3351,6 +3353,138 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         }
       }
     }
+    semrush_keyword_cache: {
+      payload: Prisma.$semrush_keyword_cachePayload<ExtArgs>
+      fields: Prisma.semrush_keyword_cacheFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.semrush_keyword_cacheFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$semrush_keyword_cachePayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.semrush_keyword_cacheFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$semrush_keyword_cachePayload>
+        }
+        findFirst: {
+          args: Prisma.semrush_keyword_cacheFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$semrush_keyword_cachePayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.semrush_keyword_cacheFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$semrush_keyword_cachePayload>
+        }
+        findMany: {
+          args: Prisma.semrush_keyword_cacheFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$semrush_keyword_cachePayload>[]
+        }
+        create: {
+          args: Prisma.semrush_keyword_cacheCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$semrush_keyword_cachePayload>
+        }
+        createMany: {
+          args: Prisma.semrush_keyword_cacheCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.semrush_keyword_cacheDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$semrush_keyword_cachePayload>
+        }
+        update: {
+          args: Prisma.semrush_keyword_cacheUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$semrush_keyword_cachePayload>
+        }
+        deleteMany: {
+          args: Prisma.semrush_keyword_cacheDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.semrush_keyword_cacheUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.semrush_keyword_cacheUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$semrush_keyword_cachePayload>
+        }
+        aggregate: {
+          args: Prisma.Semrush_keyword_cacheAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateSemrush_keyword_cache>
+        }
+        groupBy: {
+          args: Prisma.semrush_keyword_cacheGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Semrush_keyword_cacheGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.semrush_keyword_cacheCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Semrush_keyword_cacheCountAggregateOutputType> | number
+        }
+      }
+    }
+    semrush_health_logs: {
+      payload: Prisma.$semrush_health_logsPayload<ExtArgs>
+      fields: Prisma.semrush_health_logsFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.semrush_health_logsFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$semrush_health_logsPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.semrush_health_logsFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$semrush_health_logsPayload>
+        }
+        findFirst: {
+          args: Prisma.semrush_health_logsFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$semrush_health_logsPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.semrush_health_logsFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$semrush_health_logsPayload>
+        }
+        findMany: {
+          args: Prisma.semrush_health_logsFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$semrush_health_logsPayload>[]
+        }
+        create: {
+          args: Prisma.semrush_health_logsCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$semrush_health_logsPayload>
+        }
+        createMany: {
+          args: Prisma.semrush_health_logsCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.semrush_health_logsDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$semrush_health_logsPayload>
+        }
+        update: {
+          args: Prisma.semrush_health_logsUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$semrush_health_logsPayload>
+        }
+        deleteMany: {
+          args: Prisma.semrush_health_logsDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.semrush_health_logsUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.semrush_health_logsUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$semrush_health_logsPayload>
+        }
+        aggregate: {
+          args: Prisma.Semrush_health_logsAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateSemrush_health_logs>
+        }
+        groupBy: {
+          args: Prisma.semrush_health_logsGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Semrush_health_logsGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.semrush_health_logsCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Semrush_health_logsCountAggregateOutputType> | number
+        }
+      }
+    }
   }
 } & {
   other: {
@@ -3645,6 +3779,7 @@ export const CampaignsScalarFieldEnum = {
   status: 'status',
   google_status: 'google_status',
   last_google_sync_at: 'last_google_sync_at',
+  previous_gcids: 'previous_gcids',
   final_url_suffix: 'final_url_suffix',
   suffix_exchange_enabled: 'suffix_exchange_enabled',
   suffix_last_content: 'suffix_last_content',
@@ -4223,6 +4358,33 @@ export const User_atc_alert_logScalarFieldEnum = {
 export type User_atc_alert_logScalarFieldEnum = (typeof User_atc_alert_logScalarFieldEnum)[keyof typeof User_atc_alert_logScalarFieldEnum]
 
 
+export const Semrush_keyword_cacheScalarFieldEnum = {
+  id: 'id',
+  domain: 'domain',
+  database: 'database',
+  payload: 'payload',
+  raw_kw_cnt: 'raw_kw_cnt',
+  cached_at: 'cached_at',
+  expires_at: 'expires_at',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Semrush_keyword_cacheScalarFieldEnum = (typeof Semrush_keyword_cacheScalarFieldEnum)[keyof typeof Semrush_keyword_cacheScalarFieldEnum]
+
+
+export const Semrush_health_logsScalarFieldEnum = {
+  id: 'id',
+  checked_at: 'checked_at',
+  overall: 'overall',
+  error_type: 'error_type',
+  details: 'details',
+  alerted: 'alerted'
+} as const
+
+export type Semrush_health_logsScalarFieldEnum = (typeof Semrush_health_logsScalarFieldEnum)[keyof typeof Semrush_health_logsScalarFieldEnum]
+
+
 export const SortOrder = {
   asc: 'asc',
   desc: 'desc'
@@ -4729,6 +4891,24 @@ export const user_atc_alert_logOrderByRelevanceFieldEnum = {
 export type user_atc_alert_logOrderByRelevanceFieldEnum = (typeof user_atc_alert_logOrderByRelevanceFieldEnum)[keyof typeof user_atc_alert_logOrderByRelevanceFieldEnum]
 
 
+export const semrush_keyword_cacheOrderByRelevanceFieldEnum = {
+  domain: 'domain',
+  database: 'database',
+  payload: 'payload'
+} as const
+
+export type semrush_keyword_cacheOrderByRelevanceFieldEnum = (typeof semrush_keyword_cacheOrderByRelevanceFieldEnum)[keyof typeof semrush_keyword_cacheOrderByRelevanceFieldEnum]
+
+
+export const semrush_health_logsOrderByRelevanceFieldEnum = {
+  overall: 'overall',
+  error_type: 'error_type',
+  details: 'details'
+} as const
+
+export type semrush_health_logsOrderByRelevanceFieldEnum = (typeof semrush_health_logsOrderByRelevanceFieldEnum)[keyof typeof semrush_health_logsOrderByRelevanceFieldEnum]
+
+
 
 /**
  * Field references
@@ -4936,6 +5116,8 @@ export type GlobalOmitConfig = {
   merchant_monitor_rules?: Prisma.merchant_monitor_rulesOmit
   user_atc_watchlist?: Prisma.user_atc_watchlistOmit
   user_atc_alert_log?: Prisma.user_atc_alert_logOmit
+  semrush_keyword_cache?: Prisma.semrush_keyword_cacheOmit
+  semrush_health_logs?: Prisma.semrush_health_logsOmit
 }
 
 /* Types for Logging */
