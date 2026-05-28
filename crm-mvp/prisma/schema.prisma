@@ -164,6 +164,22 @@ model user_merchants {
   atc_advertiser_count      Int?      @db.UnsignedInt // ATC 真实广告主数（已过滤商家自身和代理商）
   atc_last_synced_at        DateTime? @db.DateTime(0) // 最后 ATC 同步时间
   atc_sync_status           String    @default("idle") @db.VarChar(16) // idle / syncing / done / error
+  // D-046.A IntelliCenter 商家智能画像（14 字段，含 12 画像 + 2 元数据）
+  // 由 D-046 / C-109 立项，详见设计方案"五、AI IntelliCenter MVP 详细方案"
+  industry_category              String?   @db.VarChar(64) // 行业大类 32 枚举之一，AI 批量分类填
+  industry_subcategory           String?   @db.VarChar(128) // 子类
+  business_profile               Json? // 主营产品/价格区间/折扣模式/物流/支付
+  audience_persona               Json? // 年龄/性别/地区/兴趣/购买力
+  brand_assets                   Json? // slogan/USP/认证/奖项/口碑
+  trademark_authorization_status String    @default("unauthorized") @db.VarChar(16) // unauthorized / pending / authorized / own_brand
+  compliance_risk_level          String    @default("low") @db.VarChar(8) // low / medium / high / blocked
+  requires_certification         Json? // {healthcare:bool, financial:bool, crypto:bool, ...}
+  successful_template_ids        Json? // [123, 456, ...] M11 反馈环填，MVP 留空
+  failed_template_ids            Json? // [789, ...] M11 反馈环填，MVP 留空
+  seasonal_pattern               Json? // peak_months/holiday_events/promo_calendar
+  competitor_brands              Json? // [{name, domain}, ...] 商标避让
+  profile_updated_at             DateTime? @db.DateTime(0) // 画像最后更新时间
+  profile_source                 String    @default("none") @db.VarChar(16) // none / ai_backfill / manual / feedback
   is_deleted                Int       @default(0) @db.TinyInt
   created_at                DateTime  @default(now()) @db.DateTime(0)
   updated_at                DateTime  @default(now()) @updatedAt @db.DateTime(0)
@@ -177,6 +193,9 @@ model user_merchants {
   // WHERE merchant_id + platform 查询无前缀 user_id，旧索引全部失效导致全表扫描 644K 行 / 6.6s。
   // 加 (merchant_id, platform) 复合索引后单次查询 < 5ms。
   @@index([merchant_id, platform], map: "idx_merchant_platform")
+  // D-046.A IntelliCenter 索引（按行业大类 / 风险等级查询）
+  @@index([industry_category], map: "idx_industry_category")
+  @@index([compliance_risk_level], map: "idx_compliance_risk")
 }
 
 // -----------------------------------------------------------
