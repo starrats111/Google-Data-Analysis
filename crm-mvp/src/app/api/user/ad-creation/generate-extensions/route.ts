@@ -966,6 +966,18 @@ async function generateCore(
   const { formatBusinessSummaryBlock } = await import("@/lib/business-summary");
   const businessSummaryBlock = formatBusinessSummaryBlock(businessSummary, merchantCategory);
 
+  // D-039 H2：行业感知（高敏感品类强制注入中性词模板）
+  const { detectIndustryProfile, buildIndustryPromptHint } = await import("@/lib/industry-profile");
+  const industryProfile = detectIndustryProfile({
+    merchantName,
+    category: merchantCategory,
+    pageText: cache.pageText,
+  });
+  const industryPromptHint = buildIndustryPromptHint(industryProfile);
+  if (industryProfile) {
+    console.log(`[Extensions] D-039 H2 industry detected: ${industryProfile.id} (${industryProfile.label}) for ${merchantName}`);
+  }
+
   // ─── system message：人设身份 + 写作信条 + 禁忌（AI 角色定义，最高优先级）
   const systemPrompt = `You are ${activePersona.name} — ${activePersona.persona}
 
@@ -1010,7 +1022,50 @@ ${langEnforcement}
      ✓ "End-of-Play Sneakers" / "Shop for the Best Deals" → CORRECT
    · Descriptions must use standard sentence case (capitalize only the first word and proper nouns).
    · NEVER write any word entirely in ALL CAPS (e.g. FREE, SALE, NOW) — this is a policy violation.
-${discountGuidance}${shippingGuidance}
+   · ALL CAPS exception ONLY for natural acronyms ≤4 letters: USA, MXN, USD, EUR, VPN, AI, SEO, HQ, OEM, GPS, LED, USB, PDF, HTML, CSS, JS.
+     ✗ "Renta Autos MX desde MXN499" → "MX" 2-letter + "MXN" both OK as acronyms, BUT keep total ALL-CAPS words ≤30% of headline.
+9. UNFAIR ADVANTAGE — STRICTLY BANNED CLAIMS (Google Ads policy "unfair advantage"):
+   · Headlines/descriptions must NOT include unverified superlatives or "free-cancellation-like" guarantees:
+     ✗ Banned standalone (without provable evidence): "Trusted by Millions", "Award-Winning", "#1 in X",
+       "Best in Class", "Guaranteed Results", "100% Effective", "Stops X Forever", "Never Fail",
+       "World's Best", "Top-Rated", "Industry Leader", "Skip Other Apps", "Better than Competitors",
+       "Beat Every Other", "Sick of Other X", "Tired of Bad X" (anti-competitor phrasing).
+   · Allowed only if SAME wording appears verbatim on the merchant's own website AND it is a verifiable
+     factual claim (e.g. an actual industry award, a real public review count).
+     ✓ "Loved by 2,700+ Customers" (if site says "2,700+ verified buyers")
+     ✗ "Award-Winning Goat Milk Brand" (unless site lists the specific award)
+10. NUMERICAL CLAIMS — EVIDENCE REQUIRED:
+    · Any number (price, percentage, year, count) you mention MUST be sourced from the website content
+      provided above. Do NOT invent prices, discount %, "X+ customers", year founded, etc.
+    · If you need a number but can't verify it from website content, drop the number entirely.
+      ✗ "30% Off Sitewide" (if site shows no 30% promo today)
+      ✗ "Trusted by 10,000 customers" (if site only shows reviews count = 2,792)
+      ✓ "From $13.30" (if site clearly states "from $13.30")
+11. INAPPROPRIATE CONTENT — BANNED LEXICON (Google Ads "shocking/scary/violent" policy):
+    · NEVER use these words in headlines OR descriptions, even if the merchant sells Halloween/horror items:
+      Spooky, Scary, Demon, Demonic, Blood, Bloody, Hacked, Hack, Kill, Dead, Death, Violence, Horror,
+      Nightmare, Creepy, Sinister, Sick of, Pop-Ups, Threats, Attack, Malware, Virus, Infected.
+    · For Halloween/costume/horror merchants, use NEUTRAL alternatives instead:
+      ✗ "Spooky welcome for your front entrance" → ✓ "Themed decor for your front entrance"
+      ✗ "Demon Hunters graphic t-shirt" → ✓ "Graphic Tees — Hunter Collection"
+      ✗ "Spooky duo decor for your home" → ✓ "Themed decorative duo for your home"
+12. PHONE NUMBERS — STRICTLY FORBIDDEN IN HEADLINES/DESCRIPTIONS:
+    · Do NOT include any phone number in headlines or descriptions, regardless of format
+      (US: 555-123-4567 or (555) 123-4567; international: +1 555 123 4567; toll-free: 1-800-XXX-XXXX).
+    · Phone numbers belong in Call Extensions (separate ad component), NEVER in copy.
+    · Even if the website prominently displays phone numbers, do NOT echo them in your output.
+13. CATEGORY-SPECIFIC RULES (assess merchant category from website content):
+    · ANTIVIRUS / SECURITY / VPN / Antimalware: NO absolute claims ("Stops All", "100% Clean",
+      "Block Everything"), NO scare tactics ("Sick of Hacks?", "Phone Hacked?"), use functional
+      descriptions instead ("Device Protection", "Privacy Tools", "Browse Safely").
+    · HEALTH / SUPPLEMENTS / BEAUTY (skincare/cosmetics): NO medical claims ("Cures X", "Treats Y",
+      "Heals Z") unless the merchant is a licensed medical provider. Use cosmetic-claim language
+      ("Hydrates", "Nourishes", "Visible improvement"). NO "Doctor-Approved" without verifiable doctor.
+    · GAMBLING / CASINO / SWEEPSTAKES: NO "Win Big", "Guaranteed Wins", "Easy Money" — use
+      "Entertainment", "Play Responsibly" language only.
+    · ADULT-ADJACENT (lingerie, sleepwear, swimwear): Use product-functional language only
+      ("Loungewear", "Swimwear", "Intimate Apparel" instead of provocative descriptors).
+${industryPromptHint}${discountGuidance}${shippingGuidance}
 
 ═══ MERCHANT INTELLIGENCE — READ ALL BEFORE WRITING ═══
 - Merchant: ${merchantName}
@@ -1254,6 +1309,8 @@ ${isNonEnglish ? `\n⚠️ FINAL REMINDER: ALL headlines and descriptions MUST b
       const { collectGooglePolicyViolations } = await import("@/lib/ai-rule-profile");
       const { validateClaims } = await import("@/lib/claim-validator");
       const { rewriteViolationsOnly } = await import("@/lib/ai-retry-loop");
+      // D-039 H3：本地合规校验器（不公平优势 / 不当内容 / 电话号码 / 大写 / 品牌名泄漏 / 行业感知）
+      const { checkAdCompliance } = await import("@/lib/ad-compliance-checker");
 
       const evidence = {
         rawMentions: cache.rawMentions,
@@ -1273,6 +1330,14 @@ ${isNonEnglish ? `\n⚠️ FINAL REMINDER: ALL headlines and descriptions MUST b
           evidence,
           country,
         });
+        // D-039 H3：补充行业感知 + 不公平优势 + 不当内容 + 电话号码违规
+        const h3Result = checkAdCompliance(
+          field === "headline" ? items : [],
+          field === "description" ? items : [],
+          { industryProfile, merchantName },
+        );
+        const h3Critical = h3Result.violations.filter((v) => v.field === field && v.severity === "critical");
+
         const map = new Map<number, string[]>();
         for (const v of gv) {
           if (!map.has(v.index)) map.set(v.index, []);
@@ -1281,6 +1346,10 @@ ${isNonEnglish ? `\n⚠️ FINAL REMINDER: ALL headlines and descriptions MUST b
         for (const u of cv.unsupported) {
           if (!map.has(u.index)) map.set(u.index, []);
           map.get(u.index)!.push(u.hint);
+        }
+        for (const h of h3Critical) {
+          if (!map.has(h.index)) map.set(h.index, []);
+          map.get(h.index)!.push(`[D-039:${h.rule}] ${h.hint}`);
         }
         return [...map.entries()].map(([index, hints]) => ({ index, hint: hints.join(" | ") }));
       };
@@ -1297,7 +1366,14 @@ ${isNonEnglish ? `\n⚠️ FINAL REMINDER: ALL headlines and descriptions MUST b
           evidence,
           country,
         });
-        return cv.ok;
+        if (!cv.ok) return false;
+        // D-039 H3：行业感知 + 字词级违规也要过
+        const h3 = checkAdCompliance(
+          field === "headline" ? [text] : [],
+          field === "description" ? [text] : [],
+          { industryProfile, merchantName },
+        );
+        return h3.criticalCount === 0;
       };
 
       // ⑤+③ 政策闸 headlines / descriptions 改并行（两者独立，原串行 6-20s → 并行约一半）

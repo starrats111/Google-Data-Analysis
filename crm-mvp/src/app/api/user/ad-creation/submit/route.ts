@@ -412,6 +412,57 @@ export async function POST(req: NextRequest) {
 
   const platformLabel = await resolvePlatformLabel(userId, submitMerchant.platform || "", submitMerchant.platform_connection_id);
 
+  // ═════════════════════════════════════════════════════════════════
+  // D-039 H4(C 模式) — 提交前 final gate
+  //   - critical 违规（不公平优势 / 不当内容 / 电话号码 / 品牌名泄漏 / 行业禁词） → block 让员工先修
+  //   - minor 违规（过度大写） → 仅记录警告，不阻断
+  //   - 异常时不阻断（避免误伤正常提交）
+  // ═════════════════════════════════════════════════════════════════
+  try {
+    const { checkAdCompliance } = await import("@/lib/ad-compliance-checker");
+    const { detectIndustryProfile } = await import("@/lib/industry-profile");
+    let pageTextSnippet = "";
+    try {
+      if (adCreative.crawl_cache && typeof adCreative.crawl_cache === "string") {
+        const parsed = JSON.parse(adCreative.crawl_cache) as { pageText?: string };
+        pageTextSnippet = (parsed.pageText || "").slice(0, 2000);
+      }
+    } catch {}
+    const industryProfile = detectIndustryProfile({
+      merchantName: submitMerchant.merchant_name || "",
+      category: null,
+      pageText: pageTextSnippet,
+    });
+    const finalGate = checkAdCompliance(
+      headlines as string[],
+      descriptions as string[],
+      { industryProfile, merchantName: submitMerchant.merchant_name || "" },
+    );
+    if (finalGate.criticalCount > 0) {
+      const criticals = finalGate.violations.filter((v) => v.severity === "critical");
+      const top = criticals.slice(0, 5);
+      const summary = top.map((v) => `${v.field}#${v.index}「${v.text.slice(0, 40)}${v.text.length > 40 ? "…" : ""}」→ ${v.rule}`).join("；");
+      console.warn(
+        `[AdSubmit] D-039 H4 final gate 阻止 (cam=${campaign.id})：${finalGate.criticalCount} 条 critical 违规：${summary}`,
+      );
+      return apiError(
+        `提交前合规检查发现 ${finalGate.criticalCount} 条严重违规，请先在「广告预览」页修改文案后再提交：${summary}${criticals.length > 5 ? `（共 ${finalGate.criticalCount} 条，仅展示前 5 条）` : ""}`,
+      );
+    }
+    if (finalGate.minorCount > 0) {
+      const minors = finalGate.violations.filter((v) => v.severity === "minor");
+      const summary = minors.slice(0, 5).map((v) => `${v.field}#${v.index} ${v.rule}`).join("；");
+      console.warn(
+        `[AdSubmit] D-039 H4 final gate 轻微警告（不阻断 cam=${campaign.id}）：${finalGate.minorCount} 条 minor：${summary}`,
+      );
+    }
+  } catch (h4Err) {
+    console.warn(
+      "[AdSubmit] D-039 H4 final gate 异常（不阻断提交）:",
+      h4Err instanceof Error ? h4Err.message : h4Err,
+    );
+  }
+
   // C-088: 用户自定义命名优先（最低 3 项保护：非空、≤120 字符、不能 DRAFT- 前缀）
   // Q3=C 不做撞名/格式校验，留给 Google Ads 处理
   let formalName: string;

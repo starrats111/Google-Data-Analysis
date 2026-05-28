@@ -600,8 +600,8 @@ export default function AdPreviewPage() {
       }));
   };
 
-  // ─── SemRush 关键词获取 ───
-  const fetchKeywordsFromSemrush = useCallback(async () => {
+  // ─── SemRush 关键词获取（D-038c-v2 I2 + I3 增强）───
+  const fetchKeywordsFromSemrush = useCallback(async (opts?: { manual?: boolean }) => {
     const merchantUrl = preview?.merchant?.merchant_url;
     const country = preview?.campaign?.target_country || "US";
     if (!merchantUrl) { message.error("商家 URL 缺失，无法获取关键词"); return; }
@@ -620,21 +620,59 @@ export default function AdPreviewPage() {
         }),
       });
       const text = await res.text();
-      let json: any;
-      try { json = JSON.parse(text); } catch { throw new Error("服务器返回异常，请刷新页面后重试"); }
+      let json: { code: number; message?: string; data?: Record<string, unknown> };
+      try {
+        json = JSON.parse(text);
+      } catch {
+        throw new Error("服务器返回异常，请刷新页面后重试");
+      }
+
+      // D-038c-v2 I3：失败路径，按 errorCategory 显示不同颜色 toast
       if (json.code !== 0) {
+        const errCategory = (json.data?.error_category as string | undefined) ?? "unknown";
         const errMsg = json.message || "SemRush 自动获取失败，可粘贴 3UE 链接手动获取";
         setSemrushFailed(true);
         setSemrushFailMsg(errMsg);
-        message.error({ content: errMsg, duration: 6 });
+        if (errCategory === "3ue_unstable") {
+          message.error({
+            content: `3UE 第三方服务暂时不稳定（已自动指数退避重试 + 路由层兜底）。${errMsg}`,
+            duration: 8,
+          });
+        } else if (errCategory === "account_blocked") {
+          message.error({ content: `3UE 账户异常（已通知管理员）。${errMsg}`, duration: 10 });
+        } else if (errCategory === "config_missing") {
+          message.error({ content: errMsg, duration: 10 });
+        } else {
+          message.error({ content: errMsg, duration: 6 });
+        }
+        // 失败记录到 localStorage，24h 内不再 auto-fetch（仅 auto 触发时）
+        if (!opts?.manual) {
+          try { localStorage.setItem(`semrush_fetched_${campaignId}`, JSON.stringify({ ts: Date.now(), status: "failed", category: errCategory })); } catch {}
+        }
         return;
       }
+
+      // D-038c-v2 I6：缓存兜底命中，黄色 warning 提示
+      const fromCache = json.data?.from_cache === true;
+      const cacheAgeHours = (json.data?.cache_age_hours as number | undefined) ?? 0;
+      if (fromCache) {
+        message.warning({
+          content: `3UE 服务暂不可用，已为你显示历史缓存关键词（${cacheAgeHours} 小时前），如需最新数据可稍后点击「从 SemRush 获取」重试`,
+          duration: 10,
+        });
+      }
+
       setSemrushFailed(false);
       setSemrushFailMsg("");
-      const kws = json.data?.keywords || [];
-      const rawCount = json.data?.raw_keyword_count ?? kws.length;
-      if (kws.length === 0) { message.warning("SemRush 未找到该商家的关键词，请手动输入"); return; }
-      const newKws = mergeSemrushKeywords(kws, kwList);
+      const kws = (json.data?.keywords as unknown[]) || [];
+      if (kws.length === 0) {
+        message.warning("SemRush 未找到该商家的关键词，请手动输入");
+        if (!opts?.manual) {
+          try { localStorage.setItem(`semrush_fetched_${campaignId}`, JSON.stringify({ ts: Date.now(), status: "empty" })); } catch {}
+        }
+        return;
+      }
+      const newKws = mergeSemrushKeywords(kws as Parameters<typeof mergeSemrushKeywords>[0], kwList);
       if (newKws.length > 0) {
         const merged = [...kwList, ...newKws];
         setKwList(merged);
@@ -643,34 +681,63 @@ export default function AdPreviewPage() {
         const parts: string[] = [];
         if (paidCount > 0) parts.push(`${paidCount} 个付费词`);
         if (aiCount > 0) parts.push(`${aiCount} 个 AI 词`);
-        message.success(`已获取 ${newKws.length} 个关键词（${parts.join(" + ")}）`);
-        // 自动持久化到 DB（替换旧关键词）
+        const baseMsg = `已获取 ${newKws.length} 个关键词（${parts.join(" + ")}）`;
+        // 缓存兜底命中时不重复 success（前面已 warning），普通成功显示 success
+        if (!fromCache) message.success(baseMsg);
         fetch("/api/user/ad-creation/keywords", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ campaign_id: campaignId, keywords: merged }),
         }).catch(() => {/* 静默失败，不影响UI */});
       } else {
-        message.info("SemRush 关键词已全部存在");
+        if (!fromCache) message.info("SemRush 关键词已全部存在");
       }
-    } catch (err: any) {
+
+      // 成功（含缓存兜底）也写 localStorage 防止重复 auto-fetch
+      if (!opts?.manual) {
+        try {
+          localStorage.setItem(
+            `semrush_fetched_${campaignId}`,
+            JSON.stringify({ ts: Date.now(), status: fromCache ? "cache" : "success" }),
+          );
+        } catch {}
+      }
+    } catch (err: unknown) {
       setSemrushFailed(true);
-      message.error({ content: err?.message || "关键词获取失败，可粘贴 3UE 链接手动获取", duration: 6 });
+      const errMsg = err instanceof Error ? err.message : "关键词获取失败，可粘贴 3UE 链接手动获取";
+      message.error({ content: errMsg, duration: 6 });
+      if (!opts?.manual) {
+        try { localStorage.setItem(`semrush_fetched_${campaignId}`, JSON.stringify({ ts: Date.now(), status: "error" })); } catch {}
+      }
     } finally {
       setKwFetching(false);
     }
   }, [preview, kwList, campaignId, message, budget, maxCpc, biddingStrategy]);
 
-  // ─── 初始化后自动拉取关键词 ───
-  // 触发条件：① DB 无关键词，或 ② 所有关键词均为旧格式（source=null，未经过新 SEMrush pipeline）
+  // ─── 初始化后自动拉取关键词（D-038c-v2 I2：localStorage 24h 防抖 + 失败不重复 auto-fetch）───
   useEffect(() => {
     if (!initialized || autoFetchKwDone.current) return;
     const hasNewStyleKw = kwList.some((k) => k.source === "semrush_paid" || k.source === "ai_generated");
-    if (kwList.length === 0 || !hasNewStyleKw) {
-      autoFetchKwDone.current = true;
-      fetchKeywordsFromSemrush();
-    }
-  }, [initialized, kwList, fetchKeywordsFromSemrush]);
+    if (kwList.length > 0 && hasNewStyleKw) return;
+    // 24h 内同一 campaign auto-fetch 过任何状态（success/cache/empty/failed/error）则跳过
+    try {
+      const cached = localStorage.getItem(`semrush_fetched_${campaignId}`);
+      if (cached) {
+        const parsed = JSON.parse(cached) as { ts?: number; status?: string };
+        if (parsed.ts && Date.now() - parsed.ts < 24 * 60 * 60 * 1000) {
+          autoFetchKwDone.current = true;
+          // 上次失败时显式提示用户点按钮，避免静默
+          if (parsed.status && ["failed", "error", "empty"].includes(parsed.status)) {
+            setSemrushFailed(true);
+            setSemrushFailMsg("上次 SemRush 获取未成功，请点击右上角「从 SemRush 获取关键词」按钮手动重试");
+          }
+          return;
+        }
+      }
+    } catch {}
+    autoFetchKwDone.current = true;
+    fetchKeywordsFromSemrush({ manual: false });
+  }, [initialized, kwList, fetchKeywordsFromSemrush, campaignId]);
 
   // ─── 通过 3UE 链接获取关键词 ───
   const fetchKeywordsFromUrl = useCallback(async () => {
@@ -1858,7 +1925,7 @@ export default function AdPreviewPage() {
                 size="small" type="link"
                 icon={<ThunderboltOutlined />}
                 loading={kwFetching}
-                onClick={fetchKeywordsFromSemrush}
+                onClick={() => fetchKeywordsFromSemrush({ manual: true })}
               >
                 {kwList.length === 0 ? "从 SemRush 获取关键词" : "补充关键词"}
               </Button>

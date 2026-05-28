@@ -498,8 +498,16 @@ export class SemRushClient {
     return token;
   }
 
-  private async rpc(payload: unknown, retryCount = 0, sessionRefreshed = false): Promise<unknown> {
+  private async rpc(
+    payload: unknown,
+    retryCount = 0,
+    sessionRefreshed = false,
+    emptyBodyRetryCount = 0,
+  ): Promise<unknown> {
     const MAX_RPC_RETRIES = 2;
+    // D-038c-v2 I5：空 body 指数退避（与 session 失效解耦）
+    const MAX_EMPTY_BODY_RETRIES = 3;
+    const EMPTY_BODY_BACKOFF_MS = [1000, 2000, 4000];
     if (!this.token) await this.login();
     await guard.waitForSlot();
     const cookieStr = Object.entries(this.cookies).map(([k, v]) => `${k}=${v}`).join("; ");
@@ -555,14 +563,24 @@ export class SemRushClient {
     }
 
     if (!body) {
-      if (!sessionRefreshed) {
-        console.warn("[SemRush] RPC 返回空 body，刷新会话后重试");
-        guard.invalidateSession();
-        this.token = null;
-        await this.login();
-        return this.rpc(payload, 0, true);
+      // D-038c-v2 I5：空 body **不等于** session 失效（HTML 才是真信号）。
+      // 3UE 服务端间歇性抽风经常返回空 body，与登录态无关；强制 relogin 反而浪费 1 次配额。
+      // 正确策略：指数退避 1s→2s→4s 重试 3 次（带 20% jitter，不动 session）。
+      if (emptyBodyRetryCount < MAX_EMPTY_BODY_RETRIES) {
+        const base = EMPTY_BODY_BACKOFF_MS[emptyBodyRetryCount] ?? 4000;
+        const jitter = Math.floor(Math.random() * base * 0.2);
+        const wait = base + jitter;
+        console.warn(
+          `[SemRush] RPC 返回空 body (${emptyBodyRetryCount + 1}/${MAX_EMPTY_BODY_RETRIES})，` +
+            `${wait}ms 后退避重试（保持 session，session_refreshed=${sessionRefreshed}）`,
+        );
+        await new Promise((r) => setTimeout(r, wait));
+        return this.rpc(payload, retryCount, sessionRefreshed, emptyBodyRetryCount + 1);
       }
-      throw new Error("3UE 返回空响应，请检查 3UE 账户状态");
+      console.error(
+        `[SemRush] RPC 空 body 已重试 ${MAX_EMPTY_BODY_RETRIES} 次仍失败，3UE 服务端可能抽风`,
+      );
+      throw new Error("3UE 服务暂时不可用（RPC 多次空响应），请稍后重试");
     }
 
     try {

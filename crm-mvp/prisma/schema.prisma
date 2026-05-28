@@ -97,24 +97,24 @@ model system_configs {
 // 5. 联盟平台连接表
 // -----------------------------------------------------------
 model platform_connections {
-  id              BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
-  user_id         BigInt    @db.UnsignedBigInt
-  platform        String    @db.VarChar(8)
-  account_name    String    @default("") @db.VarChar(32) // 账号名称，如 RW1, RW2
-  api_key         String?   @db.Text
-  channel_id      String?   @db.VarChar(64) // C-029：AD 平台必填渠道 ID，其他平台为 NULL
-  publish_site_id BigInt?   @db.UnsignedBigInt // 绑定的发布站点（管理员创建的全局站点）
+  id                   BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id              BigInt    @db.UnsignedBigInt
+  platform             String    @db.VarChar(8)
+  account_name         String    @default("") @db.VarChar(32) // 账号名称，如 RW1, RW2
+  api_key              String?   @db.Text
+  channel_id           String?   @db.VarChar(64) // C-029：AD 平台必填渠道 ID，其他平台为 NULL
+  publish_site_id      BigInt?   @db.UnsignedBigInt // 绑定的发布站点（管理员创建的全局站点）
   // D-026 status 取值：connected | error | unverified | disconnected
   // 默认 unverified（新建未测试），test-connection 成功 → connected，sync 失败 → error
-  status          String    @default("connected") @db.VarChar(16)
-  last_synced_at  DateTime? @db.DateTime(0)
+  status               String    @default("connected") @db.VarChar(16)
+  last_synced_at       DateTime? @db.DateTime(0)
   // D-026 新增 3 字段：API 健康监控
-  last_sync_attempt_at DateTime? @db.DateTime(0)            // 上次尝试同步时间（成功/失败都写）
-  last_error           String?   @db.VarChar(500)           // 上次错误消息（成功后清空）
+  last_sync_attempt_at DateTime? @db.DateTime(0) // 上次尝试同步时间（成功/失败都写）
+  last_error           String?   @db.VarChar(500) // 上次错误消息（成功后清空）
   consecutive_failures Int       @default(0) @db.UnsignedInt // 连续失败次数（成功后清零，>=1 切红灯）
-  is_deleted      Int       @default(0) @db.TinyInt
-  created_at      DateTime  @default(now()) @db.DateTime(0)
-  updated_at      DateTime  @default(now()) @updatedAt @db.DateTime(0)
+  is_deleted           Int       @default(0) @db.TinyInt
+  created_at           DateTime  @default(now()) @db.DateTime(0)
+  updated_at           DateTime  @default(now()) @updatedAt @db.DateTime(0)
 
   @@index([user_id, platform], map: "idx_user_platform")
   @@index([status, last_sync_attempt_at], map: "idx_status_attempt") // D-026: 健康巡检 cron 用
@@ -509,7 +509,11 @@ model google_mcc_accounts {
   is_deleted           Int      @default(0) @db.TinyInt
   created_at           DateTime @default(now()) @db.DateTime(0)
   updated_at           DateTime @default(now()) @updatedAt @db.DateTime(0)
+  /// C-095: VIRTUAL generated column = CASE WHEN is_deleted=0 THEN mcc_id ELSE NULL END
+  /// 仅用于 UNIQUE INDEX uniq_mcc_id_active 模拟"部分唯一约束"，应用层不应直接写入
+  mcc_id_active        String?  @db.VarChar(32)
 
+  @@unique([mcc_id_active], map: "uniq_mcc_id_active")
   @@index([user_id], map: "idx_user")
 }
 
@@ -875,23 +879,31 @@ model merchant_atc_snapshots {
 //   每次反查消耗 1 次 SerpApi，缓存 7 天供整个团队复用
 // -----------------------------------------------------------
 model atc_advertiser_domain_snapshot {
-  id                       BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
-  advertiser_id            String   @db.VarChar(64)
-  region                   String   @default("US") @db.VarChar(8)
-  advertiser_name          String?  @db.VarChar(255)
-  unique_domain_count      Int      @default(0) @db.UnsignedInt
-  /** C-094.1：满足「单广告持续 ≥30 天」的 domain 数（判定 peer 的核心字段） */
-  qualifying_domain_count  Int      @default(0) @db.UnsignedInt
-  ad_count                 Int      @default(0) @db.UnsignedInt
-  /** C-094.1 后存 DomainCreativeStat[]；C-093 旧数据是 string[]；空数组+ad_count>0 视为旧 bug 重算 */
-  domains_json             Json?
-  /** C-094.2：本快照写入时是否仍有 OCR 任务未完成（true 时 service 重读应返回 pending） */
-  ocr_pending              Int      @default(0) @db.TinyInt
-  /** C-094.3：本次 SerpApi 采样的图片 URL + first_shown/last_shown，OCR 跑完后供 cache 命中时重算分类，避免重复调 SerpApi */
-  sampled_ads_json         Json?
-  fetched_at               DateTime @db.DateTime(0)
-  created_at               DateTime @default(now()) @db.DateTime(0)
-  updated_at               DateTime @default(now()) @updatedAt @db.DateTime(0)
+  id                      BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  advertiser_id           String   @db.VarChar(64)
+  region                  String   @default("US") @db.VarChar(8)
+  advertiser_name         String?  @db.VarChar(255)
+  unique_domain_count     Int      @default(0) @db.UnsignedInt
+  /**
+   * C-094.1：满足「单广告持续 ≥30 天」的 domain 数（判定 peer 的核心字段）
+   */
+  qualifying_domain_count Int      @default(0) @db.UnsignedInt
+  ad_count                Int      @default(0) @db.UnsignedInt
+  /**
+   * C-094.1 后存 DomainCreativeStat[]；C-093 旧数据是 string[]；空数组+ad_count>0 视为旧 bug 重算
+   */
+  domains_json            Json?
+  /**
+   * C-094.2：本快照写入时是否仍有 OCR 任务未完成（true 时 service 重读应返回 pending）
+   */
+  ocr_pending             Int      @default(0) @db.TinyInt
+  /**
+   * C-094.3：本次 SerpApi 采样的图片 URL + first_shown/last_shown，OCR 跑完后供 cache 命中时重算分类，避免重复调 SerpApi
+   */
+  sampled_ads_json        Json?
+  fetched_at              DateTime @db.DateTime(0)
+  created_at              DateTime @default(now()) @db.DateTime(0)
+  updated_at              DateTime @default(now()) @updatedAt @db.DateTime(0)
 
   @@unique([advertiser_id, region], map: "uk_advertiser_region")
   @@index([fetched_at], map: "idx_fetched_at")
@@ -902,19 +914,19 @@ model atc_advertiser_domain_snapshot {
 // 维度：image_url 全局唯一，跨用户/跨商家共享
 // -----------------------------------------------------------
 model ad_image_ocr_cache {
-  id                BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
-  image_url         String   @unique(map: "uk_image_url") @db.VarChar(768)
-  status            String   @default("pending") @db.VarChar(20)
-  extracted_domain  String?  @db.VarChar(255)
-  raw_output        String?  @db.VarChar(512)
-  tries             Int      @default(0) @db.UnsignedInt
-  last_error        String?  @db.VarChar(512)
-  model_used        String?  @db.VarChar(64)
-  prompt_tokens     Int?     @db.UnsignedInt
-  completion_tokens Int?     @db.UnsignedInt
+  id                BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  image_url         String    @unique(map: "uk_image_url") @db.VarChar(768)
+  status            String    @default("pending") @db.VarChar(20)
+  extracted_domain  String?   @db.VarChar(255)
+  raw_output        String?   @db.VarChar(512)
+  tries             Int       @default(0) @db.UnsignedInt
+  last_error        String?   @db.VarChar(512)
+  model_used        String?   @db.VarChar(64)
+  prompt_tokens     Int?      @db.UnsignedInt
+  completion_tokens Int?      @db.UnsignedInt
   lock_at           DateTime? @db.DateTime(0)
-  created_at        DateTime @default(now()) @db.DateTime(0)
-  updated_at        DateTime @default(now()) @updatedAt @db.DateTime(0)
+  created_at        DateTime  @default(now()) @db.DateTime(0)
+  updated_at        DateTime  @default(now()) @updatedAt @db.DateTime(0)
 
   @@index([status, lock_at], map: "idx_status_lock")
 }
@@ -963,7 +975,9 @@ model user_atc_watchlist {
   advertiser_name String?  @db.VarChar(255)
   region          String   @default("US") @db.VarChar(8)
   min_days        Int      @default(30)
-  /** C-094.6：是否分享给同事（出现在「推荐广告主」列表） */
+  /**
+   * C-094.6：是否分享给同事（出现在「推荐广告主」列表）
+   */
   is_shared       Int      @default(0) @db.TinyInt
   is_deleted      Int      @default(0) @db.TinyInt
   created_at      DateTime @default(now()) @db.DateTime(0)
@@ -990,4 +1004,38 @@ model user_atc_alert_log {
 
   @@unique([user_id, creative_id, alerted_date], map: "uk_user_creative_date")
   @@index([watchlist_id], map: "idx_watchlist")
+}
+
+// -----------------------------------------------------------
+// 35. D-038c-v2 I6 — SemRush 关键词结果 24h 缓存兜底
+// 用途：3UE 抽风时回退使用缓存关键词（黄色 toast 提示），保障广告创建流程不中断
+// -----------------------------------------------------------
+model semrush_keyword_cache {
+  id         BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  domain     String   @db.VarChar(255) // normalizeDomain 后的纯域名
+  database   String   @db.VarChar(8) // SemRush db 码（us/uk/fr 等）
+  payload    String   @db.LongText // 完整 /api/user/ad-creation/semrush 响应 data JSON
+  raw_kw_cnt Int      @default(0) @db.UnsignedInt // 用于监控缓存质量
+  cached_at  DateTime @default(now()) @db.DateTime(0)
+  expires_at DateTime @db.DateTime(0) // 写入时设为 cached_at + 24h
+  created_at DateTime @default(now()) @db.DateTime(0)
+  updated_at DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@unique([domain, database], map: "uk_domain_db")
+  @@index([expires_at], map: "idx_expires_at")
+}
+
+// -----------------------------------------------------------
+// 36. D-038c-v2 I1 — SemRush 健康检查日志（cron 每整点写入，保留 7 天）
+// -----------------------------------------------------------
+model semrush_health_logs {
+  id         BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  checked_at DateTime @default(now()) @db.DateTime(0)
+  overall    String   @db.VarChar(16) // success / failure
+  error_type String?  @db.VarChar(32) // none / apikey / login / rpc_empty / unknown
+  details    String?  @db.LongText // 完整步骤日志 JSON
+  alerted    Int      @default(0) @db.TinyInt // 是否已触发 admin 告警（去重防刷）
+
+  @@index([checked_at], map: "idx_checked_at")
+  @@index([error_type, checked_at], map: "idx_errtype_time")
 }

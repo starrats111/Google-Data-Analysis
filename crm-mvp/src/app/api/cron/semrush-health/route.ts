@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { testConnection, trySwitchNode, refreshApiKey } from "@/lib/semrush-auto-fix";
+import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
+
+const HEALTH_LOG_RETENTION_DAYS = 7;
+const ADMIN_USER_ID = BigInt(1); // 管理员账号 user_id（系统默认 admin = id 1）
+const ALERT_DEDUP_WINDOW_HOURS = 24;
 
 function verifyCron(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
@@ -17,13 +22,14 @@ function log(msg: string) {
 /**
  * GET /api/cron/semrush-health
  *
- * 每天 04:00 (服务器时间 CST) 自动执行：
+ * D-038c-v2 I1：cron 频率 04:00 → 每整点 `0 * * * *`（crontab 同时更新）
+ *
+ * 每次执行：
  * 1. 测试 SemRush 连接
- * 2. 连接正常 → 跳过，记录 OK
- * 3. 连接异常 → 分析错误类型：
- *    - 节点问题 → 自动遍历节点 1-10，切换到可用节点
- *    - API Key 问题 → 自动登录 3UE，从页面提取最新 API Key 并更新 DB
- *    - 两者均失败 → 记录最终错误日志
+ * 2. 连接正常 → 写 OK 日志，结束
+ * 3. 连接异常 → 自动修复（切节点 / 刷 API Key）
+ * 4. 修复失败 → 写失败日志 + 通知 admin（24h 同 errorType 去重，防刷屏）
+ * 5. 清理 7 天前的健康日志
  */
 export async function GET(req: NextRequest) {
   if (!verifyCron(req)) {
@@ -31,8 +37,108 @@ export async function GET(req: NextRequest) {
   }
 
   const result = await runSemrushHealthCheck();
+
+  // D-038c-v2 I1：写健康日志
+  await writeHealthLog(result);
+
+  // D-038c-v2 I1：失败时通知 admin（去重 24h）
+  if (!result.healthy && !result.fixed) {
+    await maybeNotifyAdmin(result);
+  }
+
+  // 清理 7 天前的旧日志（异步，不阻塞响应）
+  void cleanupOldLogs().catch((err) => log(`清理旧日志失败: ${err instanceof Error ? err.message : err}`));
+
   const status = result.fixed || result.healthy ? 200 : 500;
   return NextResponse.json(result, { status });
+}
+
+interface HealthCheckResult {
+  healthy: boolean;
+  fixed: boolean;
+  action: string;
+  detail: string;
+  errorType?: string;
+  steps?: unknown[];
+  retestSteps?: unknown[];
+  newApiKey?: string;
+  newNode?: string;
+}
+
+async function writeHealthLog(result: HealthCheckResult) {
+  try {
+    await prisma.semrush_health_logs.create({
+      data: {
+        overall: result.healthy ? "success" : "failure",
+        error_type: result.errorType ?? (result.healthy ? "none" : "unknown"),
+        details: JSON.stringify({
+          action: result.action,
+          detail: result.detail,
+          fixed: result.fixed,
+          steps: result.steps,
+          retestSteps: result.retestSteps,
+          newApiKey: result.newApiKey,
+          newNode: result.newNode,
+        }),
+        alerted: 0,
+      },
+    });
+  } catch (err) {
+    log(`写健康日志失败: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+async function maybeNotifyAdmin(result: HealthCheckResult) {
+  try {
+    const errorType = result.errorType ?? "unknown";
+    // 24h 内同 errorType 去重
+    const windowAgo = new Date(Date.now() - ALERT_DEDUP_WINDOW_HOURS * 60 * 60 * 1000);
+    const recentSame = await prisma.notifications.findFirst({
+      where: {
+        user_id: ADMIN_USER_ID,
+        type: "alert",
+        title: { startsWith: "[SemRush]" },
+        metadata: { contains: `"errorType":"${errorType}"` },
+        created_at: { gte: windowAgo },
+        is_deleted: 0,
+      },
+      orderBy: { created_at: "desc" },
+    });
+    if (recentSame) {
+      log(`已在 24h 内推送过相同告警（errorType=${errorType}），跳过去重`);
+      return;
+    }
+    await prisma.notifications.create({
+      data: {
+        user_id: ADMIN_USER_ID,
+        type: "alert",
+        title: `[SemRush] 3UE 健康检查失败（errorType=${errorType}）`,
+        content:
+          `${result.detail}\n\n` +
+          `Action: ${result.action}\n` +
+          `请尽快登录 dash.3ue.co 检查账号状态，或在后台 SemRush 配置中手动更新凭据。`,
+        metadata: JSON.stringify({ errorType, action: result.action, ts: new Date().toISOString() }),
+      },
+    });
+    // 标记最近写入的 health_log 已告警
+    await prisma.semrush_health_logs.updateMany({
+      where: { overall: "failure" },
+      data: { alerted: 1 },
+    });
+    log(`已通知 admin (errorType=${errorType})`);
+  } catch (err) {
+    log(`通知 admin 失败: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+async function cleanupOldLogs() {
+  const cutoff = new Date(Date.now() - HEALTH_LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+  const deleted = await prisma.semrush_health_logs.deleteMany({
+    where: { checked_at: { lt: cutoff } },
+  });
+  if (deleted.count > 0) {
+    log(`已清理 ${deleted.count} 条 ${HEALTH_LOG_RETENTION_DAYS} 天前的旧日志`);
+  }
 }
 
 async function runSemrushHealthCheck() {
