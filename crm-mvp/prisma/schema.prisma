@@ -509,11 +509,7 @@ model google_mcc_accounts {
   is_deleted           Int      @default(0) @db.TinyInt
   created_at           DateTime @default(now()) @db.DateTime(0)
   updated_at           DateTime @default(now()) @updatedAt @db.DateTime(0)
-  /// C-095: VIRTUAL generated column = CASE WHEN is_deleted=0 THEN mcc_id ELSE NULL END
-  /// 仅用于 UNIQUE INDEX uniq_mcc_id_active 模拟"部分唯一约束"，应用层不应直接写入
-  mcc_id_active        String?  @db.VarChar(32)
 
-  @@unique([mcc_id_active], map: "uniq_mcc_id_active")
   @@index([user_id], map: "idx_user")
 }
 
