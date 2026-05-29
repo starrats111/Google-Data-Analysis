@@ -2663,7 +2663,8 @@ async function runIntelligentCore(
   //   D-047/C-115: sitelink 从 orchestrator 移除 —— 不再让 AI 编造 url_path，
   //   改由 buildRealSitelinks 用爬虫真实 URL 生成（与 orchestrator 并行，不增加总耗时）。
   const tasks: OrchestratorTask[] = [
-    { kind: "headlines", count: 10, maxLen: 30 },
+    // C-117: 标题满 15、描述满 4（Google Ads RSA 上限，07 铁律必须填满）
+    { kind: "headlines", count: 15, maxLen: 30 },
     { kind: "descriptions", count: 4, maxLen: 90, minLen: 40 },
     { kind: "callouts", count: 6, maxLen: 25 },
   ];

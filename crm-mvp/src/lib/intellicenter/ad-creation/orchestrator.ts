@@ -465,12 +465,28 @@ async function generateAndScoreBatch(
   aiCalls: number;
 }> {
   let aiCalls = 0;
-  let bestItems: string[] = [];
   let bestSimilarity: BatchSimilarityResult | undefined;
   let retryHint = "";
 
+  // C-117: 跨轮「累积去重」凑够数量 —— 07 铁律：标题必须满 15、描述必须满 4。
+  //   旧逻辑每轮独立、只取 similarity 最高的一轮，AI 单轮产不够就只剩 3-5 条。
+  //   现在每轮达标项合并去重进 accumulated，够数即返回；并多要 buffer 条提高单轮产出。
+  const accumulated: string[] = [];
+  const seen = new Set<string>();
+  const addItems = (items: string[]) => {
+    for (const it of items) {
+      const key = it.toLowerCase().trim();
+      if (key && !seen.has(key)) {
+        seen.add(key);
+        accumulated.push(it);
+      }
+    }
+  };
+  // 多要 buffer：让 AI 一次多产几条，截断/去重后仍够数（描述更难达标，buffer 更大）
+  const askCount = opts.count + (opts.task === "description" ? 4 : 5);
+
   for (let attempt = 0; attempt < 3; attempt++) {
-    // 最多 3 轮：1 次首轮 + 2 次返工
+    // 最多 3 轮：1 次首轮 + 2 次返工/补量
     const prompt = buildEvidencePrompt({
       merchantName: opts.ctx.merchantName,
       finalUrl: opts.ctx.finalUrl,
@@ -481,11 +497,16 @@ async function generateAndScoreBatch(
       keywords: opts.keywords,
       evidence: opts.evidence,
       task: opts.task,
-      count: opts.count,
+      count: askCount,
       maxLen: opts.maxLen,
       minLen: opts.minLen,
     });
-    const fullPrompt = retryHint ? `${prompt}\n\n# Retry feedback\n${retryHint}` : prompt;
+    // 已累积的项告诉 AI 不要重复 + 还差几条
+    const needMore = opts.count - accumulated.length;
+    const dedupHint = accumulated.length > 0
+      ? `\n\n# Already have these (do NOT repeat, generate ${needMore}+ NEW different ones):\n${accumulated.map((s) => `- ${s}`).join("\n")}`
+      : "";
+    const fullPrompt = (retryHint ? `${prompt}\n\n# Retry feedback\n${retryHint}` : prompt) + dedupHint;
 
     aiCalls += 1;
     let parsed: string[] = [];
@@ -496,14 +517,13 @@ async function generateAndScoreBatch(
           { role: "system", content: "You are a senior Google Ads copywriter. Return ONLY valid JSON." },
           { role: "user", content: fullPrompt },
         ],
-        Math.max(1024, opts.count * 80),
+        Math.max(1024, askCount * 90),
       );
       const json = JSON.parse(extractJsonFromAi(raw)) as Record<string, unknown>;
       const arr = json[opts.fieldName];
       if (Array.isArray(arr)) {
-        // C-116: 超长项「截断」而非「丢弃」—— 旧逻辑 filter 掉 length>maxLen 的项，
-        //   AI 偶发输出一批超 30 字符标题时会被全删，导致最终只剩 3 条（07 实证）。
-        //   改为 smartTruncate 在词边界截断到 maxLen，保住数量；过短/空项仍剔除。
+        // C-116: 超长项「截断」而非「丢弃」—— smartTruncate 在词边界截到 maxLen，保住数量；
+        //   过短（< minLen，描述需 ≥40）/ 空项仍剔除（无法靠截断补长，交给下一轮补量）。
         parsed = arr
           .map((x) => (typeof x === "string" ? x.trim().replace(/^["']|["']$/g, "") : ""))
           .map((s) => (s.length > opts.maxLen ? smartTruncate(s, opts.maxLen).slice(0, opts.maxLen) : s))
@@ -515,31 +535,33 @@ async function generateAndScoreBatch(
       );
     }
 
-    if (parsed.length === 0) {
-      continue;
-    }
+    if (parsed.length > 0) {
+      const sim = scoreBatch(parsed, opts.keywords);
+      if (sim.avgSimilarity > (bestSimilarity?.avgSimilarity ?? -1)) {
+        bestSimilarity = sim;
+      }
+      addItems(parsed);
 
-    const sim = scoreBatch(parsed, opts.keywords);
-    if (sim.avgSimilarity > (bestSimilarity?.avgSimilarity ?? -1)) {
-      bestItems = parsed;
-      bestSimilarity = sim;
-    }
+      // 数量已够 → 立即返回（取前 count 条）
+      if (accumulated.length >= opts.count) {
+        return { items: accumulated.slice(0, opts.count), lastSimilarity: bestSimilarity, aiCalls };
+      }
 
-    if (sim.passed && parsed.length >= Math.ceil(opts.count * 0.7)) {
-      return { items: parsed, lastSimilarity: sim, aiCalls };
+      // 触发返工（带相似度反馈 + 补量提示）
+      retryHint = buildRetryHintForLowSimilarity(sim, opts.keywords);
+      opts.emit("similarity_retry", {
+        task: opts.task,
+        attempt: attempt + 1,
+        avgSimilarity: sim.avgSimilarity,
+        lowScoringCount: sim.lowScoringItems.length,
+      });
     }
-
-    // 触发返工
-    retryHint = buildRetryHintForLowSimilarity(sim, opts.keywords);
-    opts.emit("similarity_retry", {
-      task: opts.task,
-      attempt: attempt + 1,
-      avgSimilarity: sim.avgSimilarity,
-      lowScoringCount: sim.lowScoringItems.length,
-    });
   }
 
-  return { items: bestItems, lastSimilarity: bestSimilarity, aiCalls };
+  console.warn(
+    `[Orchestrator] ${opts.task} 3 轮累积仅 ${accumulated.length}/${opts.count} 条（AI 产出不足，已尽力）`,
+  );
+  return { items: accumulated.slice(0, opts.count), lastSimilarity: bestSimilarity, aiCalls };
 }
 
 /**
