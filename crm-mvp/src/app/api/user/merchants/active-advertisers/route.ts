@@ -75,12 +75,16 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
   });
 
   // 按 user_id 聚合
+  // §78.4：latestEnabledCampaign = 该用户启用广告系列中「最新建」的那条，
+  //   用于当日预算取数（Q-d2=启用且取最新建）。
   const userCampaignMap = new Map<string, {
     userId: bigint;
     campaignIds: bigint[];
     campaignCount: number;
     enabledCount: number;
     earliestCreatedAt: Date | null;
+    latestEnabledCampaignId: bigint | null;
+    latestEnabledCreatedAt: Date | null;
   }>();
 
   for (const c of campaigns) {
@@ -92,12 +96,22 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
         campaignCount: 0,
         enabledCount: 0,
         earliestCreatedAt: null,
+        latestEnabledCampaignId: null,
+        latestEnabledCreatedAt: null,
       });
     }
     const entry = userCampaignMap.get(key)!;
     entry.campaignIds.push(c.id);
     entry.campaignCount++;
-    if (c.google_status === "ENABLED") entry.enabledCount++;
+    if (c.google_status === "ENABLED") {
+      entry.enabledCount++;
+      // 取最新建的启用广告系列（created_at 最大；null 视为最旧）
+      if (!entry.latestEnabledCreatedAt || (c.created_at && c.created_at > entry.latestEnabledCreatedAt)) {
+        entry.latestEnabledCampaignId = c.id;
+        entry.latestEnabledCreatedAt = c.created_at ?? entry.latestEnabledCreatedAt;
+      }
+      if (entry.latestEnabledCampaignId == null) entry.latestEnabledCampaignId = c.id;
+    }
     if (c.created_at && (!entry.earliestCreatedAt || c.created_at < entry.earliestCreatedAt)) {
       entry.earliestCreatedAt = c.created_at;
     }
@@ -153,6 +167,26 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
     },
   ]));
 
+  // §78.4 Q-d：当日预算 = 该用户「最新建启用广告系列」最近一天的 ads_daily_stats.budget
+  const latestEnabledIds = activeUserIds
+    .map((e) => e.latestEnabledCampaignId)
+    .filter((v): v is bigint => v != null);
+  const budgetByCampaign = new Map<string, number>();
+  if (latestEnabledIds.length > 0) {
+    // 按 date desc 取每个 campaign 的最近一天 budget（在 JS 里取首条即可）
+    const budgetRows = await prisma.ads_daily_stats.findMany({
+      where: { campaign_id: { in: latestEnabledIds }, is_deleted: 0, budget: { not: null } },
+      select: { campaign_id: true, date: true, budget: true },
+      orderBy: { date: "desc" },
+    });
+    for (const r of budgetRows) {
+      const key = r.campaign_id.toString();
+      if (!budgetByCampaign.has(key)) {
+        budgetByCampaign.set(key, Number(r.budget ?? 0));
+      }
+    }
+  }
+
   // 佣金从 affiliate_transactions 聚合（半开区间处理 DATETIME 类型）
   const commissionAgg = umIds.length > 0
     ? await prisma.$queryRawUnsafe<
@@ -206,6 +240,11 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
     }
     const netCommission = totalCommission - totalRejected;
 
+    // §78.4 Q-d：当日预算（最新建启用广告系列最近一天 budget）
+    const dailyBudget = entry.latestEnabledCampaignId != null
+      ? (budgetByCampaign.get(entry.latestEnabledCampaignId.toString()) ?? 0)
+      : 0;
+
     const row: Record<string, unknown> = {
       user_id: entry.userId,
       display_name: userNameMap.get(entry.userId.toString()) || "未知",
@@ -213,14 +252,17 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
       enabled_count: entry.enabledCount,
       // 投放日期对所有角色可见（不含财务数据）
       campaign_created_at: entry.earliestCreatedAt ?? null,
+      // §78.4 Q-c=all：ROI + 当日预算对所有角色可见
+      // ROI 沿用组长口径 (净佣金 - cost) / cost（本月）；组员只拿聚合后的 ROI，不暴露原始 cost/佣金
+      roi: totalCost > 0 ? ((netCommission - totalCost) / totalCost).toFixed(2) : "0.00",
+      daily_budget: dailyBudget.toFixed(2),
     };
-    // 财务数据仅组长可见
+    // 原始财务数据（花费/点击/佣金）仍仅组长可见
     if (isLeader) {
       row.total_cost = totalCost.toFixed(2);
       row.total_clicks = totalClicks;
       row.total_impressions = totalImpressions;
       row.monthly_commission = totalCommission.toFixed(2);
-      row.roi = totalCost > 0 ? ((netCommission - totalCost) / totalCost).toFixed(2) : "0.00";
     }
     return row;
   });

@@ -174,15 +174,16 @@ export default function MerchantsPage() {
     items: Array<{ platform: string; merchant_id: string; merchant_name: string; orders: number; total_all: number; total_settled: number; rejected: number; rate: number }>;
     total: number;
   }>(tab === "chargebacks" ? "/api/user/merchants/chargebacks" : null, cbParams);
-  // 选取商家 Tab 的拒付命中集合（固定阈值 50%，默认时间窗 2025-11-01 至今）
+  // §78.4：拒付率全量 map（threshold=0 拿全部商家真实 rate，默认时间窗 2025-11-01 至今）
+  // claimed + available 两个 tab 都加载，用于「拒付率」列 + available 红 Tag + 领取二次确认
   const cbHitsParams = useMemo(() => ({
     date_start: "2025-11-01",
     date_end: dayjs().format("YYYY-MM-DD"),
-    threshold: 50,
+    threshold: 0,
   }), []);
   const { data: cbHitsData } = useApiWithParams<{
     items: Array<{ platform: string; merchant_id: string; rate: number }>;
-  }>(tab === "available" ? "/api/user/merchants/chargebacks" : null, cbHitsParams);
+  }>((tab === "available" || tab === "claimed") ? "/api/user/merchants/chargebacks" : null, cbHitsParams);
   const chargebackHitMap = useMemo(() => {
     const m = new Map<string, number>();
     for (const it of cbHitsData?.items || []) {
@@ -801,12 +802,25 @@ export default function MerchantsPage() {
     );
   }, [atcLoading, atcLocalData, serpApiConfigured, triggerAtcQuery, router, getAtcRegion, setAtcRegion, atcPopover, openAtcPopover, closeAtcPopover, atcRegionOptions]);
 
+  // §78.4：拒付率列渲染（全员维度，时间窗 2025-11-01 至今）。无交易记录显示「-」。
+  const renderChargebackRateCol = useCallback((_: unknown, rec: Merchant) => {
+    const rate = chargebackHitMap.get(`${rec.platform}-${rec.merchant_id}`);
+    if (rate === undefined) return <span style={{ color: "#bfbfbf" }}>-</span>;
+    const color = rate >= 50 ? "#ff4d4f" : rate >= 20 ? "#faad14" : "#52c41a";
+    return (
+      <Tooltip title="全员维度拒付率（拒付佣金 / 全部状态佣金），时间窗 2025-11-01 至今">
+        <span style={{ color, fontWeight: 600 }}>{rate.toFixed(2)}%</span>
+      </Tooltip>
+    );
+  }, [chargebackHitMap]);
+
   const claimedCols = useMemo(() => [
     { title: "商家名称", dataIndex: "merchant_name", width: 240, sorter: true, sortOrder: colSortOrder("merchant_name"), render: (_: string, rec: Merchant) => <MerchantNameCell rec={rec} /> },
     { title: "平台", dataIndex: "platform", width: 80, render: (v: string) => <Tag color={PC[v] || "default"} style={{ fontWeight: 600 }}>{v}</Tag> },
     { title: "MID", dataIndex: "merchant_id", width: 100, ellipsis: true },
     { title: "主营业务", dataIndex: "category", width: 130, ellipsis: true, render: (v: string | null) => catCn(v) },
     { title: "佣金率", dataIndex: "commission_rate", width: 110, sorter: true, sortOrder: colSortOrder("commission_rate"), render: (v: string | null) => <CommissionCell v={v} /> },
+    { title: "拒付率", dataIndex: "chargeback_rate", width: 100, align: "center" as const, render: renderChargebackRateCol },
     { title: "支持地区", dataIndex: "supported_regions", width: 150, render: (v: unknown[] | null) => <RB r={v} /> },
     { title: "状态", dataIndex: "ad_status", width: 90, render: (v: string) => v === "ENABLED" ? <Tag color="green">已启用</Tag> : v === "PAUSED" ? <Tag color="orange">已暂停</Tag> : v === "NOT_SUBMITTED" ? <Tag color="blue">已领取</Tag> : <Tag>未知</Tag> },
     { title: "ATC竞争度", width: 180, render: renderAtcCompetitionCol },
@@ -817,7 +831,7 @@ export default function MerchantsPage() {
         <Popconfirm title="确认取消领取？" onConfirm={() => doRelease(rec.id)}><Button size="small" danger>取消领取</Button></Popconfirm>
       </Space>
     ) },
-  ], [doRelease, showActiveAdv, sortField, sortOrder, renderAtcCompetitionCol]);
+  ], [doRelease, showActiveAdv, sortField, sortOrder, renderAtcCompetitionCol, renderChargebackRateCol]);
   const availCols = useMemo(() => [
     { title: "商家名称", dataIndex: "merchant_name", width: 280, sorter: true, sortOrder: colSortOrder("merchant_name"), render: (_: string, rec: Merchant) => {
       const hitRate = chargebackHitMap.get(`${rec.platform}-${rec.merchant_id}`);
@@ -836,6 +850,7 @@ export default function MerchantsPage() {
     { title: "MID", dataIndex: "merchant_id", width: 100, ellipsis: true },
     { title: "主营业务", dataIndex: "category", width: 130, ellipsis: true, render: (v: string | null) => catCn(v) },
     { title: "佣金率", dataIndex: "commission_rate", width: 110, sorter: true, sortOrder: colSortOrder("commission_rate"), render: (v: string | null) => <CommissionCell v={v} /> },
+    { title: "拒付率", dataIndex: "chargeback_rate", width: 100, align: "center" as const, render: renderChargebackRateCol },
     { title: "支持地区", dataIndex: "supported_regions", width: 150, render: (v: unknown[] | null) => <RB r={v} /> },
     // C-091：选取商家 tab 也加 ATC 竞争度列，与"我的商家"完全一致——
     // 点 N 个 → 弹广告主列表 Modal → 操作列「查情报」跳转 /user/intelligence
@@ -847,7 +862,7 @@ export default function MerchantsPage() {
         {rec.policy_status === "prohibited" ? <Button size="small" disabled>禁止领取</Button> : <Button type="primary" size="small" icon={<CheckOutlined />} onClick={() => doClaim(rec)}>{rec.policy_status === "restricted" ? "领取(限制)" : "领取"}</Button>}
       </Space>
     ) },
-  ], [doClaim, showActiveAdv, sortField, sortOrder, chargebackHitMap, renderAtcCompetitionCol]);
+  ], [doClaim, showActiveAdv, sortField, sortOrder, chargebackHitMap, renderAtcCompetitionCol, renderChargebackRateCol]);
   // C-019 拒付商家 Tab 的列定义
   const chargebackCols = useMemo(() => [
     { title: "平台", dataIndex: "platform", width: 80, render: (v: string) => <Tag color={PC[v] || "default"} style={{ fontWeight: 600 }}>{v}</Tag> },
@@ -1112,7 +1127,7 @@ export default function MerchantsPage() {
           },
           getCheckboxProps: () => ({ disabled: batchRunning }),
         }}
-        pagination={{ current: page, pageSize, total, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"], showTotal: (t: number) => `共 ${t} 条`, onChange: (p, ps) => { if (ps !== pageSize) { setPageSize(ps); setPage(1); } else setPage(p); } }} scroll={{ x: 1000 }} size="small" />}
+        pagination={{ current: page, pageSize, total, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"], showTotal: (t: number) => `共 ${t} 条`, onChange: (p, ps) => { if (ps !== pageSize) { setPageSize(ps); setPage(1); } else setPage(p); } }} scroll={{ x: 1100 }} size="small" />}
       {tab === "available" && <Table columns={availCols} dataSource={merchants} rowKey="id" loading={ml} onChange={handleTableChange}
         rowSelection={{
           selectedRowKeys: batchSelectedKeys,
@@ -1129,7 +1144,7 @@ export default function MerchantsPage() {
           },
           getCheckboxProps: () => ({ disabled: batchRunning }),
         }}
-        pagination={{ current: page, pageSize, total, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"], showTotal: (t: number) => `共 ${t} 条`, onChange: (p, ps) => { if (ps !== pageSize) { setPageSize(ps); setPage(1); } else setPage(p); } }} scroll={{ x: 1280 }} size="small" />}
+        pagination={{ current: page, pageSize, total, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"], showTotal: (t: number) => `共 ${t} 条`, onChange: (p, ps) => { if (ps !== pageSize) { setPageSize(ps); setPage(1); } else setPage(p); } }} scroll={{ x: 1380 }} size="small" />}
       {tab === "violations" && (<div>
         {vioError && <div style={{ marginBottom: 12, padding: "8px 12px", background: "#fff2f0", border: "1px solid #ffccc7", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <span><WarningOutlined style={{ color: "#ff4d4f", marginRight: 6 }} />加载违规商家失败：{vioError.message || "请求异常"}</span>
@@ -1403,7 +1418,7 @@ export default function MerchantsPage() {
         </div>
       )}
     </Modal>
-    <Modal title={`在投详情 — ${advMerchant?.merchant_name || ""}`} open={advModal} onCancel={() => setAdvModal(false)} footer={null} width={isLeader ? 860 : 640}>
+    <Modal title={`在投详情 — ${advMerchant?.merchant_name || ""}`} open={advModal} onCancel={() => setAdvModal(false)} footer={null} width={isLeader ? 960 : 720}>
       {isLeader && advList.length > 0 && (<div style={{ marginBottom: 12, display: "flex", gap: 24 }}>
         <div><Text type="secondary">总花费（本月）</Text><div style={{ fontSize: 20, fontWeight: 700 }}>${advList.reduce((s, r) => s + parseFloat(r.total_cost || "0"), 0).toFixed(2)}</div></div>
         <div><Text type="secondary">总佣金（本月）</Text><div style={{ fontSize: 20, fontWeight: 700, color: "#52c41a" }}>${advList.reduce((s, r) => s + parseFloat(r.monthly_commission || "0"), 0).toFixed(2)}</div></div>
@@ -1420,12 +1435,17 @@ export default function MerchantsPage() {
         { title: "总花费", dataIndex: "total_cost", width: 90, align: "right" as const, render: (v: string) => `$${v}` },
         { title: "总点击", dataIndex: "total_clicks", width: 80, align: "right" as const, render: (v: number) => (v || 0).toLocaleString() },
         { title: "本月佣金", dataIndex: "monthly_commission", width: 100, align: "right" as const, render: (v: string) => <span style={{ color: "#52c41a", fontWeight: 600 }}>${v}</span> },
-        { title: "ROI", dataIndex: "roi", width: 70, align: "right" as const },
+        // §78.4 Q-d：当日预算 = 该员工启用广告系列最新一条最近一天的 ads_daily_stats.budget
+        { title: "当日预算", dataIndex: "daily_budget", width: 90, align: "right" as const, render: (v: string) => <span style={{ color: "#1677ff" }}>${v ?? "0.00"}</span> },
+        { title: "ROI", dataIndex: "roi", width: 70, align: "right" as const, render: (v: string) => { const n = parseFloat(v || "0"); return <span style={{ color: n >= 0 ? "#52c41a" : "#ff4d4f", fontWeight: 600 }}>{v ?? "0.00"}</span>; } },
       ] : [
-        { title: "投放人", dataIndex: "display_name", width: 120 },
+        // §78.4 Q-c=all：组员也可见每个在投人的 ROI + 当日预算
+        { title: "投放人", dataIndex: "display_name", width: 110 },
         { title: "广告系列", dataIndex: "campaign_count", width: 80, align: "center" as const },
         { title: "启用", dataIndex: "enabled_count", width: 60, align: "center" as const, render: (v: number) => <Tag color="green">{v}</Tag> },
-        { title: "投放日期", dataIndex: "campaign_created_at", width: 130, render: (v: string) => v ? new Date(v).toLocaleDateString("zh-CN", { timeZone: "Asia/Shanghai" }) : "-" },
+        { title: "投放日期", dataIndex: "campaign_created_at", width: 110, render: (v: string) => v ? new Date(v).toLocaleDateString("zh-CN", { timeZone: "Asia/Shanghai" }) : "-" },
+        { title: "当日预算", dataIndex: "daily_budget", width: 90, align: "right" as const, render: (v: string) => <span style={{ color: "#1677ff" }}>${v ?? "0.00"}</span> },
+        { title: "ROI", dataIndex: "roi", width: 70, align: "right" as const, render: (v: string) => { const n = parseFloat(v || "0"); return <span style={{ color: n >= 0 ? "#52c41a" : "#ff4d4f", fontWeight: 600 }}>{v ?? "0.00"}</span>; } },
       ]} />
     </Modal>
 
