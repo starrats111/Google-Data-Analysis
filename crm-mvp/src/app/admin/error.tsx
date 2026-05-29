@@ -12,6 +12,19 @@ export default function AdminError({
 }) {
   useEffect(() => {
     console.error("[AdminError]", error);
+    // C-113: ChunkLoadError 自动恢复（同 user/error.tsx，部署后老标签页 chunk 失效自动刷新一次）
+    const msg = String(error?.message || "");
+    const isChunkError =
+      error?.name === "ChunkLoadError" ||
+      /Loading chunk [\w-]+ failed|ChunkLoadError|Failed to fetch dynamically imported module|error loading dynamically imported module/i.test(msg);
+    if (isChunkError && typeof window !== "undefined") {
+      const KEY = "__chunk_reloaded_at";
+      const last = Number(sessionStorage.getItem(KEY) || 0);
+      if (Date.now() - last > 10000) {
+        sessionStorage.setItem(KEY, String(Date.now()));
+        window.location.reload();
+      }
+    }
   }, [error]);
 
   return (
