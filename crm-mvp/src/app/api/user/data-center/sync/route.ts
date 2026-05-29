@@ -11,6 +11,7 @@ import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
 import { applyAffiliateCommissionToDailyStats } from "@/lib/daily-stats-commission";
 import { aggregateRawTransactions } from "@/lib/affiliate-txn-aggregate";
 import { markConnectionSuccess, markConnectionAttempted, markConnectionFailure } from "@/lib/connection-health";
+import { createCampaignDedup, loadSoftDeletedGcids } from "@/lib/google-ads/campaign-dedup";
 
 /**
  * POST /api/user/data-center/sync
@@ -188,6 +189,8 @@ async function syncAdsData(
         where: { user_id: userId, mcc_id: mcc.id, is_deleted: 0 },
       });
       const campaignMap = new Map(existingCampaigns.map((c) => [c.google_campaign_id, c]));
+      // D-048 §77.23：防回灌——本 (user,mcc) 下"仅软删无活跃"的 gcid 不再补建
+      const softDeletedGcids = await loadSoftDeletedGcids(userId, mcc.id);
 
       const apiMerchants = await prisma.user_merchants.findMany({
         where: { user_id: userId, is_deleted: 0 },
@@ -218,15 +221,15 @@ async function syncAdsData(
                 if (!campaign) {
                   const parsed = parseCampaignNameFull(cd.campaign_name);
                   const merchantId = parsed ? (apiMerchantIndex.get(`${parsed.platform}_${parsed.mid}`) || BigInt(0)) : BigInt(0);
-                  campaign = await prisma.campaigns.create({
-                    data: {
-                      user_id: userId, user_merchant_id: merchantId,
-                      google_campaign_id: cd.campaign_id, mcc_id: mcc.id,
-                      customer_id: cd.customer_id, campaign_name: cd.campaign_name,
-                      daily_budget: cd.budget_dollars, target_country: "US",
-                      google_status: cd.campaign_status, last_google_sync_at: new Date(),
-                    },
-                  });
+                  const createdC = await createCampaignDedup({
+                    user_id: userId, user_merchant_id: merchantId,
+                    google_campaign_id: cd.campaign_id, mcc_id: mcc.id,
+                    customer_id: cd.customer_id, campaign_name: cd.campaign_name,
+                    daily_budget: cd.budget_dollars, target_country: "US",
+                    google_status: cd.campaign_status, last_google_sync_at: new Date(),
+                  }, { userId, mccId: mcc.id, gcid: cd.campaign_id, softDeletedGcids });
+                  if (!createdC) continue; // 被清洗过的 gcid，跳过回灌
+                  campaign = createdC;
                   campaignMap.set(cd.campaign_id, campaign);
                 } else if (!campaign.customer_id && cd.customer_id) {
                   await prisma.campaigns.update({
@@ -308,15 +311,15 @@ async function syncAdsData(
           if (!campaign) {
             const parsed = parseCampaignNameFull(cd.campaign_name);
             const merchantId = parsed ? (apiMerchantIndex.get(`${parsed.platform}_${parsed.mid}`) || BigInt(0)) : BigInt(0);
-            campaign = await prisma.campaigns.create({
-              data: {
-                user_id: userId, user_merchant_id: merchantId,
-                google_campaign_id: cd.campaign_id, mcc_id: mcc.id,
-                customer_id: cd.customer_id, campaign_name: cd.campaign_name,
-                daily_budget: cd.budget_dollars, target_country: "US",
-                google_status: cd.campaign_status, last_google_sync_at: new Date(),
-              },
-            });
+            const createdC = await createCampaignDedup({
+              user_id: userId, user_merchant_id: merchantId,
+              google_campaign_id: cd.campaign_id, mcc_id: mcc.id,
+              customer_id: cd.customer_id, campaign_name: cd.campaign_name,
+              daily_budget: cd.budget_dollars, target_country: "US",
+              google_status: cd.campaign_status, last_google_sync_at: new Date(),
+            }, { userId, mccId: mcc.id, gcid: cd.campaign_id, softDeletedGcids });
+            if (!createdC) continue; // 被清洗过的 gcid，跳过回灌
+            campaign = createdC;
             campaignMap.set(cd.campaign_id, campaign);
           } else {
             const updateData: Record<string, unknown> = {
@@ -428,20 +431,19 @@ async function syncAdsData(
         for (let i = 0; i < statusCreateOps.length; i += 30) {
           const batch = statusCreateOps.slice(i, i + 30);
           const results = await Promise.all(batch.map(({ cs, merchantId }) =>
-            prisma.campaigns.create({
-              data: {
-                user_id: userId, user_merchant_id: merchantId,
-                google_campaign_id: cs.campaign_id, mcc_id: mcc.id,
-                customer_id: cs.customer_id, campaign_name: cs.name,
-                daily_budget: cs.budget_dollars, target_country: "US",
-                google_status: cs.status, last_google_sync_at: new Date(),
-              },
-            })
+            createCampaignDedup({
+              user_id: userId, user_merchant_id: merchantId,
+              google_campaign_id: cs.campaign_id, mcc_id: mcc.id,
+              customer_id: cs.customer_id, campaign_name: cs.name,
+              daily_budget: cs.budget_dollars, target_country: "US",
+              google_status: cs.status, last_google_sync_at: new Date(),
+            }, { userId, mccId: mcc.id, gcid: cs.campaign_id, softDeletedGcids })
           ));
           for (const newCampaign of results) {
-            campaignMap.set(newCampaign.google_campaign_id!, newCampaign);
+            if (!newCampaign || !newCampaign.google_campaign_id) continue; // 被清洗过的 gcid 跳过
+            campaignMap.set(newCampaign.google_campaign_id, newCampaign);
+            totalInserted++;
           }
-          totalInserted += results.length;
         }
       } catch (err) {
         console.error("全量状态同步失败:", err);
@@ -524,10 +526,12 @@ async function upsertSheetRowsBatch(
   let inserted = 0, updated = 0;
 
   // ─── 1. 批量预加载所有相关 campaigns（存在重复时优先选有 customer_id 的） ───
+  // D-048 §77.23：查重口径统一为 user_id + mcc_id + gcid（与 API 路径一致，消除 Sheet/API 不一致）
   const uniqueCampaignIds = [...new Set(rows.map((r) => r.campaign_id))];
   const existingCampaigns = await prisma.campaigns.findMany({
-    where: { user_id: userId, google_campaign_id: { in: uniqueCampaignIds }, is_deleted: 0 },
+    where: { user_id: userId, mcc_id: mccId, google_campaign_id: { in: uniqueCampaignIds }, is_deleted: 0 },
   });
+  const sheetSoftDeletedGcids = await loadSoftDeletedGcids(userId, mccId);
   const campaignMap = new Map<string | null, typeof existingCampaigns[0]>();
   for (const c of existingCampaigns) {
     const existing = campaignMap.get(c.google_campaign_id);
@@ -553,15 +557,14 @@ async function upsertSheetRowsBatch(
       const parsed = parseCampaignNameFull(row.campaign_name);
       const merchantId = parsed ? (merchantIndex.get(`${parsed.platform}_${parsed.mid}`) || BigInt(0)) : BigInt(0);
 
-      const campaign = await prisma.campaigns.create({
-        data: {
-          user_id: userId, user_merchant_id: merchantId,
-          google_campaign_id: gid, mcc_id: mccId,
-          customer_id: row.customer_id, campaign_name: row.campaign_name,
-          daily_budget: row.budget, target_country: "US",
-          google_status: row.status, last_google_sync_at: new Date(),
-        },
-      });
+      const campaign = await createCampaignDedup({
+        user_id: userId, user_merchant_id: merchantId,
+        google_campaign_id: gid, mcc_id: mccId,
+        customer_id: row.customer_id, campaign_name: row.campaign_name,
+        daily_budget: row.budget, target_country: "US",
+        google_status: row.status, last_google_sync_at: new Date(),
+      }, { userId, mccId, gcid: gid, softDeletedGcids: sheetSoftDeletedGcids });
+      if (!campaign) continue; // 被清洗过的 gcid，跳过回灌
       campaignMap.set(gid, campaign);
     }
   }

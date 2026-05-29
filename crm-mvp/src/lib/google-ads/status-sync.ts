@@ -8,6 +8,7 @@
  */
 import prisma from "@/lib/prisma";
 import { parseCampaignNameFull, syncMerchantStatusForUser } from "@/lib/campaign-merchant-link";
+import { createCampaignDedup, loadSoftDeletedGcids } from "@/lib/google-ads/campaign-dedup";
 
 interface SyncResult {
   mcc: string;
@@ -109,6 +110,8 @@ export async function syncUserCampaignStatuses(userId: bigint): Promise<SyncResu
       const campaignMap = new Map(
         existingCampaigns.map((c) => [c.google_campaign_id, c])
       );
+      // D-048 §77.23：防回灌——本 (user,mcc) 下"仅软删无活跃"的 gcid 不再补建
+      const softDeletedGcids = await loadSoftDeletedGcids(userId, mcc.id);
 
       // ── 3. 更新已有广告状态 / 创建新广告 ──────────────────────────────────
       for (const s of statuses) {
@@ -139,22 +142,21 @@ export async function syncUserCampaignStatuses(userId: bigint): Promise<SyncResu
           const rawCountry = parsed?.country || "US";
           const targetCountry = /^[A-Z]{2,6}$/.test(rawCountry) ? rawCountry : "US";
           const internalStatus = s.status === "PAUSED" ? "paused" : "active";
-          await prisma.campaigns.create({
-            data: {
-              user_id: userId,
-              // user_merchant_id 先留 0，由 syncMerchantStatusForUser 补全
-              user_merchant_id: BigInt(0),
-              google_campaign_id: s.campaign_id,
-              mcc_id: mcc.id,
-              customer_id: s.customer_id,
-              campaign_name: s.name,
-              daily_budget: s.budget_dollars,
-              target_country: targetCountry,
-              status: internalStatus,
-              google_status: s.status,
-              last_google_sync_at: new Date(),
-            },
-          });
+          const created = await createCampaignDedup({
+            user_id: userId,
+            // user_merchant_id 先留 0，由 syncMerchantStatusForUser 补全
+            user_merchant_id: BigInt(0),
+            google_campaign_id: s.campaign_id,
+            mcc_id: mcc.id,
+            customer_id: s.customer_id,
+            campaign_name: s.name,
+            daily_budget: s.budget_dollars,
+            target_country: targetCountry,
+            status: internalStatus,
+            google_status: s.status,
+            last_google_sync_at: new Date(),
+          }, { userId, mccId: mcc.id, gcid: s.campaign_id, softDeletedGcids });
+          if (!created) continue; // 被清洗过的 gcid，跳过回灌
           newCampaigns++;
           anyChange = true;
           console.log(
