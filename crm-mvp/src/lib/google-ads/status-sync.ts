@@ -94,9 +94,7 @@ export async function syncUserCampaignStatuses(userId: bigint): Promise<SyncResu
         });
       }
 
-      // ── 2. 加载该 MCC 下所有已存在的广告系列，构建索引（含 previous_gcids 反查表） ────
-      // D-040 v2: 同时构建 previous_gcids → campaign 的反查表，让 cron 拉到 GAds REMOVED 旧广告
-      //          时能找回原 campaign 记录（避免错误 create 新 campaigns 造成同名重复行）
+      // ── 2. 加载该 MCC 下所有已存在的广告系列，构建索引 ────
       const existingCampaigns = await prisma.campaigns.findMany({
         where: { user_id: userId, mcc_id: mcc.id, is_deleted: 0 },
         select: {
@@ -106,41 +104,18 @@ export async function syncUserCampaignStatuses(userId: bigint): Promise<SyncResu
           status: true,
           customer_id: true,
           campaign_name: true,
-          previous_gcids: true,
         },
       });
       const campaignMap = new Map(
         existingCampaigns.map((c) => [c.google_campaign_id, c])
       );
-      // D-040 v2: previous_gcid → campaign 反查表（重发后旧 gcid 仍指向同一 campaign）
-      const prevGcidMap = new Map<string, typeof existingCampaigns[0]>();
-      for (const c of existingCampaigns) {
-        const prevList = Array.isArray(c.previous_gcids) ? (c.previous_gcids as string[]) : [];
-        for (const prev of prevList) {
-          if (prev && !campaignMap.has(prev)) prevGcidMap.set(prev, c);
-        }
-      }
 
       // ── 3. 更新已有广告状态 / 创建新广告 ──────────────────────────────────
       for (const s of statuses) {
-        // D-040 v2: 优先按 current gcid 找；找不到再按 previous_gcids 找；都找不到才 create
-        const existing = campaignMap.get(s.campaign_id) || prevGcidMap.get(s.campaign_id);
-        const isHistorical = !campaignMap.has(s.campaign_id) && prevGcidMap.has(s.campaign_id);
+        const existing = campaignMap.get(s.campaign_id);
 
         if (existing) {
-          // D-040 v2: 历史重发 gcid 命中 — 仅刷新 last_google_sync_at，不覆盖 current gcid 的 google_status
-          if (isHistorical) {
-            await prisma.campaigns.update({
-              where: { id: existing.id },
-              data: { last_google_sync_at: new Date() },
-            });
-            console.log(
-              `[StatusSync] D-040 v2: 历史重发 gcid=${s.campaign_id} 命中 previous_gcids` +
-              ` → 归并到 campaign id=${existing.id} (${existing.campaign_name})，不覆盖 current 状态`
-            );
-            continue;
-          }
-          // D-040 v2 BUG-1 反向同步：cron 同时刷 google_status + status 内部字段，避免长期漂移
+          // D-040 BUG-1 反向同步：cron 同时刷 google_status + status 内部字段，避免长期漂移
           const expectedInternalStatus = s.status === "PAUSED" || s.status === "REMOVED" ? "paused" : "active";
           const statusChanged = existing.google_status !== s.status;
           const internalDrifted = existing.status !== expectedInternalStatus;
@@ -160,15 +135,6 @@ export async function syncUserCampaignStatuses(userId: bigint): Promise<SyncResu
           }
         } else {
           // Google Ads 中存在但 DB 中没有 → 员工自建广告，自动入库
-          // D-040 v2: REMOVED 的孤立广告不入库（避免错把"重发后被遗弃的旧广告"当新广告入库），
-          //           backfill 脚本会按 (campaign_name + customer_id) 匹配回原 campaign 走 previous_gcids 路径
-          if (s.status === "REMOVED") {
-            console.log(
-              `[StatusSync] D-040 v2: 跳过孤立 REMOVED 广告 ${s.campaign_id} "${s.name}"` +
-              `（可能是重发遗留，待 backfill 脚本补登 previous_gcids）`
-            );
-            continue;
-          }
           const parsed = parseCampaignNameFull(s.name);
           const rawCountry = parsed?.country || "US";
           const targetCountry = /^[A-Z]{2,6}$/.test(rawCountry) ? rawCountry : "US";

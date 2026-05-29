@@ -188,14 +188,6 @@ async function syncAdsData(
         where: { user_id: userId, mcc_id: mcc.id, is_deleted: 0 },
       });
       const campaignMap = new Map(existingCampaigns.map((c) => [c.google_campaign_id, c]));
-      // D-040 v2 BUG-2：previous_gcids 反查表 — 让"重发后旧 gcid 的 cost"能归并到原 campaign
-      const prevGcidMap = new Map<string, typeof existingCampaigns[0]>();
-      for (const c of existingCampaigns) {
-        const prevList = Array.isArray(c.previous_gcids) ? (c.previous_gcids as string[]) : [];
-        for (const prev of prevList) {
-          if (prev && !campaignMap.has(prev)) prevGcidMap.set(prev, c);
-        }
-      }
 
       const apiMerchants = await prisma.user_merchants.findMany({
         where: { user_id: userId, is_deleted: 0 },
@@ -223,13 +215,6 @@ async function syncAdsData(
 
               for (const cd of historyData) {
                 let campaign = campaignMap.get(cd.campaign_id);
-                // D-040 v2 BUG-2：若 GAds 拉到的 gcid 没在 campaignMap，先查 previous_gcids 反查表
-                //                 — 找到的话把 stats 累到原 campaign 的 ads_daily_stats（同 campaign_id）
-                //                 这样重发广告的旧 gcid 的 cost 不会丢，CRM 与 GAds 对账长期对齐
-                if (!campaign && prevGcidMap.has(cd.campaign_id)) {
-                  campaign = prevGcidMap.get(cd.campaign_id);
-                  console.log(`[Sync] D-040 v2: gcid=${cd.campaign_id} 命中 previous_gcids → 归并到 campaign id=${campaign!.id}`);
-                }
                 if (!campaign) {
                   const parsed = parseCampaignNameFull(cd.campaign_name);
                   const merchantId = parsed ? (apiMerchantIndex.get(`${parsed.platform}_${parsed.mid}`) || BigInt(0)) : BigInt(0);
@@ -319,11 +304,6 @@ async function syncAdsData(
 
         for (const cd of campaignData) {
           let campaign = campaignMap.get(cd.campaign_id);
-          // D-040 v2 BUG-2：previous_gcids 反查（与上方 historyData 路径一致）
-          if (!campaign && prevGcidMap.has(cd.campaign_id)) {
-            campaign = prevGcidMap.get(cd.campaign_id);
-            console.log(`[Sync] D-040 v2: gcid=${cd.campaign_id} 命中 previous_gcids → 归并到 campaign id=${campaign!.id}`);
-          }
 
           if (!campaign) {
             const parsed = parseCampaignNameFull(cd.campaign_name);
@@ -413,20 +393,9 @@ async function syncAdsData(
         const statusCreateOps: Array<{ cs: typeof allStatuses[0]; merchantId: bigint }> = [];
 
         for (const cs of allStatuses) {
-          let existing = campaignMap.get(cs.campaign_id);
-          // D-040 v2 BUG-2：previous_gcids 反查 — 重发后旧 gcid 命中原 campaign，不要 create 新记录
-          const isHistorical = !existing && prevGcidMap.has(cs.campaign_id);
-          if (isHistorical) {
-            existing = prevGcidMap.get(cs.campaign_id);
-            // 历史重发 gcid 命中：只刷 last_google_sync_at，不覆盖 current 状态
-            statusUpdateOps.push(() => prisma.campaigns.update({
-              where: { id: existing!.id },
-              data: { last_google_sync_at: new Date() },
-            }));
-            continue;
-          }
+          const existing = campaignMap.get(cs.campaign_id);
           if (existing) {
-            // D-040 v2 BUG-1：反向同步内部 status 字段
+            // D-040 BUG-1：反向同步内部 status 字段，避免 CRM 暂停后被 cron 覆盖
             const expectedInternalStatus = cs.status === "PAUSED" || cs.status === "REMOVED" ? "paused" : "active";
             const needsUpdate = existing.google_status !== cs.status || existing.campaign_name !== cs.name || (!existing.customer_id && cs.customer_id) || existing.status !== expectedInternalStatus;
             if (needsUpdate) {
@@ -441,16 +410,11 @@ async function syncAdsData(
                 updateData.customer_id = cs.customer_id;
               }
               statusUpdateOps.push(() => prisma.campaigns.update({
-                where: { id: existing!.id },
+                where: { id: existing.id },
                 data: updateData,
               }));
             }
           } else {
-            // D-040 v2: REMOVED 孤立广告不入库，避免错把重发遗弃的旧广告当新广告入库
-            if (cs.status === "REMOVED") {
-              console.log(`[Sync] D-040 v2: 跳过孤立 REMOVED 广告 ${cs.campaign_id} "${cs.name}"（重发遗留，待 backfill 补 previous_gcids）`);
-              continue;
-            }
             const parsed = parseCampaignNameFull(cs.name);
             const merchantId = parsed ? (apiMerchantIndex.get(`${parsed.platform}_${parsed.mid}`) || BigInt(0)) : BigInt(0);
             statusCreateOps.push({ cs, merchantId });
