@@ -391,6 +391,7 @@ export const ModelName = {
   system_configs: 'system_configs',
   platform_connections: 'platform_connections',
   user_merchants: 'user_merchants',
+  ad_rejection_feedback: 'ad_rejection_feedback',
   merchant_violations: 'merchant_violations',
   merchant_recommendations: 'merchant_recommendations',
   sheet_configs: 'sheet_configs',
@@ -429,7 +430,8 @@ export const ModelName = {
   user_atc_watchlist: 'user_atc_watchlist',
   user_atc_alert_log: 'user_atc_alert_log',
   semrush_keyword_cache: 'semrush_keyword_cache',
-  semrush_health_logs: 'semrush_health_logs'
+  semrush_health_logs: 'semrush_health_logs',
+  policy_violations: 'policy_violations'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -445,7 +447,7 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
     omit: GlobalOmitOptions
   }
   meta: {
-    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "holiday_calendar" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "google_mcc_accounts" | "affiliate_transactions" | "notifications" | "notification_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "user_serpapi_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log" | "semrush_keyword_cache" | "semrush_health_logs"
+    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "ad_rejection_feedback" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "holiday_calendar" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "google_mcc_accounts" | "affiliate_transactions" | "notifications" | "notification_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "user_serpapi_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log" | "semrush_keyword_cache" | "semrush_health_logs" | "policy_violations"
     txIsolationLevel: TransactionIsolationLevel
   }
   model: {
@@ -908,6 +910,72 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         count: {
           args: Prisma.user_merchantsCountArgs<ExtArgs>
           result: runtime.Types.Utils.Optional<Prisma.User_merchantsCountAggregateOutputType> | number
+        }
+      }
+    }
+    ad_rejection_feedback: {
+      payload: Prisma.$ad_rejection_feedbackPayload<ExtArgs>
+      fields: Prisma.ad_rejection_feedbackFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.ad_rejection_feedbackFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_rejection_feedbackPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.ad_rejection_feedbackFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_rejection_feedbackPayload>
+        }
+        findFirst: {
+          args: Prisma.ad_rejection_feedbackFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_rejection_feedbackPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.ad_rejection_feedbackFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_rejection_feedbackPayload>
+        }
+        findMany: {
+          args: Prisma.ad_rejection_feedbackFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_rejection_feedbackPayload>[]
+        }
+        create: {
+          args: Prisma.ad_rejection_feedbackCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_rejection_feedbackPayload>
+        }
+        createMany: {
+          args: Prisma.ad_rejection_feedbackCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.ad_rejection_feedbackDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_rejection_feedbackPayload>
+        }
+        update: {
+          args: Prisma.ad_rejection_feedbackUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_rejection_feedbackPayload>
+        }
+        deleteMany: {
+          args: Prisma.ad_rejection_feedbackDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.ad_rejection_feedbackUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.ad_rejection_feedbackUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_rejection_feedbackPayload>
+        }
+        aggregate: {
+          args: Prisma.Ad_rejection_feedbackAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateAd_rejection_feedback>
+        }
+        groupBy: {
+          args: Prisma.ad_rejection_feedbackGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Ad_rejection_feedbackGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.ad_rejection_feedbackCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Ad_rejection_feedbackCountAggregateOutputType> | number
         }
       }
     }
@@ -3485,6 +3553,72 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         }
       }
     }
+    policy_violations: {
+      payload: Prisma.$policy_violationsPayload<ExtArgs>
+      fields: Prisma.policy_violationsFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.policy_violationsFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$policy_violationsPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.policy_violationsFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$policy_violationsPayload>
+        }
+        findFirst: {
+          args: Prisma.policy_violationsFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$policy_violationsPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.policy_violationsFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$policy_violationsPayload>
+        }
+        findMany: {
+          args: Prisma.policy_violationsFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$policy_violationsPayload>[]
+        }
+        create: {
+          args: Prisma.policy_violationsCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$policy_violationsPayload>
+        }
+        createMany: {
+          args: Prisma.policy_violationsCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.policy_violationsDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$policy_violationsPayload>
+        }
+        update: {
+          args: Prisma.policy_violationsUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$policy_violationsPayload>
+        }
+        deleteMany: {
+          args: Prisma.policy_violationsDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.policy_violationsUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.policy_violationsUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$policy_violationsPayload>
+        }
+        aggregate: {
+          args: Prisma.Policy_violationsAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregatePolicy_violations>
+        }
+        groupBy: {
+          args: Prisma.policy_violationsGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Policy_violationsGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.policy_violationsCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Policy_violationsCountAggregateOutputType> | number
+        }
+      }
+    }
   }
 } & {
   other: {
@@ -3664,6 +3798,29 @@ export const User_merchantsScalarFieldEnum = {
 } as const
 
 export type User_merchantsScalarFieldEnum = (typeof User_merchantsScalarFieldEnum)[keyof typeof User_merchantsScalarFieldEnum]
+
+
+export const Ad_rejection_feedbackScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  campaign_id: 'campaign_id',
+  google_campaign_id: 'google_campaign_id',
+  campaign_name: 'campaign_name',
+  user_merchant_id: 'user_merchant_id',
+  merchant_name: 'merchant_name',
+  merchant_url: 'merchant_url',
+  industry_category: 'industry_category',
+  policy_category: 'policy_category',
+  reason_text: 'reason_text',
+  rejected_headlines: 'rejected_headlines',
+  rejected_descriptions: 'rejected_descriptions',
+  created_by: 'created_by',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Ad_rejection_feedbackScalarFieldEnum = (typeof Ad_rejection_feedbackScalarFieldEnum)[keyof typeof Ad_rejection_feedbackScalarFieldEnum]
 
 
 export const Merchant_violationsScalarFieldEnum = {
@@ -4385,6 +4542,43 @@ export const Semrush_health_logsScalarFieldEnum = {
 export type Semrush_health_logsScalarFieldEnum = (typeof Semrush_health_logsScalarFieldEnum)[keyof typeof Semrush_health_logsScalarFieldEnum]
 
 
+export const Policy_violationsScalarFieldEnum = {
+  id: 'id',
+  campaign_id: 'campaign_id',
+  user_merchant_id: 'user_merchant_id',
+  user_id: 'user_id',
+  mcc_id: 'mcc_id',
+  google_customer_id: 'google_customer_id',
+  campaign_name: 'campaign_name',
+  merchant_domain: 'merchant_domain',
+  country: 'country',
+  policy_category: 'policy_category',
+  policy_subcategory: 'policy_subcategory',
+  policy_label_zh: 'policy_label_zh',
+  policy_official_url: 'policy_official_url',
+  error_code: 'error_code',
+  policy_name: 'policy_name',
+  external_policy_name: 'external_policy_name',
+  external_policy_description: 'external_policy_description',
+  evidence_field: 'evidence_field',
+  evidence_index: 'evidence_index',
+  violating_text: 'violating_text',
+  trigger_value: 'trigger_value',
+  field_path: 'field_path',
+  severity: 'severity',
+  suggested_fix: 'suggested_fix',
+  is_exemptible: 'is_exemptible',
+  google_raw_error_json: 'google_raw_error_json',
+  message: 'message',
+  submitted_at: 'submitted_at',
+  resolved_at: 'resolved_at',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Policy_violationsScalarFieldEnum = (typeof Policy_violationsScalarFieldEnum)[keyof typeof Policy_violationsScalarFieldEnum]
+
+
 export const SortOrder = {
   asc: 'asc',
   desc: 'desc'
@@ -4520,6 +4714,19 @@ export const user_merchantsOrderByRelevanceFieldEnum = {
 } as const
 
 export type user_merchantsOrderByRelevanceFieldEnum = (typeof user_merchantsOrderByRelevanceFieldEnum)[keyof typeof user_merchantsOrderByRelevanceFieldEnum]
+
+
+export const ad_rejection_feedbackOrderByRelevanceFieldEnum = {
+  google_campaign_id: 'google_campaign_id',
+  campaign_name: 'campaign_name',
+  merchant_name: 'merchant_name',
+  merchant_url: 'merchant_url',
+  industry_category: 'industry_category',
+  policy_category: 'policy_category',
+  reason_text: 'reason_text'
+} as const
+
+export type ad_rejection_feedbackOrderByRelevanceFieldEnum = (typeof ad_rejection_feedbackOrderByRelevanceFieldEnum)[keyof typeof ad_rejection_feedbackOrderByRelevanceFieldEnum]
 
 
 export const merchant_violationsOrderByRelevanceFieldEnum = {
@@ -4909,6 +5116,32 @@ export const semrush_health_logsOrderByRelevanceFieldEnum = {
 export type semrush_health_logsOrderByRelevanceFieldEnum = (typeof semrush_health_logsOrderByRelevanceFieldEnum)[keyof typeof semrush_health_logsOrderByRelevanceFieldEnum]
 
 
+export const policy_violationsOrderByRelevanceFieldEnum = {
+  google_customer_id: 'google_customer_id',
+  campaign_name: 'campaign_name',
+  merchant_domain: 'merchant_domain',
+  country: 'country',
+  policy_category: 'policy_category',
+  policy_subcategory: 'policy_subcategory',
+  policy_label_zh: 'policy_label_zh',
+  policy_official_url: 'policy_official_url',
+  error_code: 'error_code',
+  policy_name: 'policy_name',
+  external_policy_name: 'external_policy_name',
+  external_policy_description: 'external_policy_description',
+  evidence_field: 'evidence_field',
+  violating_text: 'violating_text',
+  trigger_value: 'trigger_value',
+  field_path: 'field_path',
+  severity: 'severity',
+  suggested_fix: 'suggested_fix',
+  google_raw_error_json: 'google_raw_error_json',
+  message: 'message'
+} as const
+
+export type policy_violationsOrderByRelevanceFieldEnum = (typeof policy_violationsOrderByRelevanceFieldEnum)[keyof typeof policy_violationsOrderByRelevanceFieldEnum]
+
+
 
 /**
  * Field references
@@ -5079,6 +5312,7 @@ export type GlobalOmitConfig = {
   system_configs?: Prisma.system_configsOmit
   platform_connections?: Prisma.platform_connectionsOmit
   user_merchants?: Prisma.user_merchantsOmit
+  ad_rejection_feedback?: Prisma.ad_rejection_feedbackOmit
   merchant_violations?: Prisma.merchant_violationsOmit
   merchant_recommendations?: Prisma.merchant_recommendationsOmit
   sheet_configs?: Prisma.sheet_configsOmit
@@ -5118,6 +5352,7 @@ export type GlobalOmitConfig = {
   user_atc_alert_log?: Prisma.user_atc_alert_logOmit
   semrush_keyword_cache?: Prisma.semrush_keyword_cacheOmit
   semrush_health_logs?: Prisma.semrush_health_logsOmit
+  policy_violations?: Prisma.policy_violationsOmit
 }
 
 /* Types for Logging */

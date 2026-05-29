@@ -2682,6 +2682,38 @@ async function runIntelligentCore(
     return [] as Array<{ url: string; title: string; desc1: string; desc2: string }>;
   });
 
+  // ─── D-050: 行业识别 + 加载拒登负样本（同商家强约束 + 同行业软提示）───
+  let rejectionFeedback: Awaited<ReturnType<typeof import("@/lib/intellicenter/ad-creation/rejection-feedback").loadRejectionFeedbackForGeneration>> | null = null;
+  let detectedIndustry: import("@/lib/industry-profile").IndustryProfile | null = null;
+  try {
+    const { detectIndustryProfile } = await import("@/lib/industry-profile");
+    detectedIndustry = detectIndustryProfile({
+      merchantName,
+      category: merchantCategory,
+      pageText: cache.pageText,
+    });
+    const { loadRejectionFeedbackForGeneration } = await import("@/lib/intellicenter/ad-creation/rejection-feedback");
+    const campaignOwner = await prisma.campaigns.findUnique({
+      where: { id: campaign.id },
+      select: { user_id: true },
+    });
+    if (campaignOwner) {
+      rejectionFeedback = await loadRejectionFeedbackForGeneration({
+        userId: campaignOwner.user_id,
+        userMerchantId: merchant.id,
+        industryId: detectedIndustry?.id ?? null,
+      });
+      const sm = rejectionFeedback.sameMerchant.length;
+      const si = rejectionFeedback.sameIndustry.length;
+      if (sm > 0 || si > 0) {
+        console.log(`[Intellicenter] D-050 拒登负样本注入: 同商家=${sm} 同行业=${si}`);
+        send("rejection_feedback_loaded", { sameMerchant: sm, sameIndustry: si });
+      }
+    }
+  } catch (e) {
+    console.warn(`[Intellicenter] D-050 拒登负样本加载失败（不阻断）: ${e instanceof Error ? e.message : e}`);
+  }
+
   try {
     const result = await runIntelligentAdCreation({
       merchantId: merchant.id,
@@ -2697,6 +2729,8 @@ async function runIntelligentCore(
       maxCpcUsd,
       tasks,
       emitSSE: send,
+      industryProfile: detectedIndustry,
+      rejectionFeedback,
     });
 
     // 政策阻断：返回 0 文案 + 已 emit policy_blocked，前端会显示阻断 banner

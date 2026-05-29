@@ -37,7 +37,7 @@ import {
   type KeywordCandidate,
   type KeywordWithMatchType,
 } from "./keyword-intelligence";
-import { buildEvidencePrompt, type EvidenceContext } from "./evidence-prompt";
+import { buildEvidencePrompt, type EvidenceContext, type RejectionLesson } from "./evidence-prompt";
 import {
   buildRetryHintForLowSimilarity,
   scoreBatch,
@@ -84,6 +84,11 @@ export interface OrchestratorContext {
   emitSSE?: (type: string, payload: unknown) => void;
   /** 行业资料（compliance-linter 用） */
   industryProfile?: IndustryProfile | null;
+  /** D-050 拒登事后学习负样本（同商家强约束 + 同行业软提示），注入 Step 6 文案 prompt */
+  rejectionFeedback?: {
+    sameMerchant: RejectionLesson[];
+    sameIndustry: RejectionLesson[];
+  } | null;
   /** 是否强制重生画像（员工点"重新生成"传 true） */
   forceProfileRefresh?: boolean;
   /** 强制 puppeteer 爬虫（promotion 需求） */
@@ -276,6 +281,7 @@ export async function runIntelligentAdCreation(
     crawledProducts: (crawlCache as unknown as { crawledProducts?: Array<{ name: string; price?: number; currency?: string }> }).crawledProducts,
     semrushTitles: crawlCache.semrushTitles,
     promotion: (crawlCache as unknown as { promoRegex?: { discount_percent?: number; discount_amount?: number; currency?: string } | null }).promoRegex,
+    rejectionFeedback: ctx.rejectionFeedback ?? null,
   };
 
   // ───── Step 6 + 7 + 8: 文案生成 / 相似度评分 / 合规兜底 ─────

@@ -1,16 +1,17 @@
 /**
- * C-112 / D-046.C — Step 3：AI 商家画像自动生成（核心步骤）
+ * C-112 / D-046.C / D-050 — Step 3：AI 商家画像（内存临时上下文）
  *
  * 07 决策 X2 = [官逆]gpt-5-nano（provider 4 hajimi，与 [官逆]gpt-5-mini 同通道）
- * 07 决策 X7 = 缓存 7 天（profile_updated_at 在 7 天内则跳过 AI 调用，复用缓存）
+ *
+ * D-050 重定向（07 拍板）：画像不再是"产品资产"——**不存库、不缓存、不做后台页面**。
+ * 每次创建广告时临时在内存生成，仅作为喂给后续文案/政策/关键词步骤的上下文，用完即弃。
  *
  * 输入：crawl 数据（pageText 9000 字符 + features 8 条 + crawledProducts 真实价格列表）+ 商家元数据
- * 输出：12 字段画像 JSON，落库到 user_merchants 表（source='ai_backfill', profile_updated_at=NOW()）
+ * 输出：内存中的画像对象（不写 user_merchants 任何字段）
  *
- * 设计目标：让画像成为"内部上下文"而非"员工填的表"，整个生成过程对员工透明无感。
+ * 设计目标：让画像成为"内部临时上下文"而非"员工填/系统存的表"，整个过程对员工透明无感。
  */
 
-import prisma from "@/lib/prisma";
 import { callAiWithFallback } from "@/lib/ai-service";
 import { extractJsonFromAi } from "@/lib/crawl-pipeline";
 import {
@@ -30,16 +31,11 @@ import {
   TRADEMARK_AUTH_STATUSES,
   type TrademarkAuthStatus,
 } from "@/lib/intellicenter/merchant-profile/types";
-import {
-  loadMerchantProfile,
-  saveMerchantProfile,
-} from "@/lib/intellicenter/merchant-profile/reader";
 
 const AI_SCENE = "ad_creation_intelligent"; // C-112 新建专用 scene，priority=1 gpt-5-nano
 const MAX_PAGE_TEXT_CHARS = 9000;
 const MAX_FEATURES = 8;
 const MAX_PRODUCTS_FOR_PROMPT = 12;
-const PROFILE_CACHE_DAYS = 7; // X7=B 缓存 7 天
 
 export interface ProfileGenerationContext {
   merchantId: bigint;
@@ -72,30 +68,17 @@ export interface ProfileGenerationResult {
 }
 
 /**
- * 主入口：按需生成商家画像。
+ * 主入口：临时生成商家画像（内存，不存库）。
  *
- * 流程：
- *   1. loadMerchantProfile 检查缓存（profile_updated_at < 7 天 && profile_source 不是 'ai_failed'）→ 命中直接返回
- *   2. 缓存过期/缺失 → 拼 prompt 调 gpt-5-nano（fallback 链 mini → claude-sonnet-4-6）
- *   3. JSON 解析 + 类型校验 + 写库（source='ai_backfill', profile_updated_at=NOW()）
- *   4. AI 失败 2 次 → 落 'ai_failed' source + 返回 DEFAULT_PROFILE 让上游降级（不阻断广告创建）
+ * 流程（D-050）：
+ *   1. 拼 prompt 调 gpt-5-nano（fallback 链 mini → claude-sonnet-4-6）
+ *   2. JSON 解析 + 类型校验 → 在内存拼成完整 MerchantIntelligenceProfile 返回
+ *   3. AI 失败 2 次 → 返回 DEFAULT_PROFILE 让上游降级（不阻断广告创建、不写任何库）
  */
 export async function generateMerchantProfile(
   ctx: ProfileGenerationContext,
 ): Promise<ProfileGenerationResult> {
   const startedAt = Date.now();
-
-  if (!ctx.forceRefresh) {
-    const cached = await loadMerchantProfile(ctx.merchantId);
-    if (isProfileFresh(cached)) {
-      return {
-        profile: cached,
-        cacheHit: true,
-        aiCalls: 0,
-        elapsedMs: Date.now() - startedAt,
-      };
-    }
-  }
 
   const prompt = buildProfileGenerationPrompt(ctx);
 
@@ -123,13 +106,15 @@ export async function generateMerchantProfile(
         lastError = "AI response did not parse to valid profile JSON";
         continue;
       }
-      const saved = await saveMerchantProfile({
-        merchantId: ctx.merchantId,
-        payload: parsed,
-        source: "ai_backfill",
-      });
+      // D-050：内存拼装完整画像对象，绝不写库
+      const profile: MerchantIntelligenceProfile = {
+        ...DEFAULT_PROFILE,
+        ...parsed,
+        profile_updated_at: new Date(),
+        profile_source: "ai_backfill",
+      };
       return {
-        profile: saved,
+        profile,
         cacheHit: false,
         aiCalls,
         elapsedMs: Date.now() - startedAt,
@@ -142,21 +127,7 @@ export async function generateMerchantProfile(
     }
   }
 
-  // 两次 AI 全失败 → 标记 ai_failed + 返回默认画像让上游降级
-  try {
-    await prisma.user_merchants.update({
-      where: { id: ctx.merchantId },
-      data: {
-        profile_source: "ai_failed",
-        profile_updated_at: new Date(),
-      } as never,
-    });
-  } catch (e) {
-    console.warn(
-      `[ProfileGenerator] mark ai_failed flag failed for merchant=${ctx.merchantId}: ${e instanceof Error ? e.message : e}`,
-    );
-  }
-
+  // 两次 AI 全失败 → 返回默认画像让上游降级（不写库）
   return {
     profile: { ...DEFAULT_PROFILE },
     cacheHit: false,
@@ -164,20 +135,6 @@ export async function generateMerchantProfile(
     elapsedMs: Date.now() - startedAt,
     error: lastError ?? "AI generation failed",
   };
-}
-
-/**
- * 判断画像是否 fresh：
- *   - profile_source 必须是 ai_backfill / manual / feedback（不接受 none / ai_failed）
- *   - industry_category 必须非空（防止旧空记录被当作缓存）
- *   - profile_updated_at 必须在 PROFILE_CACHE_DAYS 天内
- */
-function isProfileFresh(p: MerchantIntelligenceProfile): boolean {
-  if (!p.industry_category) return false;
-  if (p.profile_source === "none" || p.profile_source === "ai_failed") return false;
-  if (!p.profile_updated_at) return false;
-  const ageMs = Date.now() - p.profile_updated_at.getTime();
-  return ageMs < PROFILE_CACHE_DAYS * 24 * 60 * 60 * 1000;
 }
 
 /**

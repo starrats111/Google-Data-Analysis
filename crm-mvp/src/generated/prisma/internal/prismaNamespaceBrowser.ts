@@ -58,6 +58,7 @@ export const ModelName = {
   system_configs: 'system_configs',
   platform_connections: 'platform_connections',
   user_merchants: 'user_merchants',
+  ad_rejection_feedback: 'ad_rejection_feedback',
   merchant_violations: 'merchant_violations',
   merchant_recommendations: 'merchant_recommendations',
   sheet_configs: 'sheet_configs',
@@ -96,7 +97,8 @@ export const ModelName = {
   user_atc_watchlist: 'user_atc_watchlist',
   user_atc_alert_log: 'user_atc_alert_log',
   semrush_keyword_cache: 'semrush_keyword_cache',
-  semrush_health_logs: 'semrush_health_logs'
+  semrush_health_logs: 'semrush_health_logs',
+  policy_violations: 'policy_violations'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -255,6 +257,29 @@ export const User_merchantsScalarFieldEnum = {
 } as const
 
 export type User_merchantsScalarFieldEnum = (typeof User_merchantsScalarFieldEnum)[keyof typeof User_merchantsScalarFieldEnum]
+
+
+export const Ad_rejection_feedbackScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  campaign_id: 'campaign_id',
+  google_campaign_id: 'google_campaign_id',
+  campaign_name: 'campaign_name',
+  user_merchant_id: 'user_merchant_id',
+  merchant_name: 'merchant_name',
+  merchant_url: 'merchant_url',
+  industry_category: 'industry_category',
+  policy_category: 'policy_category',
+  reason_text: 'reason_text',
+  rejected_headlines: 'rejected_headlines',
+  rejected_descriptions: 'rejected_descriptions',
+  created_by: 'created_by',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Ad_rejection_feedbackScalarFieldEnum = (typeof Ad_rejection_feedbackScalarFieldEnum)[keyof typeof Ad_rejection_feedbackScalarFieldEnum]
 
 
 export const Merchant_violationsScalarFieldEnum = {
@@ -976,6 +1001,43 @@ export const Semrush_health_logsScalarFieldEnum = {
 export type Semrush_health_logsScalarFieldEnum = (typeof Semrush_health_logsScalarFieldEnum)[keyof typeof Semrush_health_logsScalarFieldEnum]
 
 
+export const Policy_violationsScalarFieldEnum = {
+  id: 'id',
+  campaign_id: 'campaign_id',
+  user_merchant_id: 'user_merchant_id',
+  user_id: 'user_id',
+  mcc_id: 'mcc_id',
+  google_customer_id: 'google_customer_id',
+  campaign_name: 'campaign_name',
+  merchant_domain: 'merchant_domain',
+  country: 'country',
+  policy_category: 'policy_category',
+  policy_subcategory: 'policy_subcategory',
+  policy_label_zh: 'policy_label_zh',
+  policy_official_url: 'policy_official_url',
+  error_code: 'error_code',
+  policy_name: 'policy_name',
+  external_policy_name: 'external_policy_name',
+  external_policy_description: 'external_policy_description',
+  evidence_field: 'evidence_field',
+  evidence_index: 'evidence_index',
+  violating_text: 'violating_text',
+  trigger_value: 'trigger_value',
+  field_path: 'field_path',
+  severity: 'severity',
+  suggested_fix: 'suggested_fix',
+  is_exemptible: 'is_exemptible',
+  google_raw_error_json: 'google_raw_error_json',
+  message: 'message',
+  submitted_at: 'submitted_at',
+  resolved_at: 'resolved_at',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Policy_violationsScalarFieldEnum = (typeof Policy_violationsScalarFieldEnum)[keyof typeof Policy_violationsScalarFieldEnum]
+
+
 export const SortOrder = {
   asc: 'asc',
   desc: 'desc'
@@ -1111,6 +1173,19 @@ export const user_merchantsOrderByRelevanceFieldEnum = {
 } as const
 
 export type user_merchantsOrderByRelevanceFieldEnum = (typeof user_merchantsOrderByRelevanceFieldEnum)[keyof typeof user_merchantsOrderByRelevanceFieldEnum]
+
+
+export const ad_rejection_feedbackOrderByRelevanceFieldEnum = {
+  google_campaign_id: 'google_campaign_id',
+  campaign_name: 'campaign_name',
+  merchant_name: 'merchant_name',
+  merchant_url: 'merchant_url',
+  industry_category: 'industry_category',
+  policy_category: 'policy_category',
+  reason_text: 'reason_text'
+} as const
+
+export type ad_rejection_feedbackOrderByRelevanceFieldEnum = (typeof ad_rejection_feedbackOrderByRelevanceFieldEnum)[keyof typeof ad_rejection_feedbackOrderByRelevanceFieldEnum]
 
 
 export const merchant_violationsOrderByRelevanceFieldEnum = {
@@ -1498,4 +1573,30 @@ export const semrush_health_logsOrderByRelevanceFieldEnum = {
 } as const
 
 export type semrush_health_logsOrderByRelevanceFieldEnum = (typeof semrush_health_logsOrderByRelevanceFieldEnum)[keyof typeof semrush_health_logsOrderByRelevanceFieldEnum]
+
+
+export const policy_violationsOrderByRelevanceFieldEnum = {
+  google_customer_id: 'google_customer_id',
+  campaign_name: 'campaign_name',
+  merchant_domain: 'merchant_domain',
+  country: 'country',
+  policy_category: 'policy_category',
+  policy_subcategory: 'policy_subcategory',
+  policy_label_zh: 'policy_label_zh',
+  policy_official_url: 'policy_official_url',
+  error_code: 'error_code',
+  policy_name: 'policy_name',
+  external_policy_name: 'external_policy_name',
+  external_policy_description: 'external_policy_description',
+  evidence_field: 'evidence_field',
+  violating_text: 'violating_text',
+  trigger_value: 'trigger_value',
+  field_path: 'field_path',
+  severity: 'severity',
+  suggested_fix: 'suggested_fix',
+  google_raw_error_json: 'google_raw_error_json',
+  message: 'message'
+} as const
+
+export type policy_violationsOrderByRelevanceFieldEnum = (typeof policy_violationsOrderByRelevanceFieldEnum)[keyof typeof policy_violationsOrderByRelevanceFieldEnum]
 

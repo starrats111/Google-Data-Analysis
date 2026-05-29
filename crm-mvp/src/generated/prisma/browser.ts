@@ -53,6 +53,11 @@ export type platform_connections = Prisma.platform_connectionsModel
  */
 export type user_merchants = Prisma.user_merchantsModel
 /**
+ * Model ad_rejection_feedback
+ * 
+ */
+export type ad_rejection_feedback = Prisma.ad_rejection_feedbackModel
+/**
  * Model merchant_violations
  * 
  */
@@ -249,3 +254,8 @@ export type semrush_keyword_cache = Prisma.semrush_keyword_cacheModel
  * 
  */
 export type semrush_health_logs = Prisma.semrush_health_logsModel
+/**
+ * Model policy_violations
+ * 
+ */
+export type policy_violations = Prisma.policy_violationsModel

@@ -11,6 +11,7 @@ import { isPolicyRiskKeyword } from "@/lib/keyword-optimizer";
 import { mutateGoogleAds, dollarsToMicros, queryGoogleAds, parseGoogleAdsErrors, formatGoogleAdsErrorMessage, isOperationNotPermittedError } from "@/lib/google-ads";
 import type { GoogleAdsViolation } from "@/lib/google-ads";
 import { parsePolicyError, logPolicyViolations, type ParsedPolicyError } from "@/lib/policy-hub";
+import { checkReachability, isHardUnreachable } from "@/lib/intellicenter/ad-creation";
 import { assignFormalCampaignNameBeforeSubmit, resolvePlatformLabel } from "@/lib/campaign-naming";
 import { readFile } from "fs/promises";
 import { existsSync } from "fs";
@@ -125,6 +126,29 @@ export async function POST(req: NextRequest) {
   }
   if (finalUrl.startsWith("http://")) {
     finalUrl = finalUrl.replace("http://", "https://");
+  }
+
+  // ═════════════════════════════════════════════════════════════════
+  // D-050 第2块：提交前落地页可达性硬卡（07 稳不被拒优先，宁慢不拒）
+  //   "目标网址无效(destination_not_working)" 是 Google 最常见的硬拒登之一。
+  //   提交前先探测 finalUrl（3 次重试 + 跟随重定向）；仅在「确定性死链」时阻断提交，
+  //   对 401/403/429（多为反爬/限流，Google 爬虫仍可达）放行，避免误杀正常落地页。
+  // ═════════════════════════════════════════════════════════════════
+  try {
+    const reach = await checkReachability(finalUrl, { maxRetries: 3, timeoutMs: 8000 });
+    if (isHardUnreachable(reach)) {
+      console.warn(`[AdSubmit] D-050 落地页硬卡阻断: ${finalUrl} reason=${reach.failureReason} status=${reach.statusCode}`);
+      return apiError(
+        `落地页无法访问（${reach.failureReason}${reach.statusCode ? `, HTTP ${reach.statusCode}` : ""}），为避免被 Google 以「目标网址无效」拒登，已阻止本次提交。请确认 ${reach.finalUrl || finalUrl} 能正常打开后再提交。`,
+        422,
+      );
+    }
+    if (!reach.reachable) {
+      console.warn(`[AdSubmit] D-050 落地页可达性存疑（放行，疑似反爬/限流）: ${finalUrl} reason=${reach.failureReason} status=${reach.statusCode}`);
+    }
+  } catch (e) {
+    // 探测本身异常（不应发生，checkReachability 内部已捕获）→ 不阻断，记录日志
+    console.warn(`[AdSubmit] D-050 落地页可达性探测异常（放行）: ${e instanceof Error ? e.message : e}`);
   }
 
   // ═════════════════════════════════════════════════════════════════
@@ -352,6 +376,31 @@ export async function POST(req: NextRequest) {
     }
     if (badLinks.length > 0) {
       return apiError(`站内链接 URL 格式无效，请修正后再提交：${badLinks.join("、")}`);
+    }
+
+    // D-050 第2块：sitelink 提交前可达性硬卡——确定性死链的 sitelink 直接剔除（不阻断整条广告）。
+    //   单条 sitelink 死链同样会被 Google 标记，影响整体审核；剔除比阻断更稳妥。
+    try {
+      const slArr = sitelinks as { finalUrl?: string; title?: string }[];
+      const checks = await Promise.all(
+        slArr.map(async (sl) => {
+          const slUrl = (sl.finalUrl || "").trim();
+          try {
+            const r = await checkReachability(slUrl, { maxRetries: 1, timeoutMs: 6000 });
+            return isHardUnreachable(r) ? { dead: true, title: sl.title || slUrl, reason: r.failureReason } : { dead: false };
+          } catch {
+            return { dead: false };
+          }
+        }),
+      );
+      const kept = slArr.filter((_, i) => !checks[i].dead);
+      const removed = checks.filter((c) => c.dead) as { dead: true; title: string; reason?: string }[];
+      if (removed.length > 0) {
+        console.warn(`[AdSubmit] D-050 剔除死链 sitelink ${removed.length} 条: ${removed.map((r) => `${r.title}(${r.reason})`).join("、")}`);
+        sitelinks.splice(0, sitelinks.length, ...kept);
+      }
+    } catch (e) {
+      console.warn(`[AdSubmit] D-050 sitelink 可达性探测异常（不阻断）: ${e instanceof Error ? e.message : e}`);
     }
   }
 

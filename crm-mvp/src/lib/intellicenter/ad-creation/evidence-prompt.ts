@@ -14,6 +14,16 @@ import type { MerchantIntelligenceProfile } from "@/lib/intellicenter/merchant-p
 import type { PreflightResult } from "./policy-preflight";
 import type { KeywordWithMatchType } from "./keyword-intelligence";
 
+/** D-050 拒登事后学习负样本（单条） */
+export interface RejectionLesson {
+  /** 中文政策类别名（如「商标侵权」「不可靠声明」） */
+  policyLabel: string;
+  /** 员工填写的拒登原因（已截断） */
+  reason: string;
+  /** 被拒时的标题快照（仅同商家强约束携带，给 AI 明确"这些写法已被拒"） */
+  headlines?: string[];
+}
+
 export interface EvidenceContext {
   /** crawl_pipeline.buildCrawlCache 的 pageText（已截断到 9000 字符即可） */
   pageText?: string;
@@ -25,6 +35,15 @@ export interface EvidenceContext {
   semrushTitles?: string[];
   /** 页面 promotion 信息（discount_percent / discount_amount） */
   promotion?: { discount_percent?: number; discount_amount?: number; currency?: string } | null;
+  /**
+   * D-050 拒登事后学习负样本：
+   *   - sameMerchant：同商家被拒记录 → 强约束（这些写法已被 Google 拒登，绝不能再用）
+   *   - sameIndustry：同行业被拒记录 → 软提示（同类商家踩过的坑，尽量规避）
+   */
+  rejectionFeedback?: {
+    sameMerchant: RejectionLesson[];
+    sameIndustry: RejectionLesson[];
+  } | null;
 }
 
 export interface AdGenerationPromptOpts {
@@ -56,6 +75,7 @@ export function buildEvidencePrompt(opts: AdGenerationPromptOpts): string {
   const keywordsBlock = buildKeywordsBlock(opts.keywords);
   const profileBlock = buildProfileBlock(opts.profile);
   const policyBlock = buildPolicyBlock(opts.preflight, opts.merchantName);
+  const rejectionBlock = buildRejectionBlock(opts.evidence.rejectionFeedback);
   const toneInstruction = TONE_INSTRUCTIONS[opts.preflight.recommendedTone];
 
   return `You are a senior Google Ads copywriter generating ${opts.task} content for a real merchant.
@@ -83,7 +103,7 @@ ${keywordsBlock}
 
 # Policy constraints (MANDATORY — violation will get the ad disapproved by Google)
 ${policyBlock}
-
+${rejectionBlock ? `\n# Past rejection lessons (CRITICAL — these ads were ALREADY disapproved by Google; you MUST NOT repeat the same claims/wording)\n${rejectionBlock}\n` : ""}
 # Hard rules
 1. NEVER invent: prices, discount %, awards, certifications, founding year, or testimonials not present in evidence.
 2. NEVER use: all-caps words, double exclamation "!!", emojis, "guaranteed", "100%", "#1", "best ever", "miracle".
@@ -233,5 +253,43 @@ function buildPolicyBlock(pre: PreflightResult, merchantName: string): string {
       `Banned words (must NOT appear anywhere): ${pre.blockedKeywords.slice(0, 20).join(", ")}`,
     );
   }
+  return parts.join("\n\n");
+}
+
+/**
+ * D-050：把拒登负样本拼成 prompt 块。
+ *   - 同商家：强约束（HARD CONSTRAINT），携带被拒文案让 AI 明确避开
+ *   - 同行业：软提示（SOFT HINT），仅给政策类别 + 原因，不泄露其他商家文案细节
+ */
+function buildRejectionBlock(
+  fb?: EvidenceContext["rejectionFeedback"],
+): string | null {
+  if (!fb) return null;
+  const parts: string[] = [];
+  if (fb.sameMerchant.length > 0) {
+    parts.push(
+      `## SAME MERCHANT — HARD CONSTRAINT (these exact ads were disapproved; avoid the same wording, claims, and angles)\n` +
+        fb.sameMerchant
+          .slice(0, 8)
+          .map((l, i) => {
+            const hl =
+              l.headlines && l.headlines.length > 0
+                ? ` | rejected copy: ${l.headlines.slice(0, 5).join(" / ")}`
+                : "";
+            return `${i + 1}. [${l.policyLabel}] ${l.reason}${hl}`;
+          })
+          .join("\n"),
+    );
+  }
+  if (fb.sameIndustry.length > 0) {
+    parts.push(
+      `## SAME INDUSTRY — SOFT HINT (similar merchants got rejected for these; steer clear)\n` +
+        fb.sameIndustry
+          .slice(0, 8)
+          .map((l, i) => `${i + 1}. [${l.policyLabel}] ${l.reason}`)
+          .join("\n"),
+    );
+  }
+  if (parts.length === 0) return null;
   return parts.join("\n\n");
 }

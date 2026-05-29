@@ -112,6 +112,26 @@ export async function checkReachability(
 }
 
 /**
+ * D-050 第2块：判断"是否硬性不可达"——用于提交前硬卡（稳不被拒优先）。
+ *
+ * 只在"确定性死链"时返回 true：
+ *   - DNS/连接失败（network_error）、超时（timeout）、5xx（server_error）
+ *   - 坏重定向（too_many_redirects / redirect_no_location / redirect_bad_location）
+ *   - 永久不存在（404 / 410）
+ *
+ * 对 401/403/429 等返回 false：这些大概率是反爬/限流（Cloudflare Bot Fight / 速率限制），
+ * 但 Google 自家爬虫与白名单仍可能正常访问，硬卡会误杀正常落地页，违背"不要误伤"。
+ */
+export function isHardUnreachable(r: ReachabilityResult): boolean {
+  if (r.reachable) return false;
+  const fr = r.failureReason || "";
+  if (fr.startsWith("network_error") || fr === "timeout" || fr === "server_error") return true;
+  if (fr === "too_many_redirects" || fr === "redirect_no_location" || fr === "redirect_bad_location") return true;
+  if (fr === "client_error" && (r.statusCode === 404 || r.statusCode === 410)) return true;
+  return false;
+}
+
+/**
  * 单次探测 + 跟随 redirect chain。
  *
  * 使用 manual redirect 模式逐跳跟，每跳都记录 status。

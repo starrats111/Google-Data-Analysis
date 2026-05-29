@@ -10,7 +10,7 @@ export {
   type OrchestratorTaskKind,
 } from "./orchestrator";
 
-export { checkReachability, type ReachabilityResult } from "./reachability";
+export { checkReachability, isHardUnreachable, type ReachabilityResult } from "./reachability";
 export { ensureCrawlCache, type CrawlerBridgeResult } from "./crawler-bridge";
 export {
   generateMerchantProfile,
