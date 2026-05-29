@@ -17,6 +17,7 @@ import {
   titleFromUrlPath,
   decodeHtmlEntities,
   sanitizeAdText,
+  isBadSitelinkUrl,
 } from "@/lib/crawl-pipeline";
 import { buildCrawlKey, withCrawlInflightLock } from "@/lib/crawl-inflight-lock";
 import { humanizeAdCopyBatch, AD_COPY_ANTI_AI_BLOCK } from "@/lib/humanizer";
@@ -25,6 +26,8 @@ import { generateSitelinkTexts } from "@/lib/sitelink-ai-writer";
 // C-112 / D-046.C — AI 广告创建 8 步智能闭环
 import {
   runIntelligentAdCreation,
+  checkReachability,
+  isHardUnreachable,
   type KeywordCandidate,
   type OrchestratorTask,
 } from "@/lib/intellicenter/ad-creation";
@@ -2576,12 +2579,66 @@ async function buildRealSitelinks(opts: {
   languageCode: string;
 }): Promise<Array<{ url: string; title: string; desc1: string; desc2: string }>> {
   const { cache, merchantUrl, country, merchantName, languageCode } = opts;
-  const baseline = (cache.sitelinkCandidates || []).map((s) => ({
-    url: s.url,
-    title: s.title,
-    description: s.description,
-  }));
-  const expanded = await autoExpandSitelinks({ merchantUrl, country, existing: baseline, targetCount: 6 });
+
+  // ─── D-051（07 拍板）：首选 puppeteer 首页渲染出的真实导航链接 ───
+  //   一次 puppeteer 已把首页 navLinks 拿全（CF 站也能拿到，因为首页是隐身浏览器过的验证）。
+  //   旧逻辑只用 sitelinkCandidates（CF 站被 sitemap/robots/HEAD 403 挡到归零），navLinks 闲置。
+  //   做法：navLinks → 同源+顶层路径+去重过滤 → 逐个"打得开"检测（只剔确定性死链，保留 CF-403，
+  //         因 Google 自家爬虫仍可达，避免误杀）→ 真实可达的直接当 sitelink 候选。
+  const navBaseline: Array<{ url: string; title: string; description: string }> = [];
+  const rawNav = cache.navLinks || [];
+  if (rawNav.length > 0) {
+    const origin = (() => { try { return new URL(merchantUrl).hostname.replace(/^www\./, "").toLowerCase(); } catch { return ""; } })();
+    const seen = new Set<string>();
+    const filteredNav: Array<{ url: string; text: string }> = [];
+    for (const l of rawNav) {
+      if (!l.url || !l.url.startsWith("http")) continue;
+      let u: URL;
+      try { u = new URL(l.url); } catch { continue; }
+      const host = u.hostname.replace(/^www\./, "").toLowerCase();
+      const sameOrigin = !!origin && (host === origin || host.endsWith(`.${origin}`) || origin.endsWith(`.${host}`));
+      if (!sameOrigin) continue;
+      const segs = u.pathname.split("/").filter(Boolean);
+      if (segs.length < 1 || segs.length > 2) continue; // 只要顶层栏目页（首页和深层产品页都排除）
+      if (isBadSitelinkUrl(l.url)) continue;
+      const key = (u.origin + u.pathname).replace(/\/$/, "").toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      filteredNav.push({ url: u.toString(), text: l.text });
+      if (filteredNav.length >= 12) break;
+    }
+    const checks = await Promise.all(
+      filteredNav.map(async (l) => {
+        try {
+          const r = await checkReachability(l.url, { maxRetries: 1, timeoutMs: 6000 });
+          return { l, dead: isHardUnreachable(r) };
+        } catch {
+          return { l, dead: false };
+        }
+      }),
+    );
+    for (const c of checks) {
+      if (c.dead) continue;
+      navBaseline.push({ url: c.l.url, title: (c.l.text || "").slice(0, 25), description: "" });
+      if (navBaseline.length >= 6) break;
+    }
+    console.warn(
+      `[Intellicenter] buildRealSitelinks D-051: navLinks raw=${rawNav.length} filtered=${filteredNav.length} reachable=${navBaseline.length}`,
+    );
+  }
+
+  // navLinks 真实候选优先，其次旧 sitelinkCandidates；navLinks 已凑够 6 条则跳过 sitemap/robots 扩源
+  const baseline = [
+    ...navBaseline,
+    ...(cache.sitelinkCandidates || []).map((s) => ({
+      url: s.url,
+      title: s.title,
+      description: s.description,
+    })),
+  ];
+  const expanded = navBaseline.length >= 6
+    ? baseline
+    : await autoExpandSitelinks({ merchantUrl, country, existing: baseline, targetCount: 6 });
   // 去重（保序），最多取前 8 条作为 AI 输入缓冲
   const unique: typeof expanded = [];
   const seen = new Set<string>();
