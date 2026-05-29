@@ -43,7 +43,7 @@ import {
   scoreBatch,
   type BatchSimilarityResult,
 } from "./similarity-scorer";
-import { lintAdCopy, type LinterReport } from "./compliance-linter";
+import { lintRewriteAndBackfill, type LinterReport } from "./compliance-linter";
 
 const AI_SCENE = "ad_creation_intelligent";
 
@@ -389,20 +389,49 @@ export async function runIntelligentAdCreation(
     }
   }
 
-  // ───── Step 8: Compliance Linter ─────
+  // ───── Step 8: Compliance Linter（C-118 重写闭环 + 数量补足）─────
   const t8 = Date.now();
-  const linter = lintAdCopy(
+  // 目标数量（删除违规后补足回这些数，07 铁律：标题 15 / 描述 4）
+  let targetHeadlines = 0;
+  let targetDescriptions = 0;
+  for (const t of ctx.tasks) {
+    if (t.kind === "headlines") targetHeadlines = t.count;
+    else if (t.kind === "descriptions") targetDescriptions = t.count;
+  }
+  // 注入给 linter 的「证据感知重写」AI 调用闭包
+  const rewriteCallAi = async (prompt: string): Promise<string> =>
+    callAiWithFallback(
+      AI_SCENE,
+      [
+        { role: "system", content: "You are a senior Google Ads copywriter. Return ONLY valid JSON, no markdown." },
+        { role: "user", content: prompt },
+      ],
+      1024,
+    );
+  const linter = await lintRewriteAndBackfill(
     { headlines, descriptions, callouts },
-    { merchantName: ctx.merchantName, industryProfile: ctx.industryProfile ?? null },
+    {
+      merchantName: ctx.merchantName,
+      industryProfile: ctx.industryProfile ?? null,
+      industryLabel: ctx.industryProfile?.label ?? null,
+      targetHeadlines,
+      targetDescriptions,
+    },
+    rewriteCallAi,
   );
   timings.step8_lint = Date.now() - t8;
-  if (!linter.passed) {
+  if (!linter.passed || linter.rewroteCount > 0 || linter.backfilledCount > 0) {
     emit("compliance_lint_warning", {
       droppedCount: linter.droppedCount,
       criticalCount: linter.criticalViolations.length,
       minorCount: linter.minorViolations.length,
+      rewroteCount: linter.rewroteCount,
+      backfilledCount: linter.backfilledCount,
     });
   }
+  console.log(
+    `[Orchestrator] Step8 lint: dropped=${linter.droppedCount} rewrote=${linter.rewroteCount} backfilled=${linter.backfilledCount} → headlines=${linter.cleanedHeadlines.length}/${targetHeadlines} descriptions=${linter.cleanedDescriptions.length}/${targetDescriptions}`,
+  );
 
   return {
     approved: true,

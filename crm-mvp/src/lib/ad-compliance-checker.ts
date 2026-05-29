@@ -39,12 +39,11 @@ export interface ComplianceCheckResult {
 }
 
 // Rule 9 不公平优势字词（D-039 H1 NON-NEGOTIABLE RULES 9 落地检测）
+// 注意：这里只保留「无论是否有出处都不该出现」的硬违规词。
+// 「最高级/奖项」类（best / bestseller / awarded / #1 / award-winning ...）已迁移到
+// 下方 SUPERLATIVE_AWARD_TERMS 做「证据感知」判定（C-118）—— 有具体年份/出处可降级放行。
 const UNFAIR_ADVANTAGE_TERMS: Array<{ term: string; severity: ViolationSeverity }> = [
   { term: "trusted by millions", severity: "critical" },
-  { term: "award-winning", severity: "critical" },
-  { term: "award winning", severity: "critical" },
-  { term: "best in class", severity: "critical" },
-  { term: "best-in-class", severity: "critical" },
   { term: "guaranteed results", severity: "critical" },
   { term: "guarantee results", severity: "critical" },
   { term: "100% effective", severity: "critical" },
@@ -55,8 +54,6 @@ const UNFAIR_ADVANTAGE_TERMS: Array<{ term: string; severity: ViolationSeverity 
   { term: "stops forever", severity: "critical" },
   { term: "stop all", severity: "critical" },
   { term: "industry leader", severity: "critical" },
-  { term: "world's best", severity: "critical" },
-  { term: "worlds best", severity: "critical" },
   { term: "skip other apps", severity: "critical" },
   { term: "skip juggling", severity: "critical" },
   { term: "better than competitors", severity: "critical" },
@@ -64,11 +61,54 @@ const UNFAIR_ADVANTAGE_TERMS: Array<{ term: string; severity: ViolationSeverity 
   { term: "sick of other", severity: "critical" },
   { term: "tired of other", severity: "critical" },
   { term: "beat every other", severity: "critical" },
-  { term: "top-rated", severity: "minor" },
   { term: "guaranteed", severity: "minor" },
-  { term: "#1 ", severity: "minor" },
-  { term: "no. 1 ", severity: "minor" },
 ];
+
+// C-118 证据感知「最高级 / 奖项」声明检测：
+//   - 这些词若【裸用】(无具体年份/出处) → critical（Google Ads 判 unverifiable unfair advantage，必须重写）
+//   - 若同句含具体年份(19xx/20xx) 视为有第三方出处线索 → 降为 minor（放行，例 "2025 Beauty Shortlist Winner"）
+// 07 铁律：真实有依据的奖项要保留（有文采），无依据的裸最高级要避障。
+const SUPERLATIVE_AWARD_TERMS = [
+  "best seller",
+  "best-seller",
+  "bestseller",
+  "best brand",
+  "best natural",
+  "best in class",
+  "best-in-class",
+  "award-winning",
+  "award winning",
+  "award winner",
+  "awarded",
+  "awards won",
+  "voted #1",
+  "voted no",
+  "top-rated",
+  "top rated",
+  "#1",
+  "no.1",
+  "no. 1",
+  "number one",
+  "ranked #1",
+  "world's best",
+  "worlds best",
+  "world's #1",
+];
+
+// 含 4 位年份视为「有具体出处线索」(奖项年份)，最高级声明可由 critical 降为 minor 放行
+const YEAR_HINT_RE = /\b(19|20)\d{2}\b/;
+
+// 词级匹配：字母首/尾自动加 \b 词边界，避免 "awarded" 误伤 "rewarded"；含符号词(#1)用裸匹配
+function matchesTerm(text: string, term: string): boolean {
+  const esc = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const head = /^[a-z0-9]/i.test(term) ? "\\b" : "";
+  const tail = /[a-z0-9]$/i.test(term) ? "\\b" : "";
+  try {
+    return new RegExp(`${head}${esc}${tail}`, "i").test(text);
+  } catch {
+    return text.toLowerCase().includes(term.toLowerCase());
+  }
+}
 
 // Rule 11 不当内容字词（critical 全部）
 const INAPPROPRIATE_TERMS = [
@@ -131,6 +171,25 @@ function checkOne(
   const out: ComplianceViolation[] = [];
   if (!text || text.trim().length < 2) return out;
   const lower = text.toLowerCase();
+
+  // C-118: 证据感知最高级/奖项检测（优先于通用 unfair-advantage 检测）
+  const hasYearHint = YEAR_HINT_RE.test(text);
+  for (const term of SUPERLATIVE_AWARD_TERMS) {
+    if (matchesTerm(text, term)) {
+      out.push({
+        field,
+        index: idx,
+        text,
+        rule: `superlative_award:${term}`,
+        severity: hasYearHint ? "minor" : "critical",
+        matchedTerm: term,
+        hint: hasYearHint
+          ? `Superlative/award "${term}" appears with a year — only keep it if it cites a SPECIFIC named award/issuer (e.g. "2025 Beauty Shortlist Winner"). Otherwise replace with a concrete product benefit.`
+          : `Bare superlative/award claim "${term}" is unverifiable and triggers Google Ads "unfair advantage" disapproval. Replace it: if evidence has a real named award/cert, cite it specifically with issuer/year (e.g. "2025 Beauty Shortlist Winner", "Demeter Certified Organic"); otherwise use a concrete, verifiable product fact.`,
+      });
+      return out;
+    }
+  }
 
   for (const { term, severity } of UNFAIR_ADVANTAGE_TERMS) {
     if (lower.includes(term)) {

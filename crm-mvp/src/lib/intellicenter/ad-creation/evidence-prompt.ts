@@ -88,10 +88,14 @@ ${policyBlock}
 1. NEVER invent: prices, discount %, awards, certifications, founding year, or testimonials not present in evidence.
 2. NEVER use: all-caps words, double exclamation "!!", emojis, "guaranteed", "100%", "#1", "best ever", "miracle".
 3. NEVER use the merchant brand name if policy block_brand applies (see Policy constraints above).
-4. Length: each output MUST be ≤ ${opts.maxLen} characters${opts.minLen ? ` and ≥ ${opts.minLen} characters` : ""}.
-5. Output language: ${opts.languageName} only. Do NOT mix languages.
-6. Capitalization: ${opts.task === "description" ? "sentence case (only first word + proper nouns capitalized)" : "Title Case — do NOT capitalize prepositions/articles/conjunctions in the middle"}.
-7. Return STRICT JSON. No trailing commas. No explanatory text.`;
+4. SUPERLATIVE / AWARD policy (Google Ads "unfair advantage" — read carefully):
+   - Bare superlatives are BANNED: do NOT write "Best", "Best Brand", "Bestseller", "Top-Rated", "#1", "Award-Winning", "Voted #1", "Awarded", "Awards Won" on their own — Google disapproves unverifiable superiority claims.
+   - ONLY if the evidence explicitly contains a real, named award/ranking/certification, you MAY cite it in a SPECIFIC, verifiable form that names the issuer and/or year. Example: if evidence shows "2025 Beauty Shortlist Award", write "2025 Beauty Shortlist Winner" (NOT "Best Natural Brand"); if evidence shows "Certified Organic by Demeter", write "Demeter Certified Organic" (NOT "Certified" alone).
+   - If you cannot point to a specific named award/cert in the evidence, drop the claim and use a concrete product/benefit fact instead.
+5. Length: each output MUST be ≤ ${opts.maxLen} characters${opts.minLen ? ` and ≥ ${opts.minLen} characters` : ""}.
+6. Output language: ${opts.languageName} only. Do NOT mix languages.
+7. Capitalization: ${opts.task === "description" ? "sentence case (only first word + proper nouns capitalized)" : "Title Case — do NOT capitalize prepositions/articles/conjunctions in the middle"}.
+8. Return STRICT JSON. No trailing commas. No explanatory text.`;
 }
 
 const TASK_OUTPUT_SCHEMA: Record<
