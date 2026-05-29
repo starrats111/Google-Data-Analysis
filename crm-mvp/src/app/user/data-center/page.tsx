@@ -44,6 +44,7 @@ interface CampaignRow {
   commission: number; rejected_commission: number; approved_commission: number; orders: number; roi: number;
   target_country: string; last_synced: string | null;
   mcc_currency?: string;
+  is_removed?: boolean; cid_removed?: boolean;
 }
 
 interface CostByMcc {
@@ -485,11 +486,24 @@ export default function DataCenterPage() {
   const columns: ColumnsType<IndexedRow> = [
     {
       title: "CID", dataIndex: "customer_id", width: 110, fixed: "left",
-      render: (v: string) => (
-        <span style={{ display: "inline-flex", alignItems: "center" }}>
-          <Text copyable={{ text: v }} style={{ fontSize: 12, margin: 0 }}>{formatCid(v)}</Text>
-        </span>
-      ),
+      render: (v: string, r: IndexedRow) => {
+        const removed = r.is_removed || r.cid_removed;
+        return (
+          <span style={{ display: "inline-flex", alignItems: "center" }}>
+            <Text
+              copyable={{ text: v }}
+              style={{ fontSize: 12, margin: 0, color: removed ? "#cf1322" : undefined }}
+            >
+              {formatCid(v)}
+            </Text>
+            {r.cid_removed && (
+              <Tooltip title="该 CID 已移除/停用">
+                <span style={{ color: "#cf1322", marginLeft: 4, fontSize: 11 }}>●</span>
+              </Tooltip>
+            )}
+          </span>
+        );
+      },
     },
     {
       title: "广告系列", dataIndex: "campaign_name", width: 280,
@@ -507,6 +521,11 @@ export default function DataCenterPage() {
       render: (v: string, r: IndexedRow) => (
         <Space size={4}>
           <Tag color={statusColors[v] || "default"} style={{ fontSize: 11, margin: 0 }}>{statusLabels[v] || v}</Tag>
+          {r.cid_removed && v !== "REMOVED" && (
+            <Tooltip title="所属 CID 已移除/停用">
+              <Tag color="red" style={{ fontSize: 10, margin: 0 }}>CID已移除</Tag>
+            </Tooltip>
+          )}
           {v !== "REMOVED" && r.google_campaign_id && (
             <Tooltip title={v === "ENABLED" ? "暂停广告" : "启用广告"}>
               <Button

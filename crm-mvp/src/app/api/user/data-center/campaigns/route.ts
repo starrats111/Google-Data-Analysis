@@ -62,6 +62,22 @@ export async function GET(req: NextRequest) {
     mccIds = (allMcc || []).map((m: { id: bigint }) => m.id);
   }
 
+  // D-040 v3：收集"已移除/已停用 CID"集合（status=cancelled 或 is_available=D），
+  // 这些 CID 下所有广告在前端标红
+  const removedCidSet = new Set<string>();
+  if (mccIds.length > 0) {
+    const removedCidRows = await prisma.mcc_cid_accounts.findMany({
+      where: {
+        mcc_account_id: { in: mccIds },
+        OR: [{ status: "cancelled" }, { is_available: "D" }],
+      },
+      select: { customer_id: true },
+    });
+    for (const r of removedCidRows) {
+      if (r.customer_id) removedCidSet.add(r.customer_id.replace(/-/g, ""));
+    }
+  }
+
   // 日期范围（默认本月，东八区）
   const cstNow = nowCST();
   const monthStartStr = cstNow.startOf("month").format("YYYY-MM-DD");
@@ -394,9 +410,14 @@ export async function GET(req: NextRequest) {
   });
 
   const showRemoved = statusFilter === "REMOVED" || statusFilter === "all";
-  const filteredForDisplay = showRemoved
-    ? dedupedCampaigns
-    : dedupedCampaigns.filter((c) => c.google_status !== "REMOVED");
+  // D-040 v3 Q-G2=b：默认也显示"本期有花费的已移除"广告（让删除/重发广告的花费可见并标红），
+  // 零花费的历史 REMOVED 仍隐藏避免列表噪声；显式筛 REMOVED/all 时全显示
+  const filteredForDisplay = dedupedCampaigns.filter((c) => {
+    if (c.google_status !== "REMOVED") return true;
+    if (showRemoved) return true;
+    const s = allStatsMap.get(String(c.id));
+    return (s?.cost || 0) > 0;
+  });
   // D-040 v2 BUG-3：取消 200 行硬截断，让 wj07（264 个广告系列）等用户能看到全部数据
   // 性能：MCC 维度的 campaign 量级在数百至数千之间，前端表格分页足够，后端不再切片
   const displayCampaigns = filteredForDisplay;
@@ -444,6 +465,9 @@ export async function GET(req: NextRequest) {
       target_country: c.target_country,
       last_synced: c.last_google_sync_at,
       mcc_currency: mccInfo?.currency || "USD",
+      // D-040 v3 Q-G2=b：前端据此标红——REMOVED 状态 或 属于已移除/停用 CID
+      is_removed: c.google_status === "REMOVED",
+      cid_removed: c.customer_id ? removedCidSet.has(c.customer_id.replace(/-/g, "")) : false,
     };
   });
 

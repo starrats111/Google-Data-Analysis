@@ -99,6 +99,36 @@ export async function fetchCampaignDataByDateRange(
   }));
 }
 
+/**
+ * D-040 v3：显式拉取已 REMOVED 但本期有花费的 campaign。
+ * GAQL `FROM campaign` 默认隐式过滤 REMOVED（C-098v3 已证），导致后台删除/重发的旧广告
+ * 花费永远进不了 CRM，CRM 总花费与 GAds 后台长期对不齐。本函数显式 `campaign.status='REMOVED'`
+ * + `cost_micros>0`，只拉真正花过钱的 REMOVED，避免拉回海量零花费历史广告。
+ */
+export async function fetchRemovedCampaignData(
+  credentials: MccCredentials,
+  customerId: string,
+  startDate: string,
+  endDate: string,
+): Promise<(CampaignData & { date: string })[]> {
+  const results = await queryGoogleAds(credentials, customerId, `
+    SELECT
+      campaign.id, campaign.name, campaign.status,
+      campaign_budget.amount_micros,
+      metrics.cost_micros, metrics.clicks, metrics.impressions,
+      metrics.average_cpc, metrics.conversions,
+      segments.date
+    FROM campaign
+    WHERE segments.date BETWEEN '${startDate}' AND '${endDate}'
+      AND campaign.status = 'REMOVED'
+      AND metrics.cost_micros > 0
+  `);
+  return results.map((r) => ({
+    ...parseCampaignRow(r, customerId),
+    date: String((r.segments as Record<string, unknown> | undefined)?.date ?? ""),
+  }));
+}
+
 export async function fetchAllCampaignStatuses(
   credentials: MccCredentials,
   customerIds: string[],

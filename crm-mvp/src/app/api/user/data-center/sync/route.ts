@@ -447,6 +447,60 @@ async function syncAdsData(
         console.error("全量状态同步失败:", err);
       }
 
+      // ── D-040 v3 S1：显式拉本月 REMOVED 且有花费的 campaign，入库为独立 REMOVED 行 ──
+      // 让 CRM 总花费包含后台删除/重发广告的花费，与 GAds 后台对齐
+      try {
+        const { fetchRemovedCampaignData } = await import("@/lib/google-ads");
+        const monthStartStr = cstNow.startOf("month").format("YYYY-MM-DD");
+        const CID_CONCURRENCY = 3;
+        for (let ci = 0; ci < cids.length; ci += CID_CONCURRENCY) {
+          const batch = cids.slice(ci, ci + CID_CONCURRENCY);
+          const removedResults = await Promise.all(batch.map(async (cid) => {
+            try {
+              return await fetchRemovedCampaignData(credentials, cid.customer_id, monthStartStr, todayStr);
+            } catch (err) {
+              console.error(`[Sync] REMOVED CID ${cid.customer_id} 失败:`, err);
+              return [];
+            }
+          }));
+          for (const data of removedResults) {
+            for (const cd of data) {
+              let campaign = campaignMap.get(cd.campaign_id);
+              if (!campaign) {
+                const parsed = parseCampaignNameFull(cd.campaign_name);
+                const merchantId = parsed ? (apiMerchantIndex.get(`${parsed.platform}_${parsed.mid}`) || BigInt(0)) : BigInt(0);
+                campaign = await prisma.campaigns.create({
+                  data: {
+                    user_id: userId, user_merchant_id: merchantId,
+                    google_campaign_id: cd.campaign_id, mcc_id: mcc.id,
+                    customer_id: cd.customer_id, campaign_name: cd.campaign_name,
+                    daily_budget: cd.budget_dollars, target_country: "US",
+                    status: "paused", google_status: "REMOVED", last_google_sync_at: new Date(),
+                  },
+                });
+                campaignMap.set(cd.campaign_id, campaign);
+              }
+              const dateObj = new Date(cd.date);
+              const dateRate = await getExchangeRate(mcc.currency, cd.date);
+              if (dateRate <= 0) continue;
+              const statsData = {
+                budget: cd.budget_dollars * dateRate, cost: cd.cost_dollars * dateRate,
+                clicks: cd.clicks, impressions: cd.impressions, cpc: cd.cpc_dollars * dateRate,
+                conversions: cd.conversions, data_source: "api" as const,
+              };
+              await prisma.ads_daily_stats.upsert({
+                where: { campaign_id_date: { campaign_id: campaign.id, date: dateObj } },
+                update: statsData,
+                create: { user_id: userId, user_merchant_id: BigInt(0), campaign_id: campaign.id, date: dateObj, ...statsData },
+              });
+              totalInserted++;
+            }
+          }
+        }
+      } catch (err) {
+        console.error("[Sync] REMOVED 同步失败:", err);
+      }
+
       apiResult = { inserted: totalInserted, updated: totalUpdated, message: `API 同步完成${(isFirstSync || forceFullSync || customRange) ? `（${historyStart} → ${historyEnd}）` : ""}` };
     } catch (err) {
       apiResult.message = `API 同步失败: ${err instanceof Error ? err.message : String(err)}`;

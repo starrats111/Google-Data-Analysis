@@ -457,6 +457,81 @@ async function syncAllUsersMcc(): Promise<unknown> {
                     }
                   }
                 }
+
+                // ── D-040 v3 S1：显式拉本月 REMOVED 且有花费的 campaign，入库为独立 REMOVED 行 ──
+                // GAQL `FROM campaign` 默认过滤 REMOVED，导致后台删除/重发广告的花费永远进不了 CRM，
+                // CRM 总花费长期低于 GAds 后台。这里把本月有花费的 REMOVED 显式拉回，作为 google_status=REMOVED 行入库。
+                try {
+                  const { fetchRemovedCampaignData } = await import("@/lib/google-ads");
+                  const monthStartStr = cstNow.startOf("month").format("YYYY-MM-DD");
+                  for (let ci = 0; ci < cids.length; ci += CID_CONCURRENCY) {
+                    const batch = cids.slice(ci, ci + CID_CONCURRENCY);
+                    const removedResults = await Promise.all(batch.map(async (cid) => {
+                      try {
+                        return await fetchRemovedCampaignData(credentials, cid.customer_id, monthStartStr, endStr);
+                      } catch (err) {
+                        log(`    [REMOVED] CID ${cid.customer_id} err: ${err instanceof Error ? err.message.slice(0, 80) : String(err)}`);
+                        return [];
+                      }
+                    }));
+                    for (const data of removedResults) {
+                      for (const cd of data) {
+                        let campaign = campaignByGcid.get(cd.campaign_id);
+                        if (!campaign) {
+                          try {
+                            const existingAny = await prisma.campaigns.findFirst({
+                              where: { user_id: uid, google_campaign_id: cd.campaign_id },
+                              select: { id: true, google_campaign_id: true, customer_id: true, is_deleted: true },
+                              orderBy: { id: "desc" },
+                            });
+                            // 防回灌：被刻意清洗的软删行不重建
+                            if (existingAny && existingAny.is_deleted === 1) continue;
+                            if (existingAny) {
+                              await prisma.campaigns.update({
+                                where: { id: existingAny.id },
+                                data: { google_status: "REMOVED", status: "paused", last_google_sync_at: new Date() },
+                              });
+                              campaign = { id: existingAny.id, google_campaign_id: cd.campaign_id, customer_id: existingAny.customer_id };
+                            } else {
+                              const newC = await prisma.campaigns.create({
+                                data: {
+                                  user_id: uid, user_merchant_id: BigInt(0),
+                                  google_campaign_id: cd.campaign_id, mcc_id: mcc.id,
+                                  customer_id: cd.customer_id, campaign_name: cd.campaign_name,
+                                  daily_budget: cd.budget_dollars, target_country: "US",
+                                  status: "paused", google_status: "REMOVED",
+                                  last_google_sync_at: new Date(),
+                                },
+                              });
+                              log(`  [REMOVED入库] ${cd.campaign_id} ${cd.campaign_name} cost=$${cd.cost_dollars}`);
+                              campaign = { id: newC.id, google_campaign_id: cd.campaign_id, customer_id: newC.customer_id };
+                            }
+                            campaignByGcid.set(cd.campaign_id, campaign);
+                          } catch (e) {
+                            log(`  [REMOVED入库失败] ${cd.campaign_id}: ${e instanceof Error ? e.message.slice(0, 80) : String(e)}`);
+                            continue;
+                          }
+                        }
+                        const dateObj = new Date(cd.date);
+                        const rate = await getExchangeRate(mcc.currency, cd.date);
+                        if (rate <= 0) continue;
+                        const costUsd = cd.cost_dollars * rate;
+                        await prisma.ads_daily_stats.upsert({
+                          where: { campaign_id_date: { campaign_id: campaign.id, date: dateObj } },
+                          update: { cost: costUsd, clicks: cd.clicks, impressions: cd.impressions, cpc: cd.cpc_dollars * rate, data_source: "api" },
+                          create: {
+                            user_id: uid, campaign_id: campaign.id, date: dateObj,
+                            cost: costUsd, clicks: cd.clicks, impressions: cd.impressions,
+                            cpc: cd.cpc_dollars * rate, data_source: "api", user_merchant_id: BigInt(0),
+                          },
+                        });
+                        apiUpserted++;
+                      }
+                    }
+                  }
+                } catch (e) {
+                  log(`    REMOVED 同步失败: ${e instanceof Error ? e.message : String(e)}`);
+                }
               }
             } catch (e) {
               log(`    API 补数据失败: ${e instanceof Error ? e.message : String(e)}`);
