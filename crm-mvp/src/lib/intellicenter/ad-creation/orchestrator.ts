@@ -20,7 +20,7 @@
  */
 
 import { callAiWithFallback } from "@/lib/ai-service";
-import { extractJsonFromAi } from "@/lib/crawl-pipeline";
+import { extractJsonFromAi, smartTruncate } from "@/lib/crawl-pipeline";
 import type { CrawlCache } from "@/lib/crawl-pipeline";
 import type { IndustryProfile } from "@/lib/industry-profile";
 import type { MerchantIntelligenceProfile } from "@/lib/intellicenter/merchant-profile/types";
@@ -501,14 +501,13 @@ async function generateAndScoreBatch(
       const json = JSON.parse(extractJsonFromAi(raw)) as Record<string, unknown>;
       const arr = json[opts.fieldName];
       if (Array.isArray(arr)) {
+        // C-116: 超长项「截断」而非「丢弃」—— 旧逻辑 filter 掉 length>maxLen 的项，
+        //   AI 偶发输出一批超 30 字符标题时会被全删，导致最终只剩 3 条（07 实证）。
+        //   改为 smartTruncate 在词边界截断到 maxLen，保住数量；过短/空项仍剔除。
         parsed = arr
           .map((x) => (typeof x === "string" ? x.trim().replace(/^["']|["']$/g, "") : ""))
-          .filter(
-            (s) =>
-              s.length > 0 &&
-              s.length <= opts.maxLen &&
-              (opts.minLen ? s.length >= opts.minLen : true),
-          );
+          .map((s) => (s.length > opts.maxLen ? smartTruncate(s, opts.maxLen).slice(0, opts.maxLen) : s))
+          .filter((s) => s.length > 0 && (opts.minLen ? s.length >= opts.minLen : true));
       }
     } catch (err) {
       console.warn(

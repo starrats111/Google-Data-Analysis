@@ -2710,26 +2710,34 @@ async function runIntelligentCore(
     }
 
     // 反 AI / 人性化（保留 D-039 humanize 兜底）
+    // D-047/C-116: 硬截断到 Google Ads 长度上限 —— humanizeAdCopyBatch 遇超长会「返回原文不截断」
+    //   （保语义设计），导致 AI 偶发输出 27 字符 callout（限 25）漏到前端标红甚至被 Google 拒登。
+    //   这里统一兜底：超长项用 smartTruncate 在词边界截断 + 硬 slice 保证 ≤max，空项剔除。
+    const clampLen = (arr: string[], max: number): string[] =>
+      (arr || [])
+        .map((s) => (typeof s === "string" && s.length > max ? smartTruncate(s, max).slice(0, max) : s))
+        .filter((s) => typeof s === "string" && s.trim().length > 0);
+
     const humanizedHeadlines = result.headlines.length > 0
-      ? humanizeAdCopyBatch(result.headlines, 2, 30)
+      ? clampLen(humanizeAdCopyBatch(result.headlines, 2, 30), 30)
       : [];
     const humanizedDescriptions = result.descriptions.length > 0
-      ? humanizeAdCopyBatch(result.descriptions, 40, 90)
+      ? clampLen(humanizeAdCopyBatch(result.descriptions, 40, 90), 90)
       : [];
     const humanizedCallouts = result.callouts.length > 0
-      ? humanizeAdCopyBatch(result.callouts, 2, 25)
+      ? clampLen(humanizeAdCopyBatch(result.callouts, 2, 25), 25)
       : [];
 
+    // C-116: 主体文案（headlines/descriptions/callouts）先 send + 存库 + 完成日志，
+    //   绝不被 sitelink 阻塞 —— 旧逻辑把 `await realSitelinksPromise` 放在 callouts/存库/完成日志之前，
+    //   sitelink 慢（爬虫候选不足时走 sitemap/Puppeteer 兜底）会卡住整条 SSE → 前端「一直转、生成不出来」。
     send("headlines", humanizedHeadlines);
     send("descriptions", humanizedDescriptions);
-    // D-047/C-115: 用爬虫真实 URL 生成的 sitelink（已含真实 url 字段），绝不用 orchestrator 编造结果
-    const realSitelinks = await realSitelinksPromise;
-    send("sitelinks", realSitelinks);
     if (humanizedCallouts.length > 0) {
       send("callouts", humanizedCallouts);
     }
 
-    // 持久化（与原 generateCore 一致：headlines / descriptions / sitelinks 写到 ad_creatives）
+    // 持久化主体（headlines / descriptions / callouts）
     if (adCreativeId) {
       try {
         await prisma.ad_creatives.update({
@@ -2737,21 +2745,33 @@ async function runIntelligentCore(
           data: {
             headlines: humanizedHeadlines as any,
             descriptions: humanizedDescriptions as any,
-            sitelinks: realSitelinks as any,
             callouts: humanizedCallouts as any,
           },
         });
       } catch (e) {
         console.warn(
-          `[Intellicenter] ad_creatives 持久化失败: ${e instanceof Error ? e.message : e}`,
+          `[Intellicenter] ad_creatives 主体持久化失败: ${e instanceof Error ? e.message : e}`,
         );
       }
     }
 
-    // 诊断输出：单步耗时 + AI 调用次数 + 相似度（便于 PM2 日志侧观察）
+    // C-116: 主体（标题/描述/宣传）已 send + 存库 → 通知前端 banner 立即消失（sitelink 慢也不拖住整页）
+    send("core_done", { headlines: humanizedHeadlines.length, descriptions: humanizedDescriptions.length, callouts: humanizedCallouts.length });
+
+    // 诊断输出：主体完成（sitelink 异步随后补，不计入此行）
     console.log(
-      `[Intellicenter] merchant=${merchant.id} approved=${result.approved} timings=${JSON.stringify(result.timings)} aiCalls=${JSON.stringify(result.aiCalls)} headlines=${humanizedHeadlines.length}/${tasks[0].count} descriptions=${humanizedDescriptions.length}/${tasks[1].count} sitelinks=${realSitelinks.length}/6(real-url) callouts=${humanizedCallouts.length}/${tasks[2].count} simAvgH=${result.similarity.headlines?.avgSimilarity?.toFixed(2) ?? "-"} simAvgD=${result.similarity.descriptions?.avgSimilarity?.toFixed(2) ?? "-"} lintDropped=${result.linter?.droppedCount ?? 0}`,
+      `[Intellicenter] merchant=${merchant.id} approved=${result.approved} timings=${JSON.stringify(result.timings)} aiCalls=${JSON.stringify(result.aiCalls)} headlines=${humanizedHeadlines.length}/${tasks[0].count} descriptions=${humanizedDescriptions.length}/${tasks[1].count} callouts=${humanizedCallouts.length}/${tasks[2].count} simAvgH=${result.similarity.headlines?.avgSimilarity?.toFixed(2) ?? "-"} simAvgD=${result.similarity.descriptions?.avgSimilarity?.toFixed(2) ?? "-"} lintDropped=${result.linter?.droppedCount ?? 0}`,
     );
+
+    // D-047/C-115 + C-116: sitelink 最后单独 send + 存库（爬虫真实 URL，含 url 字段；慢也不影响主体）
+    const realSitelinks = await realSitelinksPromise;
+    send("sitelinks", realSitelinks);
+    if (adCreativeId && realSitelinks.length > 0) {
+      await prisma.ad_creatives
+        .update({ where: { id: adCreativeId }, data: { sitelinks: realSitelinks as any } })
+        .catch((e) => console.warn(`[Intellicenter] sitelink 持久化失败: ${e instanceof Error ? e.message : e}`));
+    }
+    console.log(`[Intellicenter] merchant=${merchant.id} sitelinks=${realSitelinks.length}/6(real-url) 完成`);
   } catch (err) {
     // orchestrator 整体异常（极少见）→ 降级到原 generateCore 让员工业务能继续
     console.error(

@@ -971,6 +971,13 @@ export default function AdPreviewPage() {
         return;
       }
 
+      // C-116: 主体文案（标题/描述/宣传）已全部生成 → 顶部"正在一键生成"banner 立即消失，
+      //   sitelink/图片各自的独立 loading 继续（不让较慢的 sitelink 把整页"正在生成"一直转）
+      if (type === "core_done") {
+        setCoreGenerating(false);
+        return;
+      }
+
       if (type === "headlines") {
         const hs = (data || []) as string[];
         if (hs.length > 0) {
