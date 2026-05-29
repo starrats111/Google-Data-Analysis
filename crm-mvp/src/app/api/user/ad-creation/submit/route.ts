@@ -421,6 +421,7 @@ export async function POST(req: NextRequest) {
   // ═════════════════════════════════════════════════════════════════
   try {
     const { checkAdCompliance } = await import("@/lib/ad-compliance-checker");
+    const { lintRewriteAndBackfill } = await import("@/lib/intellicenter/ad-creation/compliance-linter");
     const { detectIndustryProfile } = await import("@/lib/industry-profile");
     let pageTextSnippet = "";
     try {
@@ -440,14 +441,44 @@ export async function POST(req: NextRequest) {
       { industryProfile, merchantName: submitMerchant.merchant_name || "" },
     );
     if (finalGate.criticalCount > 0) {
+      // ═══ C-119：提交无障碍 —— 不再硬阻断让员工去改，智能自动修复后直接放行 ═══
+      // 07 铁律：自动避障之后就不该再因"违规"挡住提交。检出 critical → AI 证据感知重写 +
+      //   仍违规删除 + 静态模板补足数量，用修复后的文案继续提交（与创建阶段 C-118 同一套闭环）。
       const criticals = finalGate.violations.filter((v) => v.severity === "critical");
-      const top = criticals.slice(0, 5);
-      const summary = top.map((v) => `${v.field}#${v.index}「${v.text.slice(0, 40)}${v.text.length > 40 ? "…" : ""}」→ ${v.rule}`).join("；");
-      console.warn(
-        `[AdSubmit] D-039 H4 final gate 阻止 (cam=${campaign.id})：${finalGate.criticalCount} 条 critical 违规：${summary}`,
+      const summary = criticals.slice(0, 5).map((v) => `${v.field}#${v.index}「${v.text.slice(0, 30)}」→ ${v.rule}`).join("；");
+      console.warn(`[AdSubmit] H4 检出 ${finalGate.criticalCount} 条 critical，启动自动修复（不阻断提交）：${summary}`);
+      const rewriteCallAi = async (prompt: string): Promise<string> =>
+        callAiWithFallback(
+          "ad_creation_intelligent",
+          [
+            { role: "system", content: "You are a senior Google Ads copywriter. Return ONLY valid JSON, no markdown." },
+            { role: "user", content: prompt },
+          ],
+          1024,
+        );
+      const repaired = await lintRewriteAndBackfill(
+        { headlines: headlines as string[], descriptions: descriptions as string[], callouts: callouts as string[] },
+        {
+          merchantName: submitMerchant.merchant_name || "",
+          industryProfile,
+          industryLabel: industryProfile?.label ?? null,
+          // 保持现有数量（创建阶段已满 15/4），删除违规后补回相同数量
+          targetHeadlines: (headlines as string[]).length,
+          targetDescriptions: (descriptions as string[]).length,
+        },
+        rewriteCallAi,
       );
-      return apiError(
-        `提交前合规检查发现 ${finalGate.criticalCount} 条严重违规，请先在「广告预览」页修改文案后再提交：${summary}${criticals.length > 5 ? `（共 ${finalGate.criticalCount} 条，仅展示前 5 条）` : ""}`,
+      headlines.splice(0, headlines.length, ...repaired.cleanedHeadlines);
+      descriptions.splice(0, descriptions.length, ...repaired.cleanedDescriptions);
+      if (Array.isArray(callouts)) {
+        callouts.splice(0, callouts.length, ...repaired.cleanedCallouts);
+      }
+      await prisma.ad_creatives.update({
+        where: { id: adCreative.id },
+        data: { headlines: headlines as any, descriptions: descriptions as any, callouts: callouts as any },
+      }).catch((e) => console.warn("[AdSubmit] H4 自动修复写回 DB 失败:", e instanceof Error ? e.message : e));
+      console.warn(
+        `[AdSubmit] H4 自动修复完成（已放行）：rewrote=${repaired.rewroteCount} dropped=${repaired.droppedCount} backfilled=${repaired.backfilledCount} → headlines=${headlines.length} descriptions=${descriptions.length}`,
       );
     }
     if (finalGate.minorCount > 0) {

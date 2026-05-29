@@ -10,8 +10,11 @@
  */
 
 const OCR_WORD_THRESHOLD_DEFAULT = 5;
-const OCR_IMAGE_TIMEOUT_MS = 8000;   // 单张图片 OCR 超时（超时则保留）
-const OCR_BATCH_TIMEOUT_MS = 35000;  // 整批 OCR 总超时（超时则返回已处理结果）
+// C-119 低配生产机(2核)提速：tesseract WASM 很吃 CPU，超时全面收紧，给图片提取「封顶」
+const OCR_IMAGE_TIMEOUT_MS = 5000;   // 单张图片 OCR 超时（超时则保留）
+const OCR_BATCH_TIMEOUT_MS = 12000;  // 整批 OCR 总超时（超时则返回已处理结果）
+const OCR_INIT_TIMEOUT_MS = 8000;    // scheduler 冷启动初始化超时（超时则整段跳过 OCR，避免首次卡死）
+const OCR_FETCH_TIMEOUT_MS = 4000;   // 单张图片下载超时
 const BROWSER_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
@@ -77,9 +80,14 @@ export async function ocrFilterImages(
     imageTimeoutMs = OCR_IMAGE_TIMEOUT_MS,
   } = options;
 
-  let scheduler: import("tesseract.js").Scheduler;
+  // C-119: scheduler 冷启动加超时保护 —— tesseract worker 首次初始化(下载/编译 WASM+语言包)
+  //   在 2 核机上可能卡很久，超过 OCR_INIT_TIMEOUT_MS 直接跳过 OCR（返回原候选），保证图片提取不卡死。
+  let scheduler: import("tesseract.js").Scheduler | null = null;
   try {
-    scheduler = await getScheduler();
+    scheduler = await Promise.race([
+      getScheduler(),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), OCR_INIT_TIMEOUT_MS)),
+    ]);
   } catch (e) {
     console.warn(
       "[OCRFilter] scheduler 不可用，跳过 OCR 过滤:",
@@ -87,14 +95,18 @@ export async function ocrFilterImages(
     );
     return urls;
   }
+  if (!scheduler) {
+    console.warn(`[OCRFilter] scheduler 初始化超过 ${OCR_INIT_TIMEOUT_MS}ms，本次跳过 OCR 过滤（保留原候选）`);
+    return urls;
+  }
 
   const keep = new Array<boolean>(urls.length).fill(true);
 
   const tasks = urls.map(async (url, idx) => {
     try {
-      // 1. 获取图片数据（5s 超时）
+      // 1. 获取图片数据（4s 超时）
       const resp = await fetch(url, {
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(OCR_FETCH_TIMEOUT_MS),
         headers: { "User-Agent": BROWSER_UA },
       });
       if (!resp.ok) return; // 不可达 → 保留
