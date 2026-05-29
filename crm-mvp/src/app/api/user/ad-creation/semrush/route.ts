@@ -1,14 +1,14 @@
 import { NextRequest } from "next/server";
 import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiError } from "@/lib/constants";
-import { SemRushClient, normalizeDomain, type SemRushKeyword } from "@/lib/semrush-client";
-import { isPolicyRiskKeyword } from "@/lib/keyword-optimizer";
-import { callAiWithFallback } from "@/lib/ai-service";
+import { SemRushClient, normalizeDomain } from "@/lib/semrush-client";
+import { selectKeywordsWithAi } from "@/lib/keyword-selector";
 import { prisma } from "@/lib/prisma";
 
 /**
  * POST /api/user/ad-creation/semrush
- * 关键词来源：SEMrush 主要付费关键词（top 1-2）+ AI 生成词（2-3）
+ * 关键词来源（D-047 / C-113）：SemRush「自然词池 + 付费词池」，由 AI 在真实池内「选词」
+ * （只选不造，付费优先 + 自然补长尾，数量按预算 / CPC 自适应，match type 三因子）。
  *
  * D-038c-v2 路由层增强（I3 / I6 / I7）：
  *   - I3 errorCategory：错误分类（3ue_unstable / session_expired / account_blocked / config_missing / cache_fallback / unknown）
@@ -71,115 +71,24 @@ function classifyError(err: unknown): { category: string; userMessage: string; c
   };
 }
 
-/** 从付费关键词中按 trafficPercent × volume 取 top 1-2 */
-function selectPaidKeywords(paidKws: SemRushKeyword[], limit = 2) {
-  return paidKws
-    .filter((kw) => kw.phrase && !isPolicyRiskKeyword(kw.phrase))
-    .sort((a, b) => {
-      const scoreA = (a.trafficPercent ?? 0) * (a.volume ?? 0);
-      const scoreB = (b.trafficPercent ?? 0) * (b.volume ?? 0);
-      return scoreB - scoreA;
-    })
-    .slice(0, limit)
-    .map((kw) => ({
-      phrase: kw.phrase,
-      volume: kw.volume ?? 0,
-      cpc: kw.cpc ?? null,
-      suggested_bid: kw.suggested_bid ?? null,
-      competition: kw.competition ?? null,
-      source: "semrush_paid",
-      recommended_match_type: "EXACT",
-      score: null,
-      reason: `SEMrush 主要付费关键词，月搜索量 ${kw.volume ?? 0}，流量占比 ${(kw.trafficPercent ?? 0).toFixed(1)}%`,
-      competition_band: null,
-      intent_layer: "BRAND",
-    }));
-}
-
-/** AI 根据自然搜索关键词 + 商家信息，生成 2-3 个建议关键词 */
-async function generateAiKeywords(
-  organicKeywords: SemRushKeyword[],
+/** 一次完整的 SemRush 拉取 + AI 池内选词 pipeline（不含外层重试 / 缓存兜底） */
+async function runOnePipeline(
+  merchantUrl: string,
+  country: string,
   merchantName: string,
-  domain: string,
-): Promise<object[]> {
-  const topOrganic = organicKeywords
-    .slice(0, 10)
-    .map((kw) => kw.phrase)
-    .filter(Boolean)
-    .join(", ");
-  if (!topOrganic) return [];
-
-  try {
-    const raw = await callAiWithFallback(
-      "ad_copy",
-      [
-        {
-          role: "user",
-          content: `You are a Google Ads keyword expert. Based on the merchant information and their organic search keywords, suggest 2-3 additional high-intent Google Ads keywords.
-
-Merchant name: ${merchantName || domain}
-Website: ${domain}
-Top organic keywords: ${topOrganic}
-
-Requirements:
-- Keywords must be relevant to the merchant's products/services
-- Prefer purchase-intent or feature/category terms (e.g. "buy", "shop", "sale", "best", product category names)
-- 2-5 words per keyword
-- Do NOT exactly repeat any of the provided organic keywords
-- Return ONLY a valid JSON array of strings, nothing else
-
-Example output: ["women's designer dresses", "buy formal dress online", "evening gowns sale"]`,
-        },
-      ],
-      300,
-    );
-
-    const match = raw.match(/\[[\s\S]*?\]/);
-    if (!match) return [];
-    const parsed: unknown = JSON.parse(match[0]);
-    if (!Array.isArray(parsed)) return [];
-
-    return (parsed as unknown[])
-      .map((p) => String(p || "").trim())
-      .filter((p) => p.length >= 2 && !isPolicyRiskKeyword(p))
-      .slice(0, 3)
-      .map((phrase) => ({
-        phrase,
-        volume: null,
-        cpc: null,
-        suggested_bid: null,
-        competition: null,
-        source: "ai_generated",
-        recommended_match_type: "PHRASE",
-        score: null,
-        reason: "AI 根据商家信息和自然搜索关键词生成",
-        competition_band: null,
-        intent_layer: "HIGH_INTENT",
-      }));
-  } catch (err) {
-    console.warn(
-      "[SemRush AI Keywords] AI 生成失败:",
-      err instanceof Error ? err.message : String(err),
-    );
-    return [];
-  }
-}
-
-/** 一次完整的 SemRush 拉取 + AI 增强 pipeline（不含外层重试 / 缓存兜底） */
-async function runOnePipeline(merchantUrl: string, country: string, merchantName: string) {
+  dailyBudgetUsd: number,
+  maxCpcUsd: number,
+) {
   const client = await SemRushClient.fromConfig(country);
   const result = await client.queryDomain(merchantUrl);
-
-  const paidKeywords = selectPaidKeywords(result.paidKeywords, 2);
   const domain = result.domain;
-  const aiKeywords = await generateAiKeywords(result.keywords, merchantName, domain);
 
-  const seen = new Set<string>();
-  const allKeywords = [...paidKeywords, ...aiKeywords].filter((kw) => {
-    const key = (kw as { phrase: string }).phrase.toLowerCase();
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
+  // D-047: AI 从「自然词池(organic) + 付费词池(paid)」里选词（只选不造）
+  const allKeywords = await selectKeywordsWithAi(result.keywords, result.paidKeywords, {
+    merchantName,
+    domain,
+    dailyBudgetUsd,
+    maxCpcUsd,
   });
 
   return {
@@ -236,11 +145,15 @@ export async function POST(req: NextRequest) {
   let merchantUrl = "";
   let country = "US";
   let merchantName = "";
+  let dailyBudgetUsd = 2;
+  let maxCpcUsd = 0.3;
   try {
     const body = await req.json();
     merchantUrl = String(body.merchant_url || "");
     country = String(body.country || "US");
     merchantName = String(body.merchant_name || "");
+    dailyBudgetUsd = Number(body.daily_budget) > 0 ? Number(body.daily_budget) : 2;
+    maxCpcUsd = Number(body.max_cpc) > 0 ? Number(body.max_cpc) : 0.3;
   } catch {
     return apiError("请求参数格式错误");
   }
@@ -252,7 +165,7 @@ export async function POST(req: NextRequest) {
   // ─── pipeline 主流程 + I7 路由层重试 ───
   let firstErr: unknown = null;
   try {
-    const data = await runOnePipeline(merchantUrl, country, merchantName);
+    const data = await runOnePipeline(merchantUrl, country, merchantName, dailyBudgetUsd, maxCpcUsd);
     // 异步写缓存，不 await
     void writeCache(normalized, db, data, data.raw_keyword_count);
     return Response.json({
@@ -272,7 +185,7 @@ export async function POST(req: NextRequest) {
       await new Promise((r) => setTimeout(r, OUTER_RETRY_DELAY_MS));
       try {
         console.log(`[SemRush API] I7 路由层重试 1/1（已等待 ${OUTER_RETRY_DELAY_MS}ms）`);
-        const data = await runOnePipeline(merchantUrl, country, merchantName);
+        const data = await runOnePipeline(merchantUrl, country, merchantName, dailyBudgetUsd, maxCpcUsd);
         void writeCache(normalized, db, data, data.raw_keyword_count);
         return Response.json({
           code: 0,
