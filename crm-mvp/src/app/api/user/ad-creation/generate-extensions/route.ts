@@ -2561,6 +2561,49 @@ async function selectBestImages(
   return result.slice(0, 20);
 }
 
+// ─── D-047 / C-115: 站内链接「只用爬虫真实 URL，AI 只写文案」───
+//
+// 07 验收铁律：sitelink 的 URL 必须是爬虫真实抓到的页面，绝不让 AI 编造 url_path
+// （drhauschka 实证：orchestrator 让 AI 生成 /body-care /make-up 等不存在的路径 → 前端验证全 404）。
+// 做法（复用 C-016 sitelinkPipeline 逻辑）：爬虫 sitelinkCandidates 真实 URL → autoExpandSitelinks
+// 从 sitemap/robots 补充真实 URL（HEAD 验证）→ generateSitelinkTexts 只写 title/desc（强制 url=候选真实 url）。
+async function buildRealSitelinks(opts: {
+  cache: CrawlCache;
+  merchantUrl: string;
+  country: string;
+  merchantName: string;
+  languageCode: string;
+}): Promise<Array<{ url: string; title: string; desc1: string; desc2: string }>> {
+  const { cache, merchantUrl, country, merchantName, languageCode } = opts;
+  const baseline = (cache.sitelinkCandidates || []).map((s) => ({
+    url: s.url,
+    title: s.title,
+    description: s.description,
+  }));
+  const expanded = await autoExpandSitelinks({ merchantUrl, country, existing: baseline, targetCount: 6 });
+  // 去重（保序），最多取前 8 条作为 AI 输入缓冲
+  const unique: typeof expanded = [];
+  const seen = new Set<string>();
+  for (const s of expanded) {
+    const norm = s.url.replace(/\/$/, "").replace(/^http:/, "https:").toLowerCase();
+    if (seen.has(norm)) continue;
+    seen.add(norm);
+    unique.push(s);
+    if (unique.length >= 8) break;
+  }
+  if (unique.length === 0) {
+    console.warn(`[Intellicenter] buildRealSitelinks: 无真实候选（merchantUrl=${merchantUrl}），返回空`);
+    return [];
+  }
+  const aiInputs = unique.map((s) => ({ url: s.url, pageTitle: s.title, pageDescription: s.description }));
+  const written = await generateSitelinkTexts(aiInputs, { brandRoot: merchantName, country, languageCode });
+  const filtered = written.filter((s) => !isLowValueSitelink(s.url, s.title));
+  console.warn(
+    `[Intellicenter] buildRealSitelinks: candidates=${baseline.length} expanded=${expanded.length} ai_written=${written.length} final=${filtered.slice(0, 6).length}`,
+  );
+  return filtered.slice(0, 6);
+}
+
 // ─── C-112 / D-046.C: 8 步 AI 智能闭环 wrapper ───
 //
 // 本函数完全替换原 generateCore 主路径（headlines + descriptions + sitelinks + callouts）。
@@ -2616,13 +2659,26 @@ async function runIntelligentCore(
   const dailyBudgetUsd = Number(adSettings?.daily_budget ?? 2);
   const maxCpcUsd = Number(adSettings?.max_cpc ?? 0.3);
 
-  // ─── 3. 构造任务清单（headlines×10 + descriptions×4 + sitelinks×6 + callouts×6）───
+  // ─── 3. 构造任务清单（headlines×10 + descriptions×4 + callouts×6）───
+  //   D-047/C-115: sitelink 从 orchestrator 移除 —— 不再让 AI 编造 url_path，
+  //   改由 buildRealSitelinks 用爬虫真实 URL 生成（与 orchestrator 并行，不增加总耗时）。
   const tasks: OrchestratorTask[] = [
     { kind: "headlines", count: 10, maxLen: 30 },
     { kind: "descriptions", count: 4, maxLen: 90, minLen: 40 },
-    { kind: "sitelinks", count: 6, maxLen: 25 },
     { kind: "callouts", count: 6, maxLen: 25 },
   ];
+
+  // 真实 sitelink 与 orchestrator 并行启动（爬虫真实 URL + AI 只写文案，绝不编造路径）
+  const realSitelinksPromise = buildRealSitelinks({
+    cache,
+    merchantUrl,
+    country,
+    merchantName,
+    languageCode: adLanguageCode || market.languageCode,
+  }).catch((e) => {
+    console.warn(`[Intellicenter] buildRealSitelinks 异常（推空）: ${e instanceof Error ? e.message : e}`);
+    return [] as Array<{ url: string; title: string; desc1: string; desc2: string }>;
+  });
 
   try {
     const result = await runIntelligentAdCreation({
@@ -2666,11 +2722,9 @@ async function runIntelligentCore(
 
     send("headlines", humanizedHeadlines);
     send("descriptions", humanizedDescriptions);
-    if (result.sitelinks.length > 0) {
-      send("sitelinks", result.sitelinks);
-    } else {
-      send("sitelinks", []);
-    }
+    // D-047/C-115: 用爬虫真实 URL 生成的 sitelink（已含真实 url 字段），绝不用 orchestrator 编造结果
+    const realSitelinks = await realSitelinksPromise;
+    send("sitelinks", realSitelinks);
     if (humanizedCallouts.length > 0) {
       send("callouts", humanizedCallouts);
     }
@@ -2683,7 +2737,7 @@ async function runIntelligentCore(
           data: {
             headlines: humanizedHeadlines as any,
             descriptions: humanizedDescriptions as any,
-            sitelinks: result.sitelinks as any,
+            sitelinks: realSitelinks as any,
             callouts: humanizedCallouts as any,
           },
         });
@@ -2696,7 +2750,7 @@ async function runIntelligentCore(
 
     // 诊断输出：单步耗时 + AI 调用次数 + 相似度（便于 PM2 日志侧观察）
     console.log(
-      `[Intellicenter] merchant=${merchant.id} approved=${result.approved} timings=${JSON.stringify(result.timings)} aiCalls=${JSON.stringify(result.aiCalls)} headlines=${humanizedHeadlines.length}/${tasks[0].count} descriptions=${humanizedDescriptions.length}/${tasks[1].count} sitelinks=${result.sitelinks.length}/${tasks[2].count} callouts=${humanizedCallouts.length}/${tasks[3].count} simAvgH=${result.similarity.headlines?.avgSimilarity?.toFixed(2) ?? "-"} simAvgD=${result.similarity.descriptions?.avgSimilarity?.toFixed(2) ?? "-"} lintDropped=${result.linter?.droppedCount ?? 0}`,
+      `[Intellicenter] merchant=${merchant.id} approved=${result.approved} timings=${JSON.stringify(result.timings)} aiCalls=${JSON.stringify(result.aiCalls)} headlines=${humanizedHeadlines.length}/${tasks[0].count} descriptions=${humanizedDescriptions.length}/${tasks[1].count} sitelinks=${realSitelinks.length}/6(real-url) callouts=${humanizedCallouts.length}/${tasks[2].count} simAvgH=${result.similarity.headlines?.avgSimilarity?.toFixed(2) ?? "-"} simAvgD=${result.similarity.descriptions?.avgSimilarity?.toFixed(2) ?? "-"} lintDropped=${result.linter?.droppedCount ?? 0}`,
     );
   } catch (err) {
     // orchestrator 整体异常（极少见）→ 降级到原 generateCore 让员工业务能继续
