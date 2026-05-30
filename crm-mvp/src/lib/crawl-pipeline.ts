@@ -2119,9 +2119,21 @@ export async function buildCrawlCache(
     console.log(`[CrawlPipeline] 检测到页面实际语言: ${detectedLanguageCode}（来源: HTML lang 属性或 URL 路径）`);
   }
 
+  // D-059: 把 JSON-LD 产品图（extractProducts 已提取但此前未并入 images）合并为图片兜底候选，
+  // 追加在 collectImages 结果之后（低优先），经质量过滤 + 去重，缓解主爬/子页采图为空时的 0 图问题。
+  const productImageUrls = (crawledProducts || [])
+    .map((p) => p?.imageUrl)
+    .filter((u): u is string => typeof u === "string" && /^https?:\/\//.test(u) && isQualityImageUrl(u, merchantUrl));
+  const mergedImages = productImageUrls.length > 0
+    ? Array.from(new Set([...images, ...productImageUrls]))
+    : images;
+  if (productImageUrls.length > 0 && mergedImages.length > images.length) {
+    console.log(`[CrawlPipeline] D-059 合并 JSON-LD 产品图 +${mergedImages.length - images.length} 张（images ${images.length}→${mergedImages.length}）`);
+  }
+
   return {
     links: crawlResult.links,
-    images,
+    images: mergedImages,
     pageText,
     features,
     navItems,

@@ -1556,29 +1556,38 @@ export async function harvestImagesFromPagesWithPuppeteer(
 
         const imgs: string[] = await page.evaluate((maxCount: number) => {
           const imgSet = new Set<string>();
-          document.querySelectorAll("img, [data-src], [data-original], [data-lazy-src], [data-img], [data-background], picture source").forEach((el) => {
-            const img = el as HTMLImageElement;
-            const candidates = [
-              img.src,
-              img.dataset?.src,
-              img.dataset?.original,
-              (img.dataset as Record<string, string> | undefined)?.["lazySrc"],
-              (img.dataset as Record<string, string> | undefined)?.["lazyOriginal"],
-              img.dataset?.img,
-              img.dataset?.background,
-              img.getAttribute("srcset"),
-              img.getAttribute("data-srcset"),
-            ];
-            for (const c of candidates) {
-              if (!c) continue;
-              const url = c.split(",")[0].split(" ")[0].trim();
-              if (url && url.startsWith("http") && !url.includes("undefined")) imgSet.add(url);
+          // D-059: 相对/协议相对 URL 解析为绝对（与主爬一致），srcset 全量候选
+          const pushUrl = (raw: unknown) => {
+            if (!raw) return;
+            let u = String(raw).trim();
+            if (!u || u.includes("undefined") || u.startsWith("data:")) return;
+            try { u = new URL(u, location.href).href; } catch { return; }
+            if (u.startsWith("http")) imgSet.add(u);
+          };
+          const pushSrcset = (val: unknown) => {
+            if (!val) return;
+            for (const part of String(val).split(",")) pushUrl(part.trim().split(/\s+/)[0]);
+          };
+          document.querySelectorAll("img, source, [data-src], [data-original], [data-lazy-src], [data-img], [data-background], picture source").forEach((el) => {
+            const img = el as any;
+            pushUrl(img.currentSrc);
+            pushUrl(img.src);
+            pushUrl(img.getAttribute && img.getAttribute("src"));
+            if (img.dataset) {
+              pushUrl(img.dataset.src);
+              pushUrl(img.dataset.original);
+              pushUrl(img.dataset["lazySrc"]);
+              pushUrl(img.dataset["lazyOriginal"]);
+              pushUrl(img.dataset.img);
+              pushUrl(img.dataset.background);
             }
+            pushSrcset(img.getAttribute && img.getAttribute("srcset"));
+            pushSrcset(img.getAttribute && img.getAttribute("data-srcset"));
           });
           document.querySelectorAll("[style*='background-image'], [style*='background:']").forEach((el) => {
             const style = (el as HTMLElement).style.backgroundImage || "";
-            const m = style.match(/url\(["']?(https?[^"')]+)["']?\)/);
-            if (m && !m[1].includes("undefined")) imgSet.add(m[1]);
+            const m = style.match(/url\(["']?([^"')]+)["']?\)/);
+            if (m) pushUrl(m[1]);
           });
           return Array.from(imgSet).slice(0, maxCount);
         }, maxImagesPerPage);
@@ -1923,32 +1932,60 @@ export async function crawlWithPuppeteerFull(
           navLinks.push(...fallback);
         }
         const imgSrcs = new Set<string>();
-        // 收集所有可能携带真实图片 URL 的属性（含懒加载）
-        document.querySelectorAll("img, [data-src], [data-original], [data-lazy-src], [data-img], [data-background]").forEach(el => {
-          const img = el as HTMLImageElement;
-          const candidates = [
-            img.src,
-            img.dataset.src,
-            img.dataset.original,
-            (img.dataset as Record<string,string>)["lazySrc"],
-            (img.dataset as Record<string,string>)["lazyOriginal"],
-            img.dataset.img,
-            img.dataset.background,
-            img.getAttribute("data-srcset"),
-            img.getAttribute("srcset"),
-          ];
-          for (const c of candidates) {
-            if (!c) continue;
-            // srcset 可能含多个 URL，取第一个
-            const url = c.split(",")[0].split(" ")[0].trim();
-            if (url && url.startsWith("http") && !url.includes("undefined")) imgSrcs.add(url);
+        // D-059: 相对/协议相对 URL 解析为绝对（修复 Shopify/Magento 等大量 /cdn/... 相对图被丢弃 → 0 图）
+        const pushUrl = (raw: unknown) => {
+          if (!raw) return;
+          let u = String(raw).trim();
+          if (!u || u.includes("undefined") || u.startsWith("data:")) return;
+          try { u = new URL(u, location.href).href; } catch { return; }
+          if (u.startsWith("http")) imgSrcs.add(u);
+        };
+        // srcset: "url1 320w, url2 640w" → 全部候选（后续按尺寸/质量筛选）
+        const pushSrcset = (val: unknown) => {
+          if (!val) return;
+          for (const part of String(val).split(",")) pushUrl(part.trim().split(/\s+/)[0]);
+        };
+        // 收集所有可能携带真实图片 URL 的属性（含懒加载、<picture><source>）
+        document.querySelectorAll("img, source, [data-src], [data-original], [data-lazy-src], [data-img], [data-background]").forEach(el => {
+          const img = el as any;
+          pushUrl(img.currentSrc);
+          pushUrl(img.src);
+          pushUrl(img.getAttribute && img.getAttribute("src"));
+          if (img.dataset) {
+            pushUrl(img.dataset.src);
+            pushUrl(img.dataset.original);
+            pushUrl(img.dataset["lazySrc"]);
+            pushUrl(img.dataset["lazyOriginal"]);
+            pushUrl(img.dataset.img);
+            pushUrl(img.dataset.background);
           }
+          pushSrcset(img.getAttribute && img.getAttribute("data-srcset"));
+          pushSrcset(img.getAttribute && img.getAttribute("srcset"));
         });
-        // CSS background-image
+        // CSS background-image（含相对路径）
         document.querySelectorAll("[style*='background-image'], [style*='background:']").forEach(el => {
           const style = (el as HTMLElement).style.backgroundImage || "";
-          const m = style.match(/url\(["']?(https?[^"')]+)["']?\)/);
-          if (m && !m[1].includes("undefined")) imgSrcs.add(m[1]);
+          const m = style.match(/url\(["']?([^"')]+)["']?\)/);
+          if (m) pushUrl(m[1]);
+        });
+        // D-059: og:image / twitter:image meta（可靠的主产品/品牌图，CF 站也常存在）
+        document.querySelectorAll("meta[property='og:image'], meta[property='og:image:url'], meta[property='og:image:secure_url'], meta[name='twitter:image'], meta[name='twitter:image:src']").forEach(el => {
+          pushUrl((el as HTMLMetaElement).getAttribute("content"));
+        });
+        // D-059: JSON-LD（含 Product schema）递归提取 image 字段
+        document.querySelectorAll("script[type='application/ld+json']").forEach(el => {
+          try {
+            const walk = (node: any) => {
+              if (!node || typeof node !== "object") return;
+              if (Array.isArray(node)) { node.forEach(walk); return; }
+              const im = node.image;
+              if (typeof im === "string") pushUrl(im);
+              else if (Array.isArray(im)) im.forEach((x: any) => { if (typeof x === "string") pushUrl(x); else if (x && x.url) pushUrl(x.url); });
+              else if (im && typeof im === "object" && im.url) pushUrl(im.url);
+              for (const k in node) { if (node[k] && typeof node[k] === "object") walk(node[k]); }
+            };
+            walk(JSON.parse((el as HTMLElement).textContent || ""));
+          } catch { /* 忽略非法 JSON-LD */ }
         });
         const heroTexts = Array.from(document.querySelectorAll("h1, [class*=hero] p, [class*=banner] p, [class*=headline]"))
           .map(el => (el as HTMLElement).innerText.trim()).filter(t => t.length >= 5 && t.length <= 200);

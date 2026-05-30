@@ -741,7 +741,21 @@ export async function POST(req: NextRequest) {
           // F-15: 图片提取独立于 AI 生成流程，并行运行，避免 AI/OCR 异常导致图片丢失
           tasks.push((async () => {
             try {
-              const rawImgs = cache!.images || [];
+              let rawImgs = cache!.images || [];
+              // D-059: 爬取阶段 0 图时最后兜底——直接 HTTP 抓商家首页提图（多 UA + og:image + JSON-LD +
+              // 相对 URL 解析）。解决 Puppeteer/代理那趟未拿到图、但站点 HTML 明明有图的情况（如 WordPress 站）。
+              if (rawImgs.length === 0 && merchantUrl) {
+                try {
+                  const { fetchPageImages } = await import("@/lib/crawler");
+                  const fb = await fetchPageImages(merchantUrl);
+                  if (fb.length > 0) {
+                    rawImgs = fb;
+                    console.warn(`[Extensions] D-059 raw=0 兜底 fetchPageImages 抓到 ${fb.length} 张`);
+                  }
+                } catch (fbErr) {
+                  console.warn("[Extensions] D-059 兜底 fetchPageImages 失败:", fbErr instanceof Error ? fbErr.message : fbErr);
+                }
+              }
               const images = rawImgs.length > 0
                 ? await selectBestImages(rawImgs, merchantUrl, { pageText: cache!.pageText, features: cache!.features })
                 : [];
