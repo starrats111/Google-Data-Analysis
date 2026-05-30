@@ -375,10 +375,12 @@ export default function AdPreviewPage() {
     setNetworkDisplay(c?.network_display === 1 || s?.network_display === 1);
     // 初始化最终到达网址后缀
     setSuffixInput((c as any)?.final_url_suffix ?? "");
-    // 广告语言唯一来源：crawl_cache.detectedLanguageCode（爬虫用目标国家 IP 访问网站后从 HTML lang 属性检测）
-    // 若尚未爬取（缓存不存在），则置空等待「一键生成」触发爬取后自动检测并回填
+    // 广告语言以「投放国家市场语言」为准（与文案生成逻辑一致：FR→法语、DE→德语…），
+    // 这样保证「投法语给法国人」——文案语言与广告语言、投放国家三者一致。
+    // 爬虫检测到的页面 HTML lang 仅作参考：很多站点（如 brevo.fr 法语站点 html lang=en）
+    // 会用统一英文模板，直接采信会导致广告语言与文案/国家不符，故冲突时一律按市场语言。
     const detectedLang = (preview.adCreative as any)?.detectedLanguageCode || "";
-    setAdLanguage(detectedLang);
+    setAdLanguage(marketCfg.languageCode || detectedLang || "");
     setPromotion((prev) => ({
       ...prev,
       currency_code: marketCfg.currencyCode,
@@ -1017,14 +1019,18 @@ export default function AdPreviewPage() {
         return;
       }
 
-      // 爬虫从 HTML lang 属性或 locale URL 检测到实际语言
-      // 唯一来源：crawl_cache.detectedLanguageCode，不写 DB language_id
+      // 爬虫从 HTML lang 属性或 locale URL 检测到实际页面语言
+      // 广告语言以投放国家市场语言为准：仅当检测语言与市场语言一致时确认采用；
+      // 不一致时（如法语站点 html lang=en）保持市场语言，避免与文案/国家错配。
       if (type === "detected_language") {
         const d = data as { code: string };
-        if (d?.code) {
+        const marketLang = getAdMarketConfig(targetCountry).languageCode;
+        if (d?.code && d.code === marketLang) {
           setAdLanguage(d.code);
-          const langName = GOOGLE_ADS_LANGUAGES.find((l) => l.code === d.code)?.name || d.code;
-          message.info(`广告语言已根据网站内容自动设置为 ${langName}`);
+        } else if (d?.code && d.code !== marketLang) {
+          console.warn(
+            `[AdLang] 检测页面语言 ${d.code} 与投放国家 ${targetCountry} 市场语言 ${marketLang} 不一致，按市场语言投放`,
+          );
         }
         return;
       }
@@ -1773,7 +1779,7 @@ export default function AdPreviewPage() {
         network_display: networkDisplay,
         customer_id: selectedCid,
         mcc_account_id: selectedMccId,
-        ad_language: adLanguage || "en",
+        ad_language: adLanguage || market.languageCode || "en",
         eu_political_ad: euPoliticalAd,
       };
       // C-088: 携带用户自定义广告系列名（非空则后端优先使用，否则自动分配）
@@ -3028,7 +3034,7 @@ export default function AdPreviewPage() {
             <div><Text type="secondary">商家：</Text><Text strong>{preview.merchant?.merchant_name}</Text></div>
             <div><Text type="secondary">平台：</Text><Tag>{preview.merchant?.platform}</Tag></div>
             <div><Text type="secondary">国家：</Text><Tag color="blue">{preview.campaign?.target_country}</Tag></div>
-            <div><Text type="secondary">广告语言：</Text><Tag color="orange">{GOOGLE_ADS_LANGUAGES.find((l) => l.code === adLanguage)?.name || adLanguage || "English"}</Tag></div>
+            <div><Text type="secondary">广告语言：</Text><Tag color="orange">{GOOGLE_ADS_LANGUAGES.find((l) => l.code === (adLanguage || market.languageCode))?.name || adLanguage || market.languageName}</Tag></div>
             <div style={{ marginTop: 8 }}>
               <Text type="secondary">落地页 URL：</Text>
               {!editingFinalUrl ? (
