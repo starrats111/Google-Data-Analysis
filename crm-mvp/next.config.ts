@@ -34,6 +34,10 @@ const nextConfig: NextConfig = {
     "puppeteer-extra-plugin-stealth",
     "clone-deep",
     "merge-deep",
+    // D-066：tesseract.js 必须外部化，否则 webpack 把它打进 .next/，
+    // 其 worker 入口路径被算成 .next/worker-script/node/index.js（不存在）→
+    // worker 线程加载失败抛 uncaughtException 中断在途生成 + OCR 过滤永久失效。
+    "tesseract.js",
   ],
 
   // ─── 安全头部 ───
