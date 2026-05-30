@@ -4,6 +4,10 @@ import { execSync } from "child_process";
 const isProd = process.env.NODE_ENV === "production";
 
 const nextConfig: NextConfig = {
+  // D-057: 允许部署时把构建产物写到临时目录（如 .next.tmp）再原子切换，
+  // 使旧 .next 在整个构建期间继续对外服务，消除部署期 chunk 404 窗口。
+  distDir: process.env.NEXT_DIST_DIR || ".next",
+
   generateBuildId: async () => {
     try {
       return execSync("git rev-parse --short HEAD", { encoding: "utf-8" }).trim();

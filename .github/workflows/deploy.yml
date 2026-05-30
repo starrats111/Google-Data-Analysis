@@ -58,23 +58,34 @@ jobs:
             echo "===== 4. Generate Prisma Client ====="
             npx prisma generate 2>&1 | tail -5
 
-            echo "===== 5a. Clean stale .next chunks (C-111 fix) ====="
-            # 真因：next build 是增量编译，旧 chunk 文件残留在 .next/static/chunks/，
-            # 当 next.config 改动（如本次移除 optimizePackageImports）后 chunks 重新生成，
-            # 但旧 hash 文件不删，造成新旧混合 + Cloudflare 边缘缓存旧 chunk 1 年。
-            # 删除整个 .next 强制完全 rebuild，所有 chunk hash 重新生成。
-            rm -rf .next 2>/dev/null || true
-            echo ".next cleaned, size before: $(du -sh .next 2>/dev/null || echo 0)"
-            # C-113: build 前回收可释放缓存，给 webpack client 编译腾出内存峰值空间
+            echo "===== 5a. (D-057) 回收内存，构建前不删除 .next（避免线上 404 窗口）====="
+            # D-057 真因修复：原先此处 `rm -rf .next` 在 build 之前执行，但旧 PM2 进程（next start）
+            # 仍在用同一 .next 对外服务——next start 按请求从磁盘读 .next/static/，.next 被删后整个
+            # 构建期间（数分钟）线上所有 chunk 请求 404 → 浏览器 ChunkLoadError + Cloudflare 负缓存 404。
+            # `rm -rf .next` 原是 C-111 turbopack chunk 混淆的临时对策，现已用 --webpack 基本消除，不再需要。
+            # build 前仅回收可释放缓存，给 webpack client 编译腾出内存峰值空间。
             sync && echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || sudo sh -c 'sync && echo 3 > /proc/sys/vm/drop_caches' 2>/dev/null || true
 
-            echo "===== 5b. Build with WEBPACK (NOT turbopack) — C-111 critical fix ====="
-            # 真因 v3：Next.js 16.1.7 默认使用 turbopack 生产构建，turbopack 在生成
-            # client chunk 时会引用 module ID（如 244451 Spin / 128473 / 159360 等）
-            # 但同时不把这些 module 输出到任何 chunk 文件 → 浏览器 ChunkLoadError。
-            # `optimizePackageImports` 移除无效，因为 turbopack 本身有此 bug。
-            # 解决：用 `--webpack` 强制走 webpack（久经考验），bundle 稍大但稳定。
-            NODE_OPTIONS="--max-old-space-size=1536" npx next build --webpack 2>&1 | tail -20
+            echo "===== 5b. Build with WEBPACK (NOT turbopack) ====="
+            # turbopack 默认生产构建有 client chunk 引用未输出 bug → ChunkLoadError，故强制 --webpack。
+            if git diff HEAD~1 --name-only | grep -qE "crm-mvp/next\.config\.(ts|js|mjs)"; then
+              # next.config 变更才需彻底重建：构建到 .next.tmp，验证后原子切换，旧 .next 全程在线，窗口压到亚秒级。
+              echo "next.config changed → 干净重建到 .next.tmp 后原子切换"
+              rm -rf .next.tmp 2>/dev/null || true
+              NODE_OPTIONS="--max-old-space-size=1536" NEXT_DIST_DIR=".next.tmp" npx next build --webpack 2>&1 | tail -20
+              if [ ! -f "$CRM_DIR/.next.tmp/BUILD_ID" ]; then
+                echo "BUILD FAILED: .next.tmp/BUILD_ID not found, aborting deploy"
+                exit 1
+              fi
+              rm -rf .next.old 2>/dev/null || true
+              mv .next .next.old 2>/dev/null || true
+              mv .next.tmp .next
+            else
+              # 常规部署：webpack 原地增量构建。内容哈希 chunk 新旧不冲突，旧 chunk 在构建期间继续
+              # 服务在途旧标签页，构建完成 pm2 reload 后切到新 BUILD_ID → 线上零 404 窗口。
+              echo "in-place 增量构建（零中断）"
+              NODE_OPTIONS="--max-old-space-size=1536" npx next build --webpack 2>&1 | tail -20
+            fi
 
             echo "===== 6. Verify build ====="
             if [ ! -f "$CRM_DIR/.next/BUILD_ID" ]; then
@@ -118,6 +129,9 @@ jobs:
 
             if [ "$HTTP_CODE" = "200" ]; then
               echo "Health check PASSED (HTTP $HTTP_CODE)"
+              # D-057: 原地增量构建会累积旧 chunk，清理 7 天前的孤儿 chunk（保留一周宽限期给在途旧标签页），防磁盘膨胀。
+              find "$CRM_DIR/.next/static/chunks" -type f -mtime +7 -delete 2>/dev/null || true
+              rm -rf "$CRM_DIR/.next.old" 2>/dev/null || true
             else
               echo "Health check FAILED after $MAX_RETRIES attempts (HTTP $HTTP_CODE)"
               pm2 logs ad-automation --err --lines 20 --nostream 2>/dev/null || true
