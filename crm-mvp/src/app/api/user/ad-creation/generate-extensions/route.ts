@@ -6,6 +6,7 @@ import { callAiWithFallback, suggestDisplayPaths } from "@/lib/ai-service";
 import { getAdMarketConfig, resolveLanguageName } from "@/lib/ad-market";
 import { buildAiRulePrompt, checkItemViolations } from "@/lib/ai-rule-profile";
 import { isLowValueSitelink } from "@/lib/sitelink-filter";
+import { acquireGenerationSlot } from "@/lib/generation-gate";
 import {
   type CrawlCache,
   buildCrawlCache,
@@ -483,6 +484,8 @@ export async function POST(req: NextRequest) {
 
   const encoder = new TextEncoder();
   let isClosed = false;
+  // D-063：整条生成（types 含 core）才走并发闸；sitelinks/optional/negkw 等局部补生成不占闸
+  const isFullGeneration = (types as string[]).includes("core");
   const stream = new ReadableStream({
     async start(controller) {
       const send = (eventType: string, payload: unknown) => {
@@ -496,7 +499,24 @@ export async function POST(req: NextRequest) {
         try { controller.enqueue(encoder.encode(": keepalive\n\n")); } catch { isClosed = true; }
       }, 20000);
 
+      // D-063：生成并发闸句柄（在 finally 释放）。心跳已先于此启动，排队期间连接不会断。
+      let releaseGenerationSlot: (() => void) | null = null;
+
       try {
+        // D-063：整条生成最多 2 条并行，超出则排队；排队时推 queued 事件让前端显示"排队中"
+        if (isFullGeneration) {
+          releaseGenerationSlot = await acquireGenerationSlot({
+            timeoutMs: 180000,
+            onQueued: (position) => {
+              console.warn(`[Extensions] 生成并发闸排队中：前方 ${position} 个任务（campaign_id=${campaign_id}）`);
+              send("queued", {
+                position,
+                message: `服务器繁忙，前方还有 ${position} 个生成任务，正在排队，请稍候…`,
+              });
+            },
+          });
+        }
+
         // 立即告知前端正在爬取中（避免前端因无事件超时）
         send("crawl_pending", { status: "crawling" });
 
@@ -799,11 +819,22 @@ export async function POST(req: NextRequest) {
         }
       } catch (err) {
         if (!isClosed) {
-          console.error("[Extensions] 流式生成未捕获异常:", err instanceof Error ? err.message : err);
-          try { controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "error", data: "生成失败，请重试" })}\n\n`)); } catch { isClosed = true; }
+          const code = (err as Error & { code?: string })?.code;
+          if (code === "GENERATION_SLOT_TIMEOUT") {
+            console.warn("[Extensions] 生成并发闸排队超时:", err instanceof Error ? err.message : err);
+            try { controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "error", data: "服务器繁忙，排队超时，请稍后重试" })}\n\n`)); } catch { isClosed = true; }
+          } else {
+            console.error("[Extensions] 流式生成未捕获异常:", err instanceof Error ? err.message : err);
+            try { controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "error", data: "生成失败，请重试" })}\n\n`)); } catch { isClosed = true; }
+          }
         }
       } finally {
         clearInterval(heartbeat);
+        // D-063：释放生成并发闸，唤醒队列中的下一条生成
+        if (releaseGenerationSlot) {
+          try { releaseGenerationSlot(); } catch { /* noop */ }
+          releaseGenerationSlot = null;
+        }
         if (!isClosed) {
           isClosed = true;
           try { controller.close(); } catch {}

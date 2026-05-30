@@ -1006,6 +1006,13 @@ export default function AdPreviewPage() {
     const handleEvent = async (type: string, data: unknown) => {
       arrived.add(type);
 
+      // D-063：生成并发闸排队中 —— 提示用户正在排队（连接由心跳保持，无需重试）
+      if (type === "queued") {
+        const q = data as { position?: number; message?: string };
+        message.info(q?.message || `服务器繁忙，正在排队（前方 ${q?.position ?? "?"} 个任务），请稍候…`, 5);
+        return;
+      }
+
       if (type === "crawl_status") {
         const cs = data as Record<string, unknown>;
         // D-027 P0：crawl_status 是后端 push 的最新状态，必须双向同步（含明确 false）
