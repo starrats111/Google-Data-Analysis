@@ -310,7 +310,12 @@ export default function AdPreviewPage() {
   // D-055: 生成期间保持 3s 轮询，使后端已写库的扩展数据经 SWR 刷新 + 后到补显副作用即时显示，
   // 即便 SSE 流中途静默中断也无需用户整页刷新。
   const isAnyGenerating = coreGenerating || sitelinksLoading || imagesLoading || calloutsLoading || promotionLoading || priceLoading || callLoading || snippetLoading;
-  const pollInterval = (!initialized || isAnyGenerating) ? 3000 : 0;
+  // D-058: 进入步骤2后只要主文案（标题/描述）仍全空，就持续轮询 /status，直到后端把生成结果写入 DB
+  // 后由「后到补显」副作用渲染出来。覆盖「SSE 流被切断 + 后端晚于流结束才落库」的竞态——
+  // 这正是新商家首次生成「内容已存 DB 却要刷新才显示」的真因。文案出现后条件转 false，轮询自动停止。
+  const awaitingCopy = initialized && currentStep >= 1 &&
+    (headlines.every((h) => !h || !h.trim()) || descriptions.every((d) => !d || !d.trim()));
+  const pollInterval = (!initialized || isAnyGenerating || awaitingCopy) ? 3000 : 0;
   const { data: preview, isLoading, mutate } = useApiWithParams<AdPreviewData>(
     "/api/user/ad-creation/status",
     { campaign_id: campaignId },
@@ -452,6 +457,39 @@ export default function AdPreviewPage() {
       return hasContent ? prev : fresh;
     });
   }, [preview?.adCreative?.sitelinks, initialized]);
+
+  // D-058: 标题/描述后到补显（核心修复）。新商家首次生成时后端已把文案写入 DB（ad_creatives），
+  // 但一次性 init 守门（initialized）不再重映射 preview，且 SSE 流在冷爬+并发下常被切断、
+  // headlines/descriptions 事件未达前端 → 界面停在全空，必须整页刷新才从 DB 读出。
+  // 此处监听 preview 里的 DB 文案，当前显示全空（生成中/未显示、用户未编辑）时直接补显，无需刷新。
+  const prevHeadlinesRef = useRef<string>("");
+  useEffect(() => {
+    if (!initialized) return;
+    const dbH = Array.isArray(preview?.adCreative?.headlines) ? (preview!.adCreative!.headlines as string[]) : [];
+    const fresh = dbH.filter((h) => h && h.trim());
+    if (fresh.length === 0) return;
+    const key = fresh.join("|");
+    if (key === prevHeadlinesRef.current) return;
+    // 仅当当前显示全空（用户未编辑）才补显，避免覆盖用户输入
+    if (headlines.some((h) => h && h.trim())) return;
+    prevHeadlinesRef.current = key;
+    setHeadlines(dbH.length >= 15 ? dbH.slice(0, 15) : [...dbH, ...Array(15 - dbH.length).fill("")]);
+    setHeadlinesZh((preview?.adCreative as any)?.headlines_zh || []);
+  }, [preview?.adCreative?.headlines, initialized, headlines]);
+
+  const prevDescriptionsRef = useRef<string>("");
+  useEffect(() => {
+    if (!initialized) return;
+    const dbD = Array.isArray(preview?.adCreative?.descriptions) ? (preview!.adCreative!.descriptions as string[]) : [];
+    const fresh = dbD.filter((d) => d && d.trim());
+    if (fresh.length === 0) return;
+    const key = fresh.join("|");
+    if (key === prevDescriptionsRef.current) return;
+    if (descriptions.some((d) => d && d.trim())) return;
+    prevDescriptionsRef.current = key;
+    setDescriptions(dbD.length >= 4 ? dbD.slice(0, 4) : [...dbD, ...Array(4 - dbD.length).fill("")]);
+    setDescriptionsZh((preview?.adCreative as any)?.descriptions_zh || []);
+  }, [preview?.adCreative?.descriptions, initialized, descriptions]);
 
   // ─── 生成中文翻译（仅参考，不影响广告内容） ───
   const generateZhTranslation = useCallback(async () => {
