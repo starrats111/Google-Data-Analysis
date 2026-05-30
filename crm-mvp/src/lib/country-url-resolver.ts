@@ -71,6 +71,25 @@ const COUNTRY_TLD_MAP: Record<string, string[]> = {
   AR: ["com.ar", "ar"],
 };
 
+// D-053：品牌通用/虚荣 TLD —— 商家刻意把这些 TLD 当作主域名（流媒体爱用 .tv，
+// SaaS/科技爱用 .io/.ai/.app/.dev，音频 .fm 等）。这些不是"国家本地化写错的 ccTLD"，
+// 同品牌 label 的 .com 往往是**完全不同的公司或停放页**（实证：resume.io↔resume.com、
+// beautiful.ai↔beautiful.com、brain.fm↔brain.com、trybinge.tv↔trybinge.com 均非同一主体）。
+// 因此：原始 host 的 TLD 命中此集合时，禁止 ccTLD 切换，保留商家自己的域名。
+// 注意：真正的国家 ccTLD（de/nl/fr/co.uk/com.au…）不在此列，本地化切换仍正常工作。
+// 不含 "com"（com 作为 US 目标 TLD 由 hostMatchesCountryTld 单独处理，行为不变）。
+const NON_LOCALIZABLE_TLDS = new Set([
+  "tv", "io", "ai", "app", "fm", "gg", "me", "tech", "xyz", "store", "shop",
+  "co", "dev", "studio", "live", "stream", "so", "sh", "online", "cc",
+  "net", "org", "info", "biz", "site", "website", "space", "fun", "club", "vip",
+]);
+
+function originalTldNonLocalizable(host: string): boolean {
+  const h = host.toLowerCase().replace(/^www\./, "");
+  const last = h.split(".").pop() || "";
+  return NON_LOCALIZABLE_TLDS.has(last);
+}
+
 // 品牌名末尾的"内部国家标签"（平台命名，非真实品牌一部分）
 const COUNTRY_SUFFIX_TOKENS = [
   "NL", "BE", "DE", "FR", "UK", "GB", "IT", "ES", "AT", "CH",
@@ -289,6 +308,20 @@ export async function resolveCountryUrl(merchantUrl: string, country: string): P
       switched: false,
       reason: "same_tld",
       probeLog: [{ host: originalHost, dns: "ok", tcp: "skipped" }],
+    };
+    cacheSet(cacheKey, result);
+    return result;
+  }
+
+  // 1.5 D-053：原站使用品牌通用/虚荣 TLD（.tv/.io/.ai/.app/.fm…）→ 视为品牌主域名，禁止切换。
+  // 修复 trybinge.tv→trybinge.com、resume.io→resume.com 等把落地页改成无关 .com 站的系统性误切。
+  if (originalTldNonLocalizable(originalHost)) {
+    const result: ResolveResult = {
+      finalUrl: merchantUrl,
+      brandRoot,
+      switched: false,
+      reason: "same_tld",
+      probeLog: [{ host: originalHost, dns: "skipped" as "ok", tcp: "skipped" }],
     };
     cacheSet(cacheKey, result);
     return result;
