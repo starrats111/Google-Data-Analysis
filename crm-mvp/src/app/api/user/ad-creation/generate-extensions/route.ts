@@ -2572,9 +2572,32 @@ async function selectBestImages(
     result = [...ocrPassed, ...supplemental];
   }
 
+  // D-059b: 折叠同一图片的尺寸/CDN 变体（foo-300x300.jpg / foo?w=600 / foo@2x.jpg / /300x300/ 段等），
+  // 避免前端出现"同一张图重复多次"（07 报质量问题）。按相关性排序后保留每个规范键的首个（最高分）。
+  const canonicalImageKey = (url: string): string => {
+    try {
+      const u = new URL(url);
+      const p = u.pathname.toLowerCase()
+        .replace(/[-_]\d{2,4}x\d{2,4}(?=\.[a-z0-9]+$)/i, "")
+        .replace(/\/\d{2,4}x\d{2,4}\//i, "/")
+        .replace(/@\d+(?:\.\d+)?x(?=\.[a-z0-9]+$)/i, "")
+        .replace(/[-_](?:thumb(?:nail)?|small|medium|large|scaled|mini|compact)(?=\.[a-z0-9]+$)/i, "");
+      return u.hostname.replace(/^www\./, "") + p;
+    } catch { return url.toLowerCase().split("?")[0]; }
+  };
+  const seenCanonical = new Set<string>();
+  const dedupResult: string[] = [];
+  for (const u of result) {
+    const k = canonicalImageKey(u);
+    if (seenCanonical.has(k)) continue;
+    seenCanonical.add(k);
+    dedupResult.push(u);
+  }
+  result = dedupResult;
+
   const topScores = scored.slice(0, 5).map((s) => `${s.score}:${s.url.slice(-40)}`).join(" | ");
   console.log(
-    `[SelectImages] raw=${rawImages.length} normalized=${normalizedImages.length} filtered=${filtered.length} headPassed=${headPassed.length} clean=${cleanImages.length} ocrPassed=${ocrPassed.length} final=${Math.min(result.length, 20)} | topScores: ${topScores}`,
+    `[SelectImages] raw=${rawImages.length} normalized=${normalizedImages.length} filtered=${filtered.length} headPassed=${headPassed.length} clean=${cleanImages.length} ocrPassed=${ocrPassed.length} canonicalDedup=${result.length} final=${Math.min(result.length, 20)} | topScores: ${topScores}`,
   );
   return result.slice(0, 20);
 }

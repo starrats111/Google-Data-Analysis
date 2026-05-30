@@ -1566,7 +1566,16 @@ export async function harvestImagesFromPagesWithPuppeteer(
           };
           const pushSrcset = (val: unknown) => {
             if (!val) return;
-            for (const part of String(val).split(",")) pushUrl(part.trim().split(/\s+/)[0]);
+            let best = ""; let bestScore = -1;
+            for (const part of String(val).split(",")) {
+              const seg = part.trim().split(/\s+/);
+              const u = seg[0]; if (!u) continue;
+              const desc = seg[1] || "";
+              const wm = desc.match(/(\d+)w/); const xm = desc.match(/([\d.]+)x/);
+              const score = wm ? parseInt(wm[1], 10) : (xm ? parseFloat(xm[1]) * 1000 : 1);
+              if (score > bestScore) { bestScore = score; best = u; }
+            }
+            if (best) pushUrl(best);
           };
           document.querySelectorAll("img, source, [data-src], [data-original], [data-lazy-src], [data-img], [data-background], picture source").forEach((el) => {
             const img = el as any;
@@ -1940,10 +1949,19 @@ export async function crawlWithPuppeteerFull(
           try { u = new URL(u, location.href).href; } catch { return; }
           if (u.startsWith("http")) imgSrcs.add(u);
         };
-        // srcset: "url1 320w, url2 640w" → 全部候选（后续按尺寸/质量筛选）
+        // D-059b: srcset 只取最大分辨率的一张（srcset 是同一图的多分辨率，全收会造成同图重复）
         const pushSrcset = (val: unknown) => {
           if (!val) return;
-          for (const part of String(val).split(",")) pushUrl(part.trim().split(/\s+/)[0]);
+          let best = ""; let bestScore = -1;
+          for (const part of String(val).split(",")) {
+            const seg = part.trim().split(/\s+/);
+            const u = seg[0]; if (!u) continue;
+            const desc = seg[1] || "";
+            const wm = desc.match(/(\d+)w/); const xm = desc.match(/([\d.]+)x/);
+            const score = wm ? parseInt(wm[1], 10) : (xm ? parseFloat(xm[1]) * 1000 : 1);
+            if (score > bestScore) { bestScore = score; best = u; }
+          }
+          if (best) pushUrl(best);
         };
         // 收集所有可能携带真实图片 URL 的属性（含懒加载、<picture><source>）
         document.querySelectorAll("img, source, [data-src], [data-original], [data-lazy-src], [data-img], [data-background]").forEach(el => {
