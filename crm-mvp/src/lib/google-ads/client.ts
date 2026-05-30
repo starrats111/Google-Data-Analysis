@@ -13,6 +13,9 @@ const MAX_429_RETRIES = 1;
 const MAX_429_WAIT_MS = 15_000;
 const QUERY_TIMEOUT_MS = 30_000;
 const MUTATE_TIMEOUT_MS = 60_000;
+// D-065：Google Ads 瞬时错误（INTERNAL_ERROR / DEADLINE_EXCEEDED / 5xx）指数退避重试。
+// 官方将这类错误归为 transient，建议退避重试；原子 mutate 失败会整体回滚，重试不会产生重复广告。
+const MAX_TRANSIENT_RETRIES = 3;
 
 /** 从 Google Ads 429 错误体中提取 retryDelay（秒） */
 function parseRetryDelay(errBody: string): number {
@@ -322,7 +325,12 @@ export async function mutateGoogleAds(
   const cid = customerId.replace(/-/g, "");
   const devToken = resolveDevToken(credentials.developer_token);
 
-  for (let attempt = 0; attempt <= MAX_429_RETRIES; attempt++) {
+  let rateLimitRetries = 0;
+  let transientRetries = 0;
+  // 硬上限：避免任何意外导致死循环
+  const HARD_CAP = MAX_429_RETRIES + MAX_TRANSIENT_RETRIES + 2;
+
+  for (let iteration = 0; iteration <= HARD_CAP; iteration++) {
     const token = await getAccessToken(credentials.service_account_json);
     const headers = buildHeaders(token, devToken, credentials.mcc_id);
     const apiUrl = `${ADS_BASE_URL}/customers/${cid}/googleAds:mutate`;
@@ -340,14 +348,41 @@ export async function mutateGoogleAds(
     const errBody = await resp.text().catch(() => "");
 
     if (resp.status === 429 || errBody.includes("RESOURCE_EXHAUSTED")) {
-      if (attempt < MAX_429_RETRIES) {
+      if (rateLimitRetries < MAX_429_RETRIES) {
+        rateLimitRetries++;
         const delaySec = parseRetryDelay(errBody) || 10;
         const delayMs = Math.min(delaySec * 1000, MAX_429_WAIT_MS);
-        console.warn(`[GoogleAds] Mutate 触发 429 限流，等待 ${delaySec}s 后重试 (${attempt + 1}/${MAX_429_RETRIES})`);
+        console.warn(`[GoogleAds] Mutate 触发 429 限流，等待 ${delaySec}s 后重试 (${rateLimitRetries}/${MAX_429_RETRIES})`);
         await sleep(delayMs);
         continue;
       }
       throw new Error(`Google Ads API 请求频率超限（explorer access 配额较低）。请等待几分钟后再重试，或在 Google Ads API Center 申请更高级别的 API 访问权限。`);
+    }
+
+    // D-065：瞬时错误（Google 侧 INTERNAL_ERROR / DEADLINE_EXCEEDED / 5xx）→ 指数退避重试。
+    // 只认 status=INTERNAL/DEADLINE_EXCEEDED 或 internalError，避免把真正的 INVALID_ARGUMENT/政策违规误判为瞬时。
+    const isTransient =
+      resp.status === 500 || resp.status === 503 || resp.status === 504 ||
+      errBody.includes("INTERNAL_ERROR") ||
+      errBody.includes("\"status\": \"INTERNAL\"") ||
+      errBody.includes("DEADLINE_EXCEEDED") ||
+      errBody.includes("\"status\": \"UNAVAILABLE\"");
+    if (isTransient && transientRetries < MAX_TRANSIENT_RETRIES) {
+      transientRetries++;
+      const delayMs = Math.min(2000 * 2 ** (transientRetries - 1), 12_000); // 2s,4s,8s
+      console.warn(
+        `[GoogleAds] Mutate 触发瞬时错误（status=${resp.status}，疑似 Google 侧 INTERNAL/UNAVAILABLE），` +
+          `指数退避 ${delayMs}ms 后重试 (${transientRetries}/${MAX_TRANSIENT_RETRIES})`,
+      );
+      await sleep(delayMs);
+      continue;
+    }
+    // 瞬时错误重试已耗尽：给出明确的"Google 侧临时故障"提示，而非误导性的"无效参数"
+    if (isTransient) {
+      throw new Error(
+        `Google Ads 服务暂时不可用（Google 侧内部错误 INTERNAL_ERROR / 服务抖动），系统已自动退避重试 ${MAX_TRANSIENT_RETRIES} 次仍未成功。` +
+          `这通常是 Google API 短时故障，与你的广告内容无关，请稍等 1-2 分钟后重新提交即可。`,
+      );
     }
 
     if (errBody.includes("DEVELOPER_TOKEN_NOT_APPROVED")) {
