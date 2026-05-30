@@ -307,7 +307,10 @@ export default function AdPreviewPage() {
   const [negKwLoading, setNegKwLoading] = useState(false);
 
   // 初始化前轮询查状态，初始化后停止轮询
-  const pollInterval = initialized ? 0 : 3000;
+  // D-055: 生成期间保持 3s 轮询，使后端已写库的扩展数据经 SWR 刷新 + 后到补显副作用即时显示，
+  // 即便 SSE 流中途静默中断也无需用户整页刷新。
+  const isAnyGenerating = coreGenerating || sitelinksLoading || imagesLoading || calloutsLoading || promotionLoading || priceLoading || callLoading || snippetLoading;
+  const pollInterval = (!initialized || isAnyGenerating) ? 3000 : 0;
   const { data: preview, isLoading, mutate } = useApiWithParams<AdPreviewData>(
     "/api/user/ad-creation/status",
     { campaign_id: campaignId },
@@ -432,6 +435,23 @@ export default function AdPreviewPage() {
       setCrawledImagesTextFlags({});
     }
   }, [preview?.adCreative?.image_urls, initialized, crawledImages.length]);
+
+  // D-055: sitelinks 后到补显（对齐 F-15 图片逻辑）。init 守门后不再重映射 preview，
+  // 生成完成 / SSE 中断后 mutate() 已把 sitelinks 写进 preview，但显示态仍为空 → 此处在当前
+  // 无任何有效 sitelink 时从刷新后的 preview 补显，避免用户必须整页刷新；有内容则不覆盖用户编辑。
+  const prevSitelinksRef = useRef<string>("");
+  useEffect(() => {
+    if (!initialized || !preview?.adCreative?.sitelinks) return;
+    const fresh = normalizeSitelinkItems(preview.adCreative.sitelinks);
+    if (fresh.length === 0) return;
+    const freshKey = fresh.map((s) => s.url || s.title).join("|");
+    if (freshKey === prevSitelinksRef.current) return;
+    prevSitelinksRef.current = freshKey;
+    setSitelinks((prev) => {
+      const hasContent = prev.some((s) => (s.url && s.url.trim()) || (s.title && s.title.trim()));
+      return hasContent ? prev : fresh;
+    });
+  }, [preview?.adCreative?.sitelinks, initialized]);
 
   // ─── 生成中文翻译（仅参考，不影响广告内容） ───
   const generateZhTranslation = useCallback(async () => {
@@ -1230,13 +1250,19 @@ export default function AdPreviewPage() {
         }
       }
 
+      // D-055: SSE 流可能因代理/网络静默挂起，reader.read() 永久阻塞 → loading 永不结束、
+      // 内容进了库却不显示、必须整页刷新。加 250s 超时中止（后端最长约 200s），超时后进
+      // catch→finally：关 loading + mutate 拉库，由后到补显副作用显示真实内容。
+      const genAbort = new AbortController();
+      const genTimeout = setTimeout(() => genAbort.abort(), 250000);
       const res = await fetch("/api/user/ad-creation/generate-extensions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(reqBody),
+        signal: genAbort.signal,
       });
 
-      if (!res.ok || !res.body) { message.error("生成失败"); return; }
+      if (!res.ok || !res.body) { clearTimeout(genTimeout); message.error("生成失败"); return; }
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -1262,8 +1288,14 @@ export default function AdPreviewPage() {
           }
         }
       }
+      clearTimeout(genTimeout);
     } catch (err: unknown) {
-      message.error((err instanceof Error ? err.message : null) || "生成失败，请手动填写");
+      // D-055: 超时中止不是真失败——已完成的内容会经 finally 的 mutate() + 后到补显副作用显示。
+      if (err instanceof DOMException && err.name === "AbortError") {
+        message.warning("生成耗时较长，已为你加载已完成的内容");
+      } else {
+        message.error((err instanceof Error ? err.message : null) || "生成失败，请手动填写");
+      }
     } finally {
       generationInflightRef.current.delete(inflightKey);
       if (isCore) {
