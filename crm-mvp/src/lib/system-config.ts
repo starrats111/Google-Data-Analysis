@@ -49,6 +49,28 @@ export async function getSystemConfigsByPrefix(prefix: string): Promise<Record<s
 }
 
 /**
+ * 写入/更新单个系统配置值（best-effort，失败不抛出，仅警告）。
+ * D-061：用于持久化 SemRush 运行时发现的可用节点（semrush_active_node），
+ * 使进程重启后直接复用上次好节点，避免每次重启都撞已宕机的种子节点。
+ */
+export async function setSystemConfig(
+  key: string,
+  value: string,
+  description?: string,
+): Promise<void> {
+  try {
+    await prisma.system_configs.upsert({
+      where: { config_key: key },
+      update: { config_value: value, is_deleted: 0 },
+      create: { config_key: key, config_value: value, description: description ?? null },
+    });
+    cache.set(key, { value, ts: Date.now() });
+  } catch (e) {
+    console.warn(`[SystemConfig] setSystemConfig(${key}) 失败:`, e instanceof Error ? e.message : e);
+  }
+}
+
+/**
  * 清除缓存（配置更新后调用）
  */
 export function clearConfigCache(key?: string) {

@@ -5,7 +5,7 @@
  *
  * 安全防护：全局请求队列限流 + 域名结果缓存 + 会话复用
  */
-import { getSystemConfigsByPrefix } from "@/lib/system-config";
+import { getSystemConfigsByPrefix, setSystemConfig } from "@/lib/system-config";
 import { execFile } from "child_process";
 import { promisify } from "util";
 
@@ -24,6 +24,14 @@ const MIN_REQUEST_INTERVAL_MS = 1500;
 const RANDOM_JITTER_MAX_MS = 1000;
 const DOMAIN_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const SESSION_TTL_MS = 30 * 60 * 1000;
+
+// D-061：3UE 多节点故障转移
+// 节点宕机（"节点暂不可用"）短期拉黑；套餐不可用（"套餐无法使用该节点"）长期拉黑。
+const NODE_DOWN_TTL_MS = 10 * 60 * 1000;        // 节点暂时宕机：10 分钟内不再尝试
+const NODE_FORBIDDEN_TTL_MS = 12 * 60 * 60 * 1000; // 套餐不支持该节点：12 小时内不再尝试
+// 候选节点全集（3UE 当前为 1..8；实际可用性以响应为准，本表仅决定尝试顺序与范围）
+const NODE_UNIVERSE = ["1", "2", "3", "4", "5", "6", "7", "8"];
+const ACTIVE_NODE_CONFIG_KEY = "semrush_active_node";
 
 export interface SemRushKeyword {
   phrase: string;
@@ -63,6 +71,9 @@ class SemrushGuard {
   private processing = false;
   private domainCache = new Map<string, CachedDomainResult>();
   private sessionCache: CachedSession | null = null;
+  // D-061：节点故障转移状态
+  private preferredNode: string | null = null;       // 最近成功的节点，优先复用
+  private badNodes = new Map<string, number>();       // node → 失效截止时间戳（拉黑）
 
   private async processQueue() {
     if (this.processing) return;
@@ -126,11 +137,40 @@ class SemrushGuard {
     this.sessionCache = null;
   }
 
+  // ─── D-061：节点故障转移 ───
+  getPreferredNode(): string | null {
+    if (this.preferredNode && this.isNodeBad(this.preferredNode)) {
+      this.preferredNode = null;
+    }
+    return this.preferredNode;
+  }
+
+  setPreferredNode(node: string) {
+    this.preferredNode = node;
+  }
+
+  markNodeBad(node: string, ttlMs: number) {
+    this.badNodes.set(node, Date.now() + ttlMs);
+    if (this.preferredNode === node) this.preferredNode = null;
+  }
+
+  isNodeBad(node: string): boolean {
+    const expireAt = this.badNodes.get(node);
+    if (!expireAt) return false;
+    if (Date.now() > expireAt) {
+      this.badNodes.delete(node);
+      return false;
+    }
+    return true;
+  }
+
   getStats() {
     return {
       cacheSize: this.domainCache.size,
       queueLength: this.queue.length,
       hasSession: !!this.sessionCache,
+      preferredNode: this.preferredNode,
+      badNodes: [...this.badNodes.keys()],
     };
   }
 }
@@ -143,6 +183,7 @@ interface CurlResponse {
   status: number;
   body: string;
   cookies: Record<string, string>;
+  location?: string; // D-061：3xx 重定向的 Location 头（用于识别 3UE 节点不可用跳转）
 }
 
 export async function curlFetch(
@@ -237,7 +278,11 @@ export async function curlFetch(
     }
   }
 
-  return { status, body, cookies };
+  // D-061：解析最终响应的 Location 头（curl 不带 -L 时 3xx 即为最终响应）
+  const locMatch = headerSection.match(/^location:\s*(.+)$/im);
+  const location = locMatch ? locMatch[1].trim() : undefined;
+
+  return { status, body, cookies, location };
 }
 
 // ─── 工具函数 ───
@@ -373,9 +418,12 @@ export class SemRushClient {
   private creds: SemRushCredentials;
   private token: string | null = null;
   private cookies: Record<string, string> = {};
+  // D-061：当前生效节点（构造时取自 active/seed，rpc 故障转移时动态切换）
+  private activeNode: string;
 
   constructor(creds: SemRushCredentials) {
     this.creds = creds;
+    this.activeNode = creds.nodeConfig.semrushNode || "3";
   }
 
   /** 从 system_configs 读取凭据并创建客户端 */
@@ -389,6 +437,9 @@ export class SemRushClient {
       throw new Error("SemRush 凭据未配置，请在管理后台 SemRush 配置中设置");
     }
     const db = country ? countryToDatabase(country) : (configs["semrush_database"] || "us");
+    // D-061：优先用运行时持久化的可用节点（semrush_active_node），回退管理员配置的 semrush_node，再回退 "3"。
+    // 使进程重启后直接复用上次发现的健康节点，避免重启都撞已宕机的种子节点。
+    const seedNode = configs[ACTIVE_NODE_CONFIG_KEY] || configs["semrush_node"] || "3";
     return new SemRushClient({
       username,
       password,
@@ -396,23 +447,43 @@ export class SemRushClient {
       apiKey,
       database: db,
       nodeConfig: {
-        chatNode: configs["semrush_node"] || "3",
+        chatNode: seedNode,
         chatLang: "zh_CN",
-        semrushNode: configs["semrush_node"] || "3",
+        semrushNode: seedNode,
         semrushLang: "zh",
       },
     });
   }
 
-  private buildConfigValue(): string {
+  private buildConfigValue(node?: string): string {
+    // D-061：node 决定路由到哪个 3UE 节点；不传则用当前生效节点
+    const n = node || this.activeNode;
     return JSON.stringify({
-      chat: { node: this.creds.nodeConfig.chatNode, lang: this.creds.nodeConfig.chatLang },
-      semrush: { node: this.creds.nodeConfig.semrushNode, lang: this.creds.nodeConfig.semrushLang },
+      chat: { node: n, lang: this.creds.nodeConfig.chatLang },
+      semrush: { node: n, lang: this.creds.nodeConfig.semrushLang },
     });
   }
 
-  private buildCookieHeader(token: string): string {
-    return `GMITM_token=${token}; GMITM_uname=${this.creds.username}; GMITM_config=${this.buildConfigValue()}`;
+  private buildCookieHeader(token: string, node?: string): string {
+    return `GMITM_token=${token}; GMITM_uname=${this.creds.username}; GMITM_config=${this.buildConfigValue(node)}`;
+  }
+
+  // D-061：按「优先节点 → 种子节点 → 全集升序」的顺序，挑下一个未尝试且未拉黑的节点
+  private selectNode(tried: Set<string>): string | null {
+    const ordered: string[] = [];
+    const push = (n?: string | null) => { if (n && !ordered.includes(n)) ordered.push(n); };
+    push(guard.getPreferredNode());
+    push(this.creds.nodeConfig.semrushNode);
+    for (const n of NODE_UNIVERSE) push(n);
+    // 先挑未尝试 + 未拉黑的
+    for (const n of ordered) {
+      if (!tried.has(n) && !guard.isNodeBad(n)) return n;
+    }
+    // 兜底：未尝试的（即便被拉黑，也比无节点可用强——拉黑可能已恢复）
+    for (const n of ordered) {
+      if (!tried.has(n)) return n;
+    }
+    return null;
   }
 
   private buildHeaders(token: string, includeCookie = true): Record<string, string> {
@@ -503,14 +574,32 @@ export class SemRushClient {
     retryCount = 0,
     sessionRefreshed = false,
     emptyBodyRetryCount = 0,
+    triedNodes: Set<string> = new Set(),
   ): Promise<unknown> {
     const MAX_RPC_RETRIES = 2;
     // D-038c-v2 I5：空 body 指数退避（与 session 失效解耦）
     const MAX_EMPTY_BODY_RETRIES = 3;
     const EMPTY_BODY_BACKOFF_MS = [1000, 2000, 4000];
     if (!this.token) await this.login();
+
+    // ── D-061：选定本次请求使用的节点 ──
+    // 若当前生效节点已被拉黑/已尝试过，切换到下一个候选节点。
+    if (guard.isNodeBad(this.activeNode) || triedNodes.has(this.activeNode)) {
+      const pref = guard.getPreferredNode();
+      const next = pref && !triedNodes.has(pref) ? pref : this.selectNode(triedNodes);
+      if (next) this.activeNode = next;
+    } else {
+      // 进程内已发现更优的可用节点时优先复用
+      const pref = guard.getPreferredNode();
+      if (pref && !triedNodes.has(pref) && !guard.isNodeBad(pref)) this.activeNode = pref;
+    }
+    const node = this.activeNode;
+    triedNodes.add(node);
+
     await guard.waitForSlot();
-    const cookieStr = Object.entries(this.cookies).map(([k, v]) => `${k}=${v}`).join("; ");
+    // 以选定节点构造 cookie（覆盖 GMITM_config 的 node 字段，token 跨节点通用）
+    const cookieStr = Object.entries({ ...this.cookies, GMITM_config: this.buildConfigValue(node) })
+      .map(([k, v]) => `${k}=${v}`).join("; ");
     const res = await curlFetch(RPC_URL, {
       method: "POST",
       headers: {
@@ -525,6 +614,26 @@ export class SemRushClient {
       body: JSON.stringify(payload),
       timeoutMs: 30000,
     });
+
+    // ── D-061：3UE 节点不可用 → 302 跳 gmitm.redirect.dash，自动切换节点重试 ──
+    // 真因：配置节点宕机/套餐不支持，旧逻辑当成「空 body 抽风」无脑重试同一死节点必败。
+    if (res.status >= 300 && res.status < 400 && res.location && /gmitm\.redirect/i.test(res.location)) {
+      let msg = res.location;
+      try { msg = decodeURIComponent(res.location); } catch { /* 保留原文 */ }
+      const forbidden = /套餐|无法使用该节点|升级/i.test(msg);
+      guard.markNodeBad(node, forbidden ? NODE_FORBIDDEN_TTL_MS : NODE_DOWN_TTL_MS);
+      const next = this.selectNode(triedNodes);
+      console.warn(
+        `[SemRush] 节点 ${node} 不可用（${forbidden ? "套餐不支持" : "节点宕机"}），` +
+          `${next ? `切换到节点 ${next} 重试` : "已无其它候选节点"}。3UE: ${msg.replace(/^https?:\/\/[^?]*\?msg=/, "").slice(0, 80)}`,
+      );
+      if (next) {
+        this.activeNode = next;
+        return this.rpc(payload, retryCount, sessionRefreshed, emptyBodyRetryCount, triedNodes);
+      }
+      throw new Error("3UE 所有节点当前均不可用，请稍后重试；若持续如此请在管理后台更换 3UE 账号或升级套餐");
+    }
+
     if (res.status >= 400) {
       if (res.status === 401 || res.status === 403) {
         guard.invalidateSession();
@@ -584,7 +693,17 @@ export class SemRushClient {
     }
 
     try {
-      return JSON.parse(body);
+      const parsed = JSON.parse(body);
+      // D-061：本次请求节点可用 → 记为进程内优先节点；若与种子节点不同（发生过故障转移），
+      // 持久化到 semrush_active_node，使进程重启后直接复用，不再撞已宕机的种子节点。
+      if (guard.getPreferredNode() !== node) {
+        guard.setPreferredNode(node);
+        if (this.creds.nodeConfig.semrushNode !== node) {
+          console.log(`[SemRush] 命中可用节点 ${node}（种子=${this.creds.nodeConfig.semrushNode}），持久化为 active_node`);
+          void setSystemConfig(ACTIVE_NODE_CONFIG_KEY, node, "SemRush 运行时自动发现的可用 3UE 节点（D-061）");
+        }
+      }
+      return parsed;
     } catch (parseErr) {
       const safePreview = body.slice(0, 200).replace(/[\x00-\x1f]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, "0")}`);
 
