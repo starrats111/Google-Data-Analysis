@@ -28,12 +28,46 @@ export interface ResolveResult {
   finalUrl: string;
   brandRoot: string;
   switched: boolean;
-  reason: "cc_tld_ok" | "same_tld" | "nxdomain" | "tcp_timeout" | "invalid_input";
+  reason: "cc_tld_ok" | "same_tld" | "nxdomain" | "tcp_timeout" | "invalid_input" | "cc_tld_parked";
   probeLog: ProbeLogEntry[];
 }
 
 const DNS_TIMEOUT_MS = 3000;
 const TCP_TIMEOUT_MS = 3000;
+const PARKED_PROBE_TIMEOUT_MS = 5000;
+
+// D-068：域名"停放/待售"页面识别。
+// 真因（生产实证）：resolver 只验 DNS+TCP，把 heidi.com→heidi.uk、scarosso.com→scarosso.de
+// 这类 ccTLD 切换照常放行；但很多品牌的 ccTLD 变体并不属于该品牌，而是被域名商抢注/停放的
+// "待售页"（heidi.uk=Surname.uk「Surname and Forename Domains For Sale」、scarosso.de=
+// 「steht zum Verkauf」）。爬虫忠实抓到"卖域名"文字 → AI 生成卖域名广告 → 文案与商家业务不符。
+// 故切换前再做一次 HTTP 校验：命中停放/待售强信号则拒绝切换，保留商家真实域名。
+
+// 已知域名停放/交易服务商域名（重定向落点命中即判停放）
+const PARKING_PROVIDER_HOSTS = [
+  "sedo.com", "sedoparking.com", "dan.com", "afternic.com", "hugedomains.com",
+  "bodis.com", "parkingcrew.net", "above.com", "domainmarket.com", "undeveloped.com",
+  "smartname.com", "voodoo.com", "name.com", "uniregistry.com", "epik.com",
+  "surname.uk", "seghost", "domainnamesales.com", "buydomains.com", "godaddy.com/domainsearch",
+];
+
+// 停放/待售页强文本信号（高精度，避免误伤正常电商的 "sale"）
+const PARKED_TEXT_SIGNALS: RegExp[] = [
+  /\bthis domain\b[\s\S]{0,40}\b(is|may be)\b[\s\S]{0,20}\bfor sale\b/i,
+  /\bdomain(s)?\b[\s\S]{0,30}\bfor sale\b/i,         // "domain for sale" / "domains for sale"
+  /\bbuy this domain\b/i,
+  /\bpurchase this domain\b/i,
+  /\binterested in (this|the) domain\b/i,
+  /\bthe domain\b[\s\S]{0,30}\bis (for sale|available)\b/i,
+  /\bdomain (parking|is parked)\b/i,
+  /steht zum verkauf/i,                               // 德语："正在出售"
+  /diese domain (steht|kann|ist)/i,
+  /\bdomain[- ]?kauf\b/i,
+  /surname and forename domains for sale/i,           // heidi.uk 实测
+];
+
+const BROWSER_UA_RESOLVER =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
 // 国家 → 候选 ccTLD（首个优先）
 const COUNTRY_TLD_MAP: Record<string, string[]> = {
@@ -118,6 +152,10 @@ function cacheSet(key: string, result: ResolveResult) {
     case "nxdomain":
       // DNS 不存在的候选 host 几乎永远不会变成存在，缓存 24h
       ttlMs = 24 * 60 * 60 * 1000; // 24h
+      break;
+    case "cc_tld_parked":
+      // D-068：停放/待售状态较稳定，但留出"将来商家拿回域名"的余地，缓存 6h
+      ttlMs = 6 * 60 * 60 * 1000; // 6h
       break;
     case "tcp_timeout":
       ttlMs = 5 * 60 * 1000; // 5m（可能是临时故障，短 TTL）
@@ -255,6 +293,49 @@ async function probeTcp(host: string): Promise<{ ok: boolean; rttMs: number; rea
   });
 }
 
+// ─── D-068 停放/待售页探测 ────────────────────────────────────────────
+/**
+ * 轻量 HTTP 校验候选 ccTLD 是否为"域名停放/待售页"。
+ * 只在候选已通过 DNS+TCP（即将被切换）时调用，命中则拒绝切换。
+ *
+ * 判定（任一即停放）：
+ *   - 最终重定向落点 host 命中已知停放/交易服务商；
+ *   - 页面 <title> 或正文前 ~30KB 命中停放/待售强文本信号。
+ * 任何 fetch 失败/超时 → 返回 false（无法确认 → 不阻断切换，保留原有行为）。
+ */
+async function probeParkedPage(host: string): Promise<{ parked: boolean; signal?: string }> {
+  try {
+    const resp = await fetch(`https://${host}/`, {
+      redirect: "follow",
+      signal: AbortSignal.timeout(PARKED_PROBE_TIMEOUT_MS),
+      headers: { "User-Agent": BROWSER_UA_RESOLVER, Accept: "text/html,application/xhtml+xml" },
+    });
+
+    // 1. 重定向落点命中停放服务商
+    const finalHost = (() => {
+      try { return new URL(resp.url).hostname.toLowerCase(); } catch { return ""; }
+    })();
+    const providerHit = PARKING_PROVIDER_HOSTS.find(
+      (p) => finalHost.includes(p) || resp.url.toLowerCase().includes(p),
+    );
+    if (providerHit) return { parked: true, signal: `provider:${providerHit}` };
+
+    if (!resp.ok && resp.status !== 403 && resp.status !== 406) {
+      return { parked: false };
+    }
+
+    // 2. 文本信号（只读前 ~30KB，足够覆盖 title + 首屏）
+    const raw = (await resp.text()).slice(0, 30000);
+    for (const re of PARKED_TEXT_SIGNALS) {
+      if (re.test(raw)) return { parked: true, signal: re.source.slice(0, 40) };
+    }
+    return { parked: false };
+  } catch {
+    // 无法确认（超时/WAF/网络）→ 不阻断切换
+    return { parked: false };
+  }
+}
+
 // ─── 主入口 ────────────────────────────────────────────
 
 /**
@@ -344,6 +425,7 @@ export async function resolveCountryUrl(merchantUrl: string, country: string): P
   // 3. 逐个候选探测
   let sawNxdomain = false;
   let sawTcpTimeout = false;
+  let sawParked = false;
   for (const candidateHost of candidates) {
     const dnsResult = await probeDns(candidateHost);
     if (dnsResult === "nxdomain" || dnsResult === "err") {
@@ -359,6 +441,16 @@ export async function resolveCountryUrl(merchantUrl: string, country: string): P
       rttMs: tcpResult.rttMs,
     });
     if (tcpResult.ok) {
+      // D-068：切换前校验候选是否为停放/待售页。命中则**拒绝切换**，保留商家真实域名。
+      const parkedCheck = await probeParkedPage(candidateHost);
+      if (parkedCheck.parked) {
+        sawParked = true;
+        console.warn(
+          `[CountryUrlResolver] D-068 候选 ${candidateHost} 疑似域名停放/待售页（信号=${parkedCheck.signal}），拒绝 ccTLD 切换，保留 ${originalHost}`,
+        );
+        probeLog.push({ host: candidateHost, dns: "ok", tcp: "ok", error: `parked:${parkedCheck.signal}` });
+        continue; // 试下一个候选；都停放则不切换
+      }
       // 切 URL：保留 path/query/hash，只换 host
       const newUrl = new URL(merchantUrl);
       newUrl.hostname = candidateHost;
@@ -376,7 +468,9 @@ export async function resolveCountryUrl(merchantUrl: string, country: string): P
   }
 
   // 4. 全部候选都没通
-  const reason: ResolveResult["reason"] = sawNxdomain && !sawTcpTimeout ? "nxdomain" : "tcp_timeout";
+  const reason: ResolveResult["reason"] = sawParked
+    ? "cc_tld_parked"
+    : sawNxdomain && !sawTcpTimeout ? "nxdomain" : "tcp_timeout";
   const result: ResolveResult = {
     finalUrl: merchantUrl,
     brandRoot,
