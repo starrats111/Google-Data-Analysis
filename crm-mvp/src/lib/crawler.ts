@@ -13,6 +13,35 @@ export interface PuppeteerPageData {
   categoryNames: string[];
 }
 
+/**
+ * D-067：带超时 + 强杀的安全关闭。
+ *
+ * 真因（生产实证）：所有 Puppeteer 路径的 finally 都是 `try { await browser.close(); } catch {}`
+ * 然后才 `releasePuppeteerSlot()`。在 2C/3.7G 服务器 swap 颠簸时，`browser.close()` 可能
+ * **永久挂起**（既不 resolve 也不 reject）→ 后面的 `releasePuppeteerSlot()` 永远执行不到 →
+ * Puppeteer 槽位被永久占用、Chrome 进程变僵尸；累积到 3 个槽全占死后整个爬取子系统死锁，
+ * 所有爬取 `active=3/3` 超时返回 null（UI 表现为"爬取失败/广告生成失败"）。
+ *
+ * 本助手给 close 加 8s 上限，超时则直接 SIGKILL 掉 Chrome 进程，保证调用方的槽位释放一定执行。
+ */
+async function closeBrowserSafely(browser: any): Promise<void> {
+  if (!browser) return;
+  try {
+    await Promise.race([
+      browser.close(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("browser.close timeout")), 8000)),
+    ]);
+  } catch {
+    // close 挂起或失败 → 强制杀掉 Chrome 进程，避免僵尸进程 + 槽位泄漏
+    try {
+      const proc = typeof browser.process === "function" ? browser.process() : null;
+      if (proc && typeof proc.kill === "function") proc.kill("SIGKILL");
+    } catch {
+      /* noop */
+    }
+  }
+}
+
 // ══════════════════════════════════════════════════════
 // 浏览器路径发现
 // ══════════════════════════════════════════════════════
@@ -1189,7 +1218,7 @@ export async function batchFetchMetaViaPuppeteer(
   } catch (e) {
     console.warn("[Crawler] batchFetchMetaViaPuppeteer 异常:", e instanceof Error ? e.message : e);
   } finally {
-    try { if (browser) await browser.close(); } catch {}
+    await closeBrowserSafely(browser);
     releasePuppeteerSlot();
   }
 
@@ -1402,7 +1431,7 @@ export async function fetchImagesViaPuppeteerBatch(
   } catch (e) {
     console.warn("[Crawler] fetchImagesViaPuppeteerBatch 异常:", e instanceof Error ? e.message : e);
   } finally {
-    try { if (browser) await browser.close(); } catch {}
+    await closeBrowserSafely(browser);
     releasePuppeteerSlot();
   }
 
@@ -1613,7 +1642,7 @@ export async function harvestImagesFromPagesWithPuppeteer(
   } catch (e) {
     console.warn(`[Crawler] harvestImagesFromPagesWithPuppeteer 异常: ${e instanceof Error ? e.message : e}`);
   } finally {
-    try { if (browser) await browser.close(); } catch {}
+    await closeBrowserSafely(browser);
     releasePuppeteerSlot();
   }
 
@@ -2029,7 +2058,7 @@ export async function crawlWithPuppeteerFull(
     }
     return null;
   } finally {
-    if (browser) try { await browser.close(); } catch {}
+    await closeBrowserSafely(browser);
     releasePuppeteerSlot();
   }
 }

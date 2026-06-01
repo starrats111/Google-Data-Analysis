@@ -35,6 +35,12 @@ const MAX_PUPPETEER_SLOTS = 3;
 const RESERVED_MAIN_CRAWL_SLOTS = 1;
 const NORMAL_SLOTS = MAX_PUPPETEER_SLOTS - RESERVED_MAIN_CRAWL_SLOTS;  // 2
 
+// D-067 安全网：任何 slot 被持有超过此时长则强制释放 + 唤醒队列。
+// 真因：crawler.ts finally 的 browser.close() 在 swap 颠簸时可能永久挂起，导致其后的
+// releasePuppeteerSlot() 永不执行 → 槽位永久泄漏 → 累积 3 个全占死后整个爬取子系统死锁
+// （日志表现为持续 active=3/3 全超时）。正常一次爬取 ≤90s，故 150s 仍未释放必为泄漏。
+const MAX_SLOT_HOLD_MS = 150000;
+
 let _active = 0;
 const _waitersMain: Array<(released: () => void) => void> = [];
 const _waitersNormal: Array<(released: () => void) => void> = [];
@@ -109,9 +115,11 @@ async function _acquire(timeoutMs: number, isMainCrawl: boolean): Promise<() => 
 
 function makeReleaser(): () => void {
   let done = false;
-  return () => {
+
+  const release = () => {
     if (done) return;
     done = true;
+    if (watchdog) clearTimeout(watchdog);
     if (isDisabled()) return;
     _active = Math.max(0, _active - 1);
 
@@ -130,6 +138,19 @@ function makeReleaser(): () => void {
       return;
     }
   };
+
+  // D-067 看门狗：持有超过 MAX_SLOT_HOLD_MS 仍未释放 → 强制释放，防永久泄漏死锁。
+  const watchdog = setTimeout(() => {
+    if (done) return;
+    console.warn(
+      `[PuppeteerSemaphore] D-067 槽位持有超过 ${MAX_SLOT_HOLD_MS}ms，强制释放防死锁 ` +
+        `(active=${_active}/${MAX_PUPPETEER_SLOTS}, mainQ=${_waitersMain.length}, normalQ=${_waitersNormal.length})`,
+    );
+    release();
+  }, MAX_SLOT_HOLD_MS);
+  if (typeof watchdog.unref === "function") watchdog.unref();
+
+  return release;
 }
 
 /** 仅供诊断/日志用，勿用于业务分支。 */
