@@ -410,14 +410,44 @@ function selectCreativeSamples(
   return copiesSamples.length > 0 ? copiesSamples : adsOverview;
 }
 
+// D-083：SemRush 不提供以下国家的独立数据库，映射到最接近的可用库。
+// 默认兜底：unknown → "us"（数据最全）。
 const COUNTRY_EXCEPTIONS: Record<string, string> = {
-  GB: "uk",
-  UK: "uk",
+  // 英国/爱尔兰
+  GB:    "uk",
+  UK:    "uk",
+  IE:    "uk",   // 爱尔兰 → 英国库
+  // 德语区（SemRush 无独立 AT/CH 库）
+  AT:    "de",   // 奥地利 → 德国库
+  CH:    "de",   // 瑞士 → 德国库
+  // 比利时（无 be-fr 复合代码）
+  "BE-FR": "be",
+  // 大洋洲
+  NZ:    "au",   // 新西兰 → 澳大利亚库
+  // 亚太 — 无独立库，退到最近英语/区域库
+  HK:    "sg",   // 香港 → 新加坡库（APAC 最近）
+  TW:    "sg",   // 台湾 → 新加坡库
+  MY:    "sg",   // 马来西亚 → 新加坡库
+  ID:    "sg",   // 印度尼西亚 → 新加坡库
+  TH:    "us",   // 泰国 → 美国库（SemRush 无东南亚泰语库）
+  VN:    "us",   // 越南 → 美国库
+  // 中东
+  AE:    "sa",   // 阿联酋 → 沙特库（阿语最近）
 };
+
+// SemRush 确认支持的数据库白名单（来自 user.Databases 接口，维护成本低，主要用于兜底校验）
+const KNOWN_DATABASES = new Set([
+  "us","uk","ca","au","de","fr","es","it","pt","br","nl","jp",
+  "be","se","no","dk","fi","pl","ru","in","sg","mx","ar","cl",
+  "co","tr","il","sa","kr","gr","ro","cz","hu","bg",
+]);
 
 function countryToDatabase(country: string): string {
   const upper = country.toUpperCase();
-  return COUNTRY_EXCEPTIONS[upper] || upper.toLowerCase();
+  if (COUNTRY_EXCEPTIONS[upper]) return COUNTRY_EXCEPTIONS[upper];
+  const lower = upper.toLowerCase();
+  // 不在白名单 → 兜底 us（数据最全，优于返回 0）
+  return KNOWN_DATABASES.has(lower) ? lower : "us";
 }
 
 /** 从 3UE SemRush 页面 URL 中提取被查询的域名 */
