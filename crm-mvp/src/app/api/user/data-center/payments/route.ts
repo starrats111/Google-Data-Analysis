@@ -77,10 +77,11 @@ export async function GET(req: NextRequest) {
   const conns = connIds.length
     ? await prisma.platform_connections.findMany({
         where: { id: { in: connIds } },
-        select: { id: true, account_name: true },
+        select: { id: true, account_name: true, payee: true },
       })
     : [];
   const connNameMap = new Map(conns.map((c) => [String(c.id), c.account_name || ""]));
+  const connPayeeMap = new Map(conns.map((c) => [String(c.id), c.payee || ""]));
 
   let userNameMap = new Map<string, string>();
   if (isLeader) {
@@ -94,10 +95,12 @@ export async function GET(req: NextRequest) {
   const payments = rows.map((r) => {
     const accountName = r.platform_connection_id ? (connNameMap.get(String(r.platform_connection_id)) || "") : "";
     const memberName = isLeader ? (userNameMap.get(String(r.user_id)) || "") : "";
+    const payee = r.platform_connection_id ? (connPayeeMap.get(String(r.platform_connection_id)) || "") : "";
     return {
       id: String(r.id),
       platform: r.platform,
       account_name: accountName || r.platform,
+      payee,
       member_name: memberName,
       payment_no: r.payment_no,
       source_kind: r.source_kind,

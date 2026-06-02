@@ -18,10 +18,11 @@ export async function POST(req: NextRequest) {
   const user = getUserFromRequest(req);
   if (!user) return apiError("未授权", 401);
 
-  const { id, platform, account_name, api_key, publish_site_id } = await req.json();
+  const { id, platform, account_name, api_key, publish_site_id, payee } = await req.json();
   if (!platform) return apiError("平台代码不能为空");
 
   const userId = BigInt(user.userId);
+  const normalizedPayee = typeof payee === "string" ? payee.trim() : "";
 
   // 编辑模式：按 id 更新
   if (id) {
@@ -35,6 +36,7 @@ export async function POST(req: NextRequest) {
     };
     if (account_name !== undefined) data.account_name = account_name;
     if (api_key && api_key.trim()) data.api_key = api_key;
+    if (payee !== undefined) data.payee = normalizedPayee || null;
 
     await prisma.platform_connections.update({ where: { id: existing.id }, data });
     return apiSuccess(null, "保存成功");
@@ -59,6 +61,7 @@ export async function POST(req: NextRequest) {
       account_name: finalName,
       api_key,
       channel_id: null,
+      payee: normalizedPayee || null,
       publish_site_id: publish_site_id ? BigInt(publish_site_id) : null,
       status: "connected",
     },

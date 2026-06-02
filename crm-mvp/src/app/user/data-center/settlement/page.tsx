@@ -86,6 +86,7 @@ interface PaymentRow {
   id: string;
   platform: string;
   account_name: string;
+  payee?: string | null;
   member_name?: string;
   payment_no: string;
   source_kind: string;
@@ -372,6 +373,12 @@ export default function SettlementPage() {
         </span>
       ),
     },
+    {
+      title: "收款人", dataIndex: "payee", width: 100, ellipsis: true,
+      filters: [...new Set(payData?.payments.map((p) => p.payee || "未设置") || [])].map((a) => ({ text: a, value: a })),
+      onFilter: (v, r) => (r.payee || "未设置") === v,
+      render: (v: string | null) => v ? <Tag color="purple">{v}</Tag> : <Text type="secondary">—</Text>,
+    },
     { title: "打款日", dataIndex: "paid_date", width: 110, sorter: (a, b) => (a.paid_date || "").localeCompare(b.paid_date || ""), defaultSortOrder: "descend" },
     {
       title: "实付佣金($)", dataIndex: "amount", width: 120, align: "right",
@@ -400,15 +407,15 @@ export default function SettlementPage() {
     return [...m.values()].map((x) => ({ ...x, amount: +x.amount.toFixed(2) })).sort((a, b) => b.month.localeCompare(a.month));
   }, [payData]);
 
-  // 收款人汇总：打款方式含「农业银行」→ 龚建成；其余 → 张文俊
-  const payByPerson = useMemo(() => {
-    let gong = 0, gongCnt = 0, zhang = 0, zhangCnt = 0;
+  // 收款人汇总：按连接配置的 payee 聚合
+  const payByPayee = useMemo(() => {
+    const m = new Map<string, { payee: string; count: number; amount: number }>();
     for (const p of payData?.payments || []) {
-      const isGong = (p.payment_type || "").includes("农业银行");
-      if (isGong) { gong += p.amount; gongCnt++; }
-      else { zhang += p.amount; zhangCnt++; }
+      const key = (p.payee && p.payee.trim()) || "未设置收款人";
+      const cur = m.get(key) ?? { payee: key, count: 0, amount: 0 };
+      cur.count++; cur.amount += p.amount; m.set(key, cur);
     }
-    return { gong: +gong.toFixed(2), gongCnt, zhang: +zhang.toFixed(2), zhangCnt };
+    return [...m.values()].map((x) => ({ ...x, amount: +x.amount.toFixed(2) })).sort((a, b) => b.amount - a.amount);
   }, [payData]);
 
   const payByMember = useMemo(() => {
@@ -449,31 +456,23 @@ export default function SettlementPage() {
     },
   ];
 
-  // 收款人卡片（按打款银行归属：农业银行→龚建成，其余→张文俊）
+  // 收款人卡片（按连接配置的收款人聚合实付金额）
+  const PAYEE_COLORS = ["#1890ff", COLORS.successGreen, "#722ed1", "#fa8c16", "#13c2c2", "#eb2f96"];
   const personCard = payData && payData.payments.length > 0 ? (
     <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
-      <Col xs={24} sm={12}>
-        <Card size="small" styles={{ body: { padding: "10px 16px" } }}>
-          <Statistic
-            title={<Text>张文俊 <Text type="secondary" style={{ fontSize: 12 }}>（非农业银行 · {payByPerson.zhangCnt} 笔）</Text></Text>}
-            value={payByPerson.zhang}
-            prefix="$"
-            precision={2}
-            styles={{ content: { fontSize: 22, color: "#1890ff" } }}
-          />
-        </Card>
-      </Col>
-      <Col xs={24} sm={12}>
-        <Card size="small" styles={{ body: { padding: "10px 16px" } }}>
-          <Statistic
-            title={<Text>龚建成 <Text type="secondary" style={{ fontSize: 12 }}>（农业银行 · {payByPerson.gongCnt} 笔）</Text></Text>}
-            value={payByPerson.gong}
-            prefix="$"
-            precision={2}
-            styles={{ content: { fontSize: 22, color: COLORS.successGreen } }}
-          />
-        </Card>
-      </Col>
+      {payByPayee.map((p, i) => (
+        <Col xs={24} sm={12} md={8} key={p.payee}>
+          <Card size="small" styles={{ body: { padding: "10px 16px" } }}>
+            <Statistic
+              title={<Text>{p.payee} <Text type="secondary" style={{ fontSize: 12 }}>（{p.count} 笔）</Text></Text>}
+              value={p.amount}
+              prefix="$"
+              precision={2}
+              styles={{ content: { fontSize: 22, color: PAYEE_COLORS[i % PAYEE_COLORS.length] } }}
+            />
+          </Card>
+        </Col>
+      ))}
     </Row>
   ) : null;
 
@@ -517,7 +516,7 @@ export default function SettlementPage() {
           dataSource={payData.payments}
           rowKey="id"
           size="small"
-          scroll={{ x: 820 }}
+          scroll={{ x: 920 }}
           pagination={{ defaultPageSize: 20, showTotal: (t) => `共 ${t} 笔打款`, showSizeChanger: true }}
         />
       )}

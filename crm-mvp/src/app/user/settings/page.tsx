@@ -144,6 +144,7 @@ function PlatformConnectionsTab() {
     form.setFieldsValue({
       platform: conn.platform,
       account_name: conn.account_name,
+      payee: (conn.payee as string) || undefined,
       publish_site_id: conn.publish_site_id ? String(conn.publish_site_id) : undefined,
     });
     setModalOpen(true);
@@ -353,6 +354,9 @@ function PlatformConnectionsTab() {
           </Form.Item>
           <Form.Item name="api_key" label="API Key" rules={editConn ? [] : [{ required: true }]}>
             <Input.Password placeholder={editConn ? "已保存（留空则不修改）" : "请输入 API Key"} />
+          </Form.Item>
+          <Form.Item name="payee" label="收款人" tooltip="该平台账号打款时实际收款的人，用于结算页「支付查询」按收款人汇总">
+            <Input placeholder="如 张文俊 / 龚建成" allowClear />
           </Form.Item>
           <Form.Item name="publish_site_id" label="绑定站点" tooltip="选择该账号对应的发布站点，领取商家后文章将自动发布到此站点">
             <PublishSiteSelect sites={sites} placeholder="选择发布站点（可搜索站点名或域名）" />

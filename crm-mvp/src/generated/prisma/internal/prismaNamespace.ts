@@ -3810,6 +3810,7 @@ export const Platform_connectionsScalarFieldEnum = {
   account_name: 'account_name',
   api_key: 'api_key',
   channel_id: 'channel_id',
+  payee: 'payee',
   publish_site_id: 'publish_site_id',
   status: 'status',
   last_synced_at: 'last_synced_at',
@@ -4755,6 +4756,7 @@ export const platform_connectionsOrderByRelevanceFieldEnum = {
   account_name: 'account_name',
   api_key: 'api_key',
   channel_id: 'channel_id',
+  payee: 'payee',
   status: 'status',
   last_error: 'last_error'
 } as const
