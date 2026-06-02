@@ -1,6 +1,6 @@
 ﻿"use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import {
   Card, Input, Button, Row, Col, Statistic, Table, Segmented, Space, Typography,
   Empty, Progress, Select, DatePicker, Tag, App,
@@ -85,6 +85,8 @@ interface SettlementData {
 interface PaymentRow {
   id: string;
   platform: string;
+  account_name: string;
+  member_name?: string;
   payment_no: string;
   source_kind: string;
   paid_date: string | null;
@@ -120,6 +122,8 @@ export default function SettlementPage() {
   const [data, setData] = useState<SettlementData | null>(null);
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<string>("merchant");
+  const [topView, setTopView] = useState<"commission" | "payment">("commission");
+  const [payAggTab, setPayAggTab] = useState<string>("detail");
   const [payData, setPayData] = useState<PaymentsData | null>(null);
   const [paySyncing, setPaySyncing] = useState(false);
 
@@ -357,6 +361,17 @@ export default function SettlementPage() {
       filters: [...new Set(payData?.payments.map((p) => p.platform) || [])].map((p) => ({ text: p, value: p })),
       onFilter: (v, r) => r.platform === v,
     },
+    {
+      title: "账号", dataIndex: "account_name", width: 130, ellipsis: true,
+      filters: [...new Set(payData?.payments.map((p) => p.account_name) || [])].map((a) => ({ text: a, value: a })),
+      onFilter: (v, r) => r.account_name === v,
+      render: (v: string, r: PaymentRow) => (
+        <span>
+          <Text style={{ fontSize: 13 }}>{v}</Text>
+          {r.member_name && <Text type="secondary" style={{ fontSize: 11, marginLeft: 4 }}>({r.member_name})</Text>}
+        </span>
+      ),
+    },
     { title: "打款日", dataIndex: "paid_date", width: 110, sorter: (a, b) => (a.paid_date || "").localeCompare(b.paid_date || ""), defaultSortOrder: "descend" },
     {
       title: "实付佣金($)", dataIndex: "amount", width: 120, align: "right",
@@ -373,6 +388,119 @@ export default function SettlementPage() {
 
   const s = data?.summary;
   const isLeader = data?.isLeader;
+
+  // 打款记录汇总（前端基于 payData.payments 聚合）
+  const payByMonth = useMemo(() => {
+    const m = new Map<string, { month: string; count: number; amount: number }>();
+    for (const p of payData?.payments || []) {
+      const key = (p.paid_date || "").slice(0, 7) || "未知";
+      const cur = m.get(key) ?? { month: key, count: 0, amount: 0 };
+      cur.count++; cur.amount += p.amount; m.set(key, cur);
+    }
+    return [...m.values()].map((x) => ({ ...x, amount: +x.amount.toFixed(2) })).sort((a, b) => b.month.localeCompare(a.month));
+  }, [payData]);
+
+  const payByMember = useMemo(() => {
+    const m = new Map<string, { member: string; count: number; amount: number }>();
+    for (const p of payData?.payments || []) {
+      const key = p.member_name || "—";
+      const cur = m.get(key) ?? { member: key, count: 0, amount: 0 };
+      cur.count++; cur.amount += p.amount; m.set(key, cur);
+    }
+    return [...m.values()].map((x) => ({ ...x, amount: +x.amount.toFixed(2) })).sort((a, b) => b.amount - a.amount);
+  }, [payData]);
+
+  const payMonthColumns: ColumnsType<{ month: string; count: number; amount: number }> = [
+    { title: "月份", dataIndex: "month", width: 120 },
+    { title: "笔数", dataIndex: "count", width: 90, align: "right" },
+    {
+      title: "实付佣金($)", dataIndex: "amount", align: "right",
+      sorter: (a, b) => a.amount - b.amount,
+      render: (v: number) => <span style={{ color: "#1890ff", fontWeight: 600 }}>${v.toFixed(2)}</span>,
+    },
+  ];
+  const payPlatformColumns: ColumnsType<{ platform: string; count: number; amount: number }> = [
+    { title: "平台", dataIndex: "platform", width: 120, render: (v: string) => <Tag color="blue">{v}</Tag> },
+    { title: "笔数", dataIndex: "count", width: 90, align: "right" },
+    {
+      title: "实付佣金($)", dataIndex: "amount", align: "right",
+      sorter: (a, b) => a.amount - b.amount, defaultSortOrder: "descend",
+      render: (v: number) => <span style={{ color: "#1890ff", fontWeight: 600 }}>${v.toFixed(2)}</span>,
+    },
+  ];
+  const payMemberColumns: ColumnsType<{ member: string; count: number; amount: number }> = [
+    { title: "员工", dataIndex: "member", width: 160 },
+    { title: "笔数", dataIndex: "count", width: 90, align: "right" },
+    {
+      title: "实付佣金($)", dataIndex: "amount", align: "right",
+      sorter: (a, b) => a.amount - b.amount, defaultSortOrder: "descend",
+      render: (v: number) => <span style={{ color: "#1890ff", fontWeight: 600 }}>${v.toFixed(2)}</span>,
+    },
+  ];
+
+  // 打款记录卡片（含 明细/按月份/按平台/按员工 子切换）
+  const paymentCard = payData && payData.payments.length > 0 ? (
+    <Card
+      size="small"
+      style={{ marginBottom: 12 }}
+      title={
+        <Space size={10} wrap>
+          <BankOutlined style={{ color: "#1890ff" }} />
+          <Text strong>打款记录</Text>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            实付合计 <Text strong style={{ color: "#1890ff" }}>${payData.total_paid.toLocaleString()}</Text>
+            （{payData.payments.length} 笔）
+          </Text>
+        </Space>
+      }
+    >
+      <Segmented
+        value={payAggTab}
+        onChange={(v) => setPayAggTab(v as string)}
+        options={[
+          { label: "明细", value: "detail" },
+          { label: `按月份 (${payByMonth.length})`, value: "month" },
+          { label: `按平台 (${payData.byPlatform.length})`, value: "platform" },
+          ...(isLeader ? [{ label: `按员工 (${payByMember.length})`, value: "member" }] : []),
+        ]}
+        size="small"
+        style={{ marginBottom: 12 }}
+      />
+      {payAggTab === "month" ? (
+        <Table columns={payMonthColumns} dataSource={payByMonth} rowKey="month" size="small" pagination={false} />
+      ) : payAggTab === "platform" ? (
+        <Table columns={payPlatformColumns} dataSource={payData.byPlatform} rowKey="platform" size="small" pagination={false} />
+      ) : payAggTab === "member" && isLeader ? (
+        <Table columns={payMemberColumns} dataSource={payByMember} rowKey="member" size="small" pagination={false} />
+      ) : (
+        <Table<PaymentRow>
+          columns={paymentColumns}
+          dataSource={payData.payments}
+          rowKey="id"
+          size="small"
+          scroll={{ x: 820 }}
+          pagination={{ defaultPageSize: 20, showTotal: (t) => `共 ${t} 笔打款`, showSizeChanger: true }}
+        />
+      )}
+      <Text type="secondary" style={{ fontSize: 11 }}>
+        注：RW/LH 等为提现级实付（账户级，按打款日），无法拆分到具体商家/交易月；上方「已支付 / 结算率」即以此实付总额为准。
+      </Text>
+    </Card>
+  ) : (
+    !loading && (
+      <Card style={{ textAlign: "center", padding: "40px 0" }}>
+        <Empty
+          image={<BankOutlined style={{ fontSize: 40, color: "#1890ff" }} />}
+          description={
+            <Space direction="vertical" size={4}>
+              <Text style={{ fontSize: 15 }}>该条件下暂无打款记录</Text>
+              <Text type="secondary">可点击右上角「同步已支付」拉取最新打款数据</Text>
+            </Space>
+          }
+        />
+      </Card>
+    )
+  );
 
   return (
     <div>
@@ -430,8 +558,20 @@ export default function SettlementPage() {
         </Row>
       </Card>
 
+      {/* 顶部：佣金查询 / 支付查询 切换 */}
+      <div style={{ marginBottom: 12 }}>
+        <Segmented
+          value={topView}
+          onChange={(v) => setTopView(v as "commission" | "payment")}
+          options={[
+            { label: "佣金查询", value: "commission" },
+            { label: `支付查询${payData ? ` (${payData.payments.length})` : ""}`, value: "payment" },
+          ]}
+        />
+      </div>
+
       {/* 汇总卡片 */}
-      {s && s.total_orders > 0 ? (
+      {topView === "payment" ? paymentCard : s && s.total_orders > 0 ? (
         <>
           <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
             <Col xs={12} sm={8} md={4}>
@@ -498,41 +638,6 @@ export default function SettlementPage() {
 
           {/* 月份结算进度（每月一张卡，跨整个项目周期不限于筛选时间） */}
           <MonthlySettleProgressCard memberId={memberId || undefined} />
-
-          {/* D-072 打款记录（平台实付，按 paid_date） */}
-          {payData && payData.payments.length > 0 && (
-            <Card
-              size="small"
-              style={{ marginBottom: 12 }}
-              title={
-                <Space size={10} wrap>
-                  <BankOutlined style={{ color: "#1890ff" }} />
-                  <Text strong>打款记录</Text>
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    实付合计 <Text strong style={{ color: "#1890ff" }}>${payData.total_paid.toLocaleString()}</Text>
-                    （{payData.payments.length} 笔）
-                  </Text>
-                  {payData.byPlatform.map((p) => (
-                    <Tag key={p.platform} color="blue" style={{ marginRight: 0 }}>
-                      {p.platform} ${p.amount.toLocaleString()}
-                    </Tag>
-                  ))}
-                </Space>
-              }
-            >
-              <Table<PaymentRow>
-                columns={paymentColumns}
-                dataSource={payData.payments}
-                rowKey="id"
-                size="small"
-                scroll={{ x: 680 }}
-                pagination={{ defaultPageSize: 20, showTotal: (t) => `共 ${t} 笔打款`, showSizeChanger: true }}
-              />
-              <Text type="secondary" style={{ fontSize: 11 }}>
-                注：RW/LH 等为提现级实付（账户级，按打款日），无法拆分到具体商家/交易月；上方「已支付 / 结算率」即以此实付总额为准。
-              </Text>
-            </Card>
-          )}
 
           {/* 明细切换 */}
           <Card

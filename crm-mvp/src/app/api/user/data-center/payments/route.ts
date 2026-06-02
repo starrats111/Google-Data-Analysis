@@ -68,21 +68,47 @@ export async function GET(req: NextRequest) {
       id: true, platform: true, payment_no: true, source_kind: true,
       paid_date: true, amount: true, gross_amount: true, currency: true,
       payment_type: true, raw_status: true,
+      platform_connection_id: true, user_id: true,
     },
   });
 
-  const payments = rows.map((r) => ({
-    id: String(r.id),
-    platform: r.platform,
-    payment_no: r.payment_no,
-    source_kind: r.source_kind,
-    paid_date: r.paid_date ? r.paid_date.toISOString().slice(0, 10) : null,
-    amount: +Number(r.amount).toFixed(2),
-    gross_amount: r.gross_amount != null ? +Number(r.gross_amount).toFixed(2) : null,
-    currency: r.currency,
-    payment_type: r.payment_type,
-    raw_status: r.raw_status,
-  }));
+  // 关联账号名（platform_connections.account_name）；组长视图附带员工名便于区分
+  const connIds = [...new Set(rows.map((r) => r.platform_connection_id).filter((x): x is bigint => x != null))];
+  const conns = connIds.length
+    ? await prisma.platform_connections.findMany({
+        where: { id: { in: connIds } },
+        select: { id: true, account_name: true },
+      })
+    : [];
+  const connNameMap = new Map(conns.map((c) => [String(c.id), c.account_name || ""]));
+
+  let userNameMap = new Map<string, string>();
+  if (isLeader) {
+    const us = await prisma.users.findMany({
+      where: { id: { in: [...new Set(rows.map((r) => r.user_id))] } },
+      select: { id: true, username: true, display_name: true },
+    });
+    userNameMap = new Map(us.map((u) => [String(u.id), u.display_name || u.username]));
+  }
+
+  const payments = rows.map((r) => {
+    const accountName = r.platform_connection_id ? (connNameMap.get(String(r.platform_connection_id)) || "") : "";
+    const memberName = isLeader ? (userNameMap.get(String(r.user_id)) || "") : "";
+    return {
+      id: String(r.id),
+      platform: r.platform,
+      account_name: accountName || r.platform,
+      member_name: memberName,
+      payment_no: r.payment_no,
+      source_kind: r.source_kind,
+      paid_date: r.paid_date ? r.paid_date.toISOString().slice(0, 10) : null,
+      amount: +Number(r.amount).toFixed(2),
+      gross_amount: r.gross_amount != null ? +Number(r.gross_amount).toFixed(2) : null,
+      currency: r.currency,
+      payment_type: r.payment_type,
+      raw_status: r.raw_status,
+    };
+  });
 
   // 按平台汇总
   const platMap = new Map<string, { platform: string; count: number; amount: number }>();
