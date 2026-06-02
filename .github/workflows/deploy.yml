@@ -68,24 +68,23 @@ jobs:
 
             echo "===== 5b. Build with WEBPACK (NOT turbopack) ====="
             # turbopack 默认生产构建有 client chunk 引用未输出 bug → ChunkLoadError，故强制 --webpack。
-            if git diff HEAD~1 --name-only | grep -qE "crm-mvp/next\.config\.(ts|js|mjs)"; then
-              # next.config 变更才需彻底重建：构建到 .next.tmp，验证后原子切换，旧 .next 全程在线，窗口压到亚秒级。
-              echo "next.config changed → 干净重建到 .next.tmp 后原子切换"
-              rm -rf .next.tmp 2>/dev/null || true
-              NODE_OPTIONS="--max-old-space-size=1536" NEXT_DIST_DIR=".next.tmp" npx next build --webpack 2>&1 | tail -20
-              if [ ! -f "$CRM_DIR/.next.tmp/BUILD_ID" ]; then
-                echo "BUILD FAILED: .next.tmp/BUILD_ID not found, aborting deploy"
-                exit 1
-              fi
-              rm -rf .next.old 2>/dev/null || true
-              mv .next .next.old 2>/dev/null || true
-              mv .next.tmp .next
-            else
-              # 常规部署：webpack 原地增量构建。内容哈希 chunk 新旧不冲突，旧 chunk 在构建期间继续
-              # 服务在途旧标签页，构建完成 pm2 reload 后切到新 BUILD_ID → 线上零 404 窗口。
-              echo "in-place 增量构建（零中断）"
-              NODE_OPTIONS="--max-old-space-size=1536" npx next build --webpack 2>&1 | tail -20
+            #
+            # D-078 真因修复：原「常规部署 in-place 增量构建」其实并非零中断——
+            # `next build` 会就地删除/重写 .next/server/app/**/page_client-reference-manifest.js 等产物，
+            # 旧 PM2 进程（next start）在构建的数分钟里读到被删/未重建的文件 → 该路由 500 / chunk 404，
+            # 而 Cloudflare 会把这些 404 负缓存住（默认边缘 TTL），导致构建结束后用户仍 ChunkLoadError。
+            # 因此一律改为「构建到 .next.tmp → 验证 → 原子 mv 切换」，旧 .next 全程不被触碰，
+            # 旧进程持续正常服务，切换窗口压到亚秒级，根除构建期 404 被 CF 负缓存的问题。
+            echo "干净重建到 .next.tmp 后原子切换（旧 .next 全程在线）"
+            rm -rf .next.tmp 2>/dev/null || true
+            NODE_OPTIONS="--max-old-space-size=1536" NEXT_DIST_DIR=".next.tmp" npx next build --webpack 2>&1 | tail -20
+            if [ ! -f "$CRM_DIR/.next.tmp/BUILD_ID" ]; then
+              echo "BUILD FAILED: .next.tmp/BUILD_ID not found, aborting deploy"
+              exit 1
             fi
+            rm -rf .next.old 2>/dev/null || true
+            mv .next .next.old 2>/dev/null || true
+            mv .next.tmp .next
 
             echo "===== 6. Verify build ====="
             if [ ! -f "$CRM_DIR/.next/BUILD_ID" ]; then
