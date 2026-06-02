@@ -4,7 +4,7 @@ import { apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { callAiWithFallback, suggestDisplayPaths } from "@/lib/ai-service";
 import { getAdMarketConfig, resolveLanguageName } from "@/lib/ad-market";
-import { buildAiRulePrompt, checkItemViolations } from "@/lib/ai-rule-profile";
+import { buildAiRulePrompt, checkItemViolations, resolveForbiddenTerms, autoRewriteForbiddenTerms } from "@/lib/ai-rule-profile";
 import { isLowValueSitelink } from "@/lib/sitelink-filter";
 import { acquireGenerationSlot } from "@/lib/generation-gate";
 import {
@@ -2917,6 +2917,34 @@ async function runIntelligentCore(
     const humanizedCallouts = result.callouts.length > 0
       ? clampLen(humanizeAdCopyBatch(result.callouts, 2, 25), 25)
       : [];
+
+    // ── D-082：禁止词自动避障（生成阶段，预览不出现禁止词）──
+    //   humanize 可能重新引入禁止词，故放在 humanize 之后。命中 → AI 改写最多 3 轮；
+    //   3 轮仍失败则保留原文（保数量），由提交阶段统一硬挡兜底通知员工。
+    try {
+      const _forbidden = resolveForbiddenTerms(aiRuleProfile);
+      if (_forbidden.length > 0) {
+        const _callAi = (prompt: string) =>
+          callAiWithFallback("forbidden_rewrite", [{ role: "user", content: prompt }], 120);
+        if (humanizedHeadlines.length > 0) {
+          const r = await autoRewriteForbiddenTerms(humanizedHeadlines, _forbidden, { fieldLabel: "ad headline", maxChars: 30, caseStyle: "title", callAi: _callAi });
+          humanizedHeadlines.splice(0, humanizedHeadlines.length, ...r.items);
+          if (r.rewroteCount > 0 || r.stillViolating.length > 0) console.warn(`[D-082] 生成阶段标题禁止词改写：rewrote=${r.rewroteCount} stillViolating=${r.stillViolating.length}`);
+        }
+        if (humanizedDescriptions.length > 0) {
+          const r = await autoRewriteForbiddenTerms(humanizedDescriptions, _forbidden, { fieldLabel: "ad description", maxChars: 90, caseStyle: "sentence", callAi: _callAi });
+          humanizedDescriptions.splice(0, humanizedDescriptions.length, ...r.items);
+          if (r.rewroteCount > 0 || r.stillViolating.length > 0) console.warn(`[D-082] 生成阶段描述禁止词改写：rewrote=${r.rewroteCount} stillViolating=${r.stillViolating.length}`);
+        }
+        if (humanizedCallouts.length > 0) {
+          const r = await autoRewriteForbiddenTerms(humanizedCallouts, _forbidden, { fieldLabel: "callout", maxChars: 25, caseStyle: "title", callAi: _callAi });
+          humanizedCallouts.splice(0, humanizedCallouts.length, ...r.items);
+          if (r.rewroteCount > 0 || r.stillViolating.length > 0) console.warn(`[D-082] 生成阶段标注禁止词改写：rewrote=${r.rewroteCount} stillViolating=${r.stillViolating.length}`);
+        }
+      }
+    } catch (e) {
+      console.warn("[D-082] 生成阶段禁止词改写异常（不阻断）：", e instanceof Error ? e.message : e);
+    }
 
     // C-116: 主体文案（headlines/descriptions/callouts）先 send + 存库 + 完成日志，
     //   绝不被 sitelink 阻塞 —— 旧逻辑把 `await realSitelinksPromise` 放在 callouts/存库/完成日志之前，

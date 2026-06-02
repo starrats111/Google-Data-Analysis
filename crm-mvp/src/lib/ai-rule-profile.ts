@@ -698,6 +698,113 @@ export function includesForbiddenTerm(text: string, forbiddenTerms: string[]): s
   return null;
 }
 
+/** 解析 profile（人设 + 全局）合并后的禁止词全集 */
+export function resolveForbiddenTerms(profileRaw: unknown): string[] {
+  const profile = normalizeAiRuleProfile(profileRaw);
+  const persona = getActivePersona(profile);
+  return [...new Set([...persona.forbidden_terms, ...profile.forbidden_terms])];
+}
+
+// ─── D-082：禁止词命中 → AI 自动重写（生成阶段 + 提交阶段共用） ───────────────
+
+/** 从 AI 原始返回里抽出第一个 JSON 对象（容忍 ```json 包裹/前后噪声） */
+function extractFirstJsonObject(raw: string): string {
+  let s = (raw ?? "").trim();
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fence) s = fence[1].trim();
+  const start = s.indexOf("{");
+  const end = s.lastIndexOf("}");
+  if (start >= 0 && end > start) s = s.slice(start, end + 1);
+  return s;
+}
+
+export interface ForbiddenAutoRewriteResult {
+  /** 与输入等长：可改写的已替换，仍违规的保留原文 */
+  items: string[];
+  /** 成功改写的条数 */
+  rewroteCount: number;
+  /** maxRounds 轮后仍命中禁止词的条目（保留原文） */
+  stillViolating: Array<{ index: number; text: string; term: string }>;
+}
+
+/**
+ * D-082：把命中自定义禁止词的文案逐条交给 AI 改写，最多 maxRounds 轮（默认 3）。
+ *   - 改写后仍含禁止词 / 解析失败 → 继续下一轮；
+ *   - maxRounds 轮仍失败 → 保留原文并记入 stillViolating（由上层决定：生成=保留以保数量，提交=硬挡通知员工）；
+ *   - 不依赖具体 AI client，callAi 由调用方注入（避免循环依赖），供生成与提交两处复用。
+ */
+export async function autoRewriteForbiddenTerms(
+  items: string[],
+  forbiddenTerms: string[],
+  opts: {
+    /** 用于提示词的字段名，如 "ad headline" / "ad description" / "callout" */
+    fieldLabel: string;
+    /** Google Ads 字符上限：标题 30 / 描述 90 / callout 25 */
+    maxChars: number;
+    caseStyle?: "title" | "sentence";
+    maxRounds?: number;
+    callAi: (prompt: string) => Promise<string>;
+  },
+): Promise<ForbiddenAutoRewriteResult> {
+  const out: ForbiddenAutoRewriteResult = {
+    items: (items ?? []).map((s) => String(s ?? "")),
+    rewroteCount: 0,
+    stillViolating: [],
+  };
+  const forbidden = (forbiddenTerms ?? []).filter((t) => typeof t === "string" && t.trim().length > 0);
+  if (forbidden.length === 0 || out.items.length === 0) return out;
+
+  const maxRounds = opts.maxRounds ?? 3;
+  const caseHint =
+    opts.caseStyle === "sentence"
+      ? "Use sentence case (capitalize only the first word and proper nouns); never ALL CAPS."
+      : "Use Title Case but do NOT capitalize prepositions/articles/conjunctions in the middle; never ALL CAPS.";
+
+  for (let i = 0; i < out.items.length; i++) {
+    const original = out.items[i];
+    if (!original) continue;
+    let hit = includesForbiddenTerm(original, forbidden);
+    if (!hit) continue;
+
+    let current = original;
+    let fixed = false;
+    for (let round = 1; round <= maxRounds; round++) {
+      const prompt = [
+        `You are a Google Ads copywriter. Rewrite the following ${opts.fieldLabel} to REMOVE every forbidden word while keeping the same meaning, intent and specificity.`,
+        `Forbidden words (must NOT appear at all, including close variants/synonyms): ${JSON.stringify(forbidden)}`,
+        `Constraints:`,
+        `1. Max length: ${opts.maxChars} characters.`,
+        `2. ${caseHint}`,
+        `3. Keep it concrete and natural; do NOT introduce any of the forbidden words.`,
+        `4. Return ONLY valid JSON, no extra text: {"text":"..."}`,
+        `Original: ${JSON.stringify(current)}`,
+      ].join("\n");
+      try {
+        const raw = await opts.callAi(prompt);
+        const parsed = JSON.parse(extractFirstJsonObject(raw)) as { text?: string };
+        let next = String(parsed.text ?? "").trim();
+        if (next.length > opts.maxChars) next = next.slice(0, opts.maxChars).trim();
+        if (next.length >= 2 && !includesForbiddenTerm(next, forbidden)) {
+          out.items[i] = next;
+          out.rewroteCount++;
+          fixed = true;
+          break;
+        }
+        current = next.length >= 2 ? next : current;
+      } catch {
+        // 本轮 AI 调用/解析失败 → 进入下一轮重试
+      }
+    }
+
+    if (!fixed) {
+      out.items[i] = original; // 保留原文，交由上层处理
+      out.stillViolating.push({ index: i, text: original, term: hit });
+    }
+  }
+
+  return out;
+}
+
 export function checkItemViolations(
   items: string[],
   profileRaw: unknown,

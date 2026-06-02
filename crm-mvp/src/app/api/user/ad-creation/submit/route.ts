@@ -4,7 +4,7 @@ import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { getAdMarketConfig } from "@/lib/ad-market";
 import { sanitizeAdText } from "@/lib/crawl-pipeline";
-import { collectAiRuleViolations, normalizeAiRuleProfile, getActivePersona, includesForbiddenTerm } from "@/lib/ai-rule-profile";
+import { collectAiRuleViolations, normalizeAiRuleProfile, getActivePersona, includesForbiddenTerm, autoRewriteForbiddenTerms } from "@/lib/ai-rule-profile";
 import { callAiWithFallback } from "@/lib/ai-service";
 import { extractJsonFromAi } from "@/lib/crawl-pipeline";
 import { isPolicyRiskKeyword } from "@/lib/keyword-optimizer";
@@ -255,6 +255,42 @@ export async function POST(req: NextRequest) {
   } catch (e) {
     // C-033 返工异常不阻断提交，仅记录日志
     console.warn("[C-033] Sitelinks 禁止词返工异常（不阻断提交）:", e instanceof Error ? e.message : e);
+  }
+
+  // ═════════════════════════════════════════════════════════════════
+  // D-082: headlines/descriptions/callouts 命中禁止词 → AI 自动重写（最多 3 轮）
+  //   - 与 C-033（sitelinks）同口径，但失败处理不同：3 轮仍违规 → 不删、保留原文，
+  //     交给下方 collectAiRuleViolations 硬挡报错，通知员工手动改（07 拍板）。
+  //   - keywords 来自 SemRush 词池不做改写，仍由下方硬挡处理。
+  // ═════════════════════════════════════════════════════════════════
+  try {
+    const _allForbidden = [
+      ...new Set([
+        ...getActivePersona(normalizeAiRuleProfile(adSettings?.ai_rule_profile)).forbidden_terms,
+        ...normalizeAiRuleProfile(adSettings?.ai_rule_profile).forbidden_terms,
+      ]),
+    ];
+    if (_allForbidden.length > 0) {
+      const _callAi = (prompt: string) =>
+        callAiWithFallback("forbidden_rewrite", [{ role: "user", content: prompt }], 120);
+      if (Array.isArray(headlines) && headlines.length > 0) {
+        const r = await autoRewriteForbiddenTerms(headlines as string[], _allForbidden, { fieldLabel: "ad headline", maxChars: 30, caseStyle: "title", callAi: _callAi });
+        headlines.splice(0, headlines.length, ...r.items);
+        if (r.rewroteCount > 0 || r.stillViolating.length > 0) console.warn(`[D-082] 提交阶段标题禁止词改写：rewrote=${r.rewroteCount} stillViolating=${r.stillViolating.length}`);
+      }
+      if (Array.isArray(descriptions) && descriptions.length > 0) {
+        const r = await autoRewriteForbiddenTerms(descriptions as string[], _allForbidden, { fieldLabel: "ad description", maxChars: 90, caseStyle: "sentence", callAi: _callAi });
+        descriptions.splice(0, descriptions.length, ...r.items);
+        if (r.rewroteCount > 0 || r.stillViolating.length > 0) console.warn(`[D-082] 提交阶段描述禁止词改写：rewrote=${r.rewroteCount} stillViolating=${r.stillViolating.length}`);
+      }
+      if (Array.isArray(callouts) && callouts.length > 0) {
+        const r = await autoRewriteForbiddenTerms(callouts as string[], _allForbidden, { fieldLabel: "callout", maxChars: 25, caseStyle: "title", callAi: _callAi });
+        callouts.splice(0, callouts.length, ...r.items);
+        if (r.rewroteCount > 0 || r.stillViolating.length > 0) console.warn(`[D-082] 提交阶段标注禁止词改写：rewrote=${r.rewroteCount} stillViolating=${r.stillViolating.length}`);
+      }
+    }
+  } catch (e) {
+    console.warn("[D-082] 提交阶段禁止词自动改写异常（不阻断，转下方硬挡）：", e instanceof Error ? e.message : e);
   }
 
   const aiRuleViolations = collectAiRuleViolations({
