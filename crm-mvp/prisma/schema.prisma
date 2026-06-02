@@ -579,6 +579,38 @@ model affiliate_transactions {
 }
 
 // -----------------------------------------------------------
+// D-072. 联盟平台「实付/打款」记录表
+// 各平台支付 API 拉取的已支付记录（平台/账户级）。
+// 结算页「已支付总额 + 结算率 + 打款记录」数据来源。
+// RW/LH 等提现级平台无法拆到商家/交易月，仅平台级统计。
+// -----------------------------------------------------------
+model affiliate_payments {
+  id                     BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id                BigInt    @db.UnsignedBigInt
+  platform               String    @db.VarChar(8)
+  platform_connection_id BigInt?   @db.UnsignedBigInt
+  payment_no             String    @db.VarChar(128) // withdrawal_id / payment_id
+  source_kind            String    @default("payment_summary") @db.VarChar(20) // payment_summary | withdrawal | merchant_commission
+  paid_date              DateTime? @db.DateTime(0) // 实际打款日
+  request_date           DateTime? @db.DateTime(0) // 打款单创建日
+  amount                 Decimal   @default(0.00) @db.Decimal(14, 2) // 实付佣金
+  gross_amount           Decimal?  @db.Decimal(14, 2) // 提现总额（含手续费）
+  currency               String    @default("USD") @db.VarChar(8)
+  status                 String    @default("paid") @db.VarChar(24) // paid | processing | rejected
+  raw_status             String?   @db.VarChar(64)
+  payment_type           String?   @db.VarChar(64)
+  raw_json               String?   @db.Text
+  is_deleted             Int       @default(0) @db.TinyInt
+  created_at             DateTime  @default(now()) @db.DateTime(0)
+  updated_at             DateTime  @default(now()) @updatedAt @db.DateTime(0)
+
+  @@unique([platform, platform_connection_id, payment_no], map: "uk_platform_conn_payment")
+  @@index([user_id, status], map: "idx_pay_user_status")
+  @@index([user_id, paid_date], map: "idx_pay_user_paid_date")
+  @@index([platform_connection_id], map: "idx_pay_platform_conn")
+}
+
+// -----------------------------------------------------------
 // 18. 消息通知表
 // -----------------------------------------------------------
 model notifications {

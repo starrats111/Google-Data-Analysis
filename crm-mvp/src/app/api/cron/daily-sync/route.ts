@@ -67,6 +67,9 @@ async function doDailySync() {
     log("Step 3: Syncing transaction data for all users...");
     await syncAllUsersTransactions();
 
+    log("Step 3.5: Syncing payment/withdrawal data for all users...");
+    await syncAllUsersPayments();
+
     log("Step 4: Auto-repairing published articles...");
     await autoRepairPublishedArticles({ limit: 50 });
 
@@ -1052,6 +1055,88 @@ async function syncAllUsersTransactions(): Promise<unknown> {
       const msg = e instanceof Error ? e.message : String(e);
       log(`    ${user.username} sync FAILED: ${msg}`);
       results[user.username] = { error: msg };
+    }
+  }
+  return results;
+}
+
+// ── D-072 同步所有用户的支付/打款数据 ──
+
+async function syncAllUsersPayments(): Promise<unknown> {
+  const { fetchPlatformPayments, platformSupportsPayments } = await import("@/lib/payment-api");
+  const cstNow = nowCST();
+  // 每日滚动窗口：拉近 120 天的打款记录刷新（历史首次回填用手动「同步支付」按钮）
+  const startStr = cstNow.subtract(120, "day").format("YYYY-MM-DD");
+  const endStr = cstNow.format("YYYY-MM-DD");
+
+  const users = await prisma.users.findMany({
+    where: { is_deleted: 0, status: "active", role: { in: ["user", "leader"] } },
+    select: { id: true, username: true },
+  });
+
+  const results: Record<string, unknown> = {};
+
+  for (const user of users) {
+    try {
+      const conns = await prisma.platform_connections.findMany({
+        where: { user_id: user.id, is_deleted: 0, status: "connected" },
+        select: { id: true, platform: true, account_name: true, api_key: true },
+      });
+      const validConns = conns.filter(
+        (c) => c.api_key && c.api_key.length > 5 && platformSupportsPayments(normalizePlatformCode(c.platform)),
+      );
+      if (validConns.length === 0) continue;
+
+      let synced = 0;
+      let paidAmount = 0;
+      for (const conn of validConns) {
+        const platform = normalizePlatformCode(conn.platform);
+        try {
+          const { payments, error } = await fetchPlatformPayments(platform, conn.api_key!, startStr, endStr);
+          if (error) {
+            log(`    [pay] ${user.username} ${platform} ERROR: ${error}`);
+            continue;
+          }
+          for (const p of payments) {
+            if (p.status === "paid") paidAmount += p.amount;
+            await prisma.affiliate_payments.upsert({
+              where: {
+                platform_platform_connection_id_payment_no: {
+                  platform,
+                  platform_connection_id: conn.id,
+                  payment_no: p.payment_no,
+                },
+              },
+              create: {
+                user_id: user.id, platform, platform_connection_id: conn.id, payment_no: p.payment_no,
+                source_kind: p.source_kind,
+                paid_date: p.paid_date ? new Date(p.paid_date) : null,
+                request_date: p.request_date ? new Date(p.request_date) : null,
+                amount: p.amount, gross_amount: p.gross_amount ?? null, currency: p.currency,
+                status: p.status, raw_status: p.raw_status || null, payment_type: p.payment_type ?? null,
+                raw_json: p.raw_json || null,
+              },
+              update: {
+                source_kind: p.source_kind,
+                paid_date: p.paid_date ? new Date(p.paid_date) : null,
+                request_date: p.request_date ? new Date(p.request_date) : null,
+                amount: p.amount, gross_amount: p.gross_amount ?? null,
+                status: p.status, raw_status: p.raw_status || null, payment_type: p.payment_type ?? null,
+                raw_json: p.raw_json || null, is_deleted: 0,
+              },
+            });
+            synced++;
+          }
+        } catch (e) {
+          log(`    [pay] ${user.username} ${platform} error: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+      if (synced > 0) {
+        results[user.username] = { payments_synced: synced, paid_amount: +paidAmount.toFixed(2) };
+        log(`    [pay] ${user.username}: ${synced} payment records, $${paidAmount.toFixed(2)} paid`);
+      }
+    } catch (e) {
+      results[user.username] = { error: e instanceof Error ? e.message : String(e) };
     }
   }
   return results;

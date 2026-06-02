@@ -52,8 +52,9 @@ interface Props {
   memberId?: string;
 }
 
-// 三段进度条配色（与佣金详情、结算中心其他模块保持一致）
-const SEG_GREEN = COLORS.successGreen;   // 已确认（approved + paid）
+// 四段进度条配色（与佣金详情、结算中心其他模块保持一致）
+const SEG_GREEN = COLORS.successGreen;   // 已确认（approved，已审核未支付）
+const SEG_BLUE = "#1890ff";              // 已支付（paid，与结算页表格/统计卡同色）
 const SEG_RED = COLORS.errorRed;         // 拒付（rejected）
 const SEG_YELLOW = COLORS.warningOrange; // 待确认（pending）
 const TRACK_BG = "#F0F2F5";              // 进度槽底色
@@ -65,8 +66,9 @@ const TRACK_BG = "#F0F2F5";              // 进度槽底色
  *   - 整体白蓝色调，与系统主题一致；不再使用橙底/绿底卡片。
  *   - 已结算月份：白底 + 浅绿描边 + 右上"已结算"绿色 Tag。
  *   - 未结算月份：白底 + 浅蓝描边 + 右上"未结算"蓝色 Tag。
- *   - 进度条三段式色块（一条内三色）：
- *       绿 = 已确认 (approved + paid)
+ *   - 进度条四段式色块（一条内四色）：
+ *       绿 = 已确认 (approved，已审核未支付)
+ *       蓝 = 已支付 (paid)
  *       红 = 拒付  (rejected)
  *       黄 = 待确认 (pending)
  *   - Hover 升起一档阴影 + 描边加深，回应交互。
@@ -131,10 +133,10 @@ export default function MonthlySettleProgressCard({ memberId }: Props) {
 
   const s = data.summary;
 
-  // 全月份汇总三段比例（折叠时的概览条）
+  // 全月份汇总四段比例（折叠时的概览条）：绿=已确认 / 蓝=已支付 / 红=拒付 / 黄=待确认
   const sumTotal = s.total_amount > 0 ? s.total_amount : 1;
-  const sumApprovedConfirmed = s.approved_amount + s.paid_amount;
-  const sumGreenPct = (sumApprovedConfirmed / sumTotal) * 100;
+  const sumGreenPct = (s.approved_amount / sumTotal) * 100;
+  const sumBluePct = (s.paid_amount / sumTotal) * 100;
   const sumRedPct = (s.rejected_amount / sumTotal) * 100;
   const sumYellowPct = (s.pending_amount / sumTotal) * 100;
 
@@ -184,6 +186,9 @@ export default function MonthlySettleProgressCard({ memberId }: Props) {
             {sumGreenPct > 0 && (
               <div style={{ width: `${sumGreenPct}%`, background: SEG_GREEN, transition: "width 0.3s ease" }} />
             )}
+            {sumBluePct > 0 && (
+              <div style={{ width: `${sumBluePct}%`, background: SEG_BLUE, transition: "width 0.3s ease" }} />
+            )}
             {sumRedPct > 0 && (
               <div style={{ width: `${sumRedPct}%`, background: SEG_RED, transition: "width 0.3s ease" }} />
             )}
@@ -192,9 +197,14 @@ export default function MonthlySettleProgressCard({ memberId }: Props) {
             )}
           </div>
           <Space size={16} wrap style={{ fontSize: 12 }}>
-            {sumApprovedConfirmed > 0 && (
+            {s.approved_amount > 0 && (
               <span style={{ color: SEG_GREEN }}>
-                已确认 ${sumApprovedConfirmed.toLocaleString()}
+                已确认 ${s.approved_amount.toLocaleString()}
+              </span>
+            )}
+            {s.paid_amount > 0 && (
+              <span style={{ color: SEG_BLUE }}>
+                已支付 ${s.paid_amount.toLocaleString()}
               </span>
             )}
             {s.rejected_amount > 0 && (
@@ -218,10 +228,10 @@ export default function MonthlySettleProgressCard({ memberId }: Props) {
           const settled = m.is_settled;
           const isHover = hoverMonth === m.month;
 
-          // 三段比例（金额 → 百分比）
+          // 四段比例（金额 → 百分比）：绿=已确认 / 蓝=已支付 / 红=拒付 / 黄=待确认
           const total = m.total_amount > 0 ? m.total_amount : 1;
-          const approvedConfirmed = m.approved_amount + m.paid_amount;
-          const greenPct = (approvedConfirmed / total) * 100;
+          const greenPct = (m.approved_amount / total) * 100;
+          const bluePct = (m.paid_amount / total) * 100;
           const redPct = (m.rejected_amount / total) * 100;
           const yellowPct = (m.pending_amount / total) * 100;
 
@@ -241,13 +251,13 @@ export default function MonthlySettleProgressCard({ memberId }: Props) {
                   <div style={{ fontSize: 12, lineHeight: "20px" }}>
                     <div>总：${m.total_amount.toFixed(2)}（{m.total_count} 单）</div>
                     <div style={{ color: SEG_GREEN }}>
-                      已确认：${approvedConfirmed.toFixed(2)}（{m.approved_count + m.paid_count}）
-                      {m.paid_count > 0 && (
-                        <span style={{ color: "#bfbfbf", marginLeft: 4 }}>
-                          含支付 {m.paid_count}
-                        </span>
-                      )}
+                      已确认：${m.approved_amount.toFixed(2)}（{m.approved_count}）
                     </div>
+                    {(m.paid_amount > 0 || m.paid_count > 0) && (
+                      <div style={{ color: SEG_BLUE }}>
+                        已支付：${m.paid_amount.toFixed(2)}（{m.paid_count}）
+                      </div>
+                    )}
                     <div style={{ color: SEG_RED }}>
                       拒付：${m.rejected_amount.toFixed(2)}（{m.rejected_count}）
                     </div>
@@ -336,6 +346,15 @@ export default function MonthlySettleProgressCard({ memberId }: Props) {
                         }}
                       />
                     )}
+                    {bluePct > 0 && (
+                      <div
+                        style={{
+                          width: `${bluePct}%`,
+                          background: SEG_BLUE,
+                          transition: "width 0.3s ease",
+                        }}
+                      />
+                    )}
                     {redPct > 0 && (
                       <div
                         style={{
@@ -366,9 +385,14 @@ export default function MonthlySettleProgressCard({ memberId }: Props) {
                       lineHeight: "16px",
                     }}
                   >
-                    {approvedConfirmed > 0 && (
+                    {m.approved_amount > 0 && (
                       <span style={{ color: SEG_GREEN }}>
-                        已确 ${approvedConfirmed.toFixed(2)}
+                        已确 ${m.approved_amount.toFixed(2)}
+                      </span>
+                    )}
+                    {m.paid_amount > 0 && (
+                      <span style={{ color: SEG_BLUE }}>
+                        已付 ${m.paid_amount.toFixed(2)}
                       </span>
                     )}
                     {m.rejected_amount > 0 && (

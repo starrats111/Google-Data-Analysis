@@ -157,6 +157,11 @@ export type google_mcc_accounts = Prisma.google_mcc_accountsModel
  */
 export type affiliate_transactions = Prisma.affiliate_transactionsModel
 /**
+ * Model affiliate_payments
+ * 
+ */
+export type affiliate_payments = Prisma.affiliate_paymentsModel
+/**
  * Model notifications
  * 
  */

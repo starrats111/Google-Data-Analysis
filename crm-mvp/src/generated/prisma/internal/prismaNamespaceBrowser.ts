@@ -74,6 +74,7 @@ export const ModelName = {
   ads_daily_stats: 'ads_daily_stats',
   google_mcc_accounts: 'google_mcc_accounts',
   affiliate_transactions: 'affiliate_transactions',
+  affiliate_payments: 'affiliate_payments',
   notifications: 'notifications',
   notification_preferences: 'notification_preferences',
   ai_insights: 'ai_insights',
@@ -602,6 +603,30 @@ export const Affiliate_transactionsScalarFieldEnum = {
 } as const
 
 export type Affiliate_transactionsScalarFieldEnum = (typeof Affiliate_transactionsScalarFieldEnum)[keyof typeof Affiliate_transactionsScalarFieldEnum]
+
+
+export const Affiliate_paymentsScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  platform: 'platform',
+  platform_connection_id: 'platform_connection_id',
+  payment_no: 'payment_no',
+  source_kind: 'source_kind',
+  paid_date: 'paid_date',
+  request_date: 'request_date',
+  amount: 'amount',
+  gross_amount: 'gross_amount',
+  currency: 'currency',
+  status: 'status',
+  raw_status: 'raw_status',
+  payment_type: 'payment_type',
+  raw_json: 'raw_json',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Affiliate_paymentsScalarFieldEnum = (typeof Affiliate_paymentsScalarFieldEnum)[keyof typeof Affiliate_paymentsScalarFieldEnum]
 
 
 export const NotificationsScalarFieldEnum = {
@@ -1367,6 +1392,20 @@ export const affiliate_transactionsOrderByRelevanceFieldEnum = {
 } as const
 
 export type affiliate_transactionsOrderByRelevanceFieldEnum = (typeof affiliate_transactionsOrderByRelevanceFieldEnum)[keyof typeof affiliate_transactionsOrderByRelevanceFieldEnum]
+
+
+export const affiliate_paymentsOrderByRelevanceFieldEnum = {
+  platform: 'platform',
+  payment_no: 'payment_no',
+  source_kind: 'source_kind',
+  currency: 'currency',
+  status: 'status',
+  raw_status: 'raw_status',
+  payment_type: 'payment_type',
+  raw_json: 'raw_json'
+} as const
+
+export type affiliate_paymentsOrderByRelevanceFieldEnum = (typeof affiliate_paymentsOrderByRelevanceFieldEnum)[keyof typeof affiliate_paymentsOrderByRelevanceFieldEnum]
 
 
 export const notificationsOrderByRelevanceFieldEnum = {

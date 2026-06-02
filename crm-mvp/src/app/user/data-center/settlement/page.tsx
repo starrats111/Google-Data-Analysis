@@ -7,7 +7,7 @@ import {
 } from "antd";
 import {
   SearchOutlined, AccountBookOutlined,
-  DollarOutlined, SyncOutlined,
+  DollarOutlined, SyncOutlined, BankOutlined,
 } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import { COLORS } from "@/styles/themeConfig";
@@ -82,6 +82,25 @@ interface SettlementData {
   isLeader?: boolean;
 }
 
+interface PaymentRow {
+  id: string;
+  platform: string;
+  payment_no: string;
+  source_kind: string;
+  paid_date: string | null;
+  amount: number;
+  gross_amount: number | null;
+  currency: string;
+  payment_type: string | null;
+  raw_status: string | null;
+}
+
+interface PaymentsData {
+  payments: PaymentRow[];
+  byPlatform: { platform: string; count: number; amount: number }[];
+  total_paid: number;
+}
+
 const RANGE_OPTIONS = [
   { label: "本月", value: "1m" },
   { label: "近3个月", value: "3m" },
@@ -101,22 +120,37 @@ export default function SettlementPage() {
   const [data, setData] = useState<SettlementData | null>(null);
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<string>("merchant");
+  const [payData, setPayData] = useState<PaymentsData | null>(null);
+  const [paySyncing, setPaySyncing] = useState(false);
+
+  // 构建与结算查询一致的筛选参数（打款记录不支持 mid 维度）
+  const buildParams = useCallback((withMid: boolean) => {
+    const params = new URLSearchParams();
+    if (dateRange) {
+      params.set("date_start", dateRange[0].format("YYYY-MM-DD"));
+      params.set("date_end", dateRange[1].format("YYYY-MM-DD"));
+    } else {
+      params.set("range", range);
+    }
+    if (platform) params.set("platform", platform);
+    if (withMid && mid.trim()) params.set("mid", mid.trim());
+    if (memberId) params.set("member_id", memberId);
+    return params;
+  }, [range, dateRange, platform, mid, memberId]);
+
+  const loadPayments = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/user/data-center/payments?${buildParams(false)}`).then((r) => r.json());
+      if (res.code === 0) setPayData(res.data);
+    } catch {
+      // 静默
+    }
+  }, [buildParams]);
 
   const doSearch = useCallback(async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams();
-      if (dateRange) {
-        params.set("date_start", dateRange[0].format("YYYY-MM-DD"));
-        params.set("date_end", dateRange[1].format("YYYY-MM-DD"));
-      } else {
-        params.set("range", range);
-      }
-      if (platform) params.set("platform", platform);
-      if (mid.trim()) params.set("mid", mid.trim());
-      if (memberId) params.set("member_id", memberId);
-
-      const res = await fetch(`/api/user/data-center/settlement?${params}`).then((r) => r.json());
+      const res = await fetch(`/api/user/data-center/settlement?${buildParams(true)}`).then((r) => r.json());
       if (res.code === 0) {
         setData(res.data);
         if (res.data.summary.total_orders === 0) message.info("该条件下暂无交易数据");
@@ -127,7 +161,29 @@ export default function SettlementPage() {
     } finally {
       setLoading(false);
     }
-  }, [range, dateRange, platform, mid, memberId, message]);
+    loadPayments();
+  }, [buildParams, loadPayments, message]);
+
+  const syncPayments = useCallback(async () => {
+    setPaySyncing(true);
+    try {
+      const res = await fetch("/api/user/data-center/sync-payments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        message.success(`已支付同步完成：实付 $${Number(res.data.paid_amount || 0).toFixed(2)}`);
+        doSearch();
+      } else {
+        message.error(res.message || "支付同步失败");
+      }
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : "支付同步失败");
+    } finally {
+      setPaySyncing(false);
+    }
+  }, [doSearch, message]);
 
   useEffect(() => { doSearch(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -288,6 +344,33 @@ export default function SettlementPage() {
     },
   ];
 
+  const SOURCE_KIND_LABEL: Record<string, string> = {
+    payment_summary: "打款单",
+    withdrawal: "提现",
+    merchant_commission: "商家佣金",
+  };
+
+  const paymentColumns: ColumnsType<PaymentRow> = [
+    {
+      title: "平台", dataIndex: "platform", width: 70, align: "center",
+      render: (v: string) => <Tag color="blue">{v}</Tag>,
+      filters: [...new Set(payData?.payments.map((p) => p.platform) || [])].map((p) => ({ text: p, value: p })),
+      onFilter: (v, r) => r.platform === v,
+    },
+    { title: "打款日", dataIndex: "paid_date", width: 110, sorter: (a, b) => (a.paid_date || "").localeCompare(b.paid_date || ""), defaultSortOrder: "descend" },
+    {
+      title: "实付佣金($)", dataIndex: "amount", width: 120, align: "right",
+      sorter: (a, b) => a.amount - b.amount,
+      render: (v: number) => <span style={{ color: "#1890ff", fontWeight: 600 }}>${v.toFixed(2)}</span>,
+    },
+    {
+      title: "类型", dataIndex: "source_kind", width: 90, align: "center",
+      render: (v: string) => <Tag>{SOURCE_KIND_LABEL[v] || v}</Tag>,
+    },
+    { title: "打款方式", dataIndex: "payment_type", width: 110, ellipsis: true, render: (v: string | null) => v || "—" },
+    { title: "单号", dataIndex: "payment_no", width: 140, ellipsis: true, render: (v: string) => <Text type="secondary" style={{ fontSize: 12 }}>{v}</Text> },
+  ];
+
   const s = data?.summary;
   const isLeader = data?.isLeader;
 
@@ -338,6 +421,9 @@ export default function SettlementPage() {
               )}
               <Button type="primary" size="small" icon={<SyncOutlined spin={loading} />} loading={loading} onClick={doSearch}>
                 查询
+              </Button>
+              <Button size="small" icon={<BankOutlined />} loading={paySyncing} onClick={syncPayments}>
+                同步已支付
               </Button>
             </Space>
           </Col>
@@ -412,6 +498,41 @@ export default function SettlementPage() {
 
           {/* 月份结算进度（每月一张卡，跨整个项目周期不限于筛选时间） */}
           <MonthlySettleProgressCard memberId={memberId || undefined} />
+
+          {/* D-072 打款记录（平台实付，按 paid_date） */}
+          {payData && payData.payments.length > 0 && (
+            <Card
+              size="small"
+              style={{ marginBottom: 12 }}
+              title={
+                <Space size={10} wrap>
+                  <BankOutlined style={{ color: "#1890ff" }} />
+                  <Text strong>打款记录</Text>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    实付合计 <Text strong style={{ color: "#1890ff" }}>${payData.total_paid.toLocaleString()}</Text>
+                    （{payData.payments.length} 笔）
+                  </Text>
+                  {payData.byPlatform.map((p) => (
+                    <Tag key={p.platform} color="blue" style={{ marginRight: 0 }}>
+                      {p.platform} ${p.amount.toLocaleString()}
+                    </Tag>
+                  ))}
+                </Space>
+              }
+            >
+              <Table<PaymentRow>
+                columns={paymentColumns}
+                dataSource={payData.payments}
+                rowKey="id"
+                size="small"
+                scroll={{ x: 680 }}
+                pagination={{ defaultPageSize: 20, showTotal: (t) => `共 ${t} 笔打款`, showSizeChanger: true }}
+              />
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                注：RW/LH 等为提现级实付（账户级，按打款日），无法拆分到具体商家/交易月；上方「已支付 / 结算率」即以此实付总额为准。
+              </Text>
+            </Card>
+          )}
 
           {/* 明细切换 */}
           <Card

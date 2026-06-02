@@ -1001,6 +1001,17 @@ function parseTransactions(platform: string, data: Record<string, unknown>): Pla
 
     const rawStatus = String(item.status || item.raw_status || "pending");
 
+    // D-072：v3 系交易接口（CG/PM/BSH/CF/MUI/EV）每行带 paid_date / paid_status，
+    // 平台实际打款后该字段才有值。识别为已支付 → status 置 'paid'（覆盖 approved），
+    // 点亮结算页「已支付」按商家/按月维度。rejected 不会被打款，故排除。
+    const paidDateRaw = item.paid_date ?? item.paidDate;
+    const paidStatusRaw = item.paid_status ?? item.paidStatus;
+    const isPaid =
+      (paidDateRaw != null && !["", "0", "null"].includes(String(paidDateRaw).trim())) ||
+      String(paidStatusRaw ?? "") === "1";
+    const baseStatus = normalizeTxnStatus(rawStatus);
+    const finalStatus = isPaid && baseStatus !== "rejected" ? "paid" : baseStatus;
+
     // C-082: transaction_time 严格使用 order_time（订单下单时间，唯一不变）。
     // 历史 commit 1788f95f 曾把 last_update_time 写入 transaction_time，
     // 导致：① 同 last_update 日的不同订单被错误聚合；② 订单状态变更后
@@ -1040,7 +1051,7 @@ function parseTransactions(platform: string, data: Record<string, unknown>): Pla
       merchant_id: mid,
       order_amount: orderAmount,
       commission_amount: commissionAmount,
-      status: normalizeTxnStatus(rawStatus),
+      status: finalStatus,
       raw_status: rawStatus,
       merchant_url: merchantUrl || undefined,
     };
