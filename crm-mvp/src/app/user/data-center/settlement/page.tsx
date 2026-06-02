@@ -400,6 +400,17 @@ export default function SettlementPage() {
     return [...m.values()].map((x) => ({ ...x, amount: +x.amount.toFixed(2) })).sort((a, b) => b.month.localeCompare(a.month));
   }, [payData]);
 
+  // 收款人汇总：打款方式含「农业银行」→ 龚建成；其余 → 张文俊
+  const payByPerson = useMemo(() => {
+    let gong = 0, gongCnt = 0, zhang = 0, zhangCnt = 0;
+    for (const p of payData?.payments || []) {
+      const isGong = (p.payment_type || "").includes("农业银行");
+      if (isGong) { gong += p.amount; gongCnt++; }
+      else { zhang += p.amount; zhangCnt++; }
+    }
+    return { gong: +gong.toFixed(2), gongCnt, zhang: +zhang.toFixed(2), zhangCnt };
+  }, [payData]);
+
   const payByMember = useMemo(() => {
     const m = new Map<string, { member: string; count: number; amount: number }>();
     for (const p of payData?.payments || []) {
@@ -437,6 +448,34 @@ export default function SettlementPage() {
       render: (v: number) => <span style={{ color: "#1890ff", fontWeight: 600 }}>${v.toFixed(2)}</span>,
     },
   ];
+
+  // 收款人卡片（按打款银行归属：农业银行→龚建成，其余→张文俊）
+  const personCard = payData && payData.payments.length > 0 ? (
+    <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
+      <Col xs={24} sm={12}>
+        <Card size="small" styles={{ body: { padding: "10px 16px" } }}>
+          <Statistic
+            title={<Text>张文俊 <Text type="secondary" style={{ fontSize: 12 }}>（非农业银行 · {payByPerson.zhangCnt} 笔）</Text></Text>}
+            value={payByPerson.zhang}
+            prefix="$"
+            precision={2}
+            styles={{ content: { fontSize: 22, color: "#1890ff" } }}
+          />
+        </Card>
+      </Col>
+      <Col xs={24} sm={12}>
+        <Card size="small" styles={{ body: { padding: "10px 16px" } }}>
+          <Statistic
+            title={<Text>龚建成 <Text type="secondary" style={{ fontSize: 12 }}>（农业银行 · {payByPerson.gongCnt} 笔）</Text></Text>}
+            value={payByPerson.gong}
+            prefix="$"
+            precision={2}
+            styles={{ content: { fontSize: 22, color: COLORS.successGreen } }}
+          />
+        </Card>
+      </Col>
+    </Row>
+  ) : null;
 
   // 打款记录卡片（含 明细/按月份/按平台/按员工 子切换）
   const paymentCard = payData && payData.payments.length > 0 ? (
@@ -571,7 +610,12 @@ export default function SettlementPage() {
       </div>
 
       {/* 汇总卡片 */}
-      {topView === "payment" ? paymentCard : s && s.total_orders > 0 ? (
+      {topView === "payment" ? (
+        <>
+          {personCard}
+          {paymentCard}
+        </>
+      ) : s && s.total_orders > 0 ? (
         <>
           <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
             <Col xs={12} sm={8} md={4}>
