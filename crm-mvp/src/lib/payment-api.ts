@@ -54,13 +54,14 @@ function parseAmount(v: unknown): number {
   return isNaN(n) ? 0 : n;
 }
 
-/** 把平台返回的支付状态归一化为 paid | processing | rejected */
+/** 把平台返回的支付状态归一化为 paid | processing | rejected（含中文，LH 实测 paid_status="成功提现"） */
 function normalizePaymentStatus(raw: string | null | undefined): string {
   const s = String(raw ?? "").toLowerCase().trim();
   if (!s) return "paid"; // payment_summary 早期版本无 status 字段，默认视为已付
-  if (/(paid|success|withdrawn|settled|complete|done)/.test(s)) return "paid";
-  if (/(processing|pending|review|wait|progress|created|requested)/.test(s)) return "processing";
-  if (/(reject|fail|declin|cancel|void|invalid|refus)/.test(s)) return "rejected";
+  // 先判失败/处理中，避免「提现失败」被 success 误判
+  if (/(失败|拒绝|驳回|取消|无效|reject|fail|declin|cancel|void|invalid|refus)/.test(s)) return "rejected";
+  if (/(处理中|审核|待|进行中|processing|pending|review|wait|progress|created|requested)/.test(s)) return "processing";
+  if (/(成功|已支付|已打款|已提现|提现成功|paid|success|withdrawn|settled|complete|done)/.test(s)) return "paid";
   return "paid";
 }
 
@@ -276,7 +277,8 @@ async function fetchLinkhaitaoPayments(
   const apiErr = checkApiCode(data);
   if (apiErr) throw new Error(apiErr);
 
-  const list = (data.data || []) as Record<string, unknown>[];
+  // 实测：LH 实际返回 {code:0, msg, list:[...]}（文档示例 status/data 已过时），双兼容
+  const list = ((data.list ?? data.data) || []) as Record<string, unknown>[];
   if (!Array.isArray(list)) return [];
   const out: PlatformPayment[] = [];
   for (const it of list) {
