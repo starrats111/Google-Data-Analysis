@@ -18,6 +18,9 @@ export async function POST(req: NextRequest) {
   if (!user) return apiError("未授权", 401);
 
   const userId = BigInt(user.userId);
+  // D-079：组长点击「同步已支付」时，同步整个团队成员的支付连接（与团队报表/结算口径一致）；
+  // 普通成员仅同步自己。每条打款按「连接所属成员」归属，不挂到组长名下。
+  const isLeader = user.role === "leader" && !!user.teamId;
   const body = await req.json().catch(() => ({}));
 
   const now = nowCST();
@@ -26,10 +29,21 @@ export async function POST(req: NextRequest) {
   const endStr = now.format("YYYY-MM-DD");
 
   try {
-    const connections = await prisma.platform_connections.findMany({
-      where: { user_id: userId, is_deleted: 0, status: "connected" },
-      select: { id: true, platform: true, account_name: true, api_key: true, channel_id: true },
-    });
+    let ownerIds: bigint[] = [userId];
+    if (isLeader) {
+      const members = await prisma.users.findMany({
+        where: { team_id: BigInt(user.teamId!), is_deleted: 0, role: { not: "admin" } },
+        select: { id: true },
+      });
+      ownerIds = members.map((m) => m.id);
+    }
+
+    const connections = ownerIds.length === 0
+      ? []
+      : await prisma.platform_connections.findMany({
+          where: { user_id: { in: ownerIds }, is_deleted: 0, status: "connected" },
+          select: { id: true, user_id: true, platform: true, account_name: true, api_key: true, channel_id: true },
+        });
 
     const { fetchPlatformPayments, platformSupportsPayments } = await import("@/lib/payment-api");
 
@@ -38,7 +52,12 @@ export async function POST(req: NextRequest) {
       .sort((a, b) => Number(b.id) - Number(a.id));
 
     if (validConns.length === 0) {
-      return apiError("没有支持「支付 API」的已连接平台，请先在「个人设置 → 联盟平台连接」中配置", 400);
+      return apiError(
+        isLeader
+          ? "团队成员均未配置支持「支付 API」的已连接平台"
+          : "没有支持「支付 API」的已连接平台，请先在「个人设置 → 联盟平台连接」中配置",
+        400,
+      );
     }
 
     // 串行拉取（支付接口数据量小，避免并发压垮平台）
@@ -87,7 +106,7 @@ export async function POST(req: NextRequest) {
                 },
               },
               create: {
-                user_id: userId,
+                user_id: conn.user_id,
                 platform,
                 platform_connection_id: conn.id,
                 payment_no: p.payment_no,
