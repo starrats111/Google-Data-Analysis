@@ -19,12 +19,22 @@ import { prisma } from "@/lib/prisma";
 const CACHE_TTL_HOURS = 24;
 const OUTER_RETRY_DELAY_MS = 5000;
 
-/** country → SemRush database 码（与 semrush-client.ts countryToDatabase 内部逻辑保持一致） */
+/** country → SemRush database 码（与 semrush-client.ts D-083 COUNTRY_EXCEPTIONS 保持一致） */
 function countryToDb(country?: string): string {
   if (!country) return "us";
+  const EXCEPTIONS: Record<string, string> = {
+    GB: "uk", UK: "uk", IE: "uk",
+    AT: "de", CH: "de", "BE-FR": "be",
+    NZ: "au",
+    HK: "sg", TW: "sg", MY: "sg", ID: "sg",
+    TH: "us", VN: "us",
+    AE: "sa",
+  };
   const upper = country.toUpperCase();
-  if (upper === "GB" || upper === "UK") return "uk";
-  return upper.toLowerCase();
+  if (EXCEPTIONS[upper]) return EXCEPTIONS[upper];
+  const lower = upper.toLowerCase();
+  const KNOWN = new Set(["us","uk","ca","au","de","fr","es","it","pt","br","nl","jp","be","se","no","dk","fi","pl","ru","in","sg","mx","ar","cl","co","tr","il","sa","kr","gr","ro","cz","hu","bg"]);
+  return KNOWN.has(lower) ? lower : "us";
 }
 
 /** 根据错误信息归类，决定前端 UI 表现 + 是否走缓存兜底 */

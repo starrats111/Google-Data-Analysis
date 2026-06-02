@@ -681,6 +681,34 @@ export async function POST(req: NextRequest) {
 
         const tasks: Promise<void>[] = [];
 
+        // ─── D-083b：SemRush 守门前兜底 ────────────────────────────────────────────
+        // buildCrawlCache 调用处始终传 semrushData=undefined，故 cache.semrushTitles 永远 []。
+        // 当爬虫失败（pageText 极短）时，L2 守门因 semrushTitles=0 误拦了编排器（编排器
+        // 自己会查 SemRush，但守门比它先跑）。
+        // 修法：守门前若 pageText<200 且 semrushTitles=0，先补一次 SemRush 查询；
+        //       有数据则写回内存 cache + 持久化，守门得到真实计数再做判断。
+        if ((cache!.pageText ?? "").length < 200 &&
+            (Array.isArray(cache!.semrushTitles) ? cache!.semrushTitles.length : 0) === 0) {
+          try {
+            const { SemRushClient } = await import("@/lib/semrush-client");
+            const _srClient = await SemRushClient.fromConfig(country);
+            const _srResult = await _srClient.queryDomain(merchantUrl);
+            if (_srResult.dedupedTitles.length > 0 || _srResult.keywords.length > 0) {
+              (cache as any).semrushTitles = _srResult.dedupedTitles;
+              (cache as any).semrushDescriptions = _srResult.dedupedDescriptions;
+              console.log(`[D-083b] SemRush 兜底补足 semrushTitles=${_srResult.dedupedTitles.length} keywords=${_srResult.keywords.length}（爬虫失败时 L2 守门兜底）`);
+              if (adCreativeId) {
+                await prisma.ad_creatives.update({
+                  where: { id: adCreativeId },
+                  data: { crawl_cache: cache as any },
+                }).catch((e: unknown) => console.warn("[D-083b] semrushTitles 回写 cache 失败:", e instanceof Error ? e.message : e));
+              }
+            }
+          } catch (e: unknown) {
+            console.warn("[D-083b] SemRush 兜底查询失败（不阻断，L2 守门按原逻辑判断）:", e instanceof Error ? e.message : e);
+          }
+        }
+
         // ─── L2: 上下文不足守门 ───
         // 当爬虫拿到的 pageText 极短（< 200 字符，L3 meta 兜底后仍空）+ SemRush 标题为 0
         // + 没爬到任何商品时，AI 输入只剩商家名，会从字面瞎猜业务（如 Camplify→Spa）。
