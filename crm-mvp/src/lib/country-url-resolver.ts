@@ -304,36 +304,46 @@ async function probeTcp(host: string): Promise<{ ok: boolean; rttMs: number; rea
  * 任何 fetch 失败/超时 → 返回 false（无法确认 → 不阻断切换，保留原有行为）。
  */
 async function probeParkedPage(host: string): Promise<{ parked: boolean; signal?: string }> {
-  try {
-    const resp = await fetch(`https://${host}/`, {
-      redirect: "follow",
-      signal: AbortSignal.timeout(PARKED_PROBE_TIMEOUT_MS),
-      headers: { "User-Agent": BROWSER_UA_RESOLVER, Accept: "text/html,application/xhtml+xml" },
-    });
+  // 先 https，失败（含证书过期/连接错误）回退 http —— 停放域名常证书过期且只在 http 才暴露
+  // 到停放商的 302（实测 heidi.uk：https=CERT_HAS_EXPIRED，http→302 https://surname.uk/...）。
+  const schemes = [`https://${host}/`, `http://${host}/`];
+  let lastResp: Response | null = null;
+  for (const url of schemes) {
+    try {
+      const resp = await fetch(url, {
+        redirect: "follow",
+        signal: AbortSignal.timeout(PARKED_PROBE_TIMEOUT_MS),
+        headers: { "User-Agent": BROWSER_UA_RESOLVER, Accept: "text/html,application/xhtml+xml" },
+      });
+      lastResp = resp;
 
-    // 1. 重定向落点命中停放服务商
-    const finalHost = (() => {
-      try { return new URL(resp.url).hostname.toLowerCase(); } catch { return ""; }
-    })();
-    const providerHit = PARKING_PROVIDER_HOSTS.find(
-      (p) => finalHost.includes(p) || resp.url.toLowerCase().includes(p),
-    );
-    if (providerHit) return { parked: true, signal: `provider:${providerHit}` };
+      // 1. 重定向落点命中停放/交易服务商
+      const finalHost = (() => {
+        try { return new URL(resp.url).hostname.toLowerCase(); } catch { return ""; }
+      })();
+      const providerHit = PARKING_PROVIDER_HOSTS.find(
+        (p) => finalHost.includes(p) || resp.url.toLowerCase().includes(p),
+      );
+      if (providerHit) return { parked: true, signal: `provider:${providerHit}` };
 
-    if (!resp.ok && resp.status !== 403 && resp.status !== 406) {
-      return { parked: false };
+      if (!resp.ok && resp.status !== 403 && resp.status !== 406) {
+        continue; // 该 scheme 不可用，试下一个
+      }
+
+      // 2. 文本信号（只读前 ~30KB，足够覆盖 title + 首屏）
+      const raw = (await resp.text()).slice(0, 30000);
+      for (const re of PARKED_TEXT_SIGNALS) {
+        if (re.test(raw)) return { parked: true, signal: re.source.slice(0, 40) };
+      }
+      return { parked: false }; // 成功取到正常页面 → 非停放
+    } catch {
+      // 本 scheme 失败（证书过期/连接/超时）→ 试下一个 scheme
+      continue;
     }
-
-    // 2. 文本信号（只读前 ~30KB，足够覆盖 title + 首屏）
-    const raw = (await resp.text()).slice(0, 30000);
-    for (const re of PARKED_TEXT_SIGNALS) {
-      if (re.test(raw)) return { parked: true, signal: re.source.slice(0, 40) };
-    }
-    return { parked: false };
-  } catch {
-    // 无法确认（超时/WAF/网络）→ 不阻断切换
-    return { parked: false };
   }
+  void lastResp;
+  // 两种 scheme 都没拿到可判定内容 → 无法确认，不阻断切换
+  return { parked: false };
 }
 
 // ─── 主入口 ────────────────────────────────────────────
