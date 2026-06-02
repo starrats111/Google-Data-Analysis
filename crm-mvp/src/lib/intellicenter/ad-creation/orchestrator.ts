@@ -219,6 +219,7 @@ export async function runIntelligentAdCreation(
     targetCountry: ctx.targetCountry,
     adType: "rsa",
     profile: profileGen.profile,
+    businessText: crawlCache.pageText ?? undefined, // D-062：落地页正文供类目级受限业务识别
   });
   timings.step4_preflight = Date.now() - t4;
 

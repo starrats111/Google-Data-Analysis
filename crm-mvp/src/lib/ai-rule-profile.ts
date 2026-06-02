@@ -567,6 +567,50 @@ export function deletePersona(profile: AiRuleProfile, personaId: string): AiRule
 
 // ─── Prompt 构建 ──────────────────────────────────────────────
 
+/**
+ * D-062：面向"业务类目"的受限/禁止类目高精度模式（区别于文案措辞）。
+ * 这些类目的商家——其核心业务本身就是受限品（如氯胺酮/迷幻药/受管制药品、大麻/CBD、武器弹药）——
+ * 无论文案怎么改写都会撞 Google Ads 硬性合规规则（提交时被 collectAiRuleViolations 全灭，
+ * 见 Mindbloom 案例）。故应在生成早期（Step 4 preflight）按类目识别并直接阻断 + 清晰提示，
+ * 而不是让员工白生成一整套再被硬卡。
+ *
+ * 词表面向"业务描述"（main_products / 落地页正文），与文案措辞模式正交：
+ *   - 管制物质：具体药名（ketamine/psilocybin/mdma/fentanyl…）几乎不会出现在正常电商首页 → 高精度
+ *   - 大麻/CBD：要求产品形态后缀（cbd oil/gummies/vape…）避免误伤字母巧合
+ *   - 武器：firearm/rifle/ammunition 等实体词，匹配枪械店的 main_products
+ */
+export const PROHIBITED_BUSINESS_CATEGORY_PATTERNS: Array<{ label: string; cn: string; pattern: RegExp }> = [
+  {
+    label: "controlled_substances",
+    cn: "管制物质/受管制药品（如氯胺酮、迷幻药、阿片类）",
+    pattern: /\bketamine\b|\bpsilocybin|\bpsilocybe\b|\bpsychedelic|\bhallucinogen|\b(lsd|mdma|ecstasy)\b|\bayahuasca\b|\bdmt\b|\bkratom\b|\bcocaine\b|\bheroin\b|\bmethamphet|\bopioids?\b|\bopiates?\b|\bfentanyl\b/i,
+  },
+  {
+    label: "cannabis_cbd",
+    cn: "大麻/CBD/THC（受限类目）",
+    pattern: /\bmarijuana\b|\bcannabis\b|\bthc\b|\bcbd\s*(oil|gumm|edible|vape|capsule|tincture|cream|balm)/i,
+  },
+  {
+    label: "weapons",
+    cn: "武器/弹药（受限类目）",
+    pattern: /\bfirearms?\b|\bhandguns?\b|\brifles?\b|\bshotguns?\b|\bammunition\b|\bammo\b|\bassault\s+(rifle|weapon)/i,
+  },
+];
+
+/**
+ * D-062：扫描业务文本，命中受限/禁止类目返回 {label, cn}，否则 null。
+ * 供 policy-preflight 早期类目级阻断与提交硬卡共用同一判定口径。
+ */
+export function matchProhibitedBusinessCategory(
+  text: string | null | undefined,
+): { label: string; cn: string } | null {
+  if (!text) return null;
+  for (const rule of PROHIBITED_BUSINESS_CATEGORY_PATTERNS) {
+    if (rule.pattern.test(text)) return { label: rule.label, cn: rule.cn };
+  }
+  return null;
+}
+
 const BASIC_POLICY_RISK_PATTERNS: Array<{ label: string; pattern: RegExp }> = [
   { label: "保证结果/零风险承诺", pattern: /\bguaranteed?\s+results?\b|\bzero\s+risk\b|\brisk[\s-]?free\b|\b100%\s+safe\b|\binstant\s+approval\b/i },
   { label: "医疗治愈类承诺", pattern: /\bcures?\b|\bmiracle\b|\bheals?\b|治疗|治愈|神药/i },

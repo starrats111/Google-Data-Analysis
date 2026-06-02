@@ -15,6 +15,7 @@ import {
   PhoneOutlined, DollarOutlined, TagOutlined, UnorderedListOutlined,
 } from "@ant-design/icons";
 import { useApiWithParams, mutateApi } from "@/lib/swr";
+import { describeClientError } from "@/lib/client-error";
 import { BIDDING_STRATEGIES } from "@/lib/constants";
 import { getAdMarketConfig, getCurrencyCodeByCountry, getLanguageCodeByCountry, getSnippetHeaderByCountry } from "@/lib/ad-market";
 
@@ -529,8 +530,8 @@ export default function AdPreviewPage() {
       } else {
         message.error(json.message || "翻译失败");
       }
-    } catch (err: any) {
-      message.error(err?.message || "翻译失败");
+    } catch (err: unknown) {
+      message.error(describeClientError(err, "翻译失败"));
     } finally {
       setTranslating(false);
     }
@@ -764,7 +765,7 @@ export default function AdPreviewPage() {
       }
     } catch (err: unknown) {
       setSemrushFailed(true);
-      const errMsg = err instanceof Error ? err.message : "关键词获取失败，可粘贴 3UE 链接手动获取";
+      const errMsg = describeClientError(err, "关键词获取失败，可粘贴 3UE 链接手动获取");
       message.error({ content: errMsg, duration: 6 });
       if (!opts?.manual) {
         try { localStorage.setItem(`semrush_fetched_${campaignId}`, JSON.stringify({ ts: Date.now(), status: "error" })); } catch {}
@@ -839,8 +840,8 @@ export default function AdPreviewPage() {
       } else {
         message.info("关键词已全部存在");
       }
-    } catch (err: any) {
-      message.error({ content: err?.message || "获取失败，请手动输入关键词", duration: 6 });
+    } catch (err: unknown) {
+      message.error({ content: describeClientError(err, "获取失败，请手动输入关键词"), duration: 6 });
     } finally {
       setSemrushUrlFetching(false);
     }
@@ -937,8 +938,8 @@ export default function AdPreviewPage() {
       } else {
         message.error(json.message || "CID 同步失败");
       }
-    } catch (err: any) {
-      message.error(err?.message || "CID 同步失败");
+    } catch (err: unknown) {
+      message.error(describeClientError(err, "CID 同步失败"));
     } finally {
       setCidSyncing(false);
     }
@@ -967,8 +968,8 @@ export default function AdPreviewPage() {
       } else {
         message.error(json.message || "刷新广告数量失败");
       }
-    } catch (err: any) {
-      message.error(err?.message || "刷新广告数量失败");
+    } catch (err: unknown) {
+      message.error(describeClientError(err, "刷新广告数量失败"));
     } finally {
       setCidRefreshing(false);
     }
@@ -1295,6 +1296,28 @@ export default function AdPreviewPage() {
         });
         return;
       }
+
+      // D-062：政策/类目阻断（如受管制药品、大麻CBD、武器等受限类目）——在生成早期就拦下并清晰告知
+      if (type === "policy_blocked") {
+        const d = data as { reasons?: string[]; recentRejectionCount?: number };
+        const reasons = Array.isArray(d?.reasons) && d.reasons.length > 0 ? d.reasons : ["该商家未通过政策预检，已阻断自动生成"];
+        setCoreGenerating(false);
+        setSitelinksLoading(false);
+        setImagesLoading(false);
+        modal.error({
+          title: "已阻断：商家类目受限，未自动生成文案",
+          content: (
+            <div>
+              {reasons.map((r, i) => (
+                <p key={i} style={{ marginBottom: i < reasons.length - 1 ? 8 : 0 }}>{r}</p>
+              ))}
+            </div>
+          ),
+          okText: "我知道了",
+          width: 560,
+        });
+        return;
+      }
     };
 
     try {
@@ -1369,7 +1392,10 @@ export default function AdPreviewPage() {
       if (err instanceof DOMException && err.name === "AbortError") {
         message.warning("生成耗时较长，已为你加载已完成的内容");
       } else {
-        message.error((err instanceof Error ? err.message : null) || "生成失败，请手动填写");
+        // D-060：网络层断连（部署重启/抖动/QUIC）归一化为友好中文，业务错误保留原文
+        message.error(describeClientError(err, "生成失败，请手动填写", {
+          networkMessage: "生成连接中断，已为你加载已完成的内容；如内容不全请稍后重试",
+        }));
       }
     } finally {
       generationInflightRef.current.delete(inflightKey);
@@ -1870,8 +1896,8 @@ export default function AdPreviewPage() {
           message.error(errMsg);
         }
       }
-    } catch (err: any) {
-      message.error(err?.message || "提交失败");
+    } catch (err: unknown) {
+      message.error(describeClientError(err, "提交失败"));
     } finally {
       setSubmitting(false);
     }

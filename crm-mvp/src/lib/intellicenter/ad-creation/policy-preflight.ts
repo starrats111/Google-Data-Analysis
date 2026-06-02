@@ -21,6 +21,7 @@
  */
 
 import prisma from "@/lib/prisma";
+import { matchProhibitedBusinessCategory } from "@/lib/ai-rule-profile";
 import type {
   MerchantIntelligenceProfile,
   IndustryCategory,
@@ -44,6 +45,8 @@ export interface PreflightContext {
   targetCountry: string;
   adType: AdType;
   profile: MerchantIntelligenceProfile;
+  /** D-062：落地页正文（截断），用于类目级受限/禁止业务识别（与画像核心字段互补） */
+  businessText?: string;
 }
 
 export interface PreflightResult {
@@ -147,6 +150,31 @@ export async function policyPreflight(
   if (ctx.profile.compliance_risk_level === "blocked") {
     blocking.push(
       `画像评估结果为 blocked（疑似 counterfeit / dangerous_products / illegal）。商家：${ctx.merchantName}`,
+    );
+  }
+
+  // 1.5) D-062：类目级受限/禁止业务早期识别（Mindbloom=氯胺酮案例）。
+  // 商家核心业务本身即受限品（管制物质/大麻CBD/武器）时，文案无论怎么改写都会撞提交硬卡，
+  // 应在生成早期阻断并清晰告知，避免员工白生成一整套再被「AI 设定硬规则」拦下。
+  // 优先扫画像蒸馏出的核心业务字段（高置信），再叠加落地页正文兜底。
+  const profileCoreText = [
+    ctx.merchantName,
+    ctx.profile.industry_subcategory ?? "",
+    (ctx.profile.business_profile?.main_products ?? []).join(" "),
+    ctx.profile.brand_assets?.slogan ?? "",
+    (ctx.profile.brand_assets?.usp ?? []).join(" "),
+  ].join("  ");
+  const coreHit = matchProhibitedBusinessCategory(profileCoreText);
+  const textHit = coreHit ?? matchProhibitedBusinessCategory((ctx.businessText ?? "").slice(0, 12000));
+  if (textHit) {
+    const confidenceNote = coreHit
+      ? "（依据画像识别出的核心业务）"
+      : "（依据落地页正文，若判断有误请核对商家网址/画像）";
+    blocking.push(
+      `该商家核心业务属于 Google Ads 受限/禁止类目：${textHit.cn}${confidenceNote}。` +
+        `此类商家的广告文案无论如何改写都会被硬性合规规则拦截（提交时同样会被「AI 设定硬规则」拦下），` +
+        `系统已在生成早期阻断以免做无用功。处理建议：① 确认该商家是否真属此类目；` +
+        `② 如确属，需先在 Google Ads 后台完成对应类目认证/白名单后由人工投放，或将该商家下架，系统不自动生成文案。`,
     );
   }
 

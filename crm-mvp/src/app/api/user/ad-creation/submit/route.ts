@@ -1355,10 +1355,13 @@ export async function POST(req: NextRequest) {
     // ─── 11. 图片素材独立提交（逐张加载+批量上传，失败不影响主广告） ───
     const MAX_IMAGES = 20;
     const MAX_TOTAL_IMAGE_BYTES = 50 * 1024 * 1024;
-    const imageUploadResult = { success: 0, failed: 0, errors: [] as string[] };
+    const imageUploadResult = { success: 0, failed: 0, errors: [] as string[], ineligible: false };
     if (image_urls.length > 0 && campaignRn) {
       try {
-        const imageOps: Record<string, unknown>[] = [];
+        // 两阶段（修复 AD_IMAGE 直接挂载报 UNSUPPORTED_FIELD_TYPE）：
+        //   阶段1 先创建图片 asset 拿真实资源名（asset 创建不受搜索广告图片素材"账户资格"限制，可复用）；
+        //   阶段2 再用真实资源名挂到广告系列。避免同一原子批次里用临时负数 ID 前向引用 asset→campaign_asset。
+        const assetOps: Record<string, unknown>[] = [];
         let imgTempId = -100;
         let totalBytes = 0;
         for (const url of (image_urls as string[]).slice(0, MAX_IMAGES)) {
@@ -1367,31 +1370,54 @@ export async function POST(req: NextRequest) {
           const imgBytes = Buffer.byteLength(img.data, "base64");
           if (totalBytes + imgBytes > MAX_TOTAL_IMAGE_BYTES) break;
           totalBytes += imgBytes;
-          const assetRn = `customers/${cid}/assets/${imgTempId}`;
-          imageOps.push({
+          assetOps.push({
             asset_operation: {
               create: {
-                resource_name: assetRn,
-                name: `AdImage-${img.name}-${Date.now()}`,
+                resource_name: `customers/${cid}/assets/${imgTempId}`,
+                name: `AdImage-${img.name}-${Date.now()}-${Math.abs(imgTempId)}`,
                 image_asset: { data: img.data },
-              },
-            },
-          });
-          imageOps.push({
-            campaign_asset_operation: {
-              create: {
-                asset: assetRn,
-                campaign: campaignRn,
-                field_type: "AD_IMAGE",
               },
             },
           });
           imgTempId--;
         }
-        if (imageOps.length > 0) {
-          await mutateGoogleAds(credentials, customerId, imageOps);
-          imageUploadResult.success = imageOps.length / 2;
-          console.log(`[AdSubmit] 图片素材上传成功: ${imageUploadResult.success} 张`);
+
+        if (assetOps.length > 0) {
+          // ── 阶段 1：创建图片 asset ──
+          const assetResult = await mutateGoogleAds(credentials, customerId, assetOps);
+          const assetResponses = (
+            assetResult.mutateOperationResponses || assetResult.mutate_operation_responses || []
+          ) as Record<string, Record<string, string>>[];
+          const assetResourceNames = assetResponses
+            .map((r) => r?.assetResult?.resourceName || r?.asset_result?.resource_name || "")
+            .filter(Boolean);
+
+          // ── 阶段 2：用真实资源名挂载到广告系列（AD_IMAGE 是搜索广告图片素材的正确字段类型）──
+          if (assetResourceNames.length > 0) {
+            const linkOps = assetResourceNames.map((assetRn) => ({
+              campaign_asset_operation: {
+                create: { asset: assetRn, campaign: campaignRn, field_type: "AD_IMAGE" },
+              },
+            }));
+            try {
+              await mutateGoogleAds(credentials, customerId, linkOps);
+              imageUploadResult.success = assetResourceNames.length;
+              console.log(`[AdSubmit] 图片素材上传并挂载成功: ${imageUploadResult.success} 张`);
+            } catch (linkErr) {
+              const lmsg = linkErr instanceof Error ? linkErr.message : String(linkErr);
+              // AD_IMAGE 挂载被拒最常见原因：该账户尚未满足搜索广告图片素材投放资格（需账户历史/消耗）。
+              // 这是 Google 账户层面的限制而非代码缺陷——asset 已创建可复用，不影响主广告。
+              const ineligible = /not supported to be added directly through asset links|UNSUPPORTED_FIELD_TYPE/i.test(lmsg);
+              if (ineligible) {
+                imageUploadResult.failed = assetResourceNames.length;
+                imageUploadResult.ineligible = true;
+                imageUploadResult.errors.push("账户暂不支持搜索广告图片素材");
+                console.log(`[AdSubmit] 图片素材已创建但账户暂无资格挂载（不影响广告，需账户历史/消耗达标）: ${assetResourceNames.length} 张`);
+              } else {
+                throw linkErr;
+              }
+            }
+          }
         }
       } catch (imgErr) {
         const msg = imgErr instanceof Error ? imgErr.message : String(imgErr);
@@ -1458,7 +1484,11 @@ export async function POST(req: NextRequest) {
       msgParts.push(`${imageUploadResult.success} 张图片素材上传成功`);
     }
     if (imageUploadResult.failed > 0) {
-      msgParts.push(`${imageUploadResult.failed} 张图片素材上传失败（不影响广告）`);
+      msgParts.push(
+        imageUploadResult.ineligible
+          ? `${imageUploadResult.failed} 张图片已存入账户素材库，但该账户暂不满足搜索广告图片素材投放资格（需账户历史/消耗达标），暂未挂载到广告（不影响广告投放）`
+          : `${imageUploadResult.failed} 张图片素材上传失败（不影响广告）`,
+      );
     }
     const successMsg = msgParts.join("，");
 

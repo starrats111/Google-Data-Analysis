@@ -22,6 +22,16 @@ const RPC_ORIGIN = "https://sem.3ue.co";
 
 const MIN_REQUEST_INTERVAL_MS = 1500;
 const RANDOM_JITTER_MAX_MS = 1000;
+
+// SemRush 断链健壮化：curl 进程级连接失败（连接重置/TLS/连接超时/连接被拒/空回复）
+// 属瞬时网络抖动，单次失败不应让整条查询挂掉 → 在 curlFetch 最底层做连接级退避重试。
+const CURL_CONN_RETRIES = 2;                  // 连接级重试次数（不含首次）
+const CURL_CONN_BACKOFF_MS = [800, 2000];     // 每次重试退避（叠加 ~0-400ms jitter）
+// curl 瞬时网络错误退出码：6 解析失败 / 7 连接失败 / 16 HTTP2 / 28 超时 / 35 SSL连接 /
+// 52 空回复 / 55 send失败 / 56 recv失败(连接重置) / 92 HTTP2流错误
+const CURL_TRANSIENT_EXIT_CODES = new Set([6, 7, 16, 28, 35, 52, 55, 56, 92]);
+const CURL_TRANSIENT_MSG_RE =
+  /reset by peer|connection reset|recv failure|send failure|connection timed out|operation timed out|could not resolve|couldn't resolve|empty reply|ssl|gnutls|tls|transfer closed|http2|stream was reset/i;
 const DOMAIN_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const SESSION_TTL_MS = 30 * 60 * 1000;
 
@@ -201,19 +211,44 @@ export async function curlFetch(
   if (opts.body) args.push("-d", opts.body);
   args.push(url);
 
-  let raw: string;
-  try {
-    const result = await execFileAsync("curl", args, {
-      timeout: (opts.timeoutMs || 30000) + 5000,
-      encoding: "utf-8",
-      maxBuffer: 10 * 1024 * 1024,
-    });
-    raw = result.stdout;
-  } catch (execErr: any) {
-    if (execErr?.killed || execErr?.signal === "SIGTERM") {
-      throw new Error("请求超时，请稍后再试");
+  let raw = "";
+  let lastErr: { killed: boolean; exitCode?: number; message: string } | null = null;
+  for (let attempt = 0; attempt <= CURL_CONN_RETRIES; attempt++) {
+    try {
+      const result = await execFileAsync("curl", args, {
+        timeout: (opts.timeoutMs || 30000) + 5000,
+        encoding: "utf-8",
+        maxBuffer: 10 * 1024 * 1024,
+      });
+      raw = result.stdout;
+      lastErr = null;
+      break;
+    } catch (execErr: any) {
+      const killed = !!(execErr?.killed || execErr?.signal === "SIGTERM");
+      const exitCode = typeof execErr?.code === "number" ? execErr.code : undefined;
+      const message = String(execErr?.message || "");
+      lastErr = { killed, exitCode, message };
+      // 是否瞬时网络错误：execFile 超时杀进程 / curl 瞬时退出码 / 错误文案命中网络抖动特征
+      const transient =
+        killed ||
+        (exitCode !== undefined && CURL_TRANSIENT_EXIT_CODES.has(exitCode)) ||
+        CURL_TRANSIENT_MSG_RE.test(message);
+      if (transient && attempt < CURL_CONN_RETRIES) {
+        const wait = (CURL_CONN_BACKOFF_MS[attempt] ?? 2000) + Math.floor(Math.random() * 400);
+        console.warn(
+          `[SemRush] curl 连接失败（${killed ? "超时" : `exit ${exitCode ?? "?"}`}），` +
+            `第 ${attempt + 1}/${CURL_CONN_RETRIES} 次退避重试 ${wait}ms：${message.slice(0, 100)}`,
+        );
+        await new Promise((r) => setTimeout(r, wait));
+        continue;
+      }
+      break; // 非瞬时错误或重试用尽 → 跳出，下面统一抛出
     }
-    throw new Error(`网络请求失败: ${execErr?.message?.slice(0, 120) || "未知错误"}`);
+  }
+
+  if (lastErr) {
+    if (lastErr.killed) throw new Error("请求超时，请稍后再试");
+    throw new Error(`网络请求失败: ${lastErr.message.slice(0, 120) || "未知错误"}`);
   }
 
   if (!raw || !raw.trim()) {
