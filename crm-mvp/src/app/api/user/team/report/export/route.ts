@@ -322,7 +322,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     GROUP BY user_id, month
   `, ...memberIds, yearStart, yearEnd);
 
-  const PLATFORM_ORDER = ["RW","LH","CG","LB","PM","CF","BSH","MUI","EV","AD"];
+  const PLATFORM_ORDER = ["RW","LH","CG","LB","PM","CF","BSH","MUI","EV"];
   const platformSet = new Set(commRows.map((r) => r.platform));
   const platforms = PLATFORM_ORDER.filter((p) => platformSet.has(p));
   for (const p of platformSet) { if (!platforms.includes(p)) platforms.push(p); }

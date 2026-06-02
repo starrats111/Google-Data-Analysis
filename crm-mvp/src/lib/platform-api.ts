@@ -104,19 +104,6 @@ const PLATFORM_API_CONFIG: Record<string, PlatformApiConfig> = {
     assumeAllJoined: true,
     requiresRelationshipParam: true,
   },
-  // C-029 R1.2：AD (AdsDoubler) 商家 API
-  // 关键差异（§设计方案.md §28.12~§28.13）：
-  //   - GET + 所有参数走 URL query
-  //   - 必须显式传 channelId（由 fetchAllMerchants 的 extra 参数注入）
-  //   - 返回整 channel 全集（含 To Apply/Applying/Rejected/Approved 四态），
-  //     因此 assumeAllJoined=false；parseMerchants AD 分支内按 cmStatus id===4 强过滤
-  //   - 无 relationship 参数，不设 requiresRelationshipParam
-  AD: {
-    mode: "get",
-    url: "https://api.adsdoubler.com/user/merchants/list",
-    pageKey: "page", sizeKey: "pageSize", maxSize: 1000,
-    assumeAllJoined: false,
-  },
 };
 
 // ── 统一商家数据结构 ──
@@ -155,7 +142,6 @@ async function callPlatformApi(
   token: string,
   page: number,
   relationship?: string,
-  extra?: { channelId?: string },  // C-029：AD 平台渠道 ID 注入
 ): Promise<Record<string, unknown>> {
   const { mode, url, source, pageKey, sizeKey, maxSize } = config;
 
@@ -198,9 +184,6 @@ async function callPlatformApi(
           token, [pageKey]: String(page), [sizeKey]: String(maxSize),
         });
         if (relationship) params.set("relationship", relationship);
-        if (extra?.channelId) params.set("channelId", extra.channelId);
-        // LH/LB 的 URL 已经带 ?mod=...&op=...，继续用 & 拼接；
-        // AD 的 URL 是裸路径，需要 ? 开头
         const sep = url.includes("?") ? "&" : "?";
         resp = await fetch(`${url}${sep}${params}`, { signal: controller.signal });
       }
@@ -238,17 +221,11 @@ function parseMerchants(
   platform: string,
   data: Record<string, unknown>,
   assumeAllJoined = false,
-  context?: { adSettings?: import("./ad-settings-cache").AdSettings | null },
 ): PlatformMerchant[] {
   const root = (data.data || data) as Record<string, unknown>;
   const list = (root.list || root.items || root.merchants || []) as Record<string, unknown>[];
 
   if (!Array.isArray(list)) return [];
-
-  // C-029 R1.2：AD (AdsDoubler) 独立解析分支（字段完全不同于其他平台）
-  if (platform === "AD") {
-    return parseAdMerchants(list, context?.adSettings || null);
-  }
 
   return list.map((item, idx) => {
     // LH 的字段命名和其他平台相反：mcid=数字MID，m_id=slug MCID
@@ -352,70 +329,6 @@ function parseMerchants(
   }).filter((m) => m.merchant_id && m.merchant_name);
 }
 
-/**
- * C-029 R1.2：AD (AdsDoubler) 专用商家解析
- * - 字段名全独立（cmId / merchantId 数字 / status 数字 / supportRegionIds 逗号字符串 / category 文案）
- * - QA10：按 cmStatus id===4 "Approved" 强过滤；Settings 不可用时 fallback 到不过滤
- * - category 直接取 item.category 文案（实证 §28.12.2）
- */
-function parseAdMerchants(
-  list: Record<string, unknown>[],
-  settings: import("./ad-settings-cache").AdSettings | null,
-): PlatformMerchant[] {
-  const out: PlatformMerchant[] = [];
-  let skipped = 0;
-
-  for (const item of list) {
-    const statusId = Number(item.status);
-    // Settings 可用时强过滤（Approved = 4）；不可用时不过滤（QA9 fallback）
-    const approved = settings ? statusId === 4 : true;
-    if (!approved) {
-      skipped++;
-      continue;
-    }
-
-    const mid = String(item.merchantId ?? "").trim();
-    const name = String(item.merchantName ?? "").trim();
-    if (!mid || !name) continue;
-
-    // supportRegionIds 是字符串逗号分隔（§28.12.3）
-    const rawRegions = String(item.supportRegionIds ?? "").trim();
-    const regionIds: number[] = rawRegions
-      ? rawRegions.split(",").map(s => Number(s.trim())).filter(n => Number.isFinite(n) && n > 0)
-      : [];
-    const primary = Number(item.primaryRegionId);
-    if (Number.isFinite(primary) && primary > 0 && !regionIds.includes(primary)) {
-      regionIds.unshift(primary);
-    }
-    const regions = settings
-      ? Array.from(new Set(regionIds.map(id => settings.regionMap.get(id)).filter((x): x is string => Boolean(x))))
-      : [];
-
-    const cookieDays = Number(item.cookieExpiryDays);
-    const cookieDuration = Number.isFinite(cookieDays) && cookieDays > 0 ? cookieDays : null;
-
-    out.push({
-      merchant_id: mid,
-      merchant_name: name,
-      category: String(item.category ?? "").trim(),
-      commission_rate: String(item.baseCommission ?? "").trim(),
-      supported_regions: regions,
-      merchant_url: String(item.website ?? "").trim(),
-      logo_url: String(item.logo ?? "").trim(),
-      campaign_link: String(item.trackingLink ?? "").trim(),
-      relationship_status: "joined",
-      epc_30d: null,
-      join_date: null,
-      cookie_duration: cookieDuration,
-    });
-  }
-
-  if (skipped > 0) {
-    console.log(`[MerchantDiag] AD parseAdMerchants: kept=${out.length} skipped_non_approved=${skipped}`);
-  }
-  return out;
-}
-
 function parseRegions(raw: unknown): string[] {
   if (Array.isArray(raw)) return raw.map(String);
   if (typeof raw === "string" && raw) return raw.split(/[,;|]/).map((s) => s.trim()).filter(Boolean);
@@ -457,21 +370,14 @@ export interface SyncResult {
 /**
  * 从单个平台拉取全部商家列表
  * @param relationshipFilter 可选：传 "joined" 让 API 只返回已加入的品牌（更高效，避免翻页上限漏掉末尾品牌）
- * @param extra 可选：平台专属额外参数（C-029：AD 的 channelId）
  */
 export async function fetchAllMerchants(
   platform: string,
   token: string,
   relationshipFilter?: string,
-  extra?: { channelId?: string },
 ): Promise<{ merchants: PlatformMerchant[]; error?: string }> {
   const config = PLATFORM_API_CONFIG[platform];
   if (!config) return { merchants: [], error: `不支持的平台: ${platform}` };
-
-  // C-029：AD 商家 API 必填 channelId
-  if (platform === "AD" && !extra?.channelId) {
-    return { merchants: [], error: `AD: 缺少 channelId，请在平台连接中配置渠道 ID` };
-  }
 
   const allMerchants: PlatformMerchant[] = [];
   const seen = new Set<string>();
@@ -484,20 +390,8 @@ export async function fetchAllMerchants(
     ? (config.relationshipValue ?? "Joined")
     : (assumeAllJoined ? undefined : relationshipFilter);
 
-  // C-029 R1.2：AD 前置并发拉 Settings（region/cmStatus 字典），失败回退到 null
-  let adSettings: import("./ad-settings-cache").AdSettings | null = null;
-  if (platform === "AD") {
-    const { getAdSettings } = await import("./ad-settings-cache");
-    adSettings = await getAdSettings(token).catch(() => null);
-    if (!adSettings) {
-      console.warn(`[MerchantSync] AD Settings 拉取失败，本次同步将不过滤 cmStatus、supported_regions 置空（fallback）`);
-    }
-  }
-
-  const parseCtx = { adSettings };
-
   try {
-    const firstPage = await callPlatformApi(config, token, 1, effectiveRelFilter, extra);
+    const firstPage = await callPlatformApi(config, token, 1, effectiveRelFilter);
     // 兼容两种错误格式：
     //   1. PM/BSH/CF/CG/MUI：{ "code": "1001", "message": "..." }（顶层 code）
     //   2. LB/LH/RW：{ "status": { "code": 1000, "msg": "..." }, "data": {...} }（status 包装层）
@@ -535,7 +429,7 @@ export async function fetchAllMerchants(
     const firstRawList = (firstRoot.list || firstRoot.items || firstRoot.merchants || []) as unknown[];
     const firstRawCount = Array.isArray(firstRawList) ? firstRawList.length : 0;
 
-    const firstBatch = parseMerchants(platform, firstPage, assumeAllJoined, parseCtx);
+    const firstBatch = parseMerchants(platform, firstPage, assumeAllJoined);
     for (const m of firstBatch) {
       if (!seen.has(m.merchant_id)) { seen.add(m.merchant_id); allMerchants.push(m); }
     }
@@ -581,7 +475,7 @@ export async function fetchAllMerchants(
           await sleep((retry + 1) * 2000);
         }
         try {
-          pageData = await callPlatformApi(config, token, page, effectiveRelFilter, extra);
+          pageData = await callPlatformApi(config, token, page, effectiveRelFilter);
         } catch (pageErr) {
           // 单页请求彻底失败（超时/网络），降级为空页处理，让 consecutiveEmpty 机制决定是否放弃，
           // 而不是直接 throw 中断整个同步（避免大账号因一页故障丢失后续数百页数据）
@@ -605,7 +499,7 @@ export async function fetchAllMerchants(
       }
       consecutiveEmpty = 0;
 
-      const batch = parseMerchants(platform, pageData, assumeAllJoined, parseCtx);
+      const batch = parseMerchants(platform, pageData, assumeAllJoined);
       for (const m of batch) {
         if (!seen.has(m.merchant_id)) { seen.add(m.merchant_id); allMerchants.push(m); }
       }
@@ -704,20 +598,6 @@ const PLATFORM_TXN_CONFIG: Record<string, PlatformTxnConfig> = {
     url: "https://api.engagevantage.com/api/transaction_v3",
     source: "engagevantage",
     dateFormat: "camel", pageKey: "curPage", sizeKey: "perPage", maxSize: 2000,
-  },
-  // C-029 R1.2：AD (AdsDoubler) 交易 API
-  // - GET + 所有参数走 URL query
-  // - 日期参数命名独立：transactionStart/transactionEnd
-  // - 状态为数字 1/2/3（pending/approved/rejected），由 TXN_STATUS_MAP 统一映射
-  // - 无 status:"all" 过滤参数，由 omitStatusAll 屏蔽
-  // - QA4 封板：30 天保守切片（文档错误码 50003 暗示有上限但未给数）
-  AD: {
-    mode: "get",
-    url: "https://api.adsdoubler.com/user/report/transactionList",
-    dateFormat: "ad",
-    pageKey: "page", sizeKey: "pageSize", maxSize: 1000,
-    omitStatusAll: true,
-    maxDateSpanDays: 30,
   },
 };
 

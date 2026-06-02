@@ -32,15 +32,15 @@ export async function POST(req: NextRequest) {
   } catch {
     return apiError("请求体格式错误");
   }
-  const { platform: rawPlatform, channel_id, conn_id } = body;
+  const { platform: rawPlatform, conn_id } = body;
   let apiKey = body.api_key;
 
   // 既有连接重测：从 DB 读 api_key
-  let connFromDb: { id: bigint; api_key: string | null; platform: string; channel_id: string | null } | null = null;
+  let connFromDb: { id: bigint; api_key: string | null; platform: string } | null = null;
   if (conn_id) {
     connFromDb = await prisma.platform_connections.findFirst({
       where: { id: BigInt(conn_id), user_id: BigInt(user.userId), is_deleted: 0 },
-      select: { id: true, api_key: true, platform: true, channel_id: true },
+      select: { id: true, api_key: true, platform: true },
     });
     if (!connFromDb) return apiError("连接不存在或无权限");
     if (!apiKey) apiKey = connFromDb.api_key ?? undefined;
@@ -49,12 +49,6 @@ export async function POST(req: NextRequest) {
   const platform = normalizePlatformCode(rawPlatform || connFromDb?.platform || "");
   if (!platform) return apiError("平台代码不能为空");
   if (!apiKey || apiKey.length < 5) return apiError("API Key 不能为空");
-
-  // AD 平台需要 channel_id
-  const finalChannelId = channel_id || connFromDb?.channel_id || "";
-  if (platform === "AD" && !finalChannelId) {
-    return apiError("AD 平台必须提供 channel_id");
-  }
 
   // 调真实交易 API：昨天到今天 1 天窗口
   const yesterday = dayjs().subtract(1, "day").format("YYYY-MM-DD");

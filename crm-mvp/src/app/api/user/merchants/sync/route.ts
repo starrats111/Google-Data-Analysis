@@ -37,10 +37,8 @@ export async function POST(req: NextRequest) {
     where: { user_id: userId, is_deleted: 0 },
     select: { id: true, platform: true, account_name: true, api_key: true, channel_id: true },
   });
-  // C-029：AD 平台连接必须配置 channel_id，否则视为不可用
   const valid = conns.filter(c => {
     if (!c.api_key || c.api_key.length <= 5) return false;
-    if (c.platform === "AD" && !(c.channel_id && c.channel_id.trim())) return false;
     return true;
   });
 
@@ -90,11 +88,7 @@ export async function doSyncInBackground(
     const fetchConn = async (conn: typeof fetchTargets[0]) => {
       dbg(`Fetch ${conn.platform}...`);
       try {
-        // C-029：AD 需要透传 channelId；其他平台 extra 保持为空
-        const extra = conn.platform === "AD" && conn.channel_id
-          ? { channelId: conn.channel_id }
-          : undefined;
-        const r = await fetchAllMerchants(conn.platform, conn.api_key!, "joined", extra);
+        const r = await fetchAllMerchants(conn.platform, conn.api_key!, "joined");
         if (r.error) errors.push(r.error);
         dbg(`  ${conn.platform}: ${r.merchants.length} merchants${r.error ? `, err=${r.error}` : ""}`);
         if (r.merchants.length > 0) {
@@ -155,7 +149,7 @@ export async function doSyncInBackground(
         const PLATFORM_NAMES: Record<string, string> = {
           CG: "CollabGlow", LH: "LinkHaitao", RW: "Rewardoo",
           CF: "CreatorFlare", BSH: "BrandSparkHub", PM: "Partnermatic", LB: "LinkBux",
-          MUI: "UltraInfluence", AD: "AdsDoubler",
+          MUI: "UltraInfluence",
         };
         const m = e.match(/^([A-Z]+):/);
         return m ? (PLATFORM_NAMES[m[1]] ?? m[1]) : "未知平台";
@@ -399,7 +393,7 @@ export async function doSyncInBackground(
     const PLATFORM_NAMES: Record<string, string> = {
       CG: "CollabGlow", LH: "LinkHaitao", RW: "Rewardoo",
       CF: "CreatorFlare", BSH: "BrandSparkHub", PM: "Partnermatic", LB: "LinkBux",
-      MUI: "UltraInfluence", AD: "AdsDoubler",
+      MUI: "UltraInfluence",
     };
     const platReadable = Object.entries(platformCounts)
       .map(([p, c]) => `${PLATFORM_NAMES[p] ?? p} ${c} 家`)

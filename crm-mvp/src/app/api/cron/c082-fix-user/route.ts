@@ -77,11 +77,7 @@ export async function POST(req: NextRequest) {
     select: { id: true, platform: true, account_name: true, api_key: true, channel_id: true },
   });
   const validConns = connections
-    .filter((c) => {
-      if (!c.api_key || c.api_key.length <= 5) return false;
-      if (c.platform === "AD" && !(c.channel_id && c.channel_id.trim())) return false;
-      return true;
-    })
+    .filter((c) => c.api_key && c.api_key.length > 5)
     .sort((a, b) => Number(b.id) - Number(a.id));
 
   // 预加载 user_merchants：用于 upsert 时填充 user_merchant_id（避免破坏前端按商家聚合的视图）

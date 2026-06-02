@@ -1,7 +1,8 @@
 // 联盟平台代码及全称
 // LH: linkhaitao.com | LB: linkbux.com | RW: rewardoo.com
 // CG: collabglow.com | PM: partnermatic.com | BSH: brandsparkhub.com | CF: creatorflare.com
-// MUI: ultrainfluence.com | AD: adsdoubler.com (C-029) | EV: engagevantage.com
+// MUI: ultrainfluence.com | EV: engagevantage.com
+// D-073：AD (AdsDoubler) 已全线下线，不再支持
 export const PLATFORMS = [
   { code: "CG", name: "CollabGlow", domain: "collabglow.com" },
   { code: "PM", name: "Partnermatic", domain: "partnermatic.com" },
@@ -11,7 +12,6 @@ export const PLATFORMS = [
   { code: "BSH", name: "BrandSparkHub", domain: "brandsparkhub.com" },
   { code: "CF", name: "CreatorFlare", domain: "creatorflare.com" },
   { code: "MUI", name: "UltraInfluence", domain: "ultrainfluence.com" },
-  { code: "AD", name: "AdsDoubler", domain: "adsdoubler.com" },
   { code: "EV", name: "EngageVantage", domain: "engagevantage.com" },
 ] as const;
 
@@ -65,11 +65,6 @@ const _PLATFORM_ALIAS_ENTRIES: [string, PlatformCode][] = [
   ["Ultra Influence", "MUI"], ["ultra influence", "MUI"],
   ["ultrainfluence.com", "MUI"], ["app.ultrainfluence.com", "MUI"],
   ["api.ultrainfluence.com", "MUI"],
-
-  // AD = AdsDoubler (adsdoubler.com) — C-029
-  ["AD", "AD"], ["ad", "AD"],
-  ["AdsDoubler", "AD"], ["adsdoubler", "AD"], ["Ads Doubler", "AD"], ["ads doubler", "AD"],
-  ["adsdoubler.com", "AD"], ["api.adsdoubler.com", "AD"], ["r.adsdoubler.com", "AD"],
 
   // EV = EngageVantage (engagevantage.com)
   ["EV", "EV"], ["ev", "EV"],

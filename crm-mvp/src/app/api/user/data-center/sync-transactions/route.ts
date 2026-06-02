@@ -38,13 +38,8 @@ export async function POST(req: NextRequest) {
       select: { id: true, platform: true, account_name: true, api_key: true, channel_id: true },
     });
 
-    // C-029：AD 平台必须同时具备 api_key 和 channel_id，才视为可用连接
     const validConns = connections
-      .filter((c) => {
-        if (!c.api_key || c.api_key.length <= 5) return false;
-        if (c.platform === "AD" && !(c.channel_id && c.channel_id.trim())) return false;
-        return true;
-      })
+      .filter((c) => c.api_key && c.api_key.length > 5)
       .sort((a, b) => Number(b.id) - Number(a.id));
     if (validConns.length === 0) {
       return apiError("没有可用的平台连接，请先在「个人设置 → 联盟平台连接」中配置 API Key", 400);
@@ -465,8 +460,22 @@ async function updateDailyStatsCommission(userId: bigint, statsStartDate: Date, 
     .filter(id => id !== BigInt(0));
   if (merchantIds.length === 0) return 0;
 
+  // C-095 RC-3：排除挂在已删 MCC 下的 campaigns，避免幽灵 stats 双重写入
+  const deletedMccs = await prisma.google_mcc_accounts.findMany({
+    where: { user_id: userId, is_deleted: 1 },
+    select: { id: true },
+  });
+  const deletedMccIds = deletedMccs.map((m) => m.id);
+
   const allCampaigns = await prisma.campaigns.findMany({
-    where: { user_id: userId, user_merchant_id: { in: merchantIds }, is_deleted: 0 },
+    where: {
+      user_id: userId,
+      user_merchant_id: { in: merchantIds },
+      is_deleted: 0,
+      ...(deletedMccIds.length > 0
+        ? { OR: [{ mcc_id: null }, { mcc_id: { notIn: deletedMccIds } }] }
+        : {}),
+    },
     select: { id: true, user_merchant_id: true, google_status: true, updated_at: true },
   });
 

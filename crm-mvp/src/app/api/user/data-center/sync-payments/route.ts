@@ -38,7 +38,7 @@ export async function POST(req: NextRequest) {
       .sort((a, b) => Number(b.id) - Number(a.id));
 
     if (validConns.length === 0) {
-      return apiError("没有支持「支付 API」的已连接平台（AD 平台暂无支付接口）", 400);
+      return apiError("没有支持「支付 API」的已连接平台，请先在「个人设置 → 联盟平台连接」中配置", 400);
     }
 
     // 串行拉取（支付接口数据量小，避免并发压垮平台）

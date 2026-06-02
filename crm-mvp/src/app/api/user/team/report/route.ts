@@ -75,7 +75,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   `, ...memberIds, yearStart, yearEnd);
 
   // ── 4. 整理平台列表（按出现频率排序，固定顺序） ──────────────────
-  const PLATFORM_ORDER = ["RW", "LH", "CG", "LB", "PM", "CF", "BSH", "MUI", "EV", "AD"];
+  const PLATFORM_ORDER = ["RW", "LH", "CG", "LB", "PM", "CF", "BSH", "MUI", "EV"];
   const platformSet = new Set(commRows.map((r) => r.platform));
   const platforms = PLATFORM_ORDER.filter((p) => platformSet.has(p));
   // 补充其余未在固定顺序中的平台
