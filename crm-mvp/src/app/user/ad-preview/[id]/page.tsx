@@ -1271,6 +1271,30 @@ export default function AdPreviewPage() {
         });
         return;
       }
+
+      // D-069：商家网址即"域名停放/待售页"硬拦截 —— 不是内容不足，而是网址本身指向了挂售域名
+      if (type === "merchant_url_parked") {
+        const d = data as { url?: string; reason?: string; suggestion?: string };
+        modal.error({
+          title: "商家网址疑似域名停放/待售页",
+          content: (
+            <div>
+              <p style={{ marginBottom: 8 }}><strong>原因：</strong>{d?.reason || "该网址当前是域名停放/待售页，非真实店铺页面"}</p>
+              {d?.url && (
+                <p style={{ marginBottom: 8, color: "#888", fontSize: 12, wordBreak: "break-all" }}>
+                  <strong>当前网址：</strong>{d.url}
+                </p>
+              )}
+              <p style={{ marginBottom: 0 }}>
+                {d?.suggestion || "请在『商家库』把该商家网址改为其真实在线店铺地址后，再回来重新生成文案"}
+              </p>
+            </div>
+          ),
+          okText: "我知道了，去修正网址",
+          width: 520,
+        });
+        return;
+      }
     };
 
     try {

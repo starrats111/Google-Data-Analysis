@@ -69,6 +69,21 @@ const PARKED_TEXT_SIGNALS: RegExp[] = [
 const BROWSER_UA_RESOLVER =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
+/**
+ * D-069：对已抓到的可见文本做"域名停放/待售页"高精度匹配（纯函数，无网络）。
+ * 用于商家自身 URL 即停放页的场景（resolver 的 probeParkedPage 只校验 ccTLD 候选，挡不住）。
+ * 复用与 ccTLD 切换同一套高精度信号，实测不误伤 engwe「e-bikes for sale」/rugsource「rugs for sale」。
+ * @returns 命中的信号源（截断 40 字）或 null
+ */
+export function matchParkedTextSignal(text: string | null | undefined): string | null {
+  if (!text) return null;
+  const sample = text.length > 60000 ? text.slice(0, 60000) : text;
+  for (const re of PARKED_TEXT_SIGNALS) {
+    if (re.test(sample)) return re.source.slice(0, 40);
+  }
+  return null;
+}
+
 // 国家 → 候选 ccTLD（首个优先）
 const COUNTRY_TLD_MAP: Record<string, string[]> = {
   US: ["com"],

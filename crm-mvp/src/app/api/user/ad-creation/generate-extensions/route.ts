@@ -21,6 +21,7 @@ import {
   isBadSitelinkUrl,
 } from "@/lib/crawl-pipeline";
 import { buildCrawlKey, withCrawlInflightLock } from "@/lib/crawl-inflight-lock";
+import { matchParkedTextSignal } from "@/lib/country-url-resolver";
 import { humanizeAdCopyBatch, AD_COPY_ANTI_AI_BLOCK } from "@/lib/humanizer";
 import { autoExpandSitelinks } from "@/lib/sitelink-auto-expand";
 import { generateSitelinkTexts } from "@/lib/sitelink-ai-writer";
@@ -695,6 +696,34 @@ export async function POST(req: NextRequest) {
           ctxFeatures < 3;
 
         const merchantCategory = merchant.category ?? null;
+
+        // ─── L1.5 D-069：商家网址即"域名停放/待售页"硬拦截 ───
+        // resolver 的 probeParkedPage 只校验 ccTLD 候选，挡不住商家主域本身被停放/挂售的情况
+        // （如 heidi.uk/scarosso.de 之外，商家自己填的 .com 也可能已是停放页）。此时爬到的 pageText
+        // 内容很多但全是"卖域名"，会被 AI 写成卖域名广告。命中高精度停放信号 → 直接停掉 core 生成，
+        // 给员工明确提示（修正商家网址），而不是生成与业务无关的文案。
+        const parkedSignalHit =
+          matchParkedTextSignal(cache!.pageText) ||
+          (Array.isArray(cache!.crawlQualityIssues) && cache!.crawlQualityIssues.includes("parked_page")
+            ? "crawl_quality:parked_page"
+            : null);
+
+        if (parkedSignalHit && types.includes("core")) {
+          console.warn(
+            `[Extensions] L1.5 D-069 触发：商家网址疑似域名停放/待售页（signal=${parkedSignalHit} url=${merchantUrl}），停掉 core 文案生成`,
+          );
+          send("merchant_url_parked", {
+            url: merchantUrl,
+            signal: parkedSignalHit,
+            reason: "商家网址当前是『域名停放/待售页』（非真实店铺页面），按此页面生成会得到与业务无关的『卖域名』广告",
+            suggestion: "请在『商家库』把该商家网址改为其真实在线店铺地址后，再回来重新生成文案",
+          });
+          // 与正常路径一致用 [DONE] 终止符收尾；controller.close()/释放生成闸由外层 finally 统一处理
+          if (!isClosed) {
+            try { controller.enqueue(encoder.encode("data: [DONE]\n\n")); } catch { isClosed = true; }
+          }
+          return;
+        }
 
         if (ctxInsufficient && types.includes("core")) {
           console.warn(

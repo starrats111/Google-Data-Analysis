@@ -3,6 +3,7 @@ import { getProxyUrlForCountry, getHttpProxyUrlForCountry, fetchViaProxy } from 
 import { acquirePuppeteerSlot, acquireMainCrawlSlot, puppeteerSemaphoreStats } from "@/lib/puppeteer-semaphore";
 import { normalizeImageUrl } from "@/lib/image-url-normalize";
 import { getHostKey, isHostChallenged, markHostChallenged } from "@/lib/crawl-host-cache";
+import { matchParkedTextSignal } from "@/lib/country-url-resolver";
 
 export interface PuppeteerPageData {
   html: string;
@@ -2865,7 +2866,7 @@ export function assessCrawlQuality(result: CrawlResult): {
   //   < 1000 字符 → -15 分（疑似首屏未水合，下游 AI 文案极易翻车）
   // 评分系统底层不要持有"曾经修过 30 万字节 HTML 但 0 文字"的脏数据被判 90 分的盲点。
   if (result.html) {
-    const bodyTextLen = (() => {
+    const visibleText = (() => {
       let t = result.html;
       t = t.replace(/<head[\s\S]*?<\/head>/i, "");
       t = t.replace(/<script[\s\S]*?<\/script>/gi, "");
@@ -2873,10 +2874,16 @@ export function assessCrawlQuality(result: CrawlResult): {
       t = t.replace(/<svg[\s\S]*?<\/svg>/gi, "");
       t = t.replace(/<[^>]+>/g, " ");
       t = t.replace(/\s+/g, " ").trim();
-      return t.length;
+      return t;
     })();
+    const bodyTextLen = visibleText.length;
     if (bodyTextLen < 300) { score -= 30; issues.push("empty_body_text"); }
     else if (bodyTextLen < 1000) { score -= 15; issues.push("thin_body_text"); }
+
+    // D-069：商家自身 URL 即"域名停放/待售页"（resolver 只挡 ccTLD 切换，挡不住商家主域本身是停放页）。
+    // 仅打标 parked_page 供下游守门（不降分，避免对同一停放 .com 触发无意义重爬死循环）。
+    const parkedSignal = matchParkedTextSignal(visibleText);
+    if (parkedSignal) issues.push("parked_page");
   }
 
   // Splash 页面强信号：无链接 + 图片文件名含 splash
