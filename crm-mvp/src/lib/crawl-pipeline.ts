@@ -12,7 +12,7 @@ import { getAdMarketConfig } from "@/lib/ad-market";
 import { getProxyUrlForCountry, getHttpProxyUrlForCountry, ensureCountryEgressHttpProxy } from "@/lib/crawl-proxy";
 import { isLowValueSitelink } from "@/lib/sitelink-filter";
 import { hostMatchesCountryTld } from "@/lib/country-url-resolver";
-import { getHostKey } from "@/lib/crawl-host-cache";
+import { getHostKey, isHostChallenged } from "@/lib/crawl-host-cache";
 // C-016: ccTLD 切换逻辑移出 crawl-pipeline，改由 country-url-resolver 在 route 层调度
 
 // 全局爬取并发控制：最多 2 个同时执行
@@ -1729,16 +1729,28 @@ export async function buildCrawlCache(
   //   - locale+proxy / locale 完整 locale (/en-us/) → locale_short (/us/) 已覆盖，重复
   //   - 有代理分支的 http_* 三连 → puppeteer 已 break，永远走不到，dead code
   // ══════════════════════════════════════════════════════
+  // D-084 §2（fail-fast）：host 30 分钟内已被确认 CF/Datadome 硬挑战时，
+  // 多次 puppeteer 策略 100% 撞同一堵墙，只会 3×75s 空耗 + 把 2C 机器负载拖高、
+  // 诱发更多 buildCrawlCache hang → 僵尸雪崩。此处只保留 1 次 root+proxy 尝试，
+  // 让主爬取在 ~55-75s 内 crawlFailed=true，route 层据此走 SemRush/sitelink 优雅降级。
+  const challengedHost = getHostKey(merchantUrl);
+  const isChallengedHost = !!challengedHost && isHostChallenged(challengedHost);
+  if (isChallengedHost) {
+    console.warn(`[CrawlPipeline] D-084：host=${challengedHost} 已 challenged，主爬取启用 fail-fast（仅 1 次 puppeteer，预算压缩）`);
+  }
+
   type Strategy = { name: string; run: () => Promise<CrawlResultType> };
   const strategies: Strategy[] = [];
   if (merchantUrl) {
     if (options?.forcePuppeteer || proxyUrl) {
       // 有代理 或 forcePuppeteer：优先 Puppeteer，确保 JS 渲染 + IP 出口正确
       strategies.push({ name: "puppeteer_root+proxy", run: () => runPuppeteer(merchantUrl) });
-      // locale_short 仅在 ccTLD 未匹配（通用 TLD 站如 sephora.com + ES 需 /es/）才生成
-      if (localeUrlShort) strategies.push({ name: "puppeteer_locale_short+proxy", run: () => runPuppeteer(localeUrlShort!) });
-      // 代理彻底挂（IP 校验失败/sid 全错国/网络异常）时的最后兜底
-      strategies.push({ name: "puppeteer_direct_fallback", run: () => runPuppeteerDirect(merchantUrl) });
+      if (!isChallengedHost) {
+        // locale_short 仅在 ccTLD 未匹配（通用 TLD 站如 sephora.com + ES 需 /es/）才生成
+        if (localeUrlShort) strategies.push({ name: "puppeteer_locale_short+proxy", run: () => runPuppeteer(localeUrlShort!) });
+        // 代理彻底挂（IP 校验失败/sid 全错国/网络异常）时的最后兜底
+        strategies.push({ name: "puppeteer_direct_fallback", run: () => runPuppeteerDirect(merchantUrl) });
+      }
     } else {
       // 无代理：HTTP 先（快、省资源），Puppeteer 兜底
       strategies.push({ name: "http_root", run: () => crawlPage(merchantUrl, country) });
@@ -1755,7 +1767,9 @@ export async function buildCrawlCache(
   //   无代理 → 80s（至少容纳 1 次 puppeteer 55s 完整流程 + 余量）
   //   注意：单 puppeteer 流程 ~55s（goto 35s + sleep/scroll/waitForSelector 共 20s），
   //         总预算必须 ≥ 单 puppeteer 流程，否则 SPA 站永远拿不到水合后的 HTML。
-  const STRATEGY_BUDGET_MS = puppeteerProxyUrl ? 160_000 : 90_000;
+  // D-084 §2：challenged host fail-fast 时把总预算压到 80s（≈1 次 puppeteer 完整流程），
+  // 避免在注定过不去的站上长时间占槽、拖高负载。
+  const STRATEGY_BUDGET_MS = isChallengedHost ? 80_000 : (puppeteerProxyUrl ? 160_000 : 90_000);
   const strategyStartedAt = Date.now();
 
   for (const strategy of strategies) {
