@@ -875,30 +875,13 @@ export default function AdPreviewPage() {
     }
   }, [preview, kwList, campaignId, message, budget, maxCpc, biddingStrategy]);
 
-  // ─── 初始化后自动拉取关键词（D-038c-v2 I2：localStorage 24h 防抖 + 失败不重复 auto-fetch）───
+  // ─── D-091：关键词已并入 core 生成任务（与爬虫并发查询），不再进页单独 auto-fetch SemRush，───
+  // 从源头消除二次查询 / 缓解 3UE「设备数超限」。关键词由生成 job 的 "keywords" 事件实时回填；
+  // 员工仍可点右上角「从 SemRush 获取关键词」手动拉取 / 补充。
   useEffect(() => {
-    if (!initialized || autoFetchKwDone.current) return;
-    const hasNewStyleKw = kwList.some((k) => k.source === "semrush_paid" || k.source === "semrush_organic" || k.source === "ai_generated");
-    if (kwList.length > 0 && hasNewStyleKw) return;
-    // 24h 内同一 campaign auto-fetch 过任何状态（success/cache/empty/failed/error）则跳过
-    try {
-      const cached = localStorage.getItem(`semrush_fetched_${campaignId}`);
-      if (cached) {
-        const parsed = JSON.parse(cached) as { ts?: number; status?: string };
-        if (parsed.ts && Date.now() - parsed.ts < 24 * 60 * 60 * 1000) {
-          autoFetchKwDone.current = true;
-          // 上次失败时显式提示用户点按钮，避免静默
-          if (parsed.status && ["failed", "error", "empty"].includes(parsed.status)) {
-            setSemrushFailed(true);
-            setSemrushFailMsg("上次 SemRush 获取未成功，请点击右上角「从 SemRush 获取关键词」按钮手动重试");
-          }
-          return;
-        }
-      }
-    } catch {}
+    if (!initialized) return;
     autoFetchKwDone.current = true;
-    fetchKeywordsFromSemrush({ manual: false });
-  }, [initialized, kwList, fetchKeywordsFromSemrush, campaignId]);
+  }, [initialized]);
 
   // ─── 通过 3UE 链接获取关键词 ───
   const fetchKeywordsFromUrl = useCallback(async () => {
@@ -1140,6 +1123,39 @@ export default function AdPreviewPage() {
             `[AdLang] 检测页面语言 ${d.code} 与投放国家 ${targetCountry} 市场语言 ${marketLang} 不一致，按市场语言投放`,
           );
         }
+        return;
+      }
+
+      // D-091：core 任务内 SemRush 关键词与爬虫并发，关键词先回则实时回填面板（等价旧 auto-fetch 成功路径）
+      if (type === "keywords") {
+        const kd = data as { keywords?: unknown[]; from_cache?: boolean; cache_age_hours?: number };
+        const kws = (kd?.keywords as any[]) || [];
+        if (kws.length === 0) return;
+        setSemrushFailed(false);
+        setSemrushFailMsg("");
+        setKwList((prev) => {
+          const newKws = mergeSemrushKeywords(kws as Parameters<typeof mergeSemrushKeywords>[0], prev);
+          return newKws.length > 0 ? [...prev, ...newKws] : prev;
+        });
+        const paidCount = kws.filter((k: any) => k.source === "semrush_paid").length;
+        const organicCount = kws.filter((k: any) => k.source === "semrush_organic").length;
+        const parts: string[] = [];
+        if (paidCount > 0) parts.push(`${paidCount} 个付费词`);
+        if (organicCount > 0) parts.push(`${organicCount} 个自然词`);
+        if (kd?.from_cache) {
+          message.warning({ content: `3UE 暂不可用，已采用历史缓存关键词（${kd?.cache_age_hours ?? 0} 小时前）`, duration: 8 });
+        } else {
+          message.success(`AI 已优选 ${kws.length} 个关键词${parts.length ? `（${parts.join(" + ")}）` : ""}`);
+        }
+        return;
+      }
+
+      // D-091：SemRush 关键词未就绪（失败/空/超时）→ 不阻断文案（已用网站内容生成），仅提示可手动获取
+      if (type === "keywords_failed") {
+        const kf = data as { category?: string; message?: string };
+        setSemrushFailed(true);
+        setSemrushFailMsg(kf?.message || "SemRush 关键词获取未成功，可点右上角「从 SemRush 获取关键词」手动重试");
+        message.warning({ content: "SemRush 关键词暂未获取到，已用网站内容生成文案；如需关键词可手动获取", duration: 6 });
         return;
       }
 
@@ -1491,7 +1507,7 @@ export default function AdPreviewPage() {
       };
 
       // 后台任务轮询：按事件优先级对「新出现/变化」的事件调用 handleEvent
-      const APPLY_ORDER = ["queued", "crawl_pending", "crawl_status", "detected_language", "policy_blocked", "merchant_url_parked", "context_insufficient", "headlines", "descriptions", "core_done", "callouts", "structured_snippet", "promotion", "price_items", "call", "negative_keywords", "sitelinks", "images", "compliance_auto_fix", "compliance_warnings", "compliance_policy_fix"];
+      const APPLY_ORDER = ["queued", "crawl_pending", "crawl_status", "detected_language", "keywords", "keywords_failed", "policy_blocked", "merchant_url_parked", "context_insufficient", "headlines", "descriptions", "core_done", "callouts", "structured_snippet", "promotion", "price_items", "call", "negative_keywords", "sitelinks", "images", "compliance_auto_fix", "compliance_warnings", "compliance_policy_fix"];
       const pollJob = async (jobId: string) => {
         const applied: Record<string, string> = {};
         const startedAt = Date.now();
@@ -1599,6 +1615,7 @@ export default function AdPreviewPage() {
         const req = d.request || {};
         const t = req.types || [];
         message.info("检测到正在进行的生成任务，正在接续进度…", 3);
+        setCurrentStep(1);
         if (t.includes("core")) {
           generateExtension("core");
         } else if (t.includes("optional") && (req.optionalTypes?.length ?? 0) > 0) {
@@ -1956,17 +1973,32 @@ export default function AdPreviewPage() {
     ]);
   }, [kwList, triggerNegativeKeywords, setCurrentStep, setHeadlines, setDescriptions, generateExtension, aiGenerateHeadlines, aiGenerateDescriptions, message]);
 
-  // ─── D-047: 关键词 AI 选好后自动推进生成（取消员工手动「确认关键词」闸门，仅首次自动触发；员工改词后可回步骤 1 重新生成）───
+  // ─── D-091: 进页直接自动启动「合并生成」———————————————————————————————
+  // core 后台任务内并发跑 SemRush 关键词 + 爬虫 + 文案；关键词由 job 的 "keywords" 事件实时回填
+  // 面板，不再先等关键词、无人工确认闸（与旧「先拉词 → 再 handleConfirmKeywords」两步串行相对）。
+  const autoStartGeneration = useCallback(async () => {
+    setCurrentStep(1);
+    setHeadlines(Array(15).fill(""));
+    setDescriptions(Array(4).fill(""));
+    await Promise.allSettled([
+      generateExtension("core"),
+      generateExtension("callouts", "snippet"),
+      generateExtension("promotion", "price", "call"),
+    ]);
+  }, [setCurrentStep, setHeadlines, setDescriptions, generateExtension]);
+
+  // ─── D-091: 仅首次自动触发；已有成品文案（revisit 已水合）则不重复生成；员工改词后可回步骤 0 重新生成 ───
   const autoGenerateDone = useRef(false);
   useEffect(() => {
     if (!initialized || autoGenerateDone.current) return;
     if (currentStep >= 1) return;
-    if (kwFetching) return;
-    const hasAiKw = kwList.some((k) => k.source === "semrush_paid" || k.source === "semrush_organic");
-    if (!hasAiKw) return;
     autoGenerateDone.current = true;
-    handleConfirmKeywords();
-  }, [initialized, currentStep, kwFetching, kwList, handleConfirmKeywords]);
+    const hasExistingCopy =
+      (preview?.adCreative?.headlines?.length ?? 0) > 0 ||
+      (preview?.adCreative?.descriptions?.length ?? 0) > 0;
+    if (hasExistingCopy) return;
+    autoStartGeneration();
+  }, [initialized, currentStep, preview, autoStartGeneration]);
 
   // ─── 提交 ───
   const handleSubmit = useCallback(async () => {

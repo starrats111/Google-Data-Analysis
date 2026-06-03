@@ -21,6 +21,7 @@ import {
   isBadSitelinkUrl,
 } from "@/lib/crawl-pipeline";
 import { buildCrawlKey, withCrawlInflightLock } from "@/lib/crawl-inflight-lock";
+import { fetchSemrushKeywords, type SemrushKeywordsResult } from "@/lib/semrush-keywords";
 import { matchParkedTextSignal } from "@/lib/country-url-resolver";
 import { humanizeAdCopyBatch, AD_COPY_ANTI_AI_BLOCK } from "@/lib/humanizer";
 import { autoExpandSitelinks } from "@/lib/sitelink-auto-expand";
@@ -432,6 +433,7 @@ interface GenContext {
   campaign_id: string;
   campaign: GenCampaign;
   merchant: GenMerchant;
+  adGroupId: bigint | null;
   adCreativeId: bigint | null;
   initialCache: CrawlCache | null;
   originalMerchantUrl: string;
@@ -501,6 +503,7 @@ export async function loadGenContext(
       campaign_id: String(campaign.id),
       campaign,
       merchant,
+      adGroupId: adGroup?.id ?? null,
       adCreativeId,
       initialCache,
       originalMerchantUrl,
@@ -521,6 +524,7 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
     campaign_id,
     campaign,
     merchant,
+    adGroupId,
     adCreativeId,
     initialCache,
     originalMerchantUrl,
@@ -597,6 +601,41 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
           select: { ai_rule_profile: true, daily_budget: true, max_cpc: true, bidding_strategy: true },
         });
         const aiRuleProfile = (adSettings as any)?.ai_rule_profile;
+
+        // ─── D-091：SemRush 关键词查询与爬虫并发启动 ───
+        // 仅 core 首次自动生成（未携带员工已确认/编辑的关键词）时，在此并发启动 SemRush 关键词流水线，
+        // 与下方 buildCrawlCache 同时跑——等爬虫完成时关键词通常已就绪，并复用同一次查询的 organic titles
+        // 喂给文案编排（消除二次查询/减少 3UE 设备并发）。失败/超时不阻断文案（降级用爬取数据 + DB 兜底词）。
+        // 改词「重新生成」（requestKeywords 非空）→ 跳过 SemRush 查询，直接用员工词，进一步省查询。
+        const wantSemrushKeywords =
+          (types as string[]).includes("core") &&
+          (!Array.isArray(requestKeywords) || (requestKeywords as string[]).filter(Boolean).length === 0);
+        const semrushKwBudget = Number(campaign.daily_budget) > 0 ? Number(campaign.daily_budget) : 2;
+        const semrushKwMaxCpc = Number(campaign.max_cpc_limit) > 0 ? Number(campaign.max_cpc_limit) : 0.3;
+        const semrushKwPromise: Promise<SemrushKeywordsResult | null> = wantSemrushKeywords
+          ? (async () => {
+              try {
+                const SEMRUSH_KW_BUDGET_MS = 75000; // 略低于 90s 爬取预算；超时降级不阻断
+                const timeout = new Promise<null>((resolve) => {
+                  const t = setTimeout(() => resolve(null), SEMRUSH_KW_BUDGET_MS);
+                  t.unref?.();
+                });
+                return await Promise.race([
+                  fetchSemrushKeywords({
+                    merchantUrl,
+                    country,
+                    merchantName,
+                    dailyBudgetUsd: semrushKwBudget,
+                    maxCpcUsd: semrushKwMaxCpc,
+                  }),
+                  timeout,
+                ]);
+              } catch (e) {
+                console.warn("[Extensions] D-091 SemRush 关键词查询异常（降级不阻断）:", e instanceof Error ? e.message : e);
+                return null;
+              }
+            })()
+          : Promise.resolve(null);
 
         // ─── Step 3：读取或构建爬取缓存（Puppeteer 可能 60-90 s）───
         // ccTLD 切换时需清空缓存（切换后新域名无缓存）
@@ -745,6 +784,67 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
 
         const tasks: Promise<void>[] = [];
 
+        // ─── D-091：合流 SemRush 关键词（与爬虫并发的那次查询）───
+        // 等并发跑的关键词查询（通常已先于爬虫返回）：
+        //   1) 复用 organic titles 入 cache（供编排器/L2 守门，并让下方 D-083b 不再二次查询）；
+        //   2) emit keywords 回填前端面板并落库（关掉页面也不丢）；
+        //   3) 选中的词作 core 文案 confirmedKeywords。
+        // 失败/空/超时一律不阻断（文案降级用爬取数据 + DB 兜底词）。
+        let semrushSelectedPhrases: string[] = [];
+        if (wantSemrushKeywords) {
+          const kwRes = await semrushKwPromise;
+          if (kwRes && kwRes.ok && kwRes.keywords.length > 0) {
+            semrushSelectedPhrases = kwRes.keywords.map((k) => k.phrase).filter(Boolean).slice(0, 10);
+            // 复用 organic titles 入 cache（仅当爬虫没拿到 semrushTitles 时）
+            if (
+              Array.isArray(kwRes.dedupedTitles) && kwRes.dedupedTitles.length > 0 &&
+              (!Array.isArray(cache!.semrushTitles) || cache!.semrushTitles.length === 0)
+            ) {
+              (cache as any).semrushTitles = kwRes.dedupedTitles;
+              (cache as any).semrushDescriptions = kwRes.dedupedDescriptions;
+              if (adCreativeId) {
+                await prisma.ad_creatives.update({
+                  where: { id: adCreativeId },
+                  data: { crawl_cache: cache as any },
+                }).catch(() => {});
+              }
+            }
+            // emit keywords：前端复用 mergeSemrushKeywords 实时回填面板
+            send("keywords", {
+              keywords: kwRes.keywords,
+              from_cache: kwRes.fromCache,
+              cache_age_hours: kwRes.cacheAgeHours,
+            });
+            // 落库：替换该 ad_group 关键词（删旧插新），保证关掉页面也不丢
+            if (adGroupId) {
+              const kwRows = kwRes.keywords
+                .map((k) => ({
+                  ad_group_id: adGroupId,
+                  keyword_text: String(k.phrase ?? "").trim(),
+                  match_type: (k.recommended_match_type || "PHRASE").toUpperCase(),
+                  avg_monthly_searches: k.volume != null && Number.isFinite(k.volume) ? Math.max(0, Math.round(k.volume)) : null,
+                  suggested_bid: k.suggested_bid ?? (k.cpc ?? null),
+                  competition: k.competition != null ? String(k.competition) : null,
+                  source: k.source ?? null,
+                }))
+                .filter((d) => d.keyword_text.length > 0);
+              try {
+                await prisma.$transaction([
+                  prisma.keywords.deleteMany({ where: { ad_group_id: adGroupId } }),
+                  prisma.keywords.createMany({ data: kwRows, skipDuplicates: true }),
+                ]);
+              } catch (e) {
+                console.warn("[Extensions] D-091 关键词落库失败（不阻断）:", e instanceof Error ? e.message : e);
+              }
+            }
+            console.log(`[Extensions] D-091 SemRush 关键词就绪 ${semrushSelectedPhrases.length} 个，titles=${kwRes.dedupedTitles.length}，fromCache=${kwRes.fromCache}`);
+          } else {
+            const category = kwRes?.errorCategory || "timeout_or_empty";
+            send("keywords_failed", { category, message: kwRes?.errorMessage || "" });
+            console.warn(`[Extensions] D-091 SemRush 关键词未就绪（category=${category}），文案降级用爬取/兜底词`);
+          }
+        }
+
         // ─── D-083b：SemRush 守门前兜底 ────────────────────────────────────────────
         // buildCrawlCache 调用处始终传 semrushData=undefined，故 cache.semrushTitles 永远 []。
         // 当爬虫失败（pageText 极短）时，L2 守门因 semrushTitles=0 误拦了编排器（编排器
@@ -855,7 +955,11 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
           // 跳过 generateCore，但继续走 optional 和 sitelinks 已有逻辑（这些都依赖 cache，没有上下文也无法生成）
           // 不进入主 if 分支，跳过下面的 generateCore
         } else if (types.includes("core")) {
-          const confirmedKeywords = Array.isArray(requestKeywords) ? (requestKeywords as string[]).filter(Boolean).slice(0, 10) : [];
+          // D-091：员工改词重生成优先用员工词；首次自动生成则用并发 SemRush 选出的词
+          const confirmedKeywords =
+            Array.isArray(requestKeywords) && (requestKeywords as string[]).filter(Boolean).length > 0
+              ? (requestKeywords as string[]).filter(Boolean).slice(0, 10)
+              : semrushSelectedPhrases;
           // C-112 / D-046.C：8 步 AI 智能闭环（完全替换原 generateCore 主路径）
           //   - Step 1 reachability  → Step 2 crawl（已 cache）→ Step 3 AI 画像
           //   - Step 4 政策 pre-flight → Step 5 关键词 5 源 + 三因子 match type
