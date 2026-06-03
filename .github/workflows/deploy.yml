@@ -10,7 +10,9 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # D-091：2 核/3.7G 低配生产机在「旧进程在线 + next build」并存时内存吃紧、构建偶发 >12m，
+    # 触发 appleboy command_timeout(原 12m) 超时（构建仍在跑、非 OOM 早退）。放宽到 24m 留足余量。
+    timeout-minutes: 30
 
     steps:
       - name: Deploy via SSH
@@ -21,7 +23,7 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           port: ${{ secrets.SERVER_PORT }}
           timeout: 60s
-          command_timeout: 12m
+          command_timeout: 24m
           script: |
             set -e
 
