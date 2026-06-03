@@ -80,6 +80,50 @@ function CrawlProgressTip({ active, label = "正在爬取商家网站" }: { acti
   );
 }
 
+// 一键生成广告素材 实时进度卡片：标题带秒数实时跳动 + 按耗时升级的动态副标题
+// 独立 setInterval 每秒重渲染，仅自身 re-render
+function CoreGeneratingCard({ active }: { active: boolean }) {
+  const [elapsed, setElapsed] = useState(0);
+  const startedRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!active) {
+      startedRef.current = null;
+      setElapsed(0);
+      return;
+    }
+    startedRef.current = Date.now();
+    const tick = () => {
+      if (startedRef.current == null) return;
+      setElapsed(Math.floor((Date.now() - startedRef.current) / 1000));
+    };
+    tick();
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, [active]);
+  if (!active) return null;
+  let detail = "AI 正在分析商家网站，生成标题、描述和站内链接...";
+  if (elapsed >= 90) {
+    detail = "部分网站反爬较严，正在使用真人浏览器模式深度探查，可能需 2-3 分钟，您可先继续操作其它字段。";
+  } else if (elapsed >= 60) {
+    detail = "正在爬取商家网站补充上下文并生成扩展，请稍候...";
+  } else if (elapsed >= 30) {
+    detail = "AI 正在生成标题、描述和站内链接，通常需要 15-30 秒...";
+  }
+  return (
+    <Card size="small" style={{ marginBottom: 16, border: "1px solid #91caff", background: "#e6f4ff" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+        <LoadingOutlined style={{ fontSize: 20, color: "#1677ff" }} />
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>
+            正在一键生成广告素材...（{elapsed}s）
+          </div>
+          <div style={{ fontSize: 12, color: "#5F6368" }}>{detail}</div>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 // Google Ads 支持的语言列表
 const GOOGLE_ADS_LANGUAGES = [
   { code: "en", name: "English" }, { code: "fr", name: "Français" },
@@ -1950,17 +1994,8 @@ export default function AdPreviewPage() {
         {preview.campaign?.google_campaign_id && <Tag color="green">已提交</Tag>}
       </Space>
 
-      {coreGenerating && (
-        <Card size="small" style={{ marginBottom: 16, border: "1px solid #91caff", background: "#e6f4ff" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-            <LoadingOutlined style={{ fontSize: 20, color: "#1677ff" }} />
-            <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>正在一键生成广告素材...</div>
-              <div style={{ fontSize: 12, color: "#5F6368" }}>AI 正在生成标题、描述和站内链接，通常需要 15-30 秒。</div>
-            </div>
-          </div>
-        </Card>
-      )}
+      <CoreGeneratingCard active={coreGenerating} />
+
 
       <Row gutter={16}>
         {/* ─── 左侧：关键词（步骤1） / 标题 / 描述 / 扩展（步骤2） ─── */}
