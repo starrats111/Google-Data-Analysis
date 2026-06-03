@@ -34,6 +34,7 @@ const STAGE_MAP: Record<string, { stage: string; progress: number }> = {
   crawl_pending: { stage: "crawling", progress: 12 },
   crawl_status: { stage: "analyzing", progress: 30 },
   detected_language: { stage: "analyzing", progress: 32 },
+  keywords_pending: { stage: "analyzing", progress: 34 },
   keywords: { stage: "analyzing", progress: 38 },
   keywords_failed: { stage: "analyzing", progress: 38 },
   headlines: { stage: "generating", progress: 55 },

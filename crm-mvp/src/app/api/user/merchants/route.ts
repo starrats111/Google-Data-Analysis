@@ -924,7 +924,19 @@ async function triggerAdCopyGeneration(
     let dedupedDescriptions: string[] = [];
     let paidKeywordsForDb: Array<{ phrase: string; volume: number; competition?: string | number | null; suggested_bid?: number | null; cpc?: number | null; source: string; recommended_match_type: string }> = [];
 
-    if (merchantUrl) {
+    // D-092：DataCollect（竞品预收集）与广告生成共用同一个 3UE 账号。两者并行时会叠加 3UE 会话/
+    // 节点切换，触发「设备数超限」（见 14:39 线上日志）。SemRush 客户端虽有进程级串行 guard(D-087)，
+    // 但仍是两个独立消费者互相排队、放大查询量。这里加一道闸：若当前有整条广告生成在跑，
+    // DataCollect 跳过自己的 SemRush 查询（关键词改由生成流程 D-091 补齐），只保留爬取，错峰 3UE。
+    let skipSemrushDueToGen = false;
+    try {
+      const { generationGateStats } = await import("@/lib/generation-gate");
+      skipSemrushDueToGen = generationGateStats().active > 0;
+    } catch { /* 取不到状态则照常查询 */ }
+
+    if (merchantUrl && skipSemrushDueToGen) {
+      console.log("[DataCollect] 跳过 SemRush 查询：当前有广告生成在跑（共用 3UE），错峰避免设备数超限；关键词由生成流程补齐");
+    } else if (merchantUrl) {
       try {
         const { isPolicyRiskKeyword } = await import("@/lib/keyword-optimizer");
         const client = await SemRushClient.fromConfig(country);

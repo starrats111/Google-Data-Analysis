@@ -4,16 +4,19 @@ import { PrismaMariaDb } from "@prisma/adapter-mariadb";
 // Prisma Client 单例（v7 + MariaDB adapter）
 // 注意：schema 变更后需重启 dev server 以加载新的 generated client
 // ─── 低配生产机连接池 ───
-// 默认可通过 DB_POOL_SIZE 覆盖。3~4G 内存机型默认 5：过小易排队超时，过大占内存。
-// （每个连接约 10~20MB，仍远低于滥用 10+ 连接）
+// D-092：默认从 5 提到 15（仍可由 DB_POOL_SIZE 覆盖）。
+//   真因：池=5 太小，cron 批量（MerchantAutoLink/sheet-sync）+ 多条并发广告生成 + 定时同步
+//   同一时刻挤满 5 个连接 → 后续查询排队 >10s 触发成片 `pool timeout (active=5 idle=0 limit=5)`，
+//   生成链路 DB 读写被「直接截断」。MySQL 默认 max_connections=151，15 个连接对 2 核/3.7G 安全
+//   （mariadb 原生连接很轻量）。acquireTimeout 同步提到 20s，给瞬时尖峰更多排队缓冲。
 const connectionConfig = {
   host: process.env.DB_HOST || "localhost",
   port: parseInt(process.env.DB_PORT || "3306"),
   user: process.env.DB_USER || "root",
   password: process.env.DB_PASSWORD || "",
   database: process.env.DB_NAME || "crm_mvp",
-  connectionLimit: parseInt(process.env.DB_POOL_SIZE || "5", 10),
-  acquireTimeout: 10000,
+  connectionLimit: parseInt(process.env.DB_POOL_SIZE || "15", 10),
+  acquireTimeout: 20000,
   idleTimeout: 30000,
   minimumIdle: 1,
 };

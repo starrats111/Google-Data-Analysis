@@ -74,8 +74,55 @@ function useElapsed(active: boolean): number {
   return elapsed;
 }
 
-// 一键生成广告素材 实时进度：静默不打扰的轻量提示——小跳动圆点 + 阶段文案 + 计时。
-// 不用大进度条/大百分比/流光，避免喧宾夺主；阶段文案与配色随耗时安静演进。
+// D-092：统一进度提示组件（全站一种样式）。居中「跳动圆点 + 标题(+耗时) + 副提示」，
+// 顶部生成 / 站内链接 / SemRush 关键词 / 图片提取 四处共用此组件，视觉一致、静默不打扰且体现进度与时间。
+function ProgressTip({
+  active,
+  title,
+  hint,
+  elapsed,
+  color = "#1677ff",
+  style,
+}: {
+  active: boolean;
+  title: string;
+  hint?: string;
+  elapsed?: number;
+  color?: string;
+  style?: React.CSSProperties;
+}) {
+  if (!active) return null;
+  return (
+    <div style={{ textAlign: "center", padding: "20px 0", ...style }}>
+      <style>{PROGRESS_ANIM_CSS}</style>
+      <div style={{ display: "flex", gap: 6, justifyContent: "center" }}>
+        {[0, 1, 2].map((i) => (
+          <span
+            key={i}
+            style={{
+              width: 9, height: 9, borderRadius: "50%", background: color,
+              animation: "coreGenDot 1.2s ease-in-out infinite",
+              animationDelay: `${i * 0.18}s`,
+            }}
+          />
+        ))}
+      </div>
+      <div style={{ marginTop: 12, fontWeight: 600, fontSize: 13, color: "#1f1f1f" }}>
+        {title}
+        {typeof elapsed === "number" && (
+          <span style={{ marginLeft: 8, fontSize: 12, fontWeight: 500, color }}>{elapsed}s</span>
+        )}
+      </div>
+      {hint && (
+        <div style={{ fontSize: 12, color: "#5F6368", marginTop: 4, lineHeight: 1.5, maxWidth: 520, margin: "4px auto 0" }}>
+          {hint}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 一键生成广告素材 实时进度：阶段文案与配色随耗时安静演进（统一用 ProgressTip 样式）。
 function CoreGeneratingCard({ active }: { active: boolean }) {
   const elapsed = useElapsed(active);
   if (!active) return null;
@@ -89,50 +136,24 @@ function CoreGeneratingCard({ active }: { active: boolean }) {
   let stageIdx = 0;
   for (let i = 0; i < STAGES.length; i++) if (elapsed >= STAGES[i].from) stageIdx = i;
   const stage = STAGES[stageIdx];
-  const color = stage.color;
 
   return (
-    <div
-      style={{
-        marginBottom: 16,
-        padding: "16px 18px",
-        borderRadius: 12,
-        border: `1px solid ${color}44`,
-        background: `linear-gradient(135deg, ${color}0f 0%, ${color}05 100%)`,
-        display: "flex", alignItems: "center", gap: 14,
-        transition: "background .6s ease, border-color .6s ease",
-      }}
-    >
-      <style>{PROGRESS_ANIM_CSS}</style>
-      <div style={{ display: "flex", gap: 5, flex: "0 0 auto" }}>
-        {[0, 1, 2].map((i) => (
-          <span
-            key={i}
-            style={{
-              width: 8, height: 8, borderRadius: "50%", background: color,
-              animation: "coreGenDot 1.2s ease-in-out infinite",
-              animationDelay: `${i * 0.18}s`,
-            }}
-          />
-        ))}
-      </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 600, fontSize: 13, color: "#1f1f1f" }}>
-          {stage.title}
-          <span style={{ marginLeft: 8, fontSize: 12, fontWeight: 500, color }}>{elapsed}s</span>
-        </div>
-        <div style={{ fontSize: 12, color: "#5F6368", marginTop: 3, lineHeight: 1.5 }}>{stage.hint}</div>
-      </div>
-    </div>
+    <ProgressTip
+      active={active}
+      title={stage.title}
+      hint={stage.hint}
+      elapsed={elapsed}
+      color={stage.color}
+      style={{ marginBottom: 16, padding: "16px 0" }}
+    />
   );
 }
 
-// D-038b（方案 C）：站内链接爬取进度卡片。样式与 CoreGeneratingCard 同语言，
-// 三色跳动圆点 + 阶段文案随耗时演进。独立计时，仅自身 re-render。
+// D-038b（方案 C）：站内链接爬取进度。统一用 ProgressTip 样式，阶段文案随耗时演进。
 function CrawlProgressTip({ active, label = "正在爬取商家网站" }: { active: boolean; label?: string }) {
   const elapsed = useElapsed(active);
   if (!active) return null;
-  let tip = `${label}获取站内链接，请稍候…`;
+  let tip = "正在抓取站内链接，请稍候…";
   let color = "#1677ff";
   if (elapsed >= 90) {
     tip = "部分网站反爬严格，可能需 2–3 分钟。您可继续操作其它字段，或直接手动填写链接。";
@@ -145,38 +166,14 @@ function CrawlProgressTip({ active, label = "正在爬取商家网站" }: { acti
     color = "#13c2c2";
   }
   return (
-    <div
-      style={{
-        margin: "12px 0",
-        padding: "16px 18px",
-        borderRadius: 12,
-        border: `1px solid ${color}44`,
-        background: `linear-gradient(135deg, ${color}0f 0%, ${color}05 100%)`,
-        display: "flex", alignItems: "center", gap: 14,
-        transition: "background .6s ease, border-color .6s ease",
-      }}
-    >
-      <style>{PROGRESS_ANIM_CSS}</style>
-      <div style={{ display: "flex", gap: 5, flex: "0 0 auto" }}>
-        {[0, 1, 2].map((i) => (
-          <span
-            key={i}
-            style={{
-              width: 8, height: 8, borderRadius: "50%", background: color,
-              animation: "coreGenDot 1.2s ease-in-out infinite",
-              animationDelay: `${i * 0.18}s`,
-            }}
-          />
-        ))}
-      </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 600, fontSize: 13, color: "#1f1f1f" }}>
-          {label}获取站内链接
-          <span style={{ marginLeft: 8, fontSize: 12, fontWeight: 500, color }}>{elapsed}s</span>
-        </div>
-        <div style={{ fontSize: 12, color: "#5F6368", marginTop: 3, lineHeight: 1.5 }}>{tip}</div>
-      </div>
-    </div>
+    <ProgressTip
+      active={active}
+      title={`${label}获取站内链接`}
+      hint={tip}
+      elapsed={elapsed}
+      color={color}
+      style={{ margin: "12px 0" }}
+    />
   );
 }
 
@@ -395,6 +392,9 @@ export default function AdPreviewPage() {
 
   // 关键词获取
   const [kwFetching, setKwFetching] = useState(false);
+  // D-092：合并流程里 SemRush 关键词与文案并发查询中的状态——面板显示「查询中」反馈，
+  // 避免显示「暂无关键词，点击获取」让人误以为没启动。由 keywords_pending 事件 + 自动启动置位。
+  const [kwAutoQuerying, setKwAutoQuerying] = useState(false);
   const [semrushFailed, setSemrushFailed] = useState(false);
   const [semrushFailMsg, setSemrushFailMsg] = useState("");
   const [semrushUrl, setSemrushUrl] = useState("");
@@ -1126,10 +1126,19 @@ export default function AdPreviewPage() {
         return;
       }
 
+      // D-092：关键词查询已启动（与爬虫并发）→ 面板显示「查询中」，避免误以为没跑
+      if (type === "keywords_pending") {
+        setKwAutoQuerying(true);
+        setSemrushFailed(false);
+        setSemrushFailMsg("");
+        return;
+      }
+
       // D-091：core 任务内 SemRush 关键词与爬虫并发，关键词先回则实时回填面板（等价旧 auto-fetch 成功路径）
       if (type === "keywords") {
         const kd = data as { keywords?: unknown[]; from_cache?: boolean; cache_age_hours?: number };
         const kws = (kd?.keywords as any[]) || [];
+        setKwAutoQuerying(false);
         if (kws.length === 0) return;
         setSemrushFailed(false);
         setSemrushFailMsg("");
@@ -1153,6 +1162,7 @@ export default function AdPreviewPage() {
       // D-091：SemRush 关键词未就绪（失败/空/超时）→ 不阻断文案（已用网站内容生成），仅提示可手动获取
       if (type === "keywords_failed") {
         const kf = data as { category?: string; message?: string };
+        setKwAutoQuerying(false);
         setSemrushFailed(true);
         setSemrushFailMsg(kf?.message || "SemRush 关键词获取未成功，可点右上角「从 SemRush 获取关键词」手动重试");
         message.warning({ content: "SemRush 关键词暂未获取到，已用网站内容生成文案；如需关键词可手动获取", duration: 6 });
@@ -1507,7 +1517,7 @@ export default function AdPreviewPage() {
       };
 
       // 后台任务轮询：按事件优先级对「新出现/变化」的事件调用 handleEvent
-      const APPLY_ORDER = ["queued", "crawl_pending", "crawl_status", "detected_language", "keywords", "keywords_failed", "policy_blocked", "merchant_url_parked", "context_insufficient", "headlines", "descriptions", "core_done", "callouts", "structured_snippet", "promotion", "price_items", "call", "negative_keywords", "sitelinks", "images", "compliance_auto_fix", "compliance_warnings", "compliance_policy_fix"];
+      const APPLY_ORDER = ["queued", "crawl_pending", "crawl_status", "detected_language", "keywords_pending", "keywords", "keywords_failed", "policy_blocked", "merchant_url_parked", "context_insufficient", "headlines", "descriptions", "core_done", "callouts", "structured_snippet", "promotion", "price_items", "call", "negative_keywords", "sitelinks", "images", "compliance_auto_fix", "compliance_warnings", "compliance_policy_fix"];
       const pollJob = async (jobId: string) => {
         const applied: Record<string, string> = {};
         const startedAt = Date.now();
@@ -1980,12 +1990,15 @@ export default function AdPreviewPage() {
     setCurrentStep(1);
     setHeadlines(Array(15).fill(""));
     setDescriptions(Array(4).fill(""));
+    // D-092：自动启动即先置「关键词查询中」，让面板立刻有反馈（不等 keywords_pending 事件抵达）
+    if (kwList.length === 0) setKwAutoQuerying(true);
     await Promise.allSettled([
       generateExtension("core"),
       generateExtension("callouts", "snippet"),
       generateExtension("promotion", "price", "call"),
     ]);
-  }, [setCurrentStep, setHeadlines, setDescriptions, generateExtension]);
+    setKwAutoQuerying(false);
+  }, [setCurrentStep, setHeadlines, setDescriptions, generateExtension, kwList.length]);
 
   // ─── D-091: 仅首次自动触发；已有成品文案（revisit 已水合）则不重复生成；员工改词后可回步骤 0 重新生成 ───
   const autoGenerateDone = useRef(false);
@@ -2303,7 +2316,7 @@ export default function AdPreviewPage() {
               </Button>
             }
           >
-            {kwList.length === 0 && !kwFetching && !semrushFailed && (
+            {kwList.length === 0 && !kwFetching && !kwAutoQuerying && !semrushFailed && (
               <Alert
                 type="info" showIcon
                 message="暂无关键词"
@@ -2311,12 +2324,15 @@ export default function AdPreviewPage() {
                 style={{ marginBottom: 8 }}
               />
             )}
-            {kwFetching && (
-              <div style={{ textAlign: "center", padding: "16px 0" }}>
-                <Spin tip="正在从 SemRush 获取并优选关键词..." />
-              </div>
-            )}
-            {semrushFailed && !kwFetching && (
+            {/* D-092：统一进度样式——手动获取 / 自动并发查询 共用 ProgressTip */}
+            <ProgressTip
+              active={kwFetching || kwAutoQuerying}
+              title="正在查询并优选关键词"
+              hint="从 SemRush 拉取竞品关键词，结合预算、CPC 与竞争度优选，通常 10–40 秒…"
+              color="#13c2c2"
+              style={{ padding: "16px 0" }}
+            />
+            {semrushFailed && !kwFetching && !kwAutoQuerying && (
               <Alert
                 type="warning" showIcon icon={<WarningOutlined />}
                 message="SemRush 自动获取失败"
@@ -2672,9 +2688,12 @@ export default function AdPreviewPage() {
               )}
               <div style={{ marginTop: 12, marginLeft: 24 }}>
                 {imagesLoading ? (
-                    <div style={{ textAlign: "center", padding: "24px 0" }}>
-                      <Spin tip="正在从商家网站提取图片..." />
-                    </div>
+                    <ProgressTip
+                      active
+                      title="正在从商家网站提取图片"
+                      hint="抓取真实产品图与素材，请稍候…"
+                      color="#722ed1"
+                    />
                   ) : (
                     <>
                       {/* 爬取到的图片 — 勾选模式（含文字图片自动隐藏） */}

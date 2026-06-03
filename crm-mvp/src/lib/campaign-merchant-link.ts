@@ -123,7 +123,10 @@ async function autoLinkCampaigns(userId: bigint): Promise<number> {
     );
     linked++;
 
-    if (ops.length >= 20) {
+    // D-092：批量并发从 20 降到 5——sheet-sync 这类批量任务原先一次性 20 个并发 update 会
+    // 几乎占满连接池，与并发广告生成抢连接，是 14:41 `pool timeout` 风暴的诱因之一。
+    // 降到 5 既不拖慢同步（update 很快），又给生成留出连接余量。
+    if (ops.length >= 5) {
       await Promise.all(ops.splice(0));
     }
   }
