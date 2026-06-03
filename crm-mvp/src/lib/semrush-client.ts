@@ -39,6 +39,12 @@ const SESSION_TTL_MS = 30 * 60 * 1000;
 // 节点宕机（"节点暂不可用"）短期拉黑；套餐不可用（"套餐无法使用该节点"）长期拉黑。
 const NODE_DOWN_TTL_MS = 10 * 60 * 1000;        // 节点暂时宕机：10 分钟内不再尝试
 const NODE_FORBIDDEN_TTL_MS = 12 * 60 * 60 * 1000; // 套餐不支持该节点：12 小时内不再尝试
+// D-087：设备并发超限（账号级，与节点无关）→ 原地退避重试同一节点，绝不切节点/拉黑。
+// "超出同一时间设备数量限制" 是 SemRush 账号同时在线会话数到顶，切节点换出口 IP 只会
+// 再开一台设备→越切越糟，旧逻辑还会把健康节点误判为宕机全部拉黑，导致持续"所有节点不可用"。
+const MAX_DEVICE_LIMIT_RETRIES = 4;
+const DEVICE_LIMIT_BACKOFF_MS = [1500, 3000, 5000, 8000];
+const DEVICE_LIMIT_RE = /设备数量限制|设备数限制|退出其他设备|同一时间设备|设备数超限/i;
 // 候选节点全集（3UE 当前为 1..8；实际可用性以响应为准，本表仅决定尝试顺序与范围）
 const NODE_UNIVERSE = ["1", "2", "3", "4", "5", "6", "7", "8"];
 // D-061：与既有 health-cron（semrush-auto-fix.trySwitchNode）统一写回同一个 key，
@@ -87,10 +93,17 @@ class SemrushGuard {
   private preferredNode: string | null = null;       // 最近成功的节点，优先复用
   private badNodes = new Map<string, number>();       // node → 失效截止时间戳（拉黑）
 
+  // D-087：true 时表示已有一个 SemRush 请求在飞（互斥锁占用），新请求必须等其 release。
+  private locked = false;
+
   private async processQueue() {
     if (this.processing) return;
     this.processing = true;
     while (this.queue.length > 0) {
+      // D-087：并发=1。已有请求在飞 → 暂停派发，等 release() 再驱动。
+      // 这是设备并发超限的结构性根因修复：任一时刻只允许一个 SemRush 会话在线，
+      // 从源头杜绝"超出同一时间设备数量限制"。
+      if (this.locked) break;
       const now = Date.now();
       const elapsed = now - this.lastRequestTime;
       const jitter = Math.floor(Math.random() * RANDOM_JITTER_MAX_MS);
@@ -98,18 +111,29 @@ class SemrushGuard {
       if (elapsed < requiredWait) {
         await new Promise((r) => setTimeout(r, requiredWait - elapsed));
       }
-      this.lastRequestTime = Date.now();
+      if (this.locked) break; // 退避期间可能已被占用，二次确认
+      this.locked = true;
       const item = this.queue.shift();
       item?.resolve();
     }
     this.processing = false;
   }
 
-  async waitForSlot(): Promise<void> {
-    return new Promise((resolve) => {
+  // D-087：获取一个串行槽位；返回 release 函数。调用方必须在网络请求结束后（try/finally）调用 release()，
+  // 否则会死锁后续所有 SemRush 请求。返回的 release 幂等。
+  async waitForSlot(): Promise<() => void> {
+    await new Promise<void>((resolve) => {
       this.queue.push({ resolve });
       this.processQueue();
     });
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.locked = false;
+      this.lastRequestTime = Date.now();
+      void this.processQueue();
+    };
   }
 
   getCachedDomain(domain: string): SemRushResult | null {
@@ -591,13 +615,18 @@ export class SemRushClient {
       return cached.token;
     }
 
-    await guard.waitForSlot();
+    const releaseLogin = await guard.waitForSlot();
     const ts = Date.now();
     const url = `${LOGIN_URL}?username=${encodeURIComponent(this.creds.username)}&password=${encodeURIComponent(this.creds.password)}&ts=${ts}`;
-    const res = await curlFetch(url, {
-      headers: { "user-agent": USER_AGENT, origin: LOGIN_ORIGIN },
-      timeoutMs: 20000,
-    });
+    let res: CurlResponse;
+    try {
+      res = await curlFetch(url, {
+        headers: { "user-agent": USER_AGENT, origin: LOGIN_ORIGIN },
+        timeoutMs: 20000,
+      });
+    } finally {
+      releaseLogin();
+    }
     if (res.status >= 400) {
       if (res.status === 401 || res.status === 403) {
         throw new Error("3UE 登录失败：用户名或密码错误，请在管理后台检查 SemRush 配置");
@@ -613,7 +642,7 @@ export class SemRushClient {
     this.cookies["GMITM_uname"] = this.creds.username;
     this.cookies["GMITM_config"] = this.buildConfigValue();
 
-    await guard.waitForSlot();
+    const releaseWarmup = await guard.waitForSlot();
     try {
       const cookieStr = Object.entries(this.cookies).map(([k, v]) => `${k}=${v}`).join("; ");
       const pageRes = await curlFetch("https://sem.3ue.co/analytics/overview/", {
@@ -629,6 +658,8 @@ export class SemRushClient {
       Object.assign(this.cookies, pageRes.cookies);
     } catch {
       // 页面访问失败不阻塞流程
+    } finally {
+      releaseWarmup();
     }
 
     guard.setCachedSession(this.creds.username, token, this.cookies);
@@ -642,6 +673,7 @@ export class SemRushClient {
     sessionRefreshed = false,
     emptyBodyRetryCount = 0,
     triedNodes: Set<string> = new Set(),
+    deviceLimitRetryCount = 0,
   ): Promise<unknown> {
     const MAX_RPC_RETRIES = 2;
     // D-038c-v2 I5：空 body 指数退避（与 session 失效解耦）
@@ -663,40 +695,69 @@ export class SemRushClient {
     const node = this.activeNode;
     triedNodes.add(node);
 
-    await guard.waitForSlot();
+    const releaseRpc = await guard.waitForSlot();
     // 以选定节点构造 cookie（覆盖 GMITM_config 的 node 字段，token 跨节点通用）
     const cookieStr = Object.entries({ ...this.cookies, GMITM_config: this.buildConfigValue(node) })
       .map(([k, v]) => `${k}=${v}`).join("; ");
-    const res = await curlFetch(RPC_URL, {
-      method: "POST",
-      headers: {
-        "user-agent": USER_AGENT,
-        "content-type": "application/json; charset=utf-8",
-        origin: RPC_ORIGIN,
-        referer: "https://sem.3ue.co/analytics/overview/",
-        accept: "application/json, text/plain, */*",
-        "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
-        cookie: cookieStr,
-      },
-      body: JSON.stringify(payload),
-      timeoutMs: 30000,
-    });
+    let res: CurlResponse;
+    try {
+      res = await curlFetch(RPC_URL, {
+        method: "POST",
+        headers: {
+          "user-agent": USER_AGENT,
+          "content-type": "application/json; charset=utf-8",
+          origin: RPC_ORIGIN,
+          referer: "https://sem.3ue.co/analytics/overview/",
+          accept: "application/json, text/plain, */*",
+          "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+          cookie: cookieStr,
+        },
+        body: JSON.stringify(payload),
+        timeoutMs: 30000,
+      });
+    } finally {
+      // D-087：网络请求结束立即释放串行槽位（成功/失败都释放），
+      // 后续的响应解析/递归重试是纯本地逻辑，递归调用会重新 acquire。
+      releaseRpc();
+    }
 
-    // ── D-061：3UE 节点不可用 → 302 跳 gmitm.redirect.dash，自动切换节点重试 ──
-    // 真因：配置节点宕机/套餐不支持，旧逻辑当成「空 body 抽风」无脑重试同一死节点必败。
+    // ── D-061/D-087：3UE 302 跳 gmitm.redirect.dash → 区分三类原因分别处理 ──
+    // 真因：配置节点宕机 / 套餐不支持 / 账号设备并发超限。旧逻辑把后者也当节点宕机，
+    // 逐个切节点（每切=换出口IP=再开一台设备→越切越糟）并把健康节点全拉黑，导致持续"全不可用"。
     if (res.status >= 300 && res.status < 400 && res.location && /gmitm\.redirect/i.test(res.location)) {
       let msg = res.location;
       try { msg = decodeURIComponent(res.location); } catch { /* 保留原文 */ }
+      const cleanMsg = msg.replace(/^https?:\/\/[^?]*\?msg=/, "").slice(0, 100);
+
+      // ① 设备并发超限：账号级、与节点无关 → 不拉黑、不切节点，原地退避后重试同一节点
+      if (DEVICE_LIMIT_RE.test(msg)) {
+        if (deviceLimitRetryCount < MAX_DEVICE_LIMIT_RETRIES) {
+          const wait = DEVICE_LIMIT_BACKOFF_MS[deviceLimitRetryCount] ?? 8000;
+          console.warn(
+            `[SemRush] 账号同时在线设备数超限（节点 ${node}，与节点无关），退避 ${wait}ms 后原地重试 ` +
+              `(${deviceLimitRetryCount + 1}/${MAX_DEVICE_LIMIT_RETRIES})。3UE: ${cleanMsg}`,
+          );
+          await new Promise((r) => setTimeout(r, wait));
+          // 不切节点、不加入 triedNodes、不拉黑：纯退避重试，靠并发=1 自然让其它会话先释放
+          return this.rpc(payload, retryCount, sessionRefreshed, emptyBodyRetryCount, triedNodes, deviceLimitRetryCount + 1);
+        }
+        throw new Error(
+          "SemRush 账号当前同时在线设备数已达上限（并发查询过多）。系统已自动排队退避重试仍超限，" +
+            "请减少同时进行的广告生成/竞品查询后稍后再试。",
+        );
+      }
+
+      // ② 套餐不支持该节点（长拉黑） / ③ 节点宕机（短拉黑）→ 切换其它节点
       const forbidden = /套餐|无法使用该节点|升级/i.test(msg);
       guard.markNodeBad(node, forbidden ? NODE_FORBIDDEN_TTL_MS : NODE_DOWN_TTL_MS);
       const next = this.selectNode(triedNodes);
       console.warn(
         `[SemRush] 节点 ${node} 不可用（${forbidden ? "套餐不支持" : "节点宕机"}），` +
-          `${next ? `切换到节点 ${next} 重试` : "已无其它候选节点"}。3UE: ${msg.replace(/^https?:\/\/[^?]*\?msg=/, "").slice(0, 80)}`,
+          `${next ? `切换到节点 ${next} 重试` : "已无其它候选节点"}。3UE: ${cleanMsg}`,
       );
       if (next) {
         this.activeNode = next;
-        return this.rpc(payload, retryCount, sessionRefreshed, emptyBodyRetryCount, triedNodes);
+        return this.rpc(payload, retryCount, sessionRefreshed, emptyBodyRetryCount, triedNodes, deviceLimitRetryCount);
       }
       throw new Error("3UE 所有节点当前均不可用，请稍后重试；若持续如此请在管理后台更换 3UE 账号或升级套餐");
     }
