@@ -1521,6 +1521,10 @@ export default function AdPreviewPage() {
       const pollJob = async (jobId: string) => {
         const applied: Record<string, string> = {};
         const startedAt = Date.now();
+        // D-093 自适应轮询：有新事件落地（文案/扩展正在流式产出）→ 快轮询(800ms)让 UI 即时跟手；
+        // 长时间无变化（多在等爬虫 60-90s）→ 退到 2500ms 省请求；中间态 1500ms。
+        // 比原固定 2500ms 平均快 ~1.5s 看到结果，且不在爬虫静默期空转打 DB。
+        let lastChangeAt = Date.now();
         for (;;) {
           if (genAbort.signal.aborted) throw new DOMException("aborted", "AbortError");
           let sd: { found?: boolean; status?: string; events?: Record<string, unknown>; error?: string } | null = null;
@@ -1533,6 +1537,7 @@ export default function AdPreviewPage() {
             await sleep(2500); // 单次轮询失败不致命（连接抖动），稍后重试
             continue;
           }
+          let changedThisTick = false;
           if (sd && sd.found) {
             const events = (sd.events || {}) as Record<string, unknown>;
             const keys = Object.keys(events).sort((a, b) => {
@@ -1544,6 +1549,7 @@ export default function AdPreviewPage() {
               const js = JSON.stringify(events[t]);
               if (applied[t] === js) continue;
               applied[t] = js;
+              changedThisTick = true;
               try { await handleEvent(t, events[t]); } catch {}
             }
             if (sd.status === "done" || sd.status === "failed") {
@@ -1554,7 +1560,10 @@ export default function AdPreviewPage() {
             }
           }
           if (Date.now() - startedAt > MAX_POLL_MS) throw new DOMException("aborted", "AbortError");
-          await sleep(2500);
+          if (changedThisTick) lastChangeAt = Date.now();
+          const idleMs = Date.now() - lastChangeAt;
+          const nextDelay = changedThisTick ? 800 : idleMs > 8000 ? 2500 : 1500;
+          await sleep(nextDelay);
         }
       };
 

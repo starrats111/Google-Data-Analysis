@@ -154,8 +154,27 @@ export async function runIntelligentAdCreation(
   const aiCalls: Record<string, number> = {};
 
   // ───── Step 1: URL 可达性 ─────
+  // D-093 速度优化：若已带入「成功的爬取缓存」（非 crawlFailed 且正文 ≥200 字），说明站点刚被我们
+  // 用真人浏览器(Puppeteer)真实渲染成功——可达性已被证实，无需再探测。直接合成 reachable 结果。
+  // 收益最大的恰是 Cloudflare/Akamai 硬挑战站：对它们 plain fetch 会被 403/503，原 checkReachability
+  // 会空跑 3 次重试（8s 超时 + 1.5s/3s 退避 ≈ 最多 ~28s）才放行，纯属浪费在 AI 生成前的串行等待。
+  // 无缓存或爬取失败时仍真正探测，以便诚实 emit url_unreachable_warning。
   const t1 = Date.now();
-  const reachability = await checkReachability(ctx.finalUrl);
+  const cachedCrawlOk =
+    !!ctx.existingCrawlCache &&
+    !ctx.existingCrawlCache.crawlFailed &&
+    (ctx.existingCrawlCache.pageText ?? "").length >= 200;
+  const reachability: ReachabilityResult = cachedCrawlOk
+    ? {
+        finalUrl: ctx.finalUrl,
+        statusCode: 200,
+        reachable: true,
+        redirectHops: 0,
+        attempts: 0,
+        elapsedMs: 0,
+        chain: [],
+      }
+    : await checkReachability(ctx.finalUrl);
   timings.step1_reachability = Date.now() - t1;
   if (!reachability.reachable) {
     emit("url_unreachable_warning", {
