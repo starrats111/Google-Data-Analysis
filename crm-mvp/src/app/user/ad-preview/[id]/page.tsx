@@ -4,7 +4,7 @@ import { useParams, useRouter } from "next/navigation";
 import {
   Card, Row, Col, Input, Button, Space, Tag, Typography, Spin, Alert,
   Select, InputNumber, Switch, Divider, App, Tooltip, Popconfirm, Checkbox,
-  Upload, Image, Steps, Badge,
+  Upload, Image, Steps, Badge, Progress,
 } from "antd";
 import {
   ThunderboltOutlined, LoadingOutlined,
@@ -13,6 +13,7 @@ import {
   SoundOutlined, CheckCircleOutlined, ExclamationCircleOutlined,
   InboxOutlined, WarningOutlined, TranslationOutlined,
   PhoneOutlined, DollarOutlined, TagOutlined, UnorderedListOutlined,
+  GlobalOutlined,
 } from "@ant-design/icons";
 import { useApiWithParams, mutateApi } from "@/lib/swr";
 import { describeClientError } from "@/lib/client-error";
@@ -44,9 +45,33 @@ function formatCid(cid: string): string {
   return cid;
 }
 
-// D-038b（方案 C）：爬取进度阶梯提示子组件
-// 独立 setInterval 每秒重渲染，仅自身 re-render 不影响父组件
-function CrawlProgressTip({ active, label = "正在爬取商家网站" }: { active: boolean; label?: string }) {
+// 进度动画样式（脉冲光环 + 流光进度条），仅注入一次
+const PROGRESS_ANIM_CSS = `
+@keyframes coreGenPulse {
+  0%   { transform: scale(1);    box-shadow: 0 0 0 0 var(--cg-ring); }
+  70%  { transform: scale(1.06); box-shadow: 0 0 0 10px rgba(0,0,0,0); }
+  100% { transform: scale(1);    box-shadow: 0 0 0 0 rgba(0,0,0,0); }
+}
+@keyframes coreGenSheen {
+  0%   { background-position: -180% 0; }
+  100% { background-position: 280% 0; }
+}
+@keyframes coreGenDot {
+  0%, 100% { opacity: .35; transform: translateY(0); }
+  50%      { opacity: 1;   transform: translateY(-2px); }
+}
+.cg-card { position: relative; overflow: hidden; }
+.cg-card::after {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 100%;
+  background: linear-gradient(110deg, transparent 30%, rgba(255,255,255,.55) 50%, transparent 70%);
+  background-size: 200% 100%;
+  animation: coreGenSheen 2.4s ease-in-out infinite;
+  pointer-events: none;
+}
+`;
+
+// 通用进度计时器 hook：active 期间每秒累加，非 active 归零
+function useElapsed(active: boolean): number {
   const [elapsed, setElapsed] = useState(0);
   const startedRef = useRef<number | null>(null);
   useEffect(() => {
@@ -64,63 +89,154 @@ function CrawlProgressTip({ active, label = "正在爬取商家网站" }: { acti
     const t = setInterval(tick, 1000);
     return () => clearInterval(t);
   }, [active]);
+  return elapsed;
+}
+
+// 渐进百分比：随耗时平滑逼近上限（永不到 100，避免“假完成”），给用户持续推进的体感
+function progressPercent(elapsed: number, cap = 96): number {
+  return Math.min(cap, Math.round(100 * (1 - Math.exp(-elapsed / 45))));
+}
+
+interface ProgressStage {
+  from: number;
+  Icon: React.ComponentType<{ style?: React.CSSProperties }>;
+  title: string;
+  hint: string;
+  color: string;
+  grad: [string, string];
+}
+
+// 一键生成广告素材 实时进度卡片：样式随阶段演进（图标/配色/渐变切换）+ 流光 + 推进进度条 + 步进点
+function CoreGeneratingCard({ active }: { active: boolean }) {
+  const elapsed = useElapsed(active);
   if (!active) return null;
-  let tip = `${label}获取站内链接...（${elapsed}s）`;
-  if (elapsed >= 90) {
-    tip = `${label}（已 ${elapsed}s，部分网站反爬严格，可能需 2-3 分钟，您可继续操作其它字段或选择手动填写）`;
-  } else if (elapsed >= 60) {
-    tip = `${label}（已 ${elapsed}s，正在使用 Puppeteer 真人浏览器模式探查...）`;
-  } else if (elapsed >= 30) {
-    tip = `${label}（已 ${elapsed}s，网站反爬较严，正在重试...）`;
-  }
+
+  const STAGES: ProgressStage[] = [
+    { from: 0,  Icon: GlobalOutlined, title: "正在分析商家网站",       hint: "读取页面内容、识别品牌定位与核心卖点…",                          color: "#1677ff", grad: ["#e6f4ff", "#f5faff"] },
+    { from: 30, Icon: EditOutlined,   title: "正在生成标题与描述",     hint: "AI 正在撰写广告标题与描述，通常需 15–40 秒…",                      color: "#13c2c2", grad: ["#e6fffb", "#f3fffd"] },
+    { from: 60, Icon: LinkOutlined,   title: "正在抓取站内链接与图片", hint: "补充网站上下文，抓取真实子页面与产品图，请稍候…",                  color: "#722ed1", grad: ["#f9f0ff", "#fbf5ff"] },
+    { from: 90, Icon: RocketOutlined, title: "深度探查中",             hint: "部分网站反爬较严，正用真人浏览器模式深探，可能需 2–3 分钟，您可先操作其它字段。", color: "#fa8c16", grad: ["#fff7e6", "#fffbf2"] },
+  ];
+  let stageIdx = 0;
+  for (let i = 0; i < STAGES.length; i++) if (elapsed >= STAGES[i].from) stageIdx = i;
+  const stage = STAGES[stageIdx];
+  const Icon = stage.Icon;
+  const pct = progressPercent(elapsed);
+
   return (
-    <div style={{ textAlign: "center", padding: "24px 0" }}>
-      <Spin tip={tip} />
+    <div
+      className="cg-card"
+      style={{
+        marginBottom: 16,
+        padding: "14px 18px",
+        borderRadius: 12,
+        border: `1px solid ${stage.color}55`,
+        background: `linear-gradient(135deg, ${stage.grad[0]} 0%, ${stage.grad[1]} 100%)`,
+        boxShadow: `0 2px 12px ${stage.color}1f`,
+        transition: "background .6s ease, border-color .6s ease, box-shadow .6s ease",
+      }}
+    >
+      <style>{PROGRESS_ANIM_CSS}</style>
+      <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+        <div
+          style={{
+            ["--cg-ring" as string]: `${stage.color}66`,
+            width: 40, height: 40, borderRadius: "50%", flex: "0 0 auto",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            background: "#fff",
+            animation: "coreGenPulse 1.8s ease-in-out infinite",
+            transition: "color .6s ease",
+          }}
+        >
+          <Icon style={{ fontSize: 20, color: stage.color, transition: "color .6s ease" }} />
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
+            <span style={{ fontWeight: 600, fontSize: 14, color: "#1f1f1f" }}>
+              {stage.title}
+              <span style={{ marginLeft: 8, fontSize: 12, fontWeight: 500, color: stage.color }}>{elapsed}s</span>
+            </span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: stage.color, fontVariantNumeric: "tabular-nums" }}>{pct}%</span>
+          </div>
+          <div style={{ fontSize: 12, color: "#5F6368", marginTop: 3, lineHeight: 1.5 }}>{stage.hint}</div>
+          <Progress
+            percent={pct}
+            showInfo={false}
+            size="small"
+            strokeColor={{ from: stage.color, to: STAGES[Math.min(stageIdx + 1, STAGES.length - 1)].color }}
+            trailColor="rgba(0,0,0,.06)"
+            style={{ marginTop: 8, marginBottom: 0 }}
+          />
+          <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+            {STAGES.map((s, i) => (
+              <span
+                key={s.from}
+                title={s.title}
+                style={{
+                  flex: 1, height: 4, borderRadius: 2,
+                  background: i <= stageIdx ? stage.color : "rgba(0,0,0,.1)",
+                  opacity: i === stageIdx ? 1 : i < stageIdx ? 0.7 : 0.4,
+                  transition: "background .5s ease, opacity .5s ease",
+                }}
+              />
+            ))}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
 
-// 一键生成广告素材 实时进度卡片：标题带秒数实时跳动 + 按耗时升级的动态副标题
-// 独立 setInterval 每秒重渲染，仅自身 re-render
-function CoreGeneratingCard({ active }: { active: boolean }) {
-  const [elapsed, setElapsed] = useState(0);
-  const startedRef = useRef<number | null>(null);
-  useEffect(() => {
-    if (!active) {
-      startedRef.current = null;
-      setElapsed(0);
-      return;
-    }
-    startedRef.current = Date.now();
-    const tick = () => {
-      if (startedRef.current == null) return;
-      setElapsed(Math.floor((Date.now() - startedRef.current) / 1000));
-    };
-    tick();
-    const t = setInterval(tick, 1000);
-    return () => clearInterval(t);
-  }, [active]);
+// D-038b（方案 C）：站内链接爬取进度卡片。样式与 CoreGeneratingCard 同语言，
+// 三色跳动圆点 + 阶段文案随耗时演进。独立计时，仅自身 re-render。
+function CrawlProgressTip({ active, label = "正在爬取商家网站" }: { active: boolean; label?: string }) {
+  const elapsed = useElapsed(active);
   if (!active) return null;
-  let detail = "AI 正在分析商家网站，生成标题、描述和站内链接...";
+  let tip = `${label}获取站内链接，请稍候…`;
+  let color = "#1677ff";
   if (elapsed >= 90) {
-    detail = "部分网站反爬较严，正在使用真人浏览器模式深度探查，可能需 2-3 分钟，您可先继续操作其它字段。";
+    tip = "部分网站反爬严格，可能需 2–3 分钟。您可继续操作其它字段，或直接手动填写链接。";
+    color = "#fa8c16";
   } else if (elapsed >= 60) {
-    detail = "正在爬取商家网站补充上下文并生成扩展，请稍候...";
+    tip = "正在使用真人浏览器模式（Puppeteer）深度探查子页面…";
+    color = "#722ed1";
   } else if (elapsed >= 30) {
-    detail = "AI 正在生成标题、描述和站内链接，通常需要 15-30 秒...";
+    tip = "网站反爬较严，正在重试并验证候选链接…";
+    color = "#13c2c2";
   }
   return (
-    <Card size="small" style={{ marginBottom: 16, border: "1px solid #91caff", background: "#e6f4ff" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-        <LoadingOutlined style={{ fontSize: 20, color: "#1677ff" }} />
-        <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>
-            正在一键生成广告素材...（{elapsed}s）
-          </div>
-          <div style={{ fontSize: 12, color: "#5F6368" }}>{detail}</div>
-        </div>
+    <div
+      style={{
+        margin: "12px 0",
+        padding: "16px 18px",
+        borderRadius: 12,
+        border: `1px solid ${color}44`,
+        background: `linear-gradient(135deg, ${color}0f 0%, ${color}05 100%)`,
+        display: "flex", alignItems: "center", gap: 14,
+        transition: "background .6s ease, border-color .6s ease",
+      }}
+    >
+      <style>{PROGRESS_ANIM_CSS}</style>
+      <div style={{ display: "flex", gap: 5, flex: "0 0 auto" }}>
+        {[0, 1, 2].map((i) => (
+          <span
+            key={i}
+            style={{
+              width: 8, height: 8, borderRadius: "50%", background: color,
+              animation: "coreGenDot 1.2s ease-in-out infinite",
+              animationDelay: `${i * 0.18}s`,
+            }}
+          />
+        ))}
       </div>
-    </Card>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 600, fontSize: 13, color: "#1f1f1f" }}>
+          {label}获取站内链接
+          <span style={{ marginLeft: 8, fontSize: 12, fontWeight: 500, color }}>{elapsed}s</span>
+        </div>
+        <div style={{ fontSize: 12, color: "#5F6368", marginTop: 3, lineHeight: 1.5 }}>{tip}</div>
+      </div>
+    </div>
   );
 }
 

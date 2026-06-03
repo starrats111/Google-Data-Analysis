@@ -729,8 +729,10 @@ export function isQualityImageUrl(url: string, allowedDomain?: string): boolean 
     } catch { /* ignore */ }
   }
 
-  // 过滤极小缩略图（width/w ≤ 120 的 CDN 参数，如头像、星标等 48/90px 小图）
-  const widthParam = url.match(/[?&](?:width|w)=(\d+)/i);
+  // 过滤极小缩略图（width/w/size ≤ 120 的 CDN 参数，如头像、星标、Scene7 ?size=16 追踪像素）
+  // D-085：补 size 参数——lululemon 等 Adobe Scene7 站点用 ?size=16 输出 16px 占位/追踪图，
+  // 旧正则只认 width/w 漏掉它们，导致大量 16px 垃圾图进入候选 → 前端显示为加载失败占位。
+  const widthParam = url.match(/[?&](?:width|w|size)=(\d+)/i);
   if (widthParam && parseInt(widthParam[1], 10) <= 120) return false;
 
   if (!hasValidExt) {

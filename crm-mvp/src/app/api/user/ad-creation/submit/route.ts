@@ -659,6 +659,61 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // 真实修复（D-085）：按系列名核对 Google Ads 是否已存在该广告系列（只读、非破坏性）。
+  // 用于 mutate 失败后的"状态对账"：很多"CRM 报失败但 Google 已建"的根因是跨草稿重复提交、
+  // 或原子批次服务端已 commit 但客户端拿到错误的竞态——只要 Google 端已存在同名系列，
+  // 就说明广告其实已提交成功，应采纳同步而非误报失败或删旧重建。
+  async function findExistingGoogleCampaign(): Promise<{ id: string; status: string } | null> {
+    try {
+      const rows = await queryGoogleAds(credentials, customerId, `
+        SELECT campaign.id, campaign.name, campaign.status
+        FROM campaign
+        WHERE campaign.status != 'REMOVED'
+      `);
+      for (const row of rows) {
+        const c = row.campaign as Record<string, unknown> | undefined;
+        if (String(c?.name ?? "") === campaignNameToUse && c?.id) {
+          return { id: String(c.id), status: String(c?.status ?? "") };
+        }
+      }
+    } catch (e) {
+      console.warn("[AdSubmit] 核对已存在广告系列失败（不阻断）:", e instanceof Error ? e.message : e);
+    }
+    return null;
+  }
+
+  // 真实修复（D-085）：状态对账。任何失败路径上报前先调用——若 Google 端已存在同名广告系列，
+  // 说明广告其实已提交成功，采纳并同步记录、返回成功响应；否则返回 null 交由原错误逻辑处理。
+  // 内层（mutate 失败）与外层（创建成功后持久化失败）catch 都复用，根治整类
+  // "CRM 显示失败但 Google 已有广告" 的孤儿/误报。
+  async function reconcileIfExistsInGoogle() {
+    const existingCampaign = await findExistingGoogleCampaign();
+    if (!existingCampaign) return null;
+    await prisma.campaigns.update({
+      where: { id: campaignFresh!.id },
+      data: {
+        google_campaign_id: existingCampaign.id,
+        customer_id: cid,
+        mcc_id: mccAccount!.id,
+        google_status: "ENABLED",
+      },
+    }).catch(() => {});
+    try {
+      const { syncMerchantStatusForUser } = await import("@/lib/campaign-merchant-link");
+      await syncMerchantStatusForUser(userId);
+    } catch { /* 同步失败不阻断 */ }
+    console.warn(`[AdSubmit] 状态对账：Google 已存在同名广告系列 (ID=${existingCampaign.id}, status=${existingCampaign.status})，采纳并同步，不报失败`);
+    const statusNote = existingCampaign.status && existingCampaign.status !== "ENABLED"
+      ? `（Google 端系列状态：${existingCampaign.status}）`
+      : "";
+    return apiSuccess(serializeData({
+      google_campaign_id: existingCampaign.id,
+      customer_id: customerId,
+      campaign_name: campaignNameToUse,
+      already_exists: true,
+    }), `该广告系列此前已成功提交到 Google Ads，已同步记录${statusNote}。如广告未投放，请在 Google Ads 后台查看审核/政策状态并按需修改或申诉。`);
+  }
+
   try {
     const operations: Record<string, unknown>[] = [];
 
@@ -1180,6 +1235,15 @@ export async function POST(req: NextRequest) {
     } catch (mutateErr) {
       const errMsg = mutateErr instanceof Error ? mutateErr.message : String(mutateErr);
 
+      // ─── 真实修复（D-085）：状态对账优先于任何错误上报 ───
+      // mutate 抛错后，Google 端可能其实已存在该广告系列（跨草稿重复提交、或原子批次服务端
+      // 已 commit 但客户端拿到错误等竞态）。无论错误类型，先按系列名核对：已存在 = 广告其实
+      // 已发到 Google，直接采纳并同步记录、如实返回，杜绝"CRM 显示失败但 Google 已有广告"。
+      {
+        const reconciled = await reconcileIfExistsInGoogle();
+        if (reconciled) return reconciled;
+      }
+
       if (errMsg.includes("DUPLICATE_CAMPAIGN_NAME")) {
         console.log("[AdSubmit] 检测到同名冲突，强制清理后重试...");
         await removeDuplicateCampaigns();
@@ -1288,12 +1352,27 @@ export async function POST(req: NextRequest) {
             if (readable && readable.trim().length > 0) {
               throw new Error(readable);
             }
-            // 兜底（policy-hub 解析失败时仍走旧路径，但已过滤 -2/-3）
-            const triggerList = errViolations
-              ?.filter((v) => v.trigger && !/^-?\d+$/.test(v.trigger.trim()))
-              .map((v) => `「${v.trigger}」`) || [];
-            const triggerHint = triggerList.length > 0 ? `（违规内容: ${triggerList.join(", ")}）` : "";
-            throw new Error(`Google Ads 拒绝了 RSA 广告素材${triggerHint}，请修改标题或描述中的违规文案后重新提交。（违规操作: ${skippedDetails.join("、")}）`);
+            // 兜底（policy-hub 未解析出 policyViolationDetails 时）：
+            // 只提炼真正的广告文案触发词，过滤掉广告系列名 / 纯数字级联占位 / 关键词噪音，
+            // 不再把「操作[N]、关键词、关联资源」整串堆给用户（那些是级联失败，非真正原因）。
+            const campaignNm = (campaign.campaign_name || "").trim();
+            const adTextTriggers = Array.from(new Set(
+              (errViolations || [])
+                .map((v) => (v.trigger || "").trim())
+                .filter((t) =>
+                  t
+                  && !/^-?\d+$/.test(t)
+                  && t !== campaignNm
+                  && !skippedKeywords.includes(t)),
+            ));
+            const triggerHint = adTextTriggers.length > 0
+              ? `（疑似触发词：${adTextTriggers.map((t) => `「${t}」`).join("、")}）`
+              : "";
+            throw new Error(
+              `Google Ads 以政策原因拒绝了广告素材${triggerHint}。`
+              + `常见原因是标题或描述中含有商标/品牌词或其它受限表述；`
+              + `请修改标题、描述后重新提交。若确为商家自有品牌，可在 Google Ads 后台对该广告点「申诉」。`,
+            );
           }
 
           const filteredOps = operations.filter((_, i) => !violatingIndices.has(i));
@@ -1552,6 +1631,14 @@ export async function POST(req: NextRequest) {
     const rawBody = (err as any)?.rawBody as string | undefined;
     console.error("[AdSubmit] Google Ads 创建失败:", msg);
     if (rawBody) console.error("[AdSubmit] API 原始响应:", rawBody.slice(0, 1500));
+
+    // 真实修复（D-085）：主 mutate 成功（广告已建于 Google）但后续持久化/同步步骤抛错时，
+    // 也会落到这里。上报失败前先对账：Google 已有同名系列 → 采纳同步并如实返回成功，
+    // 避免"广告已建成却报创建失败"。
+    {
+      const reconciled = await reconcileIfExistsInGoogle();
+      if (reconciled) return reconciled;
+    }
 
     if (msg.includes("RESOURCE_EXHAUSTED") || msg.includes("请求频率超限")) {
       return apiError("Google Ads API 请求频率超限，系统已自动重试但仍受限。请等待 3-5 分钟后再重试。（当前 Developer Token 为 explorer access 级别，频率限制较严格）");

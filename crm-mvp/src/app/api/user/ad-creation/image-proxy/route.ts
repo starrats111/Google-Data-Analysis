@@ -371,8 +371,14 @@ export async function GET(req: NextRequest) {
           const resp = await fetch(url, {
             headers: {
               "User-Agent": ua,
-              Accept: "image/webp,image/jpeg,image/png,image/avif,image/*;q=0.8",
+              // D-085：补浏览器级请求头，提升 Scene7/Akamai 等 CDN-WAF 的放行率
+              // （部分 CDN 对缺 Accept-Language / Sec-Fetch-* 的“裸”请求直接 403）
+              Accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+              "Accept-Language": "en-US,en;q=0.9",
               Referer: referer,
+              "Sec-Fetch-Dest": "image",
+              "Sec-Fetch-Mode": "no-cors",
+              "Sec-Fetch-Site": "cross-site",
             },
             signal: AbortSignal.timeout(8000),
             redirect: "follow",

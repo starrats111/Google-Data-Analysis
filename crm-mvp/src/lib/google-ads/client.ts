@@ -399,7 +399,10 @@ export async function mutateGoogleAds(
       const friendlyMsg = formatGoogleAdsErrorMessage(violations, resp.status);
       const err = new Error(friendlyMsg) as Error & { violations: GoogleAdsViolation[]; rawBody: string };
       err.violations = violations;
-      err.rawBody = errBody.slice(0, 3000);
+      // D-085：政策错误体在操作多时很大，policyViolationDetails 往往在 3000 字之后。
+      // 旧截断 3000 会把 externalPolicyName/violatingText 切掉，导致 policy-hub 深度解析
+      // 拿到残缺 JSON → readableMessage 为空 → 上层落到「广告系列名当违规内容」的乱码兜底。
+      err.rawBody = errBody.slice(0, 20000);
       throw err;
     }
     throw new Error(`Google Ads API 请求失败 (${resp.status}): ${errBody.slice(0, 2000)}`);
