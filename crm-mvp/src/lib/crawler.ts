@@ -1913,10 +1913,11 @@ export async function crawlWithPuppeteerFull(
     } catch {}
 
     const html = await page.content();
-    if (isBlockedPage(html) || html.length < 3000) {
-      console.log(`[Crawler] Puppeteer: 仍被拦截或内容过少 (${html.length} bytes)`);
-      return null;
-    }
+    // D-085：丢弃判断推迟到 DOM 提取之后。
+    // 旧逻辑 isBlockedPage(html) || html.length<3000 在提取前直接 return null，
+    // 把已渲染出真实内容的页面（含 navLinks/正文）整个丢掉——这正是"站内链接能读到、
+    // 主文案却判空 → AI 退回英文线索"的根因。现在统一为一条爬取链路：先提取，
+    // 只有真·CF 挑战墙（既无 navLinks 也无正文）才判空。
 
     // DOM 结构化提取（独立 catch，失败不丢 html）
     let domData: Omit<PuppeteerPageData, "html"> = {
@@ -2047,7 +2048,27 @@ export async function crawlWithPuppeteerFull(
       console.warn("[Crawler] page.evaluate() DOM extraction failed:", evalErr instanceof Error ? evalErr.message : evalErr);
     }
 
-    console.log(`[Crawler] Puppeteer 成功: ${html.length} bytes, navLinks: ${domData.navLinks.length}, images: ${domData.images.length}`);
+    // D-085：推迟到此处做"真·拦截墙"判定。
+    // 渲染出真实内容的信号：导航链接 ≥3 条 / 正文 ≥600 字 / hero 标题 ≥1 条。
+    const bodyTextLen = await page
+      .evaluate(() => (document.body?.innerText || "").trim().length)
+      .catch(() => 0);
+    const hasRealContent =
+      domData.navLinks.length >= 3 || bodyTextLen >= 600 || domData.heroTexts.length >= 1;
+    const looksBlocked = isBlockedPage(html) || html.length < 3000;
+    if (looksBlocked && !hasRealContent) {
+      console.log(
+        `[Crawler] Puppeteer: 真·拦截/空页判空 (html=${html.length}B navLinks=${domData.navLinks.length} body=${bodyTextLen})`,
+      );
+      return null;
+    }
+    if (isBlockedPage(html) && hasRealContent) {
+      console.log(
+        `[Crawler] Puppeteer: isBlockedPage 命中但已渲染真实内容(navLinks=${domData.navLinks.length} body=${bodyTextLen}B)，按 false-positive 保留`,
+      );
+    }
+
+    console.log(`[Crawler] Puppeteer 成功: ${html.length} bytes, navLinks: ${domData.navLinks.length}, images: ${domData.images.length}, body: ${bodyTextLen}`);
     return { html, ...domData };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

@@ -528,8 +528,9 @@ export function extractPromotionInfo(html: string, sourceUrl: string, country: s
       const ctx = String(result._promo_context);
       const eventMatch = ctx.match(/(?:during|for)\s+(?:our|the|a)?\s*([A-Z][a-zA-Z &'-]{2,30}?)(?:\s+(?:event|sale|deals?|offer))?[.,!]/i) ||
         ctx.match(/([A-Z][a-zA-Z &'-]{2,30}?)\s+(?:event|sale|deals?)/i);
-      if (eventMatch?.[1]?.trim().length >= 3) {
-        result.promotion_target = smartTruncate(eventMatch[1].trim(), 20);
+      const eventName = eventMatch?.[1]?.trim();
+      if (eventName && eventName.length >= 3) {
+        result.promotion_target = smartTruncate(eventName, 20);
       } else {
         // ── 专项场景识别（优先级高于通用事件名提取）──
         // 1. "first order" / "new customer" / "first purchase" → promotion_target = "First Order"
@@ -992,6 +993,7 @@ const COUNTRY_TO_LOCALE: Record<string, string> = {
   NO: "nb-no", DK: "da-dk", FI: "fi-fi",
   JP: "ja-jp", KR: "ko-kr", CN: "zh-cn", TW: "zh-tw",
   BR: "pt-br", PT: "pt-pt", MX: "es-mx",
+  HK: "en-hk",
 };
 
 /**
@@ -1251,6 +1253,12 @@ async function discoverSitelinkCandidates(
   // 注：merchantHostKey 变量保留供后续日志诊断使用，但不再用作业务短路条件。
   // ══════════════════════════════════════════════════════
   const merchantHostKey = getHostKey(merchantUrl);
+  // D-085：恢复 merchantHostChallenged 定义。D-038b 回滚时删掉了它的声明却漏删了下方
+  // navLinks 兜底分支（~1338 行）对它的引用 → 运行时抛 ReferenceError，被 discoverSitelinkCandidates
+  // 外层 .catch(()=>[]) 吞掉 → challenged host 的站内链接直接返回空。
+  // 该分支语义（已知 challenged host 跳过 navLinks 的 Puppeteer 兜底、信任 link.text）与 D-084
+  // fail-fast 方向一致，故恢复定义而非删分支。
+  const merchantHostChallenged = !!merchantHostKey && isHostChallenged(merchantHostKey);
 
   if (pageLinkDeferred.length < 6 && httpFailedLinks.length > 0) {
     const needed = Math.min(httpFailedLinks.length, 8);
@@ -1760,7 +1768,7 @@ export async function buildCrawlCache(
   }
 
   let crawlResult: CrawlResultType = { html: "", links: [], images: [], method: "failed", error: "未配置商家 URL" };
-  let crawlQuality = { score: 0, tier: "failed" as const, issues: ["no_url"] };
+  let crawlQuality: ReturnType<typeof assessCrawlQuality> = { score: 0, tier: "failed", issues: ["no_url"] };
 
   // 整体爬取时间预算：
   //   有代理 → 130s（最多容纳 2 次 puppeteer 完整流程 + HTTP 兜底）
@@ -2087,7 +2095,11 @@ export async function buildCrawlCache(
     if (siteUsesLocale) {
       const targetLocale = COUNTRY_TO_LOCALE[country.toUpperCase()]; // en-us
       const targetShort = country.toLowerCase(); // us
-      if (targetLocale || targetShort) {
+      // D-085：站点用完整 locale 格式（/en-hk/）但本国在 COUNTRY_TO_LOCALE 无映射时，
+      // targetLocale=undefined，旧代码 "/" + targetLocale! 会拼出 /undefined/home 畸形 URL，
+      // 直接污染 final_url。这里统一算一个"安全前缀"：算不出有效完整 locale 就跳过本地化、保留原 URL。
+      const localePrefix = usesShortCountryCode ? targetShort : (targetLocale || undefined);
+      if (localePrefix) {
         try {
           const u = new URL(merchantUrl);
           // 检测 merchantUrl 自身是否已有前缀
@@ -2096,14 +2108,13 @@ export async function buildCrawlCache(
           const existingShort = existingShortMatch && KNOWN_COUNTRY_CODES_SET.has(existingShortMatch[1].toLowerCase()) ? existingShortMatch : null;
           if (existingLongMatch) {
             // 替换已有的完整 locale 前缀
-            u.pathname = "/" + (usesShortCountryCode ? targetShort : targetLocale!) + u.pathname.slice(existingLongMatch[0].length - 1);
+            u.pathname = "/" + localePrefix + u.pathname.slice(existingLongMatch[0].length - 1);
           } else if (existingShort) {
             // 替换已有的纯国家码前缀
-            u.pathname = "/" + (usesShortCountryCode ? targetShort : targetLocale!) + u.pathname.slice(existingShort[0].length - 1);
+            u.pathname = "/" + localePrefix + u.pathname.slice(existingShort[0].length - 1);
           } else {
             // 插入前缀（保留原有路径）
-            const prefix = usesShortCountryCode ? targetShort : (targetLocale || targetShort);
-            u.pathname = "/" + prefix + (u.pathname === "/" ? "/" : u.pathname);
+            u.pathname = "/" + localePrefix + (u.pathname === "/" ? "/" : u.pathname);
           }
           localizedMerchantUrl = u.toString();
           if (localizedMerchantUrl !== merchantUrl) {
