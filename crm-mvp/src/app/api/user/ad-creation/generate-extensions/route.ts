@@ -2916,6 +2916,23 @@ async function buildRealSitelinks(opts: {
 }): Promise<Array<{ url: string; title: string; desc1: string; desc2: string }>> {
   const { cache, merchantUrl, country, merchantName, languageCode } = opts;
 
+  // D-094：站内链接必须与「落地页 URL」同站（同注册域，允许子域）。
+  // Google Ads 要求 sitelink 域名与 final URL 同域；avis.de 落地页配 secure.avis.co.uk 这类
+  // 跨 ccTLD 链接（多国共用预订平台）会被判不同域→拒登，且对员工是「完全不匹配」的脏数据。
+  // 这里用落地页 host 作为唯一基准，任何来源（navLinks/sitelinkCandidates/sitemap 扩源/旧缓存）
+  // 的候选都过此闸；落地页 host 解析不出来时一律判不同站（不能验证就不冒险发跨域）。
+  const merchantOriginHost = (() => {
+    try { return new URL(merchantUrl).hostname.replace(/^www\./, "").toLowerCase(); } catch { return ""; }
+  })();
+  const isSameSite = (u: string): boolean => {
+    if (!merchantOriginHost) return false;
+    let host = "";
+    try { host = new URL(u).hostname.replace(/^www\./, "").toLowerCase(); } catch { return false; }
+    return host === merchantOriginHost
+      || host.endsWith(`.${merchantOriginHost}`)
+      || merchantOriginHost.endsWith(`.${host}`);
+  };
+
   // ─── D-051（07 拍板）：首选 puppeteer 首页渲染出的真实导航链接 ───
   //   一次 puppeteer 已把首页 navLinks 拿全（CF 站也能拿到，因为首页是隐身浏览器过的验证）。
   //   旧逻辑只用 sitelinkCandidates（CF 站被 sitemap/robots/HEAD 403 挡到归零），navLinks 闲置。
@@ -2924,16 +2941,13 @@ async function buildRealSitelinks(opts: {
   const navBaseline: Array<{ url: string; title: string; description: string }> = [];
   const rawNav = cache.navLinks || [];
   if (rawNav.length > 0) {
-    const origin = (() => { try { return new URL(merchantUrl).hostname.replace(/^www\./, "").toLowerCase(); } catch { return ""; } })();
     const seen = new Set<string>();
     const filteredNav: Array<{ url: string; text: string }> = [];
     for (const l of rawNav) {
       if (!l.url || !l.url.startsWith("http")) continue;
       let u: URL;
       try { u = new URL(l.url); } catch { continue; }
-      const host = u.hostname.replace(/^www\./, "").toLowerCase();
-      const sameOrigin = !!origin && (host === origin || host.endsWith(`.${origin}`) || origin.endsWith(`.${host}`));
-      if (!sameOrigin) continue;
+      if (!isSameSite(l.url)) continue;
       const segs = u.pathname.split("/").filter(Boolean);
       if (segs.length < 1 || segs.length > 2) continue; // 只要顶层栏目页（首页和深层产品页都排除）
       if (isBadSitelinkUrl(l.url)) continue;
@@ -2975,15 +2989,22 @@ async function buildRealSitelinks(opts: {
   const expanded = navBaseline.length >= 6
     ? baseline
     : await autoExpandSitelinks({ merchantUrl, country, existing: baseline, targetCount: 6 });
-  // 去重（保序），最多取前 8 条作为 AI 输入缓冲
+  // 去重（保序）+ 同站闸（D-094），最多取前 8 条作为 AI 输入缓冲。
+  // 同站闸在此统一兜底：sitelinkCandidates / autoExpand / 旧缓存等任意来源的跨域候选一律剔除，
+  // 保证落地页 avis.de 不会配出 secure.avis.co.uk 这类与落地页不同域的站内链接。
   const unique: typeof expanded = [];
   const seen = new Set<string>();
+  let crossSiteDropped = 0;
   for (const s of expanded) {
+    if (!isSameSite(s.url)) { crossSiteDropped++; continue; }
     const norm = s.url.replace(/\/$/, "").replace(/^http:/, "https:").toLowerCase();
     if (seen.has(norm)) continue;
     seen.add(norm);
     unique.push(s);
     if (unique.length >= 8) break;
+  }
+  if (crossSiteDropped > 0) {
+    console.warn(`[Intellicenter] buildRealSitelinks D-094：剔除 ${crossSiteDropped} 条与落地页(${merchantOriginHost})不同域的站内链接候选`);
   }
   if (unique.length === 0) {
     console.warn(`[Intellicenter] buildRealSitelinks: 无真实候选（merchantUrl=${merchantUrl}），返回空`);

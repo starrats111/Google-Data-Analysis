@@ -1049,6 +1049,15 @@ async function discoverSitelinkCandidates(
 ): Promise<{ url: string; title: string; description: string }[]> {
   let merchantDomain = "";
   try { merchantDomain = new URL(merchantUrl).hostname.replace(/^www\./, ""); } catch {}
+  // D-094：同站判定（同注册域，允许子域）。注意不能用 `hostname.includes(merchantDomain)`：
+  // merchantDomain 解析失败为空串时 `"x".includes("")===true`，会放行任意跨域 host
+  // （avis.de 落地页混入 secure.avis.co.uk 即此类）；空基准时一律判不同站，不冒险。
+  const isSameMerchantSite = (host: string): boolean => {
+    if (!merchantDomain) return false;
+    const h = host.replace(/^www\./, "").toLowerCase();
+    const base = merchantDomain.toLowerCase();
+    return h === base || h.endsWith(`.${base}`) || base.endsWith(`.${h}`);
+  };
   const proxyUrl = country ? (await getProxyUrlForCountry(country) ?? undefined) : undefined;
   // Puppeteer 专用 HTTP 代理（Chrome 不支持 SOCKS5 认证，必须用 HTTP proxy）
   const puppeteerProxyUrl = puppeteerProxyUrlOverride !== undefined
@@ -1307,7 +1316,7 @@ async function discoverSitelinkCandidates(
         .filter(l => {
           try {
             const u = new URL(l.url);
-            return u.hostname.includes(merchantDomain) && !new URL(l.url).search && l.text.length >= 2;
+            return isSameMerchantSite(u.hostname) && !u.search && l.text.length >= 2;
           } catch { return false; }
         })
         .map(l => country ? { ...l, url: normalizeLocaleInUrl(l.url, country) } : l)
@@ -1427,7 +1436,7 @@ async function discoverSitelinkCandidates(
       .filter((l) => {
         try {
           const u = new URL(l.url);
-          return u.hostname.includes(merchantDomain) && !u.search;
+          return isSameMerchantSite(u.hostname) && !u.search;
         } catch { return false; }
       })
       .slice(0, 3);
@@ -1453,7 +1462,7 @@ async function discoverSitelinkCandidates(
           try {
             const abs = new URL(href, target.url).toString();
             const u = new URL(abs);
-            if (!u.hostname.includes(merchantDomain) || u.search) continue;
+            if (!isSameMerchantSite(u.hostname) || u.search) continue;
             if (u.pathname === "/" || u.pathname === "") continue;
             depth1Links.push({ url: abs, text });
           } catch { continue; }
