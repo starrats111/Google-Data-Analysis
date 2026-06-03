@@ -410,42 +410,60 @@ Return ONLY a JSON array of ${violations.length} strings.`;
  *
  * 数据来自 ad_creatives.crawl_cache（认领时已缓存），缺失时现场爬取
  */
-export async function POST(req: NextRequest) {
-  const user = getUserFromRequest(req);
-  if (!user) return apiError("未授权", 401);
+// ───────────────────────────────────────────────────────────────
+// D-090：广告生成上下文加载 + 流水线构造（SSE 旧链路与后台 job runner 共用）
+// 把原 POST 里"加载 campaign/merchant/cache + 构造 SSE 流"两段抽成可复用函数：
+//   - loadGenContext：按 campaign_id 装配生成所需全部上下文
+//   - buildGenerationStream：构造与原先逐字节一致的 SSE ReadableStream
+// 旧 POST（本文件底部）继续返回该流（灰度回滚 fallback）；后台 runner 则消费同一条流落库。
+// ───────────────────────────────────────────────────────────────
 
-  let body: any;
-  try {
-    body = await req.json();
-  } catch (e) {
-    console.error("[Extensions] 请求体 JSON 解析失败:", e instanceof Error ? e.message : e);
-    return apiError("请求体格式错误");
-  }
-  const { campaign_id, types = [], ad_language, keywords: requestKeywords = [] } = body;
-  if (!campaign_id) {
-    console.warn("[Extensions] 400: 缺少 campaign_id, body:", JSON.stringify(body).slice(0, 200));
-    return apiError("缺少 campaign_id");
-  }
-  if (!types.length) {
-    console.warn("[Extensions] 400: 缺少 types, campaign_id:", campaign_id);
-    return apiError("缺少 types");
-  }
+export interface GenerationRequestPayload {
+  types: string[];
+  ad_language?: string | null;
+  keywords?: string[];
+  optionalTypes?: string[];
+}
+
+type GenCampaign = NonNullable<Awaited<ReturnType<typeof prisma.campaigns.findFirst>>>;
+type GenMerchant = NonNullable<Awaited<ReturnType<typeof prisma.user_merchants.findFirst>>>;
+
+interface GenContext {
+  campaign_id: string;
+  campaign: GenCampaign;
+  merchant: GenMerchant;
+  adCreativeId: bigint | null;
+  initialCache: CrawlCache | null;
+  originalMerchantUrl: string;
+  country: string;
+  optionalNeedsPromo: boolean;
+  dbKeywordsForFallback: string[];
+  types: string[];
+  ad_language: string | undefined;
+  requestKeywords: string[];
+  body: { optionalTypes?: string[] };
+  userId: bigint;
+}
+
+export async function loadGenContext(
+  campaignIdRaw: string | number | bigint,
+  userId: bigint,
+  payload: GenerationRequestPayload,
+): Promise<{ ctx: GenContext } | { error: string; status: number }> {
+  const types = (payload.types || []) as string[];
+  const ad_language = payload.ad_language ?? undefined;
+  const requestKeywords = (payload.keywords || []) as string[];
+  const body = { optionalTypes: (payload.optionalTypes || []) as string[] };
 
   const campaign = await prisma.campaigns.findFirst({
-    where: { id: BigInt(campaign_id), user_id: BigInt(user.userId), is_deleted: 0 },
+    where: { id: BigInt(campaignIdRaw), user_id: userId, is_deleted: 0 },
   });
-  if (!campaign) {
-    console.warn(`[Extensions] 404: 广告系列不存在, campaign_id=${campaign_id}, user_id=${user.userId}`);
-    return apiError("广告系列不存在", 404);
-  }
+  if (!campaign) return { error: "广告系列不存在", status: 404 };
 
   const merchant = await prisma.user_merchants.findFirst({
     where: { id: campaign.user_merchant_id, is_deleted: 0 },
   });
-  if (!merchant) {
-    console.warn(`[Extensions] 400: 商家不存在, user_merchant_id=${campaign.user_merchant_id}, campaign_id=${campaign_id}`);
-    return apiError("商家不存在");
-  }
+  if (!merchant) return { error: "商家不存在", status: 400 };
 
   const adGroup = await prisma.ad_groups.findFirst({
     where: { campaign_id: campaign.id, is_deleted: 0 },
@@ -473,15 +491,48 @@ export async function POST(req: NextRequest) {
   // merchant_url 是商家层面的默认 URL，可能带旧地区前缀（如 /en-sg/）
   const originalMerchantUrl = adCreative?.final_url || merchant.merchant_url || "";
   const country = campaign.target_country || "US";
-  const market = getAdMarketConfig(country);
-
-  // C-035 FIX：立即开启 SSE 流 —— 将 resolveCountryUrl（DNS 探测）+ buildCrawlCache
-  // （Puppeteer 爬取，最坏 90 s+）全部移入 stream.start() 内部，让 new Response(stream)
-  // 立即返回 HTTP 200 + text/event-stream 头，Cloudflare 收到头后不再计 100 s 超时。
-  const needsOptional = (types as string[]).includes("optional");
-  const optionalNeedsPromo = needsOptional && ((body.optionalTypes as string[]) || []).some((t: string) => ["promotion", "price"].includes(t));
+  const needsOptional = types.includes("optional");
+  const optionalNeedsPromo = needsOptional && (body.optionalTypes || []).some((t: string) => ["promotion", "price"].includes(t));
   const adCreativeId = adCreative?.id || null;
   const initialCache = adCreative?.crawl_cache as CrawlCache | null;
+
+  return {
+    ctx: {
+      campaign_id: String(campaign.id),
+      campaign,
+      merchant,
+      adCreativeId,
+      initialCache,
+      originalMerchantUrl,
+      country,
+      optionalNeedsPromo,
+      dbKeywordsForFallback,
+      types,
+      ad_language,
+      requestKeywords,
+      body,
+      userId,
+    },
+  };
+}
+
+export function buildGenerationStream(ctx: GenContext): ReadableStream {
+  const {
+    campaign_id,
+    campaign,
+    merchant,
+    adCreativeId,
+    initialCache,
+    originalMerchantUrl,
+    country,
+    optionalNeedsPromo,
+    dbKeywordsForFallback,
+    types,
+    ad_language,
+    requestKeywords,
+    body,
+    userId,
+  } = ctx;
 
   const encoder = new TextEncoder();
   let isClosed = false;
@@ -542,7 +593,7 @@ export async function POST(req: NextRequest) {
 
         // ─── Step 2：读取 ad_default_settings ───
         const adSettings = await prisma.ad_default_settings.findFirst({
-          where: { user_id: BigInt(user.userId), is_deleted: 0 },
+          where: { user_id: userId, is_deleted: 0 },
           select: { ai_rule_profile: true, daily_budget: true, max_cpc: true, bidding_strategy: true },
         });
         const aiRuleProfile = (adSettings as any)?.ai_rule_profile;
@@ -603,10 +654,16 @@ export async function POST(req: NextRequest) {
           //   - 内部抛错 → 外层 catch 设 crawlFailed=true 走真实失败路径
           //   - 极端 hang 兜底：300s（5 分钟）防 puppeteer 死锁，仅作 safety net
           //     不再当作"业务超时降级"，hang 触发时直接 throw 真实错误
-          const HANG_SAFETY_MS = 300000;
+          //
+          // D-090（后台 job 化后）：生成不再占用用户长连接，但仍要防止单条生成把 generation-gate
+          // 的并发槽长时间占死（300s）拖垮排队。故把 crawl 预算从 300s 收紧到 90s——
+          // 超时不再 throw 让整条生成失败，而是降级为 crawlFailed cache 继续：
+          // 下游 D-083b SemRush 兜底 + 编排器自身的 SemRush 路径仍可产出文案；
+          // 若 SemRush 也无数据，则由 L2 守门给出明确的 context_insufficient 提示（诚实失败）。
+          const HANG_SAFETY_MS = 90000;
           const LOCK_TIMEOUT_MS_LOCAL = HANG_SAFETY_MS + 10000;
           const buildStartedAt = Date.now();
-          console.log(`[Extensions] D-038b：buildCrawlCache 启动 hang_safety=${HANG_SAFETY_MS / 1000}s（无业务砍切）merchantUrl=${merchantUrl}`);
+          console.log(`[Extensions] D-090：buildCrawlCache 启动 crawl_budget=${HANG_SAFETY_MS / 1000}s（超时降级出文案）merchantUrl=${merchantUrl}`);
           const newCache: CrawlCache = await withCrawlInflightLock(crawlKey, async () => {
             const hangSafety = new Promise<CrawlCache>((_, reject) =>
               setTimeout(
@@ -628,9 +685,16 @@ export async function POST(req: NextRequest) {
               const msg = err instanceof Error ? err.message : String(err);
               const elapsedMs = Date.now() - buildStartedAt;
               if (msg === "buildCrawlCache-hang-safety") {
-                // 5 分钟 hang 兜底触发 = puppeteer 死锁等极端情况，真实错误不再造 stub cache
-                console.error(`[Extensions] D-038b：buildCrawlCache HANG 兜底触发（${HANG_SAFETY_MS / 1000}s）elapsedMs=${elapsedMs}ms merchantUrl=${merchantUrl}`);
-                throw new Error(`商家网站爬取超过 ${HANG_SAFETY_MS / 1000}s 仍未完成，可能是 puppeteer 死锁或网络异常，请稍后重试`);
+                // D-090：crawl 预算超时（90s）→ 降级为 crawlFailed cache 继续生成，
+                // 不再 throw 让整条生成失败（后台 job 化后无长连接可断，但要释放并发槽）。
+                console.error(`[Extensions] D-090：buildCrawlCache 超过 ${HANG_SAFETY_MS / 1000}s 预算，降级为 crawlFailed cache 继续（SemRush/编排器兜底出文案）elapsedMs=${elapsedMs}ms merchantUrl=${merchantUrl}`);
+                return {
+                  links: [], images: [], pageText: "", features: [], navItems: [],
+                  phoneCandidates: [], sitelinkCandidates: [], semrushTitles: [], semrushDescriptions: [],
+                  promoRegex: null, priceRegex: [], crawledProducts: [],
+                  crawledAt: new Date().toISOString(), crawlMethod: "timeout-degraded", crawlFailed: true,
+                  crawlQualityScore: 0, crawlQualityIssues: ["crawl_budget_timeout"],
+                } as CrawlCache;
               }
               console.warn(`[Extensions] D-038b：buildCrawlCache 真实失败 elapsedMs=${elapsedMs}ms msg=${msg}`);
               throw err;
@@ -903,7 +967,48 @@ export async function POST(req: NextRequest) {
     },
   });
 
-  return new Response(stream, {
+  return stream;
+}
+
+// ───────────────────────────────────────────────────────────────
+// POST：旧 SSE 长连接链路（D-090 灰度回滚 fallback）。
+// 默认前端走 /generate-start + /generate-status 后台任务；仅当
+// GENERATION_ASYNC_OFF=1 时 /generate-start 返回 { fallback:true }，
+// 前端回退到直接调用本路由（行为与重构前逐字节一致）。
+// ───────────────────────────────────────────────────────────────
+export async function POST(req: NextRequest) {
+  const user = getUserFromRequest(req);
+  if (!user) return apiError("未授权", 401);
+
+  let body: any;
+  try {
+    body = await req.json();
+  } catch (e) {
+    console.error("[Extensions] 请求体 JSON 解析失败:", e instanceof Error ? e.message : e);
+    return apiError("请求体格式错误");
+  }
+  const { campaign_id, types = [], ad_language, keywords: requestKeywords = [] } = body;
+  if (!campaign_id) {
+    console.warn("[Extensions] 400: 缺少 campaign_id, body:", JSON.stringify(body).slice(0, 200));
+    return apiError("缺少 campaign_id");
+  }
+  if (!types.length) {
+    console.warn("[Extensions] 400: 缺少 types, campaign_id:", campaign_id);
+    return apiError("缺少 types");
+  }
+
+  const loaded = await loadGenContext(campaign_id, BigInt(user.userId), {
+    types,
+    ad_language,
+    keywords: requestKeywords,
+    optionalTypes: body.optionalTypes || [],
+  });
+  if ("error" in loaded) {
+    console.warn(`[Extensions] ${loaded.status}: ${loaded.error}, campaign_id=${campaign_id}`);
+    return apiError(loaded.error, loaded.status);
+  }
+
+  return new Response(buildGenerationStream(loaded.ctx), {
     headers: {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache, no-transform",

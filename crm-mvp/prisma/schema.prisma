@@ -422,6 +422,30 @@ model ad_creatives {
 }
 
 // -----------------------------------------------------------
+// 12b. 广告生成后台任务表（D-090：把生成从长连接 SSE 解耦为后台任务）
+// 服务端 runner 跑完整条生成并把每阶段事件快照写入 result，前端短轮询读取。
+// 连接断/刷新/部署重启都不丢结果；启动时把卡在 running 的任务重新入队恢复。
+// -----------------------------------------------------------
+model ad_generation_jobs {
+  id           BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  campaign_id  BigInt    @db.UnsignedBigInt
+  user_id      BigInt    @db.UnsignedBigInt
+  types        Json // 本次生成的字段类型集合（如 ["core","sitelinks","images",...]）
+  status       String    @default("queued") @db.VarChar(16) // queued | running | done | failed
+  stage        String?   @db.VarChar(32) // 当前阶段：crawling / generating / sitelinks / images / done ...
+  progress     Int       @default(0) @db.TinyInt // 0-100，仅供进度提示
+  result       Json? // 累积事件快照：{ headlines, descriptions, sitelinks, images, call, ... }
+  error        String?   @db.Text
+  attempt      Int       @default(0) @db.TinyInt
+  heartbeat_at DateTime? @db.DateTime(0) // runner 最近一次写入时间，用于判定僵死
+  created_at   DateTime  @default(now()) @db.DateTime(0)
+  updated_at   DateTime  @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([campaign_id, status], map: "idx_campaign_status")
+  @@index([status], map: "idx_status")
+}
+
+// -----------------------------------------------------------
 // 13. 站点表（全局资源，管理员统一管理）
 // -----------------------------------------------------------
 model publish_sites {

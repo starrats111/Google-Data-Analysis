@@ -1448,43 +1448,107 @@ export default function AdPreviewPage() {
         }
       }
 
-      // D-055: SSE 流可能因代理/网络静默挂起，reader.read() 永久阻塞 → loading 永不结束、
-      // 内容进了库却不显示、必须整页刷新。加 250s 超时中止（后端最长约 200s），超时后进
-      // catch→finally：关 loading + mutate 拉库，由后到补显副作用显示真实内容。
+      // D-090：广告生成已重构为「后台任务 + 短轮询」，根治长连接承载分钟级重活导致的「生成连接中断」。
+      //   1) POST /generate-start 立即拿 job_id（幂等：重复点击/刷新/接续复用同一 job）
+      //   2) 每 2.5s GET /generate-status 读 result 事件快照，对「新出现/变化」的事件复用 handleEvent
+      //      （applied 去重防 toast 重复）；连接断/刷新/部署重启都不丢结果——job 在后台跑完落库。
+      //   3) 灰度回滚：generate-start 返回 { fallback:true } 时退回旧 SSE 链路（逐字节一致）。
+      const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+      const MAX_POLL_MS = 360000; // 6 分钟封顶；超时后台任务仍在跑，重进页面会自动接续
       const genAbort = new AbortController();
-      const genTimeout = setTimeout(() => genAbort.abort(), 250000);
-      const res = await fetch("/api/user/ad-creation/generate-extensions", {
+      const genTimeout = setTimeout(() => genAbort.abort(), MAX_POLL_MS);
+
+      // 旧 SSE 链路（灰度回滚 fallback）：与重构前逐字节一致
+      const runLegacySSE = async () => {
+        const res = await fetch("/api/user/ad-creation/generate-extensions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(reqBody),
+          signal: genAbort.signal,
+        });
+        if (!res.ok || !res.body) { message.error("生成失败"); return; }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split("\n\n");
+          buffer = parts.pop() || "";
+          for (const part of parts) {
+            for (const line of part.split("\n")) {
+              if (!line.startsWith("data: ")) continue;
+              const payload = line.slice(6).trim();
+              if (payload === "[DONE]") continue;
+              try {
+                const evt = JSON.parse(payload) as { type: string; data: unknown };
+                await handleEvent(evt.type, evt.data);
+              } catch {}
+            }
+          }
+        }
+      };
+
+      // 后台任务轮询：按事件优先级对「新出现/变化」的事件调用 handleEvent
+      const APPLY_ORDER = ["queued", "crawl_pending", "crawl_status", "detected_language", "policy_blocked", "merchant_url_parked", "context_insufficient", "headlines", "descriptions", "core_done", "callouts", "structured_snippet", "promotion", "price_items", "call", "negative_keywords", "sitelinks", "images", "compliance_auto_fix", "compliance_warnings", "compliance_policy_fix"];
+      const pollJob = async (jobId: string) => {
+        const applied: Record<string, string> = {};
+        const startedAt = Date.now();
+        for (;;) {
+          if (genAbort.signal.aborted) throw new DOMException("aborted", "AbortError");
+          let sd: { found?: boolean; status?: string; events?: Record<string, unknown>; error?: string } | null = null;
+          try {
+            const r = await fetch(`/api/user/ad-creation/generate-status?job_id=${encodeURIComponent(jobId)}`, { signal: genAbort.signal });
+            const j = await r.json();
+            sd = j?.data;
+          } catch (e) {
+            if (genAbort.signal.aborted) throw e;
+            await sleep(2500); // 单次轮询失败不致命（连接抖动），稍后重试
+            continue;
+          }
+          if (sd && sd.found) {
+            const events = (sd.events || {}) as Record<string, unknown>;
+            const keys = Object.keys(events).sort((a, b) => {
+              const ia = APPLY_ORDER.indexOf(a); const ib = APPLY_ORDER.indexOf(b);
+              return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
+            });
+            for (const t of keys) {
+              if (t === "error") continue;
+              const js = JSON.stringify(events[t]);
+              if (applied[t] === js) continue;
+              applied[t] = js;
+              try { await handleEvent(t, events[t]); } catch {}
+            }
+            if (sd.status === "done" || sd.status === "failed") {
+              if (sd.status === "failed") {
+                message.error(sd.error || (typeof events.error === "string" ? events.error : "生成失败，请重试"));
+              }
+              return;
+            }
+          }
+          if (Date.now() - startedAt > MAX_POLL_MS) throw new DOMException("aborted", "AbortError");
+          await sleep(2500);
+        }
+      };
+
+      let startData: { code?: number; message?: string; data?: { job_id?: string; fallback?: boolean } } | null = null;
+      const startRes = await fetch("/api/user/ad-creation/generate-start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(reqBody),
         signal: genAbort.signal,
       });
+      startData = await startRes.json().catch(() => null);
 
-      if (!res.ok || !res.body) { clearTimeout(genTimeout); message.error("生成失败"); return; }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        const parts = buffer.split("\n\n");
-        buffer = parts.pop() || "";
-
-        for (const part of parts) {
-          for (const line of part.split("\n")) {
-            if (!line.startsWith("data: ")) continue;
-            const payload = line.slice(6).trim();
-            if (payload === "[DONE]") continue;
-            try {
-              const evt = JSON.parse(payload) as { type: string; data: unknown };
-              await handleEvent(evt.type, evt.data);
-            } catch {}
-          }
-        }
+      if (startData?.data?.fallback) {
+        await runLegacySSE();
+      } else if (startData?.code === 0 && startData?.data?.job_id) {
+        await pollJob(startData.data.job_id);
+      } else {
+        clearTimeout(genTimeout);
+        message.error(startData?.message || "生成失败");
+        return;
       }
       clearTimeout(genTimeout);
     } catch (err: unknown) {
@@ -1513,6 +1577,40 @@ export default function AdPreviewPage() {
       try { mutate(); } catch {}
     }
   }, [campaignId, message, callCountryCode, defaultCurrencyCode, defaultLanguageCode, defaultSnippetHeader, targetCountry, preview, adLanguage, mutate]);
+
+  // ─── D-090：进页自动接续未完成的后台生成 job ───
+  // 刷新/断网/换设备/部署重启后重进本页，若该 campaign 存在 queued|running 的生成任务，
+  // 自动复用同一 job 继续轮询，给出实时进度。已完成的内容由 ad_creatives 持久化 + preview 水合展示，
+  // 故仅在「仍在进行」时接续；正在本页生成中（inflight）则跳过，避免重复触发。
+  const resumeCheckedRef = useRef(false);
+  useEffect(() => {
+    if (resumeCheckedRef.current) return;
+    if (!campaignId || !preview) return;
+    resumeCheckedRef.current = true;
+    (async () => {
+      try {
+        if (generationInflightRef.current.size > 0) return;
+        const r = await fetch(`/api/user/ad-creation/generate-status?campaign_id=${encodeURIComponent(campaignId)}`);
+        const j = await r.json();
+        const d = j?.data as { found?: boolean; status?: string; request?: { types?: string[]; optionalTypes?: string[] } } | undefined;
+        if (!d?.found) return;
+        if (d.status !== "queued" && d.status !== "running") return;
+        if (generationInflightRef.current.size > 0) return;
+        const req = d.request || {};
+        const t = req.types || [];
+        message.info("检测到正在进行的生成任务，正在接续进度…", 3);
+        if (t.includes("core")) {
+          generateExtension("core");
+        } else if (t.includes("optional") && (req.optionalTypes?.length ?? 0) > 0) {
+          generateExtension(...((req.optionalTypes || []) as Array<"callouts" | "promotion" | "price" | "call" | "snippet">));
+        } else if (t.length > 0) {
+          generateExtension(...(t as Array<"core" | "sitelinks" | "images" | "callouts" | "promotion" | "price" | "call" | "snippet">));
+        }
+      } catch {
+        /* 接续失败不影响正常使用 */
+      }
+    })();
+  }, [campaignId, preview, generateExtension, message]);
 
   // ─── 手动输入 URL → 自动获取标题和描述 + 验证 ───
   const fetchAndValidateSitelink = useCallback(async (idx: number) => {
