@@ -9,6 +9,7 @@ import {
   harvestImagesFromPagesWithPuppeteer, getAcceptLanguage,
   dedupeByImageStem, capImagesPerDirectory,
 } from "@/lib/crawler";
+import { dedupeByVisualHash } from "@/lib/image-phash";
 import { getAdMarketConfig } from "@/lib/ad-market";
 import { getProxyUrlForCountry, getHttpProxyUrlForCountry, ensureCountryEgressHttpProxy } from "@/lib/crawl-proxy";
 import { isLowValueSitelink } from "@/lib/sitelink-filter";
@@ -2179,9 +2180,23 @@ export async function buildCrawlCache(
   // BUG-02 A+C（设计方案.md §四点五）：文件名词干去重 + 同目录配额，
   // 去掉「不同 URL 同一张图」与「单目录霸屏」造成的候选图同质化。输入按现有分数顺序。
   const afterStem = dedupeByImageStem(mergedImagesRaw);
-  const mergedImages = capImagesPerDirectory(afterStem, 4);
+  let mergedImages = capImagesPerDirectory(afterStem, 4);
   if (mergedImages.length < mergedImagesRaw.length) {
     console.log(`[CrawlPipeline] BUG-02 去同质：${mergedImagesRaw.length} → 词干去重 ${afterStem.length} → 目录配额 ${mergedImages.length}`);
+  }
+
+  // BUG-02 D（设计方案.md §四点五）：感知哈希视觉去重——去掉「不同 URL 但视觉相同」的图。
+  // 带并发上限 + 单图超时 + 总预算 + URL 缓存；任何失败/超预算都优雅降级（保留原图）。
+  try {
+    const beforeV = mergedImages.length;
+    mergedImages = await dedupeByVisualHash(mergedImages, {
+      maxImages: 40, concurrency: 3, perImageTimeoutMs: 4000, totalBudgetMs: 15000, threshold: 6,
+    });
+    if (mergedImages.length < beforeV) {
+      console.log(`[CrawlPipeline] BUG-02 D 视觉去重：${beforeV} → ${mergedImages.length}`);
+    }
+  } catch (e) {
+    console.warn("[CrawlPipeline] BUG-02 D 视觉去重跳过：", e instanceof Error ? e.message : e);
   }
 
   return {

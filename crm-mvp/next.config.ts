@@ -38,6 +38,8 @@ const nextConfig: NextConfig = {
     // 其 worker 入口路径被算成 .next/worker-script/node/index.js（不存在）→
     // worker 线程加载失败抛 uncaughtException 中断在途生成 + OCR 过滤永久失效。
     "tesseract.js",
+    // BUG-02 D：sharp 为原生模块（含 .node 二进制），必须外部化，否则 webpack 打包失败。
+    "sharp",
   ],
 
   // ─── 安全头部 ───
