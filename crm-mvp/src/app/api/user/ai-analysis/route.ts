@@ -11,94 +11,13 @@ import { dateColumnStart, dateColumnEndExclusive } from "@/lib/date-utils";
 import { normalizeAiRuleProfile, getActivePersona } from "@/lib/ai-rule-profile";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 // ──────────────────────────────────────────────
-// 工具定义（OpenAI function calling 格式）
+// 数据工具执行（Prisma 直查）
+// 说明：当前实测多数中转 provider 不支持 OpenAI function calling（tool_choice=required
+// 仍不返回 tool_calls），故不再让模型主动调用工具，而是由服务端预取这些数据注入提示词。
 // ──────────────────────────────────────────────
-const TOOLS = [
-  {
-    type: "function",
-    function: {
-      name: "get_account_overview",
-      description: "获取用户广告账户总览：花费、总佣金（联盟平台实际数据）、已确认、待结算、ROI、点击量、曝光量，支持自定义日期范围",
-      parameters: {
-        type: "object",
-        properties: {
-          date_from: { type: "string", description: "开始日期 YYYY-MM-DD" },
-          date_to:   { type: "string", description: "结束日期 YYYY-MM-DD" },
-        },
-        required: ["date_from", "date_to"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "get_campaign_performance",
-      description: "获取各广告系列的完整诊断数据：花费/总佣金/拒付/ROI/CTR/CPC/曝光量/运行天数/最高出价(max_cpc)，佣金来自联盟平台，可按花费或ROI排序",
-      parameters: {
-        type: "object",
-        properties: {
-          date_from: { type: "string", description: "开始日期 YYYY-MM-DD" },
-          date_to:   { type: "string", description: "结束日期 YYYY-MM-DD" },
-          order_by:  { type: "string", enum: ["cost", "roi", "clicks", "commission"], description: "排序字段，默认cost" },
-          limit:     { type: "number", description: "返回条数，默认20，最大50" },
-        },
-        required: ["date_from", "date_to"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "get_affiliate_summary",
-      description: "获取联盟平台佣金汇总：各平台收入、拒付率、待结算金额，含全状态分布",
-      parameters: {
-        type: "object",
-        properties: {
-          date_from:  { type: "string", description: "开始日期 YYYY-MM-DD" },
-          date_to:    { type: "string", description: "结束日期 YYYY-MM-DD" },
-          breakdown:  { type: "string", enum: ["platform", "merchant", "daily"], description: "分组维度，默认platform" },
-        },
-        required: ["date_from", "date_to"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "get_daily_trend",
-      description: "获取每日广告花费/佣金/ROI趋势数据，用于发现规律和异常",
-      parameters: {
-        type: "object",
-        properties: {
-          date_from: { type: "string", description: "开始日期 YYYY-MM-DD" },
-          date_to:   { type: "string", description: "结束日期 YYYY-MM-DD" },
-        },
-        required: ["date_from", "date_to"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "get_roi_diagnosis",
-      description: "ROI健康诊断：返回每条系列的花费/佣金/拒付/ROI/CTR/CPC/运行天数/最高出价，按亏损/低效/盈利分类，用于深度诊断",
-      parameters: {
-        type: "object",
-        properties: {
-          date_from: { type: "string", description: "开始日期 YYYY-MM-DD" },
-          date_to:   { type: "string", description: "结束日期 YYYY-MM-DD" },
-        },
-        required: ["date_from", "date_to"],
-      },
-    },
-  },
-];
-
-// ──────────────────────────────────────────────
-// 工具执行（Prisma 直查）
 // ──────────────────────────────────────────────
 type ToolArgs = Record<string, unknown>;
 
@@ -539,9 +458,6 @@ export async function POST(req: NextRequest) {
   }
 
   const baseContext = `分析时间范围：${date_from} 至 ${date_to}`;
-  const userQuestion = question?.trim()
-    ? `${baseContext}\n\n${question.trim()}`
-    : `${baseContext}\n\n请对该时间段的 Google Ads 账户进行全面数据分析，包括：账户总览、各系列 ROI 诊断、联盟平台收入分析、每日趋势，最后给出 3 条可执行的优化建议。`;
 
   // 获取 AI 配置（严格使用控制台配置，不兜底）
   let aiConfig: AiConfig;
@@ -570,12 +486,13 @@ export async function POST(req: NextRequest) {
 
 【当前日期】今天是 ${todayStr}（${todayStr.slice(0, 4)} 年），这是真实的服务器时间。用户传入的日期范围均为过去或当前日期，直接使用，不得质疑或要求确认。
 
-【数据工具】
-- get_account_overview：花费、总佣金、已确认、ROI、点击、曝光（佣金来自联盟平台实际数据）
-- get_campaign_performance：各系列花费/总佣金/已确认/ROI 明细（佣金按商家映射）
-- get_affiliate_summary：联盟平台收入明细（按平台/商家/日期分组）
-- get_daily_trend：每日花费与佣金趋势（成本来自Google Ads，佣金来自联盟平台）
-- get_roi_diagnosis：系列盈亏分类诊断
+【数据来源】
+用户消息中已附上该时间段的真实数据（JSON），直接基于这些数据分析，不需要也无法再调用任何工具。数据包含以下部分：
+- 账户总览：花费、总佣金、已确认、ROI、点击、曝光（佣金来自联盟平台实际数据）
+- ROI 诊断：各系列盈亏分类（亏损/低效/盈利）
+- 系列明细：各系列花费/总佣金/已确认/ROI/CTR/CPC/运行天数/最高出价
+- 联盟平台收入：按平台分组的收入/拒付明细
+- 每日趋势：每日花费与佣金（成本来自 Google Ads，佣金来自联盟平台）
 
 【佣金口径说明 — 必须遵守】
 - 所有工具的佣金数据均来自联盟平台实际交易，与数据中心显示的数值完全一致
@@ -607,153 +524,119 @@ export async function POST(req: NextRequest) {
   - max_cpc 与实际 cpc 对比 → max_cpc 过低会限制流量，发现时直接指出具体数值
   - 花费极低（<$5）但 ctr 强劲的系列 → 预算受限潜力股，建议扩量并给出百分比
   - rejected_commission 占比高的系列 → 拒付风险警示
-- 用户消息第一行为"分析时间范围：YYYY-MM-DD 至 YYYY-MM-DD"，直接用于工具调用，无需确认
-- 主动调用多个工具，获取完整数据再开始分析
-- 数据为空时只说"该时段暂无数据，请确认同步状态"，不猜测原因`;
+- 用户消息已包含"分析时间范围"与对应的真实 JSON 数据，直接基于其分析，不要质疑或要求确认，也不要在正文里描述"我将调用工具"
+- 综合所有数据部分做交叉分析，不要遗漏任一维度
+- 数据为空或全部为错误/无数据时，只说"该时段暂无数据，请确认同步状态"，不猜测原因`;
 
-  const messages: Array<{ role: string; content: unknown }> = [
-    { role: "system", content: systemPrompt },
-    { role: "user", content: userQuestion },
-  ];
-
-  // SSE 流
+  // SSE 流：服务端预取数据 + 单轮（含截断续写）生成报告，不依赖模型 function calling。
   const stream = new ReadableStream({
     async start(controller) {
       const enc = new TextEncoder();
+      let closed = false;
       const send = (event: string, data: string) => {
+        if (closed) return;
         controller.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
       };
+      // SSE 心跳：等待 AI 期间持续发注释行（以 ":" 开头，前端解析时忽略），
+      // 防止 Cloudflare/Nginx 因长时间无字节把连接判为空闲而 reset（即前端看到的 network error）。
+      const beat = () => { if (!closed) { try { controller.enqueue(enc.encode(`: keepalive ${Date.now()}\n\n`)); } catch { /* ignore */ } } };
 
       try {
-        let round = 0;
-        const MAX_ROUNDS = 14; // 工具调用最多8轮 + 续写最多6轮
-        // 一旦进入正文生成阶段，就不再传工具定义（防止续写轮重新触发工具调用）
-        let generationStarted = false;
+        // ── 1) 服务端预取真实数据（替代模型工具调用）──
+        send("status", `${activePersona.name} 正在读取账户数据...`);
+        const toolPlan: Array<{ title: string; name: string; args: ToolArgs }> = [
+          { title: "账户总览",     name: "get_account_overview",     args: { date_from, date_to } },
+          { title: "ROI 诊断",     name: "get_roi_diagnosis",        args: { date_from, date_to } },
+          { title: "系列明细",     name: "get_campaign_performance", args: { date_from, date_to, order_by: "cost", limit: 30 } },
+          { title: "联盟平台收入", name: "get_affiliate_summary",    args: { date_from, date_to, breakdown: "platform" } },
+          { title: "每日趋势",     name: "get_daily_trend",          args: { date_from, date_to } },
+        ];
+        const dataParts: string[] = [];
+        let nonEmpty = 0;
+        for (const t of toolPlan) {
+          send("tool", `读取${t.title}...`);
+          let r: string;
+          try { r = await executeTool(t.name, t.args, userId); }
+          catch (e) { r = JSON.stringify({ error: String(e) }); }
+          try { const o = JSON.parse(r) as { error?: unknown }; if (!o.error) nonEmpty++; } catch { nonEmpty++; }
+          dataParts.push(`## ${t.title}\n${r}`);
+        }
 
-        while (round < MAX_ROUNDS) {
-          round++;
-          send("status", `[第${round}轮] ${activePersona.name} 正在思考...`);
+        if (nonEmpty === 0) {
+          send("content", "该时段暂无数据，请确认数据同步状态后重试。");
+          send("done", "无数据");
+          closed = true; controller.close();
+          return;
+        }
 
-          const base = aiConfig.baseUrl.replace(/\/+$/, "").replace(/\/v1\/messages$/, "").replace(/\/v1$/, "");
-          const url = `${base}/v1/chat/completions`;
+        const dataContext = `${baseContext}\n\n【已为你预取的真实数据（JSON）】\n${dataParts.join("\n\n")}`;
+        const finalUserMsg = question?.trim()
+          ? `${dataContext}\n\n【分析要求】\n${question.trim()}`
+          : `${dataContext}\n\n【分析要求】\n请基于以上真实数据进行全面分析：账户总览、各系列 ROI 诊断、联盟平台收入、每日趋势，并给出 3 条可执行的优化建议。`;
 
-          const requestBody: Record<string, unknown> = {
-            model: aiConfig.modelName,
-            messages,
-            max_tokens: 8192,
-            temperature: 0.3,
-            stream: false,
-          };
+        const messages: Array<{ role: string; content: string }> = [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: finalUserMsg },
+        ];
 
-          // 工具定义只在工具调用阶段传入，一旦开始生成正文就不再传
-          const hasToolResults = messages.some((m) => m.role === "tool");
-          const isFirstRound = round === 1;
-          if (!generationStarted && (isFirstRound || hasToolResults)) {
-            requestBody.tools = TOOLS;
-            requestBody.tool_choice = "auto";
+        // ── 2) 单轮生成报告（token 截断时续写）──
+        const base = aiConfig.baseUrl.replace(/\/+$/, "").replace(/\/v1\/messages$/, "").replace(/\/v1$/, "");
+        const apiUrl = `${base}/v1/chat/completions`;
+        const MAX_ROUNDS = 6;
+        for (let round = 1; round <= MAX_ROUNDS; round++) {
+          send("status", round === 1 ? `${activePersona.name} 正在分析...` : "内容较长，继续生成...");
+
+          const hb = setInterval(beat, 12000);
+          let res: Response;
+          try {
+            res = await fetch(apiUrl, {
+              method: "POST",
+              headers: { Authorization: `Bearer ${aiConfig.apiKey}`, "Content-Type": "application/json" },
+              body: JSON.stringify({ model: aiConfig.modelName, messages, max_tokens: 8192, temperature: 0.3, stream: false }),
+              signal: AbortSignal.timeout(110000),
+            });
+          } finally {
+            clearInterval(hb);
           }
-
-          const res = await fetch(url, {
-            method: "POST",
-            headers: { Authorization: `Bearer ${aiConfig.apiKey}`, "Content-Type": "application/json" },
-            body: JSON.stringify(requestBody),
-            signal: AbortSignal.timeout(90000),
-          });
 
           if (!res.ok) {
             const text = await res.text().catch(() => "");
-            throw new Error(`AI API 错误: HTTP ${res.status} - ${text.slice(0, 300)}`);
+            throw new Error(`AI API 错误: HTTP ${res.status} - ${text.slice(0, 200)}`);
           }
 
           const data = await res.json() as {
-            choices: Array<{
-              finish_reason: string;
-              message: {
-                role: string;
-                content: string | null;
-                tool_calls?: Array<{
-                  id: string;
-                  function: { name: string; arguments: string };
-                }>;
-              };
-            }>;
+            choices?: Array<{ finish_reason: string; message: { content: string | null } }>;
           };
-
           const choice = data.choices?.[0];
           if (!choice) throw new Error("AI 返回空响应");
 
-          const msg = choice.message;
-          messages.push({ role: msg.role, content: msg.content || null });
-
-          // 有工具调用
-          if (msg.tool_calls && msg.tool_calls.length > 0) {
-            // 先补全 tool_calls 到最后一条 assistant 消息
-            const lastAssistant = messages[messages.length - 1] as {
-              role: string;
-              content: unknown;
-              tool_calls?: typeof msg.tool_calls;
-            };
-            lastAssistant.tool_calls = msg.tool_calls;
-
-            for (const tc of msg.tool_calls) {
-              const toolName = tc.function.name;
-              send("status", `Adrian 正在调用工具：${toolName}...`);
-
-              let toolArgs: ToolArgs = {};
-              try { toolArgs = JSON.parse(tc.function.arguments); } catch { /* empty */ }
-
-              let toolResult: string;
-              try {
-                toolResult = await executeTool(toolName, toolArgs, userId);
-              } catch (e) {
-                toolResult = JSON.stringify({ error: String(e) });
-              }
-
-              send("tool", `${toolName} 返回 ${toolResult.length} 字节数据`);
-
-              messages.push({
-                role: "tool",
-                content: toolResult,
-                // @ts-expect-error tool_call_id is valid
-                tool_call_id: tc.id,
-                name: toolName,
-              });
-            }
-            continue; // 继续下一轮
-          }
-
-          // 没有工具调用 → 正文生成阶段
-          generationStarted = true;
-          const content = msg.content || "";
+          const content = choice.message?.content || "";
           if (content) {
-            // 分块流式发送（模拟 streaming）
-            const chunkSize = 50;
+            const chunkSize = 60;
             for (let i = 0; i < content.length; i += chunkSize) {
               send("content", content.slice(i, i + chunkSize));
-              await new Promise((r) => setTimeout(r, 15));
+              await new Promise((r) => setTimeout(r, 12));
             }
           }
+          messages.push({ role: "assistant", content });
 
-          // finish_reason === "length" 表示模型被 token 上限截断，续写
-          // 此时 generationStarted=true，下一轮不会再传工具定义
           if (choice.finish_reason === "length" && content) {
-            send("status", "内容未完，继续生成...");
             messages.push({ role: "user", content: "请继续，从上文截断处接着写，不要重复已写内容。" });
             continue;
           }
 
           send("done", "分析完成");
-          controller.close();
+          closed = true; controller.close();
           return;
         }
 
-        send("content", "\n\n⚠️ 分析轮次超限，请重试。");
+        send("content", "\n\n报告生成轮次超限，请重试。");
         send("done", "超限退出");
-        controller.close();
+        closed = true; controller.close();
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        send("error", msg);
-        controller.close();
+        send("error", err instanceof Error ? err.message : String(err));
+        closed = true;
+        try { controller.close(); } catch { /* ignore */ }
       }
     },
   });
@@ -761,8 +644,9 @@ export async function POST(req: NextRequest) {
   return new Response(stream, {
     headers: {
       "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
+      "Cache-Control": "no-cache, no-transform",
       "Connection": "keep-alive",
+      "X-Accel-Buffering": "no",
     },
   });
 }
