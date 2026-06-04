@@ -1003,8 +1003,15 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
                   console.warn("[Extensions] D-059 兜底 fetchPageImages 失败:", fbErr instanceof Error ? fbErr.message : fbErr);
                 }
               }
-              const images = rawImgs.length > 0
-                ? await selectBestImages(rawImgs, merchantUrl, { pageText: cache!.pageText, features: cache!.features })
+              // D-095b：Shopify 商家——优先从产品页 .js 抓干净产品图，置顶注入选图池
+              // （营销首页常只有 lifestyle/信任徽章/截图，产品图不在首页）。非 Shopify 站返回空。
+              let productImgs: string[] = [];
+              try { productImgs = await collectShopifyProductImages(merchantUrl, cache!); } catch (e) {
+                console.warn("[Extensions] D-095b Shopify 产品图采集失败（不阻断）:", e instanceof Error ? e.message : e);
+              }
+              const imgPool = productImgs.length > 0 ? [...productImgs, ...rawImgs] : rawImgs;
+              const images = imgPool.length > 0
+                ? await selectBestImages(imgPool, merchantUrl, { pageText: cache!.pageText, features: cache!.features, priorityImages: productImgs })
                 : [];
               send("images", images);
               if (adCreativeId && images.length > 0) {
@@ -2738,10 +2745,86 @@ function extractBusinessKeywords(pageText: string, features: string[]): string[]
   return [...new Set(result)];
 }
 
+// D-095b：Shopify 商家产品图采集。
+// 实证（COSMO Technologies 儿童智能手表）：营销首页几乎只有 lifestyle/信任徽章/GPS 地图截图，
+// 真正干净的产品图在 /products/<handle> 页；且其文件名是 /s/files/ 下的哈希，URL 启发式无法识别。
+// Shopify 暴露 /products/<handle>.js 返回 images[] 干净产品图——直接从爬虫已发现的 /products/
+// 链接取 handle 拉取，作为「产品图」最高优先注入选图池。非 Shopify 站自动跳过（不发无谓请求）。
+async function collectShopifyProductImages(
+  merchantUrl: string,
+  cache: CrawlCache,
+  maxProducts = 6,
+): Promise<string[]> {
+  let base: URL;
+  try { base = new URL(merchantUrl); } catch { return []; }
+  // 仅对疑似 Shopify 站发起（避免对任意站点打 /products/x.js 浪费请求）
+  const looksShopify =
+    (cache.images || []).some((u) => /cdn\.shopify\.com/i.test(u)) ||
+    /cdn\.shopify\.com|myshopify\.com|shopify/i.test(cache.pageText || "");
+  if (!looksShopify) return [];
+
+  const baseHost = base.hostname.replace(/^www\./, "").toLowerCase();
+  const linkPool: unknown[] = [
+    ...(((cache as any).navLinks as unknown[]) || []),
+    ...(((cache as any).sitelinkCandidates as unknown[]) || []),
+    ...(((cache as any).links as unknown[]) || []),
+  ];
+  const handles: string[] = [];
+  const seenHandle = new Set<string>();
+  for (const l of linkPool) {
+    const raw = typeof l === "string" ? l : (l as { url?: string })?.url;
+    if (!raw) continue;
+    let u: URL;
+    try { u = new URL(raw, base.origin); } catch { continue; }
+    if (u.hostname.replace(/^www\./, "").toLowerCase() !== baseHost) continue;
+    const m = u.pathname.match(/\/products\/([^/?#]+)/i);
+    if (!m) continue;
+    const h = decodeURIComponent(m[1]).toLowerCase();
+    if (!h || seenHandle.has(h)) continue;
+    seenHandle.add(h);
+    handles.push(h);
+    if (handles.length >= maxProducts) break;
+  }
+  if (handles.length === 0) return [];
+
+  const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+  const results = await Promise.allSettled(
+    handles.map(async (h) => {
+      const resp = await fetch(`${base.origin}/products/${encodeURIComponent(h)}.js`, {
+        headers: { "User-Agent": UA, Accept: "application/json" },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!resp.ok) return [] as string[];
+      const ct = resp.headers.get("content-type") || "";
+      if (!/json|javascript/i.test(ct)) return [] as string[]; // 非 Shopify → 多为 text/html 404
+      const data = (await resp.json().catch(() => null)) as { images?: unknown[] } | null;
+      const arr = Array.isArray(data?.images) ? data!.images! : [];
+      return arr
+        .map((it) => (typeof it === "string" ? it : (it as { src?: string })?.src || ""))
+        .map((s) => (s.startsWith("//") ? `https:${s}` : s))
+        .filter((s) => /^https?:\/\//.test(s));
+    }),
+  );
+  const out: string[] = [];
+  const seenUrl = new Set<string>();
+  for (const r of results) {
+    if (r.status !== "fulfilled") continue;
+    for (const u of r.value) {
+      if (seenUrl.has(u)) continue;
+      seenUrl.add(u);
+      out.push(u);
+    }
+  }
+  if (out.length > 0) {
+    console.warn(`[Extensions] D-095b Shopify 产品图采集：handles=${handles.length} 取到产品图 ${out.length} 张`);
+  }
+  return out;
+}
+
 async function selectBestImages(
   rawImages: string[],
   merchantUrl?: string,
-  merchantContext?: { pageText?: string; features?: string[] },
+  merchantContext?: { pageText?: string; features?: string[]; priorityImages?: string[] },
 ): Promise<string[]> {
   // 解析商家主域名，用于品牌相关性判断
   let merchantDomain = "";
@@ -2800,10 +2883,17 @@ async function selectBestImages(
     console.log(`[SelectImages] 检测到业务关键词: ${businessKeywords.slice(0, 8).join(", ")}`);
   }
 
+  // D-095b：来自 Shopify 产品页 .js 的图片 = 确定的产品图，给最高优先（其 /s/files/ 哈希文件名
+  // 无法靠 URL 启发式识别，故用集合显式加权，确保排在 lifestyle/徽章之上）。
+  const prioritySet = new Set(
+    (merchantContext?.priorityImages || []).map((u) => normalizeImageUrl(u)),
+  );
+
   // 按产品相关性评分排序（高分 = 产品图，低分 = 品牌外壳图）
   const brandSuffix = merchantDomain ? merchantDomain.replace(/^[^.]+\./, "") : "";
   const scored = filtered.map((url) => {
     let score = imageRelevanceScore(url);
+    if (prioritySet.has(url)) score += 200; // Shopify 产品页确证产品图，置顶
     // 商家业务关键词加成：URL 路径含主营业务词则加分
     if (businessKeywords.length > 0) {
       const urlPath = (() => {
