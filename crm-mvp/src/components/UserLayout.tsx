@@ -111,6 +111,7 @@ interface NotificationDetail {
   removed?: { name: string; platform: string }[];
   added?: { name: string; platform: string }[];
   invalidLinks?: { name: string; platform: string; reason: string }[];
+  statusChanged?: { name: string; platform: string }[];
 }
 
 export default function UserLayout({ children }: { children: React.ReactNode }) {
@@ -405,6 +406,23 @@ export default function UserLayout({ children }: { children: React.ReactNode }) 
                   rowKey={(_, i) => String(i)}
                   size="small"
                   pagination={detailModal.data.added.length > 10 ? { pageSize: 10 } : false}
+                />
+              </div>
+            )}
+            {detailModal.data.statusChanged && detailModal.data.statusChanged.length > 0 && (
+              <div style={{ marginBottom: 20 }}>
+                <Text strong style={{ fontSize: 14, display: "block", marginBottom: 8 }}>
+                  <Tag color="orange">待同步</Tag>以下 {detailModal.data.statusChanged.length} 个商家平台已 joined，但 CRM 内仍是 pending，请手动更新状态
+                </Text>
+                <Table
+                  dataSource={detailModal.data.statusChanged}
+                  columns={[
+                    { title: "商家名称", dataIndex: "name", key: "name" },
+                    { title: "平台", dataIndex: "platform", key: "platform", width: 120, render: (v: string) => <Tag>{v}</Tag> },
+                  ]}
+                  rowKey={(_, i) => String(i)}
+                  size="small"
+                  pagination={detailModal.data.statusChanged.length > 10 ? { pageSize: 10 } : false}
                 />
               </div>
             )}

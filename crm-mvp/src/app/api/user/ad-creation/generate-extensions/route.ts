@@ -2777,14 +2777,20 @@ async function collectShopifyProductImages(
   const cacheDegraded = (cache.images || []).length === 0; // D-090 降级 / 爬虫失败时 cache 无图
   if (!cacheLooksShopify && !cacheDegraded) return [];
 
-  const out: string[] = [];
+  // C-151：Shopify products.json 的 images[] 中 images[0] 是「产品主图」（干净白底图），
+  //   images[1..] 多为次级/细节/场景(lifestyle)图（实证 garrettwade「Dinner Forks」的次级图
+  //   `..._Flatware_Set_W_4_PiecesAlt...` 是摆盘食物图，被当产品图上屏 → 07：个别图明显不符/低质）。
+  //   修复口径（07：加强单图质量+归属校验）：主图(featured)优先收集——覆盖更多不同产品、且都是干净产品图；
+  //   次级图(secondary)仅作数量兜底。产品数足够时（如 garrettwade 50 个产品）次级 lifestyle 图被自然挤出，不再上屏。
+  const featured: string[] = [];
+  const secondary: string[] = [];
   const seen = new Set<string>();
-  const pushImg = (raw?: string) => {
+  const add = (bucket: string[], raw?: string) => {
     if (!raw) return;
     const u = raw.startsWith("//") ? `https:${raw}` : raw;
     if (!/^https?:\/\//.test(u) || seen.has(u)) return;
     seen.add(u);
-    out.push(u);
+    bucket.push(u);
   };
 
   // 主路径：/products.json 总清单——与爬虫完全无关，单请求拿全部产品+产品图，
@@ -2801,12 +2807,11 @@ async function collectShopifyProductImages(
         const imgs = Array.isArray((p as { images?: unknown[] })?.images)
           ? (p as { images: unknown[] }).images
           : [];
-        let per = 0;
-        for (const im of imgs) {
-          pushImg(typeof im === "string" ? im : (im as { src?: string })?.src);
-          if (++per >= 3) break; // 每个产品最多取 3 张，保证多样性、降低信息图占比
+        // images[0]=主图→featured；images[1..2]=次级/场景图→secondary（仅兜底）
+        for (let i = 0; i < imgs.length && i <= 2; i++) {
+          const im = imgs[i];
+          add(i === 0 ? featured : secondary, typeof im === "string" ? im : (im as { src?: string })?.src);
         }
-        if (out.length >= maxImages) break;
       }
     }
   } catch {
@@ -2814,7 +2819,7 @@ async function collectShopifyProductImages(
   }
 
   // 兜底：/products.json 被禁用时，从爬虫已发现的 /products/ 链接逐个拉 .js
-  if (out.length === 0) {
+  if (featured.length === 0) {
     const baseHost = base.hostname.replace(/^www\./, "").toLowerCase();
     const linkPool: unknown[] = [
       ...(((cache as any).navLinks as unknown[]) || []),
@@ -2835,7 +2840,7 @@ async function collectShopifyProductImages(
       if (!h || seenHandle.has(h)) continue;
       seenHandle.add(h);
       handles.push(h);
-      if (handles.length >= 6) break;
+      if (handles.length >= 8) break;
     }
     if (handles.length > 0) {
       const results = await Promise.allSettled(
@@ -2851,12 +2856,17 @@ async function collectShopifyProductImages(
           );
         }),
       );
-      for (const r of results) if (r.status === "fulfilled") for (const s of r.value) pushImg(s);
+      for (const r of results) if (r.status === "fulfilled") {
+        const arr = r.value;
+        for (let i = 0; i < arr.length && i <= 2; i++) add(i === 0 ? featured : secondary, arr[i]);
+      }
     }
   }
 
+  // 主图优先、次级兜底：上屏尽量是干净产品主图、覆盖更多不同产品
+  const out = [...featured, ...secondary];
   if (out.length > 0) {
-    console.warn(`[Extensions] D-095b Shopify 产品图采集：${out.length} 张（origin=${base.origin}）`);
+    console.warn(`[Extensions] D-095b/C-151 Shopify 产品图采集：featured=${featured.length} secondary=${secondary.length} → ${Math.min(out.length, maxImages)} 张（origin=${base.origin}）`);
   }
   return out.slice(0, maxImages);
 }
@@ -2940,6 +2950,12 @@ async function selectBestImages(
         try { return new URL(url).pathname.toLowerCase(); } catch { return url.toLowerCase().split("?")[0]; }
       })();
       if (businessKeywords.some((kw) => urlPath.includes(kw))) score += 25;
+    }
+    // C-151：次级/场景(lifestyle)图特征 URL 降权（-alt-、_alt、lifestyle、in-use、scene 等），
+    //   这类多为摆拍/场景图而非干净产品主图（07：个别图明显不符/低质）。已确证产品主图(prioritySet)不降权。
+    if (!prioritySet.has(url)) {
+      const lp = (() => { try { return new URL(url).pathname.toLowerCase(); } catch { return url.toLowerCase(); } })();
+      if (/(?:[-_]alt[-_.]|[-_]alt\d|lifestyle|in[-_]?use|[-_]scene[-_.])/i.test(lp)) score -= 40;
     }
     // 品牌 CDN 加成：主域名同后缀的 CDN 域名（如 sensershop.com 对应 senser.net）
     try {
