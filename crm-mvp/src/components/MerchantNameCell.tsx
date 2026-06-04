@@ -13,20 +13,6 @@
 import { useState } from "react";
 import { App, Button, Popover, Space, Tooltip, Typography } from "antd";
 import { CopyOutlined, ShopOutlined } from "@ant-design/icons";
-import { copyTextToClipboard, previewText } from "@/lib/clipboard";
-
-/**
- * BUG-01：优先返回完整 http(s) URL，避免某一字段是裸 token 时被复制。
- * 在 campaign_link / tracking_link / connection_accounts[].link 中优先挑 ^https?://。
- */
-function pickFullTrackingLink(
-  candidates: Array<string | null | undefined>,
-): string {
-  const valid = candidates
-    .map((c) => (typeof c === "string" ? c.trim() : ""))
-    .filter(Boolean);
-  return valid.find((c) => /^https?:\/\//i.test(c)) || valid[0] || "";
-}
 
 const { Text } = Typography;
 
@@ -90,42 +76,25 @@ export default function MerchantNameCell({
   /** 当 merchant_name 为空时显示的兜底文本（如"未在我的商家库"） */
   fallbackName?: string;
 }) {
-  const { message, modal } = App.useApp();
+  const { message } = App.useApp();
   const [popoverOpen, setPopoverOpen] = useState(false);
 
   const accounts: ConnectionAccount[] = Array.isArray(rec.connection_accounts) ? rec.connection_accounts : [];
-  // BUG-01：单账号时也优先取完整 http URL（campaign_link / tracking_link / 账号链接里挑）
-  const singleLink = pickFullTrackingLink([
-    rec.campaign_link,
-    rec.tracking_link,
-    ...accounts.map((a) => a.link),
-  ]);
+  const singleLink = rec.campaign_link || rec.tracking_link || "";
   const isMultiAccount = accounts.length >= 2;
 
-  const doCopy = async (link: string, accountName?: string) => {
+  const doCopy = (link: string, accountName?: string) => {
     if (!link) {
       message.error("无可用追踪链接");
       return;
     }
-    const ok = await copyTextToClipboard(link);
-    if (!ok) {
-      // 绝对保底：自动复制失败时把完整链接弹出来，可直接选中手动复制
-      modal.info({
-        title: "请手动复制完整追踪链接",
-        width: 560,
-        content: (
-          <Typography.Paragraph
-            copyable={{ text: link }}
-            style={{ wordBreak: "break-all", marginBottom: 0, marginTop: 8 }}
-          >
-            {link}
-          </Typography.Paragraph>
-        ),
-      });
-      return;
-    }
-    const tip = accountName ? `已复制 ${accountName} 的追踪链接` : "追踪链接已复制";
-    message.success(`${tip}：${previewText(link)}`);
+    navigator.clipboard
+      .writeText(link)
+      .then(() => {
+        if (accountName) message.success(`已复制 ${accountName} 的追踪链接`);
+        else message.success("追踪链接已复制");
+      })
+      .catch(() => message.error("复制失败"));
   };
 
   const onSingleCopy = (e: React.MouseEvent) => {
