@@ -2598,6 +2598,13 @@ const IMG_BLACKLIST = [
   "spinner", "loading", "placeholder", "blank", "footer", "newsletter",
   "trustpilot", "captcha", "pixel", "tracking", "facebook", "twitter", "instagram",
   "visa", "mastercard", "paypal", "ssl", "emoji", "1x1", "spacer",
+  // D-095：信任/奖项/评分/担保类装饰图——COSMO(智能手表)实证：提取结果全是 Inc.5000 奖牌、
+  // 退款/包邮/质保盾牌、Google 评分徽章、品牌 logo，无一张真实产品图。这些 URL 不含 logo/badge
+  // 关键字时会漏过，故扩充黑名单一并硬剔（产品图文件名几乎不会含这些词，误杀风险极低）。
+  "award", "guarantee", "warranty", "money-back", "moneyback", "moneyguarantee",
+  "verified", "certified", "g2crowd", "capterra", "inc5000", "inc-5000", "inc_5000",
+  "trust-badge", "trustbadge", "as-seen", "asseenon", "featured-in", "stars-",
+  "google-review", "review-star", "five-star", "5-star",
 ];
 
 // 已知图片 CDN 域名 — 跳过 HEAD 验证（这些域名只提供图片）
@@ -2624,6 +2631,7 @@ const imageRelevanceScore = (url: string): number => {
   if (/\/catalog\/product/i.test(path)) score += 50;
   if (/\/media\/catalog/i.test(path)) score += 45;
   if (/\/(goods|item|sku)\//i.test(path)) score += 45;
+  if (/\/cdn\/shop\/(files|products)\//i.test(path)) score += 45; // Shopify 新版产品图路径
   if (/\/(collection|shop)\//i.test(path)) score += 30;
   if (/\/upload\//i.test(path)) score += 25;
   // UUID in path = CDN-hosted media
@@ -2640,6 +2648,11 @@ const imageRelevanceScore = (url: string): number => {
   if (/-title\.(png|jpg|webp)$/i.test(path)) score -= 60;
   if (/\/(header|footer|nav|menu|sidebar)\//i.test(path)) score -= 70;
   if (/\/(email|newsletter|subscribe)\//i.test(path)) score -= 60;
+  // D-095：信任/奖项/评分/担保/特性图标类装饰图重罚（漏过硬黑名单的也压到产品图之下）
+  if (/award|medal|trophy|inc[-_]?5000|g2crowd|capterra|as[-_]?seen|featured[-_]?in/i.test(path)) score -= 90;
+  if (/trust|guarantee|warrant|money[-_]?back|free[-_]?shipping|shipping[-_]?icon/i.test(path)) score -= 80;
+  if (/rating|review|stars?|seal|certified|verified|endorse/i.test(path)) score -= 70;
+  if (/feature[-_]?icon|benefit[-_]?icon|usp[-_]?icon|value[-_]?prop/i.test(path)) score -= 60;
   return score;
 };
 
@@ -2707,7 +2720,10 @@ function extractBusinessKeywords(pageText: string, features: string[]): string[]
     ["outdoor", "camping", "hiking", "sports", "fitness", "gym", "running", "athletic"],
     ["jewelry", "necklace", "bracelet", "ring", "earring", "pendant", "diamond", "gemstone"],
     ["bag", "handbag", "backpack", "wallet", "purse", "luggage", "tote", "satchel"],
-    ["electronics", "laptop", "phone", "tablet", "camera", "gadget", "headphone", "speaker"],
+    ["electronics", "laptop", "phone", "tablet", "camera", "gadget", "headphone", "speaker", "earbud", "earbuds", "charger", "smart home", "router"],
+    // D-095：可穿戴/智能手表（COSMO Technologies 实证：原 DOMAIN_GROUPS 无 watch/wearable，
+    // 智能手表站拿不到业务关键词加成，导致产品图无法在评分上盖过徽章/logo）
+    ["watch", "smartwatch", "smart watch", "wearable", "fitness tracker", "activity tracker", "heart rate", "step counter", "sleep tracking", "gps watch", "wristband", "watch band", "watch strap"],
     ["food", "organic", "supplement", "nutrition", "vitamin", "snack", "beverage", "grocery"],
     ["book", "stationery", "notebook", "art", "craft"],
     ["toy", "children", "kids", "game", "puzzle", "educational"],
