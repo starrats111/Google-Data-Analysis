@@ -2750,75 +2750,107 @@ function extractBusinessKeywords(pageText: string, features: string[]): string[]
 // 真正干净的产品图在 /products/<handle> 页；且其文件名是 /s/files/ 下的哈希，URL 启发式无法识别。
 // Shopify 暴露 /products/<handle>.js 返回 images[] 干净产品图——直接从爬虫已发现的 /products/
 // 链接取 handle 拉取，作为「产品图」最高优先注入选图池。非 Shopify 站自动跳过（不发无谓请求）。
+const SHOPIFY_UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
 async function collectShopifyProductImages(
   merchantUrl: string,
   cache: CrawlCache,
-  maxProducts = 6,
+  maxImages = 30,
 ): Promise<string[]> {
   let base: URL;
   try { base = new URL(merchantUrl); } catch { return []; }
-  // 仅对疑似 Shopify 站发起（避免对任意站点打 /products/x.js 浪费请求）
-  const looksShopify =
+
+  // 触发条件：疑似 Shopify（cache 含 cdn.shopify）或 爬虫降级（cache 无图，无法判断但值得一试）。
+  // 正常成功爬取的非 Shopify 站直接跳过，避免无谓请求。
+  const cacheLooksShopify =
     (cache.images || []).some((u) => /cdn\.shopify\.com/i.test(u)) ||
     /cdn\.shopify\.com|myshopify\.com|shopify/i.test(cache.pageText || "");
-  if (!looksShopify) return [];
+  const cacheDegraded = (cache.images || []).length === 0; // D-090 降级 / 爬虫失败时 cache 无图
+  if (!cacheLooksShopify && !cacheDegraded) return [];
 
-  const baseHost = base.hostname.replace(/^www\./, "").toLowerCase();
-  const linkPool: unknown[] = [
-    ...(((cache as any).navLinks as unknown[]) || []),
-    ...(((cache as any).sitelinkCandidates as unknown[]) || []),
-    ...(((cache as any).links as unknown[]) || []),
-  ];
-  const handles: string[] = [];
-  const seenHandle = new Set<string>();
-  for (const l of linkPool) {
-    const raw = typeof l === "string" ? l : (l as { url?: string })?.url;
-    if (!raw) continue;
-    let u: URL;
-    try { u = new URL(raw, base.origin); } catch { continue; }
-    if (u.hostname.replace(/^www\./, "").toLowerCase() !== baseHost) continue;
-    const m = u.pathname.match(/\/products\/([^/?#]+)/i);
-    if (!m) continue;
-    const h = decodeURIComponent(m[1]).toLowerCase();
-    if (!h || seenHandle.has(h)) continue;
-    seenHandle.add(h);
-    handles.push(h);
-    if (handles.length >= maxProducts) break;
-  }
-  if (handles.length === 0) return [];
-
-  const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-  const results = await Promise.allSettled(
-    handles.map(async (h) => {
-      const resp = await fetch(`${base.origin}/products/${encodeURIComponent(h)}.js`, {
-        headers: { "User-Agent": UA, Accept: "application/json" },
-        signal: AbortSignal.timeout(8000),
-      });
-      if (!resp.ok) return [] as string[];
-      const ct = resp.headers.get("content-type") || "";
-      if (!/json|javascript/i.test(ct)) return [] as string[]; // 非 Shopify → 多为 text/html 404
-      const data = (await resp.json().catch(() => null)) as { images?: unknown[] } | null;
-      const arr = Array.isArray(data?.images) ? data!.images! : [];
-      return arr
-        .map((it) => (typeof it === "string" ? it : (it as { src?: string })?.src || ""))
-        .map((s) => (s.startsWith("//") ? `https:${s}` : s))
-        .filter((s) => /^https?:\/\//.test(s));
-    }),
-  );
   const out: string[] = [];
-  const seenUrl = new Set<string>();
-  for (const r of results) {
-    if (r.status !== "fulfilled") continue;
-    for (const u of r.value) {
-      if (seenUrl.has(u)) continue;
-      seenUrl.add(u);
-      out.push(u);
+  const seen = new Set<string>();
+  const pushImg = (raw?: string) => {
+    if (!raw) return;
+    const u = raw.startsWith("//") ? `https:${raw}` : raw;
+    if (!/^https?:\/\//.test(u) || seen.has(u)) return;
+    seen.add(u);
+    out.push(u);
+  };
+
+  // 主路径：/products.json 总清单——与爬虫完全无关，单请求拿全部产品+产品图，
+  // 即便爬虫 90s 超时降级也能取到干净产品图（实证 COSMO 返回 27 个产品）。
+  try {
+    const resp = await fetch(`${base.origin}/products.json?limit=50`, {
+      headers: { "User-Agent": SHOPIFY_UA, Accept: "application/json" },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (resp.ok && /json/i.test(resp.headers.get("content-type") || "")) {
+      const data = (await resp.json().catch(() => null)) as { products?: unknown[] } | null;
+      const prods = Array.isArray(data?.products) ? data!.products! : [];
+      for (const p of prods) {
+        const imgs = Array.isArray((p as { images?: unknown[] })?.images)
+          ? (p as { images: unknown[] }).images
+          : [];
+        let per = 0;
+        for (const im of imgs) {
+          pushImg(typeof im === "string" ? im : (im as { src?: string })?.src);
+          if (++per >= 3) break; // 每个产品最多取 3 张，保证多样性、降低信息图占比
+        }
+        if (out.length >= maxImages) break;
+      }
+    }
+  } catch {
+    /* 非 Shopify 或超时 → 走下方兜底 */
+  }
+
+  // 兜底：/products.json 被禁用时，从爬虫已发现的 /products/ 链接逐个拉 .js
+  if (out.length === 0) {
+    const baseHost = base.hostname.replace(/^www\./, "").toLowerCase();
+    const linkPool: unknown[] = [
+      ...(((cache as any).navLinks as unknown[]) || []),
+      ...(((cache as any).sitelinkCandidates as unknown[]) || []),
+      ...(((cache as any).links as unknown[]) || []),
+    ];
+    const handles: string[] = [];
+    const seenHandle = new Set<string>();
+    for (const l of linkPool) {
+      const raw = typeof l === "string" ? l : (l as { url?: string })?.url;
+      if (!raw) continue;
+      let u: URL;
+      try { u = new URL(raw, base.origin); } catch { continue; }
+      if (u.hostname.replace(/^www\./, "").toLowerCase() !== baseHost) continue;
+      const m = u.pathname.match(/\/products\/([^/?#]+)/i);
+      if (!m) continue;
+      const h = decodeURIComponent(m[1]).toLowerCase();
+      if (!h || seenHandle.has(h)) continue;
+      seenHandle.add(h);
+      handles.push(h);
+      if (handles.length >= 6) break;
+    }
+    if (handles.length > 0) {
+      const results = await Promise.allSettled(
+        handles.map(async (h) => {
+          const resp = await fetch(`${base.origin}/products/${encodeURIComponent(h)}.js`, {
+            headers: { "User-Agent": SHOPIFY_UA, Accept: "application/json" },
+            signal: AbortSignal.timeout(8000),
+          });
+          if (!resp.ok || !/json|javascript/i.test(resp.headers.get("content-type") || "")) return [] as string[];
+          const data = (await resp.json().catch(() => null)) as { images?: unknown[] } | null;
+          return (Array.isArray(data?.images) ? data!.images! : []).map((it) =>
+            typeof it === "string" ? it : (it as { src?: string })?.src || "",
+          );
+        }),
+      );
+      for (const r of results) if (r.status === "fulfilled") for (const s of r.value) pushImg(s);
     }
   }
+
   if (out.length > 0) {
-    console.warn(`[Extensions] D-095b Shopify 产品图采集：handles=${handles.length} 取到产品图 ${out.length} 张`);
+    console.warn(`[Extensions] D-095b Shopify 产品图采集：${out.length} 张（origin=${base.origin}）`);
   }
-  return out;
+  return out.slice(0, maxImages);
 }
 
 async function selectBestImages(
