@@ -5,9 +5,10 @@
  *
  * 安全防护：全局请求队列限流 + 域名结果缓存 + 会话复用
  */
-import { getSystemConfigsByPrefix, setSystemConfig } from "@/lib/system-config";
+import { getSystemConfig, getSystemConfigsByPrefix, setSystemConfig } from "@/lib/system-config";
 import { execFile } from "child_process";
 import { promisify } from "util";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 const execFileAsync = promisify(execFile);
 
@@ -34,6 +35,15 @@ const CURL_TRANSIENT_MSG_RE =
   /reset by peer|connection reset|recv failure|send failure|connection timed out|operation timed out|could not resolve|couldn't resolve|empty reply|ssl|gnutls|tls|transfer closed|http2|stream was reset/i;
 const DOMAIN_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const SESSION_TTL_MS = 30 * 60 * 1000;
+
+// BUG-04 A：跨进程/跨重启共享会话。会话仅存内存时，每次冷启动（ad-automation 累计重启 121 次）
+// 都会在 3UE 侧新开一台"在线设备"且从不释放 → 设备配额被僵尸会话占满。持久化到 system_configs，
+// 冷启动优先复用同一 token（= 同一台设备），从根上消除重启造成的设备堆积。
+const SESSION_CONFIG_KEY = "semrush_session";
+// BUG-04 B：丢弃/轮换旧会话时尽力登出，释放其在 3UE 侧占用的设备。
+// 注意：仓库内无现成 logout 端点，此为最可能端点；全程吞错 + 短超时，失败不影响主流程。
+// 绝不在进程优雅退出时登出——那会让 A 想复用的 token 失效，反而又新开设备。
+const LOGOUT_URL = "https://dash.3ue.co/api/account/logout";
 
 // D-061：3UE 多节点故障转移
 // 节点宕机（"节点暂不可用"）短期拉黑；套餐不可用（"套餐无法使用该节点"）长期拉黑。
@@ -83,6 +93,12 @@ interface CachedDomainResult {
   cachedAt: number;
 }
 
+// BUG-04 C：标记"当前异步上下文是否已持有独占槽"。queryDomain 用 withExclusive 在整条查询
+// （login → 多次 rpc → copies）外层占一次槽；其内部 login()/rpc() 再调 waitForSlot 时直接
+// 命中重入返回 no-op，避免自我死锁，同时保证"一条逻辑查询 = 一个连续独占会话"，彻底消除
+// 登录→RPC 之间锁松开导致的多查询穿插（穿插会放大并发会话/登录竞态）。
+const slotCtx = new AsyncLocalStorage<{ held: boolean }>();
+
 class SemrushGuard {
   private lastRequestTime = 0;
   private queue: Array<{ resolve: () => void }> = [];
@@ -121,7 +137,12 @@ class SemrushGuard {
 
   // D-087：获取一个串行槽位；返回 release 函数。调用方必须在网络请求结束后（try/finally）调用 release()，
   // 否则会死锁后续所有 SemRush 请求。返回的 release 幂等。
+  // BUG-04 C：若当前异步上下文已通过 withExclusive 持有独占槽，则本次 waitForSlot 直接返回 no-op
+  // release（重入），不再二次抢锁——否则 queryDomain 外层已占槽、内部 login/rpc 再抢会自我死锁。
   async waitForSlot(): Promise<() => void> {
+    if (slotCtx.getStore()?.held) {
+      return () => {};
+    }
     await new Promise<void>((resolve) => {
       this.queue.push({ resolve });
       this.processQueue();
@@ -134,6 +155,21 @@ class SemrushGuard {
       this.lastRequestTime = Date.now();
       void this.processQueue();
     };
+  }
+
+  // BUG-04 C：在"整条查询"外层占一次独占槽，期间内部所有 waitForSlot 走重入 no-op。
+  // 保证一条 queryDomain 全程只对应一个连续会话，且任一时刻全进程仅一条查询在飞。
+  async withExclusive<T>(fn: () => Promise<T>): Promise<T> {
+    if (slotCtx.getStore()?.held) {
+      // 已在独占上下文内（理论上不会嵌套，防御性处理）
+      return fn();
+    }
+    const release = await this.waitForSlot();
+    try {
+      return await slotCtx.run({ held: true }, fn);
+    } finally {
+      release();
+    }
   }
 
   getCachedDomain(domain: string): SemRushResult | null {
@@ -167,10 +203,53 @@ class SemrushGuard {
 
   setCachedSession(username: string, token: string, cookies: Record<string, string>) {
     this.sessionCache = { token, cookies: { ...cookies }, username, expiresAt: Date.now() + SESSION_TTL_MS };
+    void this.persistSession(this.sessionCache); // BUG-04 A：同步落库，供其它进程/重启后复用
   }
 
   invalidateSession() {
+    // BUG-04 B：丢弃旧会话时尽力登出，释放其在 3UE 侧占用的"在线设备"（吞错、不阻塞）。
+    const old = this.sessionCache;
     this.sessionCache = null;
+    if (old) void logout3ue(old);
+    void this.clearPersistedSession();
+  }
+
+  // BUG-04 A：写持久化会话（fire-and-forget，失败仅警告，不影响主流程）
+  private async persistSession(s: CachedSession): Promise<void> {
+    try {
+      await setSystemConfig(
+        SESSION_CONFIG_KEY,
+        JSON.stringify({ username: s.username, token: s.token, cookies: s.cookies, expiresAt: s.expiresAt }),
+        "SemRush 会话（跨重启复用，避免设备数超限）",
+      );
+    } catch (e) {
+      console.warn("[SemRush] BUG-04 A 会话持久化失败（忽略）:", e instanceof Error ? e.message : e);
+    }
+  }
+
+  // BUG-04 A：冷启动/内存未命中时读持久化会话；校验用户名匹配 + 未过期，命中则同步进内存。
+  async loadPersistedSession(username: string): Promise<CachedSession | null> {
+    try {
+      const raw = await getSystemConfig(SESSION_CONFIG_KEY);
+      if (!raw) return null;
+      const o = JSON.parse(raw) as { username?: string; token?: string; cookies?: Record<string, string>; expiresAt?: number };
+      if (!o?.token || !o.username || o.username !== username) return null;
+      if (!o.expiresAt || Date.now() > o.expiresAt) return null;
+      const s: CachedSession = { token: o.token, cookies: { ...(o.cookies || {}) }, username: o.username, expiresAt: o.expiresAt };
+      this.sessionCache = s;
+      return s;
+    } catch {
+      return null;
+    }
+  }
+
+  // BUG-04 A：清空持久化会话（登出/失效后调用）
+  private async clearPersistedSession(): Promise<void> {
+    try {
+      await setSystemConfig(SESSION_CONFIG_KEY, "", "SemRush 会话（已清空）");
+    } catch {
+      /* 清空失败不影响主流程 */
+    }
   }
 
   // ─── D-061：节点故障转移 ───
@@ -208,6 +287,29 @@ class SemrushGuard {
       preferredNode: this.preferredNode,
       badNodes: [...this.badNodes.keys()],
     };
+  }
+}
+
+// BUG-04 B：尽力登出 3UE，释放该会话占用的"在线设备"。仓库内无现成 logout 端点，
+// 这里用最可能路径 /api/account/logout；全程吞错 + 短超时，失败不影响任何主流程。
+// 仅在"丢弃/轮换旧会话"（invalidateSession）时调用——绝不在进程优雅退出时调用，
+// 否则会让 BUG-04 A 想复用的持久化 token 失效，反而又新开设备。
+async function logout3ue(session: CachedSession): Promise<void> {
+  try {
+    const cookieStr = Object.entries(session.cookies).map(([k, v]) => `${k}=${v}`).join("; ");
+    await curlFetch(LOGOUT_URL, {
+      method: "POST",
+      headers: {
+        "user-agent": USER_AGENT,
+        origin: LOGIN_ORIGIN,
+        accept: "application/json, text/plain, */*",
+        cookie: cookieStr,
+      },
+      timeoutMs: 6000,
+    });
+    console.log("[SemRush] BUG-04 B：已尝试登出旧会话以释放设备");
+  } catch {
+    /* 登出失败不影响主流程 */
   }
 }
 
@@ -615,6 +717,16 @@ export class SemRushClient {
       return cached.token;
     }
 
+    // BUG-04 A：内存未命中 → 尝试复用持久化会话（跨重启同一 token = 同一台设备），
+    // 命中则不发起新登录，从根上避免重启造成的设备堆积。
+    const persisted = await guard.loadPersistedSession(this.creds.username);
+    if (persisted) {
+      this.token = persisted.token;
+      this.cookies = { ...persisted.cookies };
+      console.log("[SemRush] BUG-04 A：复用持久化会话（跨重启同一设备），跳过登录");
+      return persisted.token;
+    }
+
     const releaseLogin = await guard.waitForSlot();
     const ts = Date.now();
     const url = `${LOGIN_URL}?username=${encodeURIComponent(this.creds.username)}&password=${encodeURIComponent(this.creds.password)}&ts=${ts}`;
@@ -948,6 +1060,9 @@ export class SemRushClient {
       return cached;
     }
 
+    // BUG-04 C：整条查询（login + 全部 rpc + copies）外层占一次独占槽，内部 waitForSlot 走重入
+    // no-op，保证一条 queryDomain = 一个连续会话，且全进程任一时刻仅一条查询在飞（真串行=1）。
+    return guard.withExclusive(async () => {
     console.log(`[SemRush] 开始查询: ${domain} (db=${this.creds.database})（队列状态: ${JSON.stringify(guard.getStats())}）`);
     await this.login();
 
@@ -995,7 +1110,7 @@ export class SemRushClient {
     const paidKws = adsRows
       .slice(0, 50)
       .map((r: any) => parseKeywordRow(r))
-      .filter((kw) => kw.phrase);
+      .filter((kw: SemRushKeyword) => kw.phrase);
 
     const reportToken = String(byId.get(11)?.result?.token || "");
     const dateStr = normalizeReportDate(String(byId.get(2)?.result?.daily?.[0] || ""));
@@ -1050,6 +1165,7 @@ export class SemRushClient {
     guard.setCachedDomain(cacheKey, result);
     console.log(`[SemRush] 查询完成: ${domain} (db=${this.creds.database}, ${kws.length} 关键词, ${ads.length} 广告)`);
     return result;
+    }); // BUG-04 C：withExclusive 结束
   }
 
   /** 获取缓存统计信息 */
