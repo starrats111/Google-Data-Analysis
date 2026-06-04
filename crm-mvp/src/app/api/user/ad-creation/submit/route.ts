@@ -4,6 +4,7 @@ import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { getAdMarketConfig } from "@/lib/ad-market";
 import { sanitizeAdText } from "@/lib/crawl-pipeline";
+import { fitAdTextBatch, fitAdTextSync } from "@/lib/ad-text-fit";
 import { collectAiRuleViolations, normalizeAiRuleProfile, getActivePersona, includesForbiddenTerm, autoRewriteForbiddenTerms } from "@/lib/ai-rule-profile";
 import { callAiWithFallback } from "@/lib/ai-service";
 import { extractJsonFromAi } from "@/lib/crawl-pipeline";
@@ -212,9 +213,9 @@ export async function POST(req: NextRequest) {
               ], 120);
 
               const parsed = JSON.parse(extractJsonFromAi(raw)) as { title?: string; desc1?: string; desc2?: string };
-              const t = String(parsed.title || "").trim().slice(0, 25);
-              const d1 = String(parsed.desc1 || "").trim().slice(0, 35);
-              const d2 = String(parsed.desc2 || "").trim().slice(0, 35);
+              const t = fitAdTextSync(String(parsed.title || ""), 25);
+              const d1 = fitAdTextSync(String(parsed.desc1 || ""), 35);
+              const d2 = fitAdTextSync(String(parsed.desc2 || ""), 35);
 
               // 校验：重写后是否仍有禁止词
               const stillViolates = [t, d1, d2].some((f) => f && includesForbiddenTerm(f, _allForbidden));
@@ -824,19 +825,26 @@ export async function POST(req: NextRequest) {
     });
 
     // ─── 6. RSA 广告 ───
-    const headlineAssets = headlines
-      .slice(0, 15)
-      .map((h: string) => ({
-        text: sanitizeAdText(h, { allowExclamation: true }).slice(0, 30),
-      }))
+    // C-148：文案"贴合限长"——超长一律 AI 语义压缩成完整短语，AI 失败按词边界回退，
+    // 绝不再用 .slice() 从单词中间硬切（旧逻辑会把超长标题/描述切成半截词上线）。
+    const adTextLang = market.languageCode || "English";
+    const fittedHeadlines = await fitAdTextBatch(
+      (headlines as string[]).slice(0, 15).map((h) => sanitizeAdText(h, { allowExclamation: true })),
+      30,
+      adTextLang,
+    );
+    const headlineAssets = fittedHeadlines
+      .map((text: string) => ({ text }))
       .filter((h: { text: string }, i: number, arr: { text: string }[]) =>
         h.text.length > 0 && arr.findIndex((x) => x.text.toLowerCase() === h.text.toLowerCase()) === i
       );
-    const descriptionAssets = descriptions
-      .slice(0, 4)
-      .map((d: string) => ({
-        text: sanitizeAdText(d, { allowExclamation: true }).slice(0, 90),
-      }))
+    const fittedDescriptions = await fitAdTextBatch(
+      (descriptions as string[]).slice(0, 4).map((d) => sanitizeAdText(d, { allowExclamation: true })),
+      90,
+      adTextLang,
+    );
+    const descriptionAssets = fittedDescriptions
+      .map((text: string) => ({ text }))
       .filter((d: { text: string }, i: number, arr: { text: string }[]) =>
         d.text.length > 0 && arr.findIndex((x) => x.text.toLowerCase() === d.text.toLowerCase()) === i
       );
@@ -886,15 +894,32 @@ export async function POST(req: NextRequest) {
     }
 
     // ─── 8. Sitelink 扩展（标题/描述需符合 Google Ads 大写和标点规范） ───
+    // C-148：站点链接标题/描述同样走"贴合限长"，绝不从词中间硬切。
+    const slTitlesFitted = await fitAdTextBatch(
+      (sitelinks as any[]).map((sl) => sanitizeAdText((sl.title || ""), { allowExclamation: false })),
+      25,
+      adTextLang,
+    );
+    const slDesc1Fitted = await fitAdTextBatch(
+      (sitelinks as any[]).map((sl) => sanitizeAdText((sl.description1 || ""), { allowExclamation: true })),
+      35,
+      adTextLang,
+    );
+    const slDesc2Fitted = await fitAdTextBatch(
+      (sitelinks as any[]).map((sl) => sanitizeAdText((sl.description2 || ""), { allowExclamation: true })),
+      35,
+      adTextLang,
+    );
     let assetTempId = -10;
     const seenSitelinkTexts = new Set<string>();
-    for (const sl of sitelinks) {
+    for (let slIdx = 0; slIdx < (sitelinks as any[]).length; slIdx++) {
+      const sl = (sitelinks as any[])[slIdx];
       const assetTempRn = `customers/${cid}/assets/${assetTempId}`;
       let slUrl = (sl.finalUrl || "").trim();
       if (slUrl.startsWith("http://")) slUrl = slUrl.replace("http://", "https://");
-      const linkText = sanitizeAdText((sl.title || ""), { allowExclamation: false }).slice(0, 25);
-      const desc1Raw = sanitizeAdText((sl.description1 || ""), { allowExclamation: true }).slice(0, 35);
-      const desc2Raw = sanitizeAdText((sl.description2 || ""), { allowExclamation: true }).slice(0, 35);
+      const linkText = slTitlesFitted[slIdx];
+      const desc1Raw = slDesc1Fitted[slIdx];
+      const desc2Raw = slDesc2Fitted[slIdx];
 
       // 安全校验：link_text 为空或 URL 无效则跳过该站内链接
       if (!linkText || !slUrl.startsWith("https://")) {
@@ -915,11 +940,11 @@ export async function POST(req: NextRequest) {
         sitelinkAssetPayload.description1 = desc1Raw;
         sitelinkAssetPayload.description2 = desc2Raw;
       } else if (desc1Raw.length >= 1) {
-        // desc2 为空时用 link_text 截断补全，保证二者同时存在
+        // desc2 为空时用 link_text 按词边界补全，保证二者同时存在
         sitelinkAssetPayload.description1 = desc1Raw;
-        sitelinkAssetPayload.description2 = linkText.slice(0, 35);
+        sitelinkAssetPayload.description2 = fitAdTextSync(linkText, 35);
       } else if (desc2Raw.length >= 1) {
-        sitelinkAssetPayload.description1 = linkText.slice(0, 35);
+        sitelinkAssetPayload.description1 = fitAdTextSync(linkText, 35);
         sitelinkAssetPayload.description2 = desc2Raw;
       }
       // 两者均为空时不包含，API 允许省略描述
@@ -946,8 +971,13 @@ export async function POST(req: NextRequest) {
     }
 
     // ─── 9. Callout 扩展（服务端校验：callout 必须 ≥ 2 条、每条 2-25 字符） ───
-    const validCallouts = callouts
-      .map((c: string) => sanitizeAdText((c || ""), { allowExclamation: false }).slice(0, 25))
+    // C-148：宣传信息走"贴合限长"，超长 AI 压缩/词边界回退，不再 .slice 硬切
+    const fittedCallouts = await fitAdTextBatch(
+      (callouts as string[]).map((c) => sanitizeAdText((c || ""), { allowExclamation: false })),
+      25,
+      adTextLang,
+    );
+    const validCallouts = fittedCallouts
       .filter((c: string) => c.length >= 2)
       .filter((c: string, i: number, arr: string[]) =>
         arr.findIndex((x) => x.toLowerCase() === c.toLowerCase()) === i
@@ -995,7 +1025,7 @@ export async function POST(req: NextRequest) {
     if (promotion?.promotion_target && hasValidDiscount) {
       const assetTempRn = `customers/${cid}/assets/${assetTempId}`;
       const promotionAsset: Record<string, unknown> = {
-        promotion_target: (promotion.promotion_target || "").slice(0, 20),
+        promotion_target: fitAdTextSync(promotion.promotion_target || "", 20),
         language_code: promotion.language_code || market.promotionLanguageCode,
       };
       if (promotion.discount_type === "PERCENT") {
@@ -1059,14 +1089,25 @@ export async function POST(req: NextRequest) {
       const VALID_PRICE_UNITS = new Set([
         "PER_HOUR", "PER_DAY", "PER_WEEK", "PER_MONTH", "PER_YEAR", "PER_NIGHT",
       ]);
+      // C-148：价格组件 header/description 走"贴合限长"，不再 .slice 硬切
+      const fittedPriceHeaders = await fitAdTextBatch(
+        (price.items as any[]).map((it) => String(it.header || "")),
+        25,
+        adTextLang,
+      );
+      const fittedPriceDescs = await fitAdTextBatch(
+        (price.items as any[]).map((it) => String(it.description || "")),
+        25,
+        adTextLang,
+      );
       const seenPriceHeaders = new Set<string>();
       const priceOfferings = price.items
-        .map((item: any) => {
-          const header = (item.header || "").slice(0, 25);
+        .map((item: any, pIdx: number) => {
+          const header = fittedPriceHeaders[pIdx];
           const headerKey = header.toLowerCase();
           if (!header || seenPriceHeaders.has(headerKey)) return null;
           seenPriceHeaders.add(headerKey);
-          let description = (item.description || "").slice(0, 25);
+          let description = fittedPriceDescs[pIdx];
           // Google Ads 硬规则：PriceOffering header 和 description 不能相同
           if (description.toLowerCase() === header.toLowerCase() || !description) {
             description = `Shop ${header}`.length <= 25 ? `Shop ${header}` : "View details";
@@ -1170,9 +1211,13 @@ export async function POST(req: NextRequest) {
     }
 
     // ─── 9e. 结构化摘要 (Structured Snippet) ───
-    const snippetValues = (structured_snippet?.values || [])
-      .slice(0, 10)
-      .map((v: string) => (v || "").slice(0, 25))
+    // C-148：摘要值走"贴合限长"，不再 .slice 硬切
+    const fittedSnippetValues = await fitAdTextBatch(
+      (structured_snippet?.values || []).slice(0, 10).map((v: string) => String(v || "")),
+      25,
+      adTextLang,
+    );
+    const snippetValues = fittedSnippetValues
       .filter((v: string) => v.length > 0)
       .filter((v: string, i: number, arr: string[]) =>
         arr.findIndex((x) => x.toLowerCase() === v.toLowerCase()) === i

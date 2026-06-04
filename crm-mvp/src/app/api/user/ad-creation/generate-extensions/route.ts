@@ -21,6 +21,7 @@ import {
   isBadSitelinkUrl,
 } from "@/lib/crawl-pipeline";
 import { buildCrawlKey, withCrawlInflightLock } from "@/lib/crawl-inflight-lock";
+import { fitAdTextBatch, fitAdTextSync } from "@/lib/ad-text-fit";
 import { fetchSemrushKeywords, type SemrushKeywordsResult } from "@/lib/semrush-keywords";
 import { matchParkedTextSignal } from "@/lib/country-url-resolver";
 import { humanizeAdCopyBatch, AD_COPY_ANTI_AI_BLOCK } from "@/lib/humanizer";
@@ -1546,6 +1547,8 @@ ${isNonEnglish ? `\n⚠️ FINAL REMINDER: ALL headlines and descriptions MUST b
         headlines = [...headlines, ...cleanNew].slice(0, 15);
         console.log(`[Core] 合规后返工补充: +${cleanNew.length} 条 (总${headlines.length})`);
       }
+      // C-148：落库/输出前兜底——保证每条 ≤30 完整短语（常态已合规→无 AI 调用）
+      headlines = await fitAdTextBatch(headlines, 30, languageName);
       send("headlines", headlines);
       return { items: headlines, fix: headlineFix };
     };
@@ -1573,6 +1576,8 @@ ${isNonEnglish ? `\n⚠️ FINAL REMINDER: ALL headlines and descriptions MUST b
         descriptions = [...descriptions, ...cleanNew].slice(0, 4);
         console.log(`[Core] 合规后返工补充描述: +${cleanNew.length} 条 (总${descriptions.length})`);
       }
+      // C-148：落库/输出前兜底——保证每条 ≤90 完整短语（常态已合规→无 AI 调用）
+      descriptions = await fitAdTextBatch(descriptions, 90, languageName);
       send("descriptions", descriptions);
       return { items: descriptions, fix: descFix };
     };
@@ -2094,7 +2099,7 @@ async function generateOptionalBatch(
       const occasion = validatePromotionOccasion(String(promo.occasion || "NONE"));
       const rawTarget = String(promo.promotion_target || "").trim();
       const cleanedTarget = stripDiscountFromTarget(rawTarget);
-      let promotionTarget = cleanedTarget.slice(0, 20);
+      let promotionTarget = fitAdTextSync(cleanedTarget, 20);
 
       if (cleanedTarget.length > 20) {
         try {
@@ -2104,7 +2109,7 @@ async function generateOptionalBatch(
               content: `You are a Google Ads copywriter. Extract ONLY the promotion event name from the text below.\n\nRules:\n- Max 20 characters (including spaces)\n- Output ONLY the event name (e.g. "Friends & Family", "Spring Specials", "Summer Sale")\n- Do NOT include any discount numbers, percentages, or "off"\n- No punctuation at the end\n- English only\n\nText: "${cleanedTarget}"`,
             },
           ], 30);
-          const optimized = aiRaw.trim().replace(/^["']|["']$/g, "").slice(0, 20);
+          const optimized = fitAdTextSync(aiRaw.trim().replace(/^["']|["']$/g, ""), 20);
           if (optimized.length >= 3) promotionTarget = optimized;
         } catch (e) {
           console.warn(`[Optional] 促销标题 AI 优化失败:`, e instanceof Error ? e.message : e);
@@ -2184,7 +2189,7 @@ Rules:
 
         if (aiPromo) {
           const occasion = validatePromotionOccasion("NONE");
-          const promotionTarget = stripDiscountFromTarget(String(aiPromo.promotion_target || "")).slice(0, 20) || "Special Offer";
+          const promotionTarget = fitAdTextSync(stripDiscountFromTarget(String(aiPromo.promotion_target || "")), 20) || "Special Offer";
           send("promotion", {
             skipped: false,
             found: true,
@@ -2308,12 +2313,12 @@ Header and description MUST be different for each item. COUNT CAREFULLY.`;
             let header = (ai?.header || "").trim().replace(/\s*[\$€£¥]\d[\d,.]*/g, "").trim();
             let desc = (ai?.description || "").trim();
 
-            // 长度安全网：超过 25 字符则回退到原始数据清理版
+            // 长度安全网：超过 25 字符则回退到原始数据清理版（C-148：按词边界拟合，不半截词）
             if (header.length < 2 || header.length > 25) {
-              header = item.header.replace(/\s*[\$€£¥]\s*\d[\d,.]*\+?/g, "").trim().slice(0, 25);
+              header = fitAdTextSync(item.header.replace(/\s*[\$€£¥]\s*\d[\d,.]*\+?/g, "").trim(), 25);
             }
             if (desc.length < 2 || desc.length > 25) {
-              desc = (item.description || "").trim().slice(0, 25);
+              desc = fitAdTextSync((item.description || "").trim(), 25);
             }
 
             // header == description 冲突解决
@@ -2328,10 +2333,12 @@ Header and description MUST be different for each item. COUNT CAREFULLY.`;
         } else {
           // AI 全部失败时的降级处理：清理原始数据
           items = items.map((item) => {
-            let header = item.header
-              .replace(/\s*[\$€£¥]\s*\d[\d,.]*\+?/g, "")
-              .replace(/\s+/g, " ").trim().slice(0, 25);
-            let desc = (item.description || "").trim().slice(0, 25);
+            // C-148：AI 全失败兜底也按词边界拟合，不半截词
+            let header = fitAdTextSync(
+              item.header.replace(/\s*[\$€£¥]\s*\d[\d,.]*\+?/g, "").replace(/\s+/g, " ").trim(),
+              25,
+            );
+            let desc = fitAdTextSync((item.description || "").trim(), 25);
             if (desc.toLowerCase() === header.toLowerCase() || desc.length < 2) {
               desc = `Shop ${merchantName}`.length <= 25 ? `Shop ${merchantName}` : "View details";
               if (desc.toLowerCase() === header.toLowerCase()) desc = "View details";
@@ -2457,8 +2464,9 @@ Return ONLY a valid JSON object with the applicable keys:
           : [];
         // 必须至少4条，不足则补充通用词
         if (callouts.length < 4) {
+          // C-148：特征兜底也按词边界拟合，不再 .slice 硬切出半截词
           const extras = cache.features
-            .map((f) => f.slice(0, 25))
+            .map((f) => fitAdTextSync(f, 25))
             .filter((f) => f.length >= 2 && !callouts.includes(f));
           callouts = [...callouts, ...extras].slice(0, 6);
         }

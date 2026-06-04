@@ -64,17 +64,9 @@ export async function getHttpProxyUrlForCountry(country: string): Promise<string
  *   - 可在模板头部显式指定协议，如 "http://host:port:user:pass" 或 "socks5://host:port:user:pass"
  *   - 无协议前缀时默认 socks5://（适用于 cliproxy / ipipbright 等 SOCKS5 供应商）
  *   - username 中的 ** 会被替换为国家代码（US / GB / AU 等）
+ *   - C-150：改用 cliproxy 住宅代理（rotating gateway，每次连接自动换出口 IP），
+ *     不再需要 sid 轮换逻辑，故移除 sid- 随机替换。
  */
-/** 生成 8 位随机字母数字字符串，用于 sid 替换，确保每次爬取拿到全新节点 */
-function randomSid(len = 8): string {
-  const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  let result = "";
-  for (let i = 0; i < len; i++) {
-    result += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return result;
-}
-
 export function buildSocks5Url(template: string, country: string): string {
   // 提取可选的协议前缀（http:// / https:// / socks5://）
   let proto = "socks5";
@@ -91,10 +83,9 @@ export function buildSocks5Url(template: string, country: string): string {
   const host     = parts[0].trim();
   const port     = parts[1].trim();
   const password = parts[parts.length - 1].trim();
-  // 替换国家代码（**），并将 sid-XXXX 替换为随机值避免 Sticky IP 锁定到错误地区
+  // 仅替换国家代码（**）；C-150：cliproxy 住宅代理为 rotating gateway，无需 sid 轮换
   const username = parts.slice(2, parts.length - 1).join(":")
-    .replace(/\*\*/g, country.toUpperCase().trim())
-    .replace(/(?<=sid-)([A-Za-z0-9]+)/, randomSid());
+    .replace(/\*\*/g, country.toUpperCase().trim());
 
   return `${proto}://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${port}`;
 }

@@ -1759,8 +1759,20 @@ export async function buildCrawlCache(
   type Strategy = { name: string; run: () => Promise<CrawlResultType> };
   const strategies: Strategy[] = [];
   if (merchantUrl) {
-    if (options?.forcePuppeteer || proxyUrl) {
-      // 有代理 或 forcePuppeteer：优先 Puppeteer，确保 JS 渲染 + IP 出口正确
+    // ══════════════════════════════════════════════════════
+    // C-150 B（反爬 + 省 CPU 根治）：始终先跑「轻量 HTTP（走住宅代理）」，质量够即跳过 Puppeteer。
+    //   背景实证：旧逻辑 `if (proxyUrl) → Puppeteer 优先` 导致**只要配了代理**，连服务端渲染的
+    //   Shopify 站（简单 GET 即返回完整 HTML，实测 200/800K-1.2M）也强开 Chrome 渲染，
+    //   在 2C 资源饿死时撞 90s 预算雪崩。改为 HTTP 先：住宅代理 IP 绕反爬 + crawlPage 拿到
+    //   ≥5 链接即返回 method=http（零 Chrome），仅真正 SPA/不足量才落 Puppeteer 兜底。
+    //   forcePuppeteer（如价格动态站显式要求渲染）时跳过 HTTP 先，保持原行为。
+    // ══════════════════════════════════════════════════════
+    if (!options?.forcePuppeteer) {
+      strategies.push({ name: "http_root", run: () => crawlPage(merchantUrl, country) });
+      if (localeUrlShort) strategies.push({ name: "http_locale_short", run: () => crawlPage(localeUrlShort!, country) });
+    }
+    if (options?.forcePuppeteer || proxyUrl || puppeteerProxyUrl) {
+      // 有代理 或 forcePuppeteer：Puppeteer+代理 作为 HTTP 不足时的兜底（JS 渲染 + IP 出口正确）
       strategies.push({ name: "puppeteer_root+proxy", run: () => runPuppeteer(merchantUrl) });
       if (!isChallengedHost) {
         // locale_short 仅在 ccTLD 未匹配（通用 TLD 站如 sephora.com + ES 需 /es/）才生成
@@ -1769,9 +1781,7 @@ export async function buildCrawlCache(
         strategies.push({ name: "puppeteer_direct_fallback", run: () => runPuppeteerDirect(merchantUrl) });
       }
     } else {
-      // 无代理：HTTP 先（快、省资源），Puppeteer 兜底
-      strategies.push({ name: "http_root", run: () => crawlPage(merchantUrl, country) });
-      if (localeUrlShort) strategies.push({ name: "http_locale_short", run: () => crawlPage(localeUrlShort!, country) });
+      // 无代理：Puppeteer 直连兜底
       strategies.push({ name: "puppeteer_root", run: () => runPuppeteer(merchantUrl) });
     }
   }
