@@ -7,6 +7,7 @@ import {
   batchFetchMetaViaPuppeteer, crawlWithPuppeteerFull, crawlPageWithPuppeteer,
   assessCrawlQuality, isQualityImageUrl,
   harvestImagesFromPagesWithPuppeteer, getAcceptLanguage,
+  dedupeByImageStem, capImagesPerDirectory,
 } from "@/lib/crawler";
 import { getAdMarketConfig } from "@/lib/ad-market";
 import { getProxyUrlForCountry, getHttpProxyUrlForCountry, ensureCountryEgressHttpProxy } from "@/lib/crawl-proxy";
@@ -2168,11 +2169,19 @@ export async function buildCrawlCache(
   const productImageUrls = (crawledProducts || [])
     .map((p) => p?.imageUrl)
     .filter((u): u is string => typeof u === "string" && /^https?:\/\//.test(u) && isQualityImageUrl(u, merchantUrl));
-  const mergedImages = productImageUrls.length > 0
+  const mergedImagesRaw = productImageUrls.length > 0
     ? Array.from(new Set([...images, ...productImageUrls]))
     : images;
-  if (productImageUrls.length > 0 && mergedImages.length > images.length) {
-    console.log(`[CrawlPipeline] D-059 合并 JSON-LD 产品图 +${mergedImages.length - images.length} 张（images ${images.length}→${mergedImages.length}）`);
+  if (productImageUrls.length > 0 && mergedImagesRaw.length > images.length) {
+    console.log(`[CrawlPipeline] D-059 合并 JSON-LD 产品图 +${mergedImagesRaw.length - images.length} 张（images ${images.length}→${mergedImagesRaw.length}）`);
+  }
+
+  // BUG-02 A+C（设计方案.md §四点五）：文件名词干去重 + 同目录配额，
+  // 去掉「不同 URL 同一张图」与「单目录霸屏」造成的候选图同质化。输入按现有分数顺序。
+  const afterStem = dedupeByImageStem(mergedImagesRaw);
+  const mergedImages = capImagesPerDirectory(afterStem, 4);
+  if (mergedImages.length < mergedImagesRaw.length) {
+    console.log(`[CrawlPipeline] BUG-02 去同质：${mergedImagesRaw.length} → 词干去重 ${afterStem.length} → 目录配额 ${mergedImages.length}`);
   }
 
   return {

@@ -13,6 +13,20 @@
 import { useState } from "react";
 import { App, Button, Popover, Space, Tooltip, Typography } from "antd";
 import { CopyOutlined, ShopOutlined } from "@ant-design/icons";
+import { copyTextToClipboard, previewText } from "@/lib/clipboard";
+
+/**
+ * BUG-01：优先返回完整 http(s) URL，避免某一字段是裸 token 时被复制。
+ * 在 campaign_link / tracking_link / connection_accounts[].link 中优先挑 ^https?://。
+ */
+function pickFullTrackingLink(
+  candidates: Array<string | null | undefined>,
+): string {
+  const valid = candidates
+    .map((c) => (typeof c === "string" ? c.trim() : ""))
+    .filter(Boolean);
+  return valid.find((c) => /^https?:\/\//i.test(c)) || valid[0] || "";
+}
 
 const { Text } = Typography;
 
@@ -80,21 +94,26 @@ export default function MerchantNameCell({
   const [popoverOpen, setPopoverOpen] = useState(false);
 
   const accounts: ConnectionAccount[] = Array.isArray(rec.connection_accounts) ? rec.connection_accounts : [];
-  const singleLink = rec.campaign_link || rec.tracking_link || "";
+  // BUG-01：单账号时也优先取完整 http URL（campaign_link / tracking_link / 账号链接里挑）
+  const singleLink = pickFullTrackingLink([
+    rec.campaign_link,
+    rec.tracking_link,
+    ...accounts.map((a) => a.link),
+  ]);
   const isMultiAccount = accounts.length >= 2;
 
-  const doCopy = (link: string, accountName?: string) => {
+  const doCopy = async (link: string, accountName?: string) => {
     if (!link) {
       message.error("无可用追踪链接");
       return;
     }
-    navigator.clipboard
-      .writeText(link)
-      .then(() => {
-        if (accountName) message.success(`已复制 ${accountName} 的追踪链接`);
-        else message.success("追踪链接已复制");
-      })
-      .catch(() => message.error("复制失败"));
+    const ok = await copyTextToClipboard(link);
+    if (!ok) {
+      message.error("复制失败，请手动复制");
+      return;
+    }
+    const tip = accountName ? `已复制 ${accountName} 的追踪链接` : "追踪链接已复制";
+    message.success(`${tip}：${previewText(link)}`);
   };
 
   const onSingleCopy = (e: React.MouseEvent) => {

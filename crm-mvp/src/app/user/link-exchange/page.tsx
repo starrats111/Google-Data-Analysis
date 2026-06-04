@@ -13,6 +13,7 @@ import {
   CheckOutlined, CloseOutlined, ReloadOutlined, FileTextOutlined,
 } from "@ant-design/icons";
 import AppPageHeader from "@/components/AppPageHeader";
+import { copyTextToClipboard, previewText } from "@/lib/clipboard";
 
 const { Text } = Typography;
 
@@ -304,7 +305,11 @@ export default function LinkExchangePage() {
         return (
           <Tooltip title={row.trackingLink}>
             <Button size="small" type="link" icon={<LinkOutlined />} style={{ padding: 0, fontSize: 12 }}
-              onClick={() => { navigator.clipboard.writeText(row.trackingLink!); message.success("已复制"); }}>
+              onClick={async () => {
+                const ok = await copyTextToClipboard(row.trackingLink!);
+                if (ok) message.success(`已复制：${previewText(row.trackingLink!)}`);
+                else message.error("复制失败，请手动复制");
+              }}>
               {row.merchantName ?? "复制链接"}
             </Button>
           </Tooltip>

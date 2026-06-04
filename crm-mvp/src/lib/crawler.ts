@@ -704,6 +704,11 @@ const FILTERED_IMG_KEYWORDS = [
   "select-", "select_chevron",
   "bowl-chopstick", "bowl_chopstick",
   "instant-confirm", "instant_confirm",
+  // BUG-02 B（设计方案.md §四点五）：明确的全站通用图（banner/CTA/占位 mockup），非产品图，硬过滤
+  "cta-", "_cta", "cta_", "mockup", "promo-banner", "promo_banner",
+  "global-shop", "global_shop", "hero-banner", "hero_banner",
+  "page-banner", "page_banner", "top-banner", "top_banner",
+  "slider-", "slider_", "carousel-", "carousel_", "lookbook", "announcement",
 ];
 
 /**
@@ -806,6 +811,69 @@ function deduplicateCdnImages(images: string[]): string[] {
   baseMap.forEach(({ url }) => result.push(url));
 
   return Array.from(new Set(result));
+}
+
+// ══════════════════════════════════════════════════════
+// BUG-02 A（设计方案.md §四点五）：按文件名词干去重
+// deduplicateCdnImages 只合并「同 basePath 不同 CDN 参数」，无法处理
+// 「同一张图不同路径/尺寸后缀」（如 banner.png / banner@2x.png / banner-1024x576.png）。
+// 这里取最后路径段、去扩展名、剥离常见尺寸/倍率/缩略后缀，得到词干，同词干只保留第一张（输入已按分数降序）。
+// ══════════════════════════════════════════════════════
+export function imageStemKey(url: string): string {
+  let path = url;
+  try {
+    path = new URL(url).pathname;
+  } catch {
+    path = url.split("?")[0].split("#")[0];
+  }
+  const last = path.split("/").filter(Boolean).pop() || path;
+  let stem = last.split("?")[0].split("#")[0].toLowerCase();
+  stem = stem.replace(/\.(jpg|jpeg|png|webp|avif|gif|pjpg)$/i, "");
+  stem = stem
+    .replace(/[-_]?\d{2,4}x\d{2,4}\b/g, "")   // 1024x576 / -768x1024
+    .replace(/[-_@](?:2x|3x|4x)\b/g, "")       // @2x / -3x
+    .replace(/[-_](?:thumb|thumbnail|small|medium|large|scaled|cropped|resized|mobile|desktop|retina)\b/g, "")
+    .replace(/[-_]\d{1,4}$/g, "")               // 结尾 -123 尺寸/序号
+    .replace(/[-_]+$/g, "")
+    .trim();
+  return stem || last.toLowerCase();
+}
+
+export function dedupeByImageStem(images: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const url of images) {
+    const key = imageStemKey(url);
+    if (!key) { out.push(url); continue; }
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(url);
+  }
+  return out;
+}
+
+// ══════════════════════════════════════════════════════
+// BUG-02 C（设计方案.md §四点五）：同目录前缀配额，强制候选图多样性
+// 同一目录（如 /wp-content/uploads/2020/06/）下最多保留 maxPerDir 张，
+// 避免一个 banner 目录霸屏导致同质化。输入需已按分数降序。
+// ══════════════════════════════════════════════════════
+export function capImagesPerDirectory(images: string[], maxPerDir = 4): string[] {
+  const counts = new Map<string, number>();
+  const out: string[] = [];
+  for (const url of images) {
+    let dir = "";
+    try {
+      const u = new URL(url);
+      dir = u.origin + u.pathname.slice(0, u.pathname.lastIndexOf("/") + 1);
+    } catch {
+      dir = url.split("?")[0].split("#")[0].replace(/[^/]+$/, "");
+    }
+    const n = counts.get(dir) || 0;
+    if (n >= maxPerDir) continue;
+    counts.set(dir, n + 1);
+    out.push(url);
+  }
+  return out;
 }
 
 function upgradeCdnThumbnails(images: string[]): string[] {
@@ -2256,12 +2324,18 @@ export function extractLinksAndImages(
       "/badge", "/sprite", "/ui/", "/asset/icons", "feature-icon", "benefit-icon"];
     if (noiseKws.some(kw => imgUrlLower.includes(kw))) score -= 20;
 
+    // BUG-02 C（设计方案.md §四点五）：全站通用 banner/hero/slide 强降权，
+    // 避免被当作产品图排在前排造成同质化（误伤含 hero 的产品图风险低，仅 -25 不一票否决）
+    const promoWordKws = ["banner", "hero", "slide", "splash", "promo"];
+    if (promoWordKws.some(kw => imgUrlLower.includes(kw) || altText.includes(kw))) score -= 25;
+
     // srcset 加分（真实产品图通常有 srcset 响应式）
     if (tag.includes("srcset")) score += 10;
 
     // 主内容区域加分
+    // BUG-02 C：移除 'class="hero'——全站 hero 横幅不应加分（改由上方 promoWordKws 降权处理）
     const nearContext = html.slice(Math.max(0, match.index! - 300), match.index!).toLowerCase();
-    if (["<main", "<article", '<section', 'class="product', 'class="hero', 'class="gallery',
+    if (["<main", "<article", '<section', 'class="product', 'class="gallery',
       'class="content', 'class="shop', 'class="collection'].some(kw => nearContext.includes(kw))) {
       score += 15;
     }
