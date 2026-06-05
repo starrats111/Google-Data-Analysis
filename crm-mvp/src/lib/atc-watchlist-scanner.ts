@@ -12,7 +12,7 @@
 
 import prisma from "@/lib/prisma";
 import { searchIntelligence } from "@/lib/atc-service";
-import type { AtcAd } from "@/lib/atc-service";
+import type { AtcAd, AtcIntelligenceResult } from "@/lib/atc-service";
 
 export interface WatchlistScanResult {
   scannedUsers: number;
@@ -28,6 +28,8 @@ export interface WatchlistScanResult {
 interface PerItemResult {
   alertsCreated: number;
   error?: string;
+  /** BUG-05 B：本条是否真打了 SerpApi（false=命中本轮共享缓存，调用方据此跳过限流 sleep） */
+  calledSerpApi: boolean;
 }
 
 const SLEEP_BETWEEN_CALLS_MS = 1500;
@@ -79,17 +81,27 @@ async function processOneWatchlist(
   serpApiKeys: string[],
   yesterdayCst: string,
   todayCst: string,
+  intelCache: Map<string, AtcIntelligenceResult>,
 ): Promise<PerItemResult> {
+  let calledSerpApi = false;
   try {
-    const result = await searchIntelligence({
-      advertiser_id: watchlist.advertiser_id,
-      region: watchlist.region,
-      serpApiKeys,
-    });
+    // BUG-05 B：跨用户共享缓存——同一 (advertiser_id, region) 当轮只真打一次 SerpApi。
+    // advertiser_id 查询的结果只取决于广告主本身，与用户/key 无关，可安全跨用户复用。
+    const cacheKey = `${watchlist.advertiser_id}|${watchlist.region}`;
+    let result = intelCache.get(cacheKey);
+    if (!result) {
+      result = await searchIntelligence({
+        advertiser_id: watchlist.advertiser_id,
+        region: watchlist.region,
+        serpApiKeys,
+      });
+      calledSerpApi = true;
+      intelCache.set(cacheKey, result); // 仅成功结果入缓存（失败会 throw，不污染缓存）
+    }
 
     const adv = result.advertisers.find((a) => a.id === watchlist.advertiser_id);
     if (!adv || !Array.isArray(adv.ads) || adv.ads.length === 0) {
-      return { alertsCreated: 0 };
+      return { alertsCreated: 0, calledSerpApi };
     }
 
     // D-008 F-17=C：scanner 写库前从 atc_advertiser_domain_snapshot 拿 fallback domain 列表
@@ -192,11 +204,12 @@ async function processOneWatchlist(
       }
     }
 
-    return { alertsCreated };
+    return { alertsCreated, calledSerpApi };
   } catch (err) {
     return {
       alertsCreated: 0,
       error: err instanceof Error ? err.message : String(err),
+      calledSerpApi,
     };
   }
 }
@@ -230,6 +243,10 @@ export async function scanAllWatchlists(): Promise<WatchlistScanResult> {
   const yesterdayCst = yesterdayCstStr();
   const todayCst = todayCstStr();
 
+  // BUG-05 B：本轮跨用户共享的情报结果缓存（key=advertiser_id|region）。
+  // 多个用户盯同一广告主时，当轮只真打一次 SerpApi，其余命中缓存，省 SerpApi 额度。
+  const intelCache = new Map<string, AtcIntelligenceResult>();
+
   // 按 user_id 分组，一次加载该用户的 SerpApi key 池
   const byUser = new Map<string, typeof watchlists>();
   for (const w of watchlists) {
@@ -253,13 +270,14 @@ export async function scanAllWatchlists(): Promise<WatchlistScanResult> {
     }
 
     for (const w of userWatches) {
-      const item = await processOneWatchlist(w, serpApiKeys, yesterdayCst, todayCst);
+      const item = await processOneWatchlist(w, serpApiKeys, yesterdayCst, todayCst, intelCache);
       res.alertsCreated += item.alertsCreated;
       if (item.error) {
         res.skippedSearchError++;
         res.errors.push(`watchlist#${w.id}(${w.advertiser_id}): ${item.error.slice(0, 200)}`);
       }
-      await sleep(SLEEP_BETWEEN_CALLS_MS);
+      // BUG-05 B：命中本轮缓存（未真打 SerpApi）时无需限流等待，加速整轮扫描
+      if (item.calledSerpApi) await sleep(SLEEP_BETWEEN_CALLS_MS);
     }
   }
 
