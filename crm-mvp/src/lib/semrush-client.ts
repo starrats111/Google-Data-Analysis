@@ -6,6 +6,7 @@
  * 安全防护：全局请求队列限流 + 域名结果缓存 + 会话复用
  */
 import { getSystemConfig, getSystemConfigsByPrefix, setSystemConfig } from "@/lib/system-config";
+import prisma from "@/lib/prisma";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -118,6 +119,13 @@ class SemrushGuard {
 
   // D-087：true 时表示已有一个 SemRush 请求在飞（互斥锁占用），新请求必须等其 release。
   private locked = false;
+
+  // 方案-09：每个 3UE 账号一个 guard 实例（不同员工账号各自串行、互不阻塞），
+  // 会话持久化键按账号区分，避免多账号互相覆盖 session（旧全局账号过渡期仍单独一键）。
+  private readonly sessionConfigKey: string;
+  constructor(accountKey?: string) {
+    this.sessionConfigKey = accountKey ? `${SESSION_CONFIG_KEY}:${accountKey}` : SESSION_CONFIG_KEY;
+  }
 
   private async processQueue() {
     if (this.processing) return;
@@ -268,7 +276,7 @@ class SemrushGuard {
   private async persistSession(s: CachedSession): Promise<void> {
     try {
       await setSystemConfig(
-        SESSION_CONFIG_KEY,
+        this.sessionConfigKey,
         JSON.stringify({ username: s.username, token: s.token, cookies: s.cookies, expiresAt: s.expiresAt }),
         "SemRush 会话（跨重启复用，避免设备数超限）",
       );
@@ -280,7 +288,7 @@ class SemrushGuard {
   // BUG-04 A：冷启动/内存未命中时读持久化会话；校验用户名匹配 + 未过期，命中则同步进内存。
   async loadPersistedSession(username: string): Promise<CachedSession | null> {
     try {
-      const raw = await getSystemConfig(SESSION_CONFIG_KEY);
+      const raw = await getSystemConfig(this.sessionConfigKey);
       if (!raw) return null;
       const o = JSON.parse(raw) as { username?: string; token?: string; cookies?: Record<string, string>; expiresAt?: number };
       if (!o?.token || !o.username || o.username !== username) return null;
@@ -296,7 +304,7 @@ class SemrushGuard {
   // BUG-04 A：清空持久化会话（登出/失效后调用）
   private async clearPersistedSession(): Promise<void> {
     try {
-      await setSystemConfig(SESSION_CONFIG_KEY, "", "SemRush 会话（已清空）");
+      await setSystemConfig(this.sessionConfigKey, "", "SemRush 会话（已清空）");
     } catch {
       /* 清空失败不影响主流程 */
     }
@@ -363,7 +371,17 @@ async function logout3ue(session: CachedSession): Promise<void> {
   }
 }
 
-const guard = new SemrushGuard();
+// 方案-09：按 3UE 账号(username)各持一个 guard，实现"不同员工账号并行、单账号内串行"，
+// 从根上避免共享账号被批量并发打满设备数。旧全局账号(system_configs)也走此 Map（key=其 username）。
+const guardByAccount = new Map<string, SemrushGuard>();
+function getSemrushGuard(accountKey: string): SemrushGuard {
+  let g = guardByAccount.get(accountKey);
+  if (!g) {
+    g = new SemrushGuard(accountKey);
+    guardByAccount.set(accountKey, g);
+  }
+  return g;
+}
 
 // ─── curl 封装（绕过 TLS 指纹检测） ───
 
@@ -663,10 +681,13 @@ export class SemRushClient {
   private cookies: Record<string, string> = {};
   // D-061：当前生效节点（构造时取自 active/seed，rpc 故障转移时动态切换）
   private activeNode: string;
+  // 方案-09：本客户端绑定的账号级 guard（按 username 取实例）
+  private guard: SemrushGuard;
 
   constructor(creds: SemRushCredentials) {
     this.creds = creds;
     this.activeNode = creds.nodeConfig.semrushNode || "3";
+    this.guard = getSemrushGuard(creds.username);
   }
 
   /** 从 system_configs 读取凭据并创建客户端 */
@@ -698,6 +719,36 @@ export class SemRushClient {
     });
   }
 
+  /**
+   * 方案-09：优先用「员工自配 SemRush 账号」创建客户端；员工未配置则回退到全局 system_configs（Q09-a/b/c）。
+   * 各员工各用各账号 → 不同员工的查询走不同 guard 实例并行，单账号内串行，根治共享账号批量设备超限。
+   */
+  static async fromUserConfig(userId: string | number | bigint, country?: string): Promise<SemRushClient> {
+    try {
+      const uid = typeof userId === "bigint" ? userId : BigInt(userId);
+      const row = await prisma.user_semrush_keys.findFirst({
+        where: { user_id: uid, is_active: 1, is_deleted: 0 },
+        orderBy: { created_at: "asc" },
+      });
+      if (row?.username && row.password && row.user_id_3ue && row.api_key) {
+        const db = country ? countryToDatabase(country) : (row.database || "us");
+        const seedNode = row.node || "3";
+        return new SemRushClient({
+          username: row.username,
+          password: row.password,
+          userId: row.user_id_3ue,
+          apiKey: row.api_key,
+          database: db,
+          nodeConfig: { chatNode: seedNode, chatLang: "zh_CN", semrushNode: seedNode, semrushLang: "zh" },
+        });
+      }
+    } catch (e) {
+      console.warn("[SemRush] fromUserConfig 读取员工配置失败，回退全局账号:", e instanceof Error ? e.message : e);
+    }
+    // 回退：员工未配置 / 配置不全 / 读取异常 → 用全局共享账号（过渡期兜底）
+    return SemRushClient.fromConfig(country);
+  }
+
   private buildConfigValue(node?: string): string {
     // D-061：node 决定路由到哪个 3UE 节点；不传则用当前生效节点
     const n = node || this.activeNode;
@@ -715,12 +766,12 @@ export class SemRushClient {
   private selectNode(tried: Set<string>): string | null {
     const ordered: string[] = [];
     const push = (n?: string | null) => { if (n && !ordered.includes(n)) ordered.push(n); };
-    push(guard.getPreferredNode());
+    push(this.guard.getPreferredNode());
     push(this.creds.nodeConfig.semrushNode);
     for (const n of NODE_UNIVERSE) push(n);
     // 先挑未尝试 + 未拉黑的
     for (const n of ordered) {
-      if (!tried.has(n) && !guard.isNodeBad(n)) return n;
+      if (!tried.has(n) && !this.guard.isNodeBad(n)) return n;
     }
     // 兜底：未尝试的（即便被拉黑，也比无节点可用强——拉黑可能已恢复）
     for (const n of ordered) {
@@ -759,7 +810,7 @@ export class SemRushClient {
   }
 
   async login(): Promise<string> {
-    const cached = guard.getCachedSession(this.creds.username);
+    const cached = this.guard.getCachedSession(this.creds.username);
     if (cached) {
       this.token = cached.token;
       this.cookies = { ...cached.cookies };
@@ -769,7 +820,7 @@ export class SemRushClient {
 
     // BUG-04 A：内存未命中 → 尝试复用持久化会话（跨重启同一 token = 同一台设备），
     // 命中则不发起新登录，从根上避免重启造成的设备堆积。
-    const persisted = await guard.loadPersistedSession(this.creds.username);
+    const persisted = await this.guard.loadPersistedSession(this.creds.username);
     if (persisted) {
       this.token = persisted.token;
       this.cookies = { ...persisted.cookies };
@@ -777,7 +828,7 @@ export class SemRushClient {
       return persisted.token;
     }
 
-    const releaseLogin = await guard.waitForSlot();
+    const releaseLogin = await this.guard.waitForSlot();
     const ts = Date.now();
     const url = `${LOGIN_URL}?username=${encodeURIComponent(this.creds.username)}&password=${encodeURIComponent(this.creds.password)}&ts=${ts}`;
     let res: CurlResponse;
@@ -804,7 +855,7 @@ export class SemRushClient {
     this.cookies["GMITM_uname"] = this.creds.username;
     this.cookies["GMITM_config"] = this.buildConfigValue();
 
-    const releaseWarmup = await guard.waitForSlot();
+    const releaseWarmup = await this.guard.waitForSlot();
     try {
       const cookieStr = Object.entries(this.cookies).map(([k, v]) => `${k}=${v}`).join("; ");
       const pageRes = await curlFetch("https://sem.3ue.co/analytics/overview/", {
@@ -824,7 +875,7 @@ export class SemRushClient {
       releaseWarmup();
     }
 
-    guard.setCachedSession(this.creds.username, token, this.cookies);
+    this.guard.setCachedSession(this.creds.username, token, this.cookies);
     console.log("[SemRush] 登录成功，会话已缓存");
     return token;
   }
@@ -845,19 +896,19 @@ export class SemRushClient {
 
     // ── D-061：选定本次请求使用的节点 ──
     // 若当前生效节点已被拉黑/已尝试过，切换到下一个候选节点。
-    if (guard.isNodeBad(this.activeNode) || triedNodes.has(this.activeNode)) {
-      const pref = guard.getPreferredNode();
+    if (this.guard.isNodeBad(this.activeNode) || triedNodes.has(this.activeNode)) {
+      const pref = this.guard.getPreferredNode();
       const next = pref && !triedNodes.has(pref) ? pref : this.selectNode(triedNodes);
       if (next) this.activeNode = next;
     } else {
       // 进程内已发现更优的可用节点时优先复用
-      const pref = guard.getPreferredNode();
-      if (pref && !triedNodes.has(pref) && !guard.isNodeBad(pref)) this.activeNode = pref;
+      const pref = this.guard.getPreferredNode();
+      if (pref && !triedNodes.has(pref) && !this.guard.isNodeBad(pref)) this.activeNode = pref;
     }
     const node = this.activeNode;
     triedNodes.add(node);
 
-    const releaseRpc = await guard.waitForSlot();
+    const releaseRpc = await this.guard.waitForSlot();
     // 以选定节点构造 cookie（覆盖 GMITM_config 的 node 字段，token 跨节点通用）
     const cookieStr = Object.entries({ ...this.cookies, GMITM_config: this.buildConfigValue(node) })
       .map(([k, v]) => `${k}=${v}`).join("; ");
@@ -911,7 +962,7 @@ export class SemRushClient {
 
       // ② 套餐不支持该节点（长拉黑） / ③ 节点宕机（短拉黑）→ 切换其它节点
       const forbidden = /套餐|无法使用该节点|升级/i.test(msg);
-      guard.markNodeBad(node, forbidden ? NODE_FORBIDDEN_TTL_MS : NODE_DOWN_TTL_MS);
+      this.guard.markNodeBad(node, forbidden ? NODE_FORBIDDEN_TTL_MS : NODE_DOWN_TTL_MS);
       const next = this.selectNode(triedNodes);
       console.warn(
         `[SemRush] 节点 ${node} 不可用（${forbidden ? "套餐不支持" : "节点宕机"}），` +
@@ -926,7 +977,7 @@ export class SemRushClient {
 
     if (res.status >= 400) {
       if (res.status === 401 || res.status === 403) {
-        guard.invalidateSession();
+        this.guard.invalidateSession();
       }
       const statusMessages: Record<number, string> = {
         401: "3UE 账户认证失败，请检查用户名和密码是否正确",
@@ -955,7 +1006,7 @@ export class SemRushClient {
     // 如果 body 以 < 开头，说明返回了 HTML（可能是会话过期被重定向到登录页）
     if (body.startsWith("<") && !sessionRefreshed) {
       console.warn("[SemRush] RPC 返回 HTML 而非 JSON，会话可能已过期，刷新会话后重试");
-      guard.invalidateSession();
+      this.guard.invalidateSession();
       this.token = null;
       await this.login();
       return this.rpc(payload, 0, true);
@@ -987,8 +1038,8 @@ export class SemRushClient {
       // D-061：本次请求节点可用 → 记为进程内优先节点；若与种子节点不同（发生过故障转移），
       // 持久化到 semrush_node（= NODE_CONFIG_KEY，与 health-cron 同一真相源），使进程重启后直接复用，
       // 不再撞已宕机的种子节点。ARCH-01 T0b：旧注释误写 semrush_active_node（已废弃的孤儿 key），此处更正。
-      if (guard.getPreferredNode() !== node) {
-        guard.setPreferredNode(node);
+      if (this.guard.getPreferredNode() !== node) {
+        this.guard.setPreferredNode(node);
         if (this.creds.nodeConfig.semrushNode !== node) {
           console.log(`[SemRush] 命中可用节点 ${node}（种子=${this.creds.nodeConfig.semrushNode}），持久化 semrush_node`);
           void setSystemConfig(NODE_CONFIG_KEY, node, "SemRush 当前可用 3UE 节点（D-061 自动故障转移写回）");
@@ -1000,7 +1051,7 @@ export class SemRushClient {
 
       if (!sessionRefreshed && retryCount === 0) {
         console.warn(`[SemRush] JSON 解析失败，刷新会话后重试。body 前200字符: ${safePreview}`);
-        guard.invalidateSession();
+        this.guard.invalidateSession();
         this.token = null;
         await this.login();
         return this.rpc(payload, 0, true);
@@ -1105,7 +1156,7 @@ export class SemRushClient {
     if (!domain) throw new Error("无效的域名");
 
     const cacheKey = `${domain}:${this.creds.database}`;
-    const cached = guard.getCachedDomain(cacheKey);
+    const cached = this.guard.getCachedDomain(cacheKey);
     if (cached) {
       console.log(`[SemRush] 命中缓存: ${domain} (db=${this.creds.database}, ${cached.keywords.length} 关键词)`);
       return cached;
@@ -1113,8 +1164,8 @@ export class SemRushClient {
 
     // BUG-04 C：整条查询（login + 全部 rpc + copies）外层占一次独占槽，内部 waitForSlot 走重入
     // no-op，保证一条 queryDomain = 一个连续会话，且全进程任一时刻仅一条查询在飞（真串行=1）。
-    return guard.withExclusive(async () => {
-    console.log(`[SemRush] 开始查询: ${domain} (db=${this.creds.database})（队列状态: ${JSON.stringify(guard.getStats())}）`);
+    return this.guard.withExclusive(async () => {
+    console.log(`[SemRush] 开始查询: ${domain} (db=${this.creds.database})（队列状态: ${JSON.stringify(this.guard.getStats())}）`);
     await this.login();
 
     // 批量 RPC：keywords + adsOverview + reportToken + ratesDate 合并为一次请求
@@ -1213,14 +1264,25 @@ export class SemRushClient {
       dedupedDescriptions: dedupeAdDescriptions(descPool),
     };
 
-    guard.setCachedDomain(cacheKey, result);
+    this.guard.setCachedDomain(cacheKey, result);
     console.log(`[SemRush] 查询完成: ${domain} (db=${this.creds.database}, ${kws.length} 关键词, ${ads.length} 广告)`);
     return result;
     }); // BUG-04 C：withExclusive 结束
   }
 
-  /** 获取缓存统计信息 */
+  /** 获取缓存统计信息（聚合所有账号 guard） */
   static getGuardStats() {
-    return guard.getStats();
+    const all = [...guardByAccount.values()];
+    if (all.length === 0) return { cacheSize: 0, queueLength: 0, hasSession: false, preferredNode: null, badNodes: [] as string[], accounts: 0 };
+    return all.reduce(
+      (acc, g) => {
+        const s = g.getStats();
+        acc.cacheSize += s.cacheSize;
+        acc.queueLength += s.queueLength;
+        acc.hasSession = acc.hasSession || s.hasSession;
+        return acc;
+      },
+      { cacheSize: 0, queueLength: 0, hasSession: false, preferredNode: null as string | null, badNodes: [] as string[], accounts: all.length },
+    );
   }
 }

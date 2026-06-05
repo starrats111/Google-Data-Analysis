@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useState, useEffect, useMemo } from "react";
 import {
@@ -10,6 +10,7 @@ import {
   PlusOutlined, DeleteOutlined, SaveOutlined, EditOutlined, BellOutlined,
   InboxOutlined, FileTextOutlined, CheckCircleOutlined, LockOutlined, CopyOutlined,
   CodeOutlined, EyeOutlined, ExclamationCircleOutlined, CheckOutlined, SyncOutlined,
+  SearchOutlined,
 } from "@ant-design/icons";
 import { generateLinkExchangeScript } from "@/lib/link-exchange-script-template";
 import {
@@ -1059,6 +1060,186 @@ function SerpApiTab() {
   );
 }
 
+// ==================== SemRush 关键词 Tab（方案-09：员工自配 3UE 账号）====================
+interface SemrushKeyRow {
+  id: string;
+  key_name: string;
+  username: string;
+  user_id_3ue: string;
+  masked_api_key: string;
+  node: string;
+  database: string;
+  is_active: boolean;
+  created_at: string;
+}
+
+function SemRushTab() {
+  const { message } = App.useApp();
+  const [keys, setKeys] = useState<SemrushKeyRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [addVisible, setAddVisible] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [testingId, setTestingId] = useState<string | null>(null);
+  const [testingNew, setTestingNew] = useState(false);
+  const [form, setForm] = useState({
+    key_name: "", username: "", password: "", user_id_3ue: "", api_key: "", node: "3", database: "us",
+  });
+
+  const setField = (k: keyof typeof form, v: string) => setForm((p) => ({ ...p, [k]: v }));
+  const resetForm = () => setForm({ key_name: "", username: "", password: "", user_id_3ue: "", api_key: "", node: "3", database: "us" });
+
+  const fetchKeys = async () => {
+    setLoading(true);
+    const res = await fetch("/api/user/settings/semrush").then((r) => r.json());
+    if (res.code === 0) setKeys(res.data);
+    setLoading(false);
+  };
+
+  useEffect(() => { fetchKeys(); }, []);
+
+  const handleAdd = async () => {
+    if (!form.username.trim() || !form.password.trim() || !form.user_id_3ue.trim() || !form.api_key.trim()) {
+      message.warning("用户名/密码/UserID/ApiKey 均必填"); return;
+    }
+    setSaving(true);
+    const res = await fetch("/api/user/settings/semrush", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(form),
+    }).then((r) => r.json());
+    setSaving(false);
+    if (res.code === 0) { message.success("添加成功"); resetForm(); setAddVisible(false); fetchKeys(); }
+    else message.error(res.message);
+  };
+
+  const handleDelete = async (id: string) => {
+    const res = await fetch("/api/user/settings/semrush", {
+      method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }),
+    }).then((r) => r.json());
+    if (res.code === 0) { message.success("已删除"); fetchKeys(); } else message.error(res.message);
+  };
+
+  const handleToggle = async (id: string, is_active: boolean) => {
+    const res = await fetch("/api/user/settings/semrush", {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, is_active: !is_active }),
+    }).then((r) => r.json());
+    if (res.code === 0) { message.success(is_active ? "已禁用" : "已启用"); fetchKeys(); } else message.error(res.message);
+  };
+
+  const handleTestExisting = async (id: string) => {
+    setTestingId(id);
+    const res = await fetch("/api/user/settings/semrush", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }),
+    }).then((r) => r.json());
+    setTestingId(null);
+    if (res.code === 0) message.success(res.message); else message.error(res.message);
+  };
+
+  const handleTestNew = async () => {
+    if (!form.username.trim() || !form.password.trim() || !form.user_id_3ue.trim() || !form.api_key.trim()) {
+      message.warning("请先填完整凭据再测试"); return;
+    }
+    setTestingNew(true);
+    const res = await fetch("/api/user/settings/semrush", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(form),
+    }).then((r) => r.json());
+    setTestingNew(false);
+    if (res.code === 0) message.success(res.message); else message.error(res.message);
+  };
+
+  const columns = [
+    { title: "备注名", dataIndex: "key_name", width: 110, render: (v: string) => <Text strong>{v}</Text> },
+    { title: "用户名", dataIndex: "username", width: 120, render: (v: string) => <Text code style={{ fontSize: 12 }}>{v}</Text> },
+    { title: "ApiKey（脱敏）", dataIndex: "masked_api_key", render: (v: string) => <Text code style={{ fontSize: 12 }}>{v}</Text> },
+    { title: "节点/库", width: 90, render: (_: unknown, r: SemrushKeyRow) => <Text type="secondary" style={{ fontSize: 12 }}>{r.node}/{r.database}</Text> },
+    { title: "状态", dataIndex: "is_active", width: 70, render: (v: boolean) => v ? <Tag color="green">启用</Tag> : <Tag color="default">禁用</Tag> },
+    {
+      title: "操作", width: 190,
+      render: (_: unknown, rec: SemrushKeyRow) => (
+        <Space size={4}>
+          <Button size="small" loading={testingId === rec.id} onClick={() => handleTestExisting(rec.id)}>测试</Button>
+          <Button size="small" onClick={() => handleToggle(rec.id, rec.is_active)}>{rec.is_active ? "禁用" : "启用"}</Button>
+          <Popconfirm title="确认删除此账号？" onConfirm={() => handleDelete(rec.id)}>
+            <Button size="small" danger>删除</Button>
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ];
+
+  return (
+    <div style={{ maxWidth: 760 }}>
+      <Card
+        title={<><SearchOutlined /> SemRush 关键词 — 3UE 账号管理</>}
+        size="small"
+        extra={<Button type="primary" size="small" icon={<PlusOutlined />} onClick={() => setAddVisible(true)}>添加账号</Button>}
+        loading={loading}
+      >
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          {keys.length === 0 ? (
+            <div style={{ textAlign: "center", padding: "24px 0", color: "#bfbfbf" }}>
+              <SearchOutlined style={{ fontSize: 32, marginBottom: 8 }} />
+              <div>尚未配置 SemRush 账号，点击右上角「添加账号」开始使用</div>
+              <div style={{ fontSize: 12, marginTop: 6 }}>未配置时系统暂用全局兜底账号（过渡期）</div>
+            </div>
+          ) : (
+            <Table dataSource={keys} columns={columns} rowKey="id" size="small" pagination={false} />
+          )}
+
+          {addVisible && (
+            <Card size="small" style={{ background: "#fafafa" }} title="添加新 SemRush(3UE) 账号">
+              <Row gutter={[10, 10]}>
+                <Col span={8}>
+                  <Text type="secondary" style={{ display: "block", marginBottom: 4 }}>备注名（选填）</Text>
+                  <Input placeholder={`账号 ${keys.length + 1}`} value={form.key_name} onChange={(e) => setField("key_name", e.target.value)} />
+                </Col>
+                <Col span={8}>
+                  <Text type="secondary" style={{ display: "block", marginBottom: 4 }}>用户名 *</Text>
+                  <Input placeholder="3UE 登录用户名" value={form.username} onChange={(e) => setField("username", e.target.value)} />
+                </Col>
+                <Col span={8}>
+                  <Text type="secondary" style={{ display: "block", marginBottom: 4 }}>密码 *</Text>
+                  <Input.Password placeholder="3UE 登录密码" value={form.password} onChange={(e) => setField("password", e.target.value)} />
+                </Col>
+                <Col span={8}>
+                  <Text type="secondary" style={{ display: "block", marginBottom: 4 }}>UserID *</Text>
+                  <Input placeholder="3UE userId" value={form.user_id_3ue} onChange={(e) => setField("user_id_3ue", e.target.value)} />
+                </Col>
+                <Col span={8}>
+                  <Text type="secondary" style={{ display: "block", marginBottom: 4 }}>ApiKey *</Text>
+                  <Input.Password placeholder="3UE api_key" value={form.api_key} onChange={(e) => setField("api_key", e.target.value)} />
+                </Col>
+                <Col span={4}>
+                  <Text type="secondary" style={{ display: "block", marginBottom: 4 }}>节点</Text>
+                  <Input placeholder="3" value={form.node} onChange={(e) => setField("node", e.target.value)} />
+                </Col>
+                <Col span={4}>
+                  <Text type="secondary" style={{ display: "block", marginBottom: 4 }}>默认库</Text>
+                  <Input placeholder="us" value={form.database} onChange={(e) => setField("database", e.target.value)} />
+                </Col>
+                <Col span={24}>
+                  <Space>
+                    <Button loading={testingNew} onClick={handleTestNew}>测试连接</Button>
+                    <Button type="primary" loading={saving} icon={<SaveOutlined />} onClick={handleAdd}>添加</Button>
+                    <Button onClick={() => { setAddVisible(false); resetForm(); }}>取消</Button>
+                  </Space>
+                </Col>
+              </Row>
+            </Card>
+          )}
+
+          <div style={{ background: "#f6f8fa", borderRadius: 6, padding: "10px 14px", fontSize: 12, color: "#666", lineHeight: "1.8" }}>
+            <div><strong>为什么自配</strong>：每人各用各的 3UE 账号配额，避免共用一个账号被批量生成打满「设备数超限」。</div>
+            <div><strong>选取策略</strong>：广告生成 / 关键词查询优先用你启用中的账号（按账号各自串行、不同员工并行）。</div>
+            <div><strong>默认库</strong>：按投放国自动覆盖（如 GB→uk），此处仅为兜底默认。</div>
+            <div><strong>未配置</strong>：过渡期回退全局兜底账号，建议尽快配置自己的账号。</div>
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 // ==================== 主页面 ====================
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState("platforms");
@@ -1077,6 +1258,7 @@ export default function SettingsPage() {
           { key: "password", label: <><LockOutlined /> 修改密码</>, children: <ChangePasswordTab /> },
           { key: "script", label: <><FileTextOutlined /> 脚本配置</>, children: <ScriptConfigTab /> },
           { key: "serpapi", label: <><EyeOutlined /> 广告情报</>, children: <SerpApiTab /> },
+          { key: "semrush", label: <><SearchOutlined /> SemRush 关键词</>, children: <SemRushTab /> },
         ]}
       />
     </div>

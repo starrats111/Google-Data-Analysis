@@ -103,6 +103,11 @@ export type keywords = Prisma.keywordsModel
  */
 export type ad_creatives = Prisma.ad_creativesModel
 /**
+ * Model ad_generation_jobs
+ * 
+ */
+export type ad_generation_jobs = Prisma.ad_generation_jobsModel
+/**
  * Model publish_sites
  * 
  */
@@ -234,6 +239,11 @@ export type ad_image_ocr_cache = Prisma.ad_image_ocr_cacheModel
  * 
  */
 export type user_serpapi_keys = Prisma.user_serpapi_keysModel
+/**
+ * Model user_semrush_keys
+ * 
+ */
+export type user_semrush_keys = Prisma.user_semrush_keysModel
 /**
  * Model merchant_monitor_rules
  * 

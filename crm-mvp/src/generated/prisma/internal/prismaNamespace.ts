@@ -401,6 +401,7 @@ export const ModelName = {
   ad_groups: 'ad_groups',
   keywords: 'keywords',
   ad_creatives: 'ad_creatives',
+  ad_generation_jobs: 'ad_generation_jobs',
   publish_sites: 'publish_sites',
   site_migrations: 'site_migrations',
   articles: 'articles',
@@ -427,6 +428,7 @@ export const ModelName = {
   atc_advertiser_domain_snapshot: 'atc_advertiser_domain_snapshot',
   ad_image_ocr_cache: 'ad_image_ocr_cache',
   user_serpapi_keys: 'user_serpapi_keys',
+  user_semrush_keys: 'user_semrush_keys',
   merchant_monitor_rules: 'merchant_monitor_rules',
   user_atc_watchlist: 'user_atc_watchlist',
   user_atc_alert_log: 'user_atc_alert_log',
@@ -448,7 +450,7 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
     omit: GlobalOmitOptions
   }
   meta: {
-    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "ad_rejection_feedback" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "holiday_calendar" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "google_mcc_accounts" | "affiliate_transactions" | "affiliate_payments" | "notifications" | "notification_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "user_serpapi_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log" | "semrush_keyword_cache" | "semrush_health_logs" | "policy_violations"
+    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "ad_rejection_feedback" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "holiday_calendar" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "ad_generation_jobs" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "google_mcc_accounts" | "affiliate_transactions" | "affiliate_payments" | "notifications" | "notification_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "user_serpapi_keys" | "user_semrush_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log" | "semrush_keyword_cache" | "semrush_health_logs" | "policy_violations"
     txIsolationLevel: TransactionIsolationLevel
   }
   model: {
@@ -1571,6 +1573,72 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         count: {
           args: Prisma.ad_creativesCountArgs<ExtArgs>
           result: runtime.Types.Utils.Optional<Prisma.Ad_creativesCountAggregateOutputType> | number
+        }
+      }
+    }
+    ad_generation_jobs: {
+      payload: Prisma.$ad_generation_jobsPayload<ExtArgs>
+      fields: Prisma.ad_generation_jobsFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.ad_generation_jobsFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_generation_jobsPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.ad_generation_jobsFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_generation_jobsPayload>
+        }
+        findFirst: {
+          args: Prisma.ad_generation_jobsFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_generation_jobsPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.ad_generation_jobsFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_generation_jobsPayload>
+        }
+        findMany: {
+          args: Prisma.ad_generation_jobsFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_generation_jobsPayload>[]
+        }
+        create: {
+          args: Prisma.ad_generation_jobsCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_generation_jobsPayload>
+        }
+        createMany: {
+          args: Prisma.ad_generation_jobsCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.ad_generation_jobsDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_generation_jobsPayload>
+        }
+        update: {
+          args: Prisma.ad_generation_jobsUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_generation_jobsPayload>
+        }
+        deleteMany: {
+          args: Prisma.ad_generation_jobsDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.ad_generation_jobsUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.ad_generation_jobsUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_generation_jobsPayload>
+        }
+        aggregate: {
+          args: Prisma.Ad_generation_jobsAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateAd_generation_jobs>
+        }
+        groupBy: {
+          args: Prisma.ad_generation_jobsGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Ad_generation_jobsGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.ad_generation_jobsCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Ad_generation_jobsCountAggregateOutputType> | number
         }
       }
     }
@@ -3290,6 +3358,72 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         }
       }
     }
+    user_semrush_keys: {
+      payload: Prisma.$user_semrush_keysPayload<ExtArgs>
+      fields: Prisma.user_semrush_keysFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.user_semrush_keysFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_semrush_keysPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.user_semrush_keysFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_semrush_keysPayload>
+        }
+        findFirst: {
+          args: Prisma.user_semrush_keysFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_semrush_keysPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.user_semrush_keysFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_semrush_keysPayload>
+        }
+        findMany: {
+          args: Prisma.user_semrush_keysFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_semrush_keysPayload>[]
+        }
+        create: {
+          args: Prisma.user_semrush_keysCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_semrush_keysPayload>
+        }
+        createMany: {
+          args: Prisma.user_semrush_keysCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.user_semrush_keysDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_semrush_keysPayload>
+        }
+        update: {
+          args: Prisma.user_semrush_keysUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_semrush_keysPayload>
+        }
+        deleteMany: {
+          args: Prisma.user_semrush_keysDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.user_semrush_keysUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.user_semrush_keysUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_semrush_keysPayload>
+        }
+        aggregate: {
+          args: Prisma.User_semrush_keysAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateUser_semrush_keys>
+        }
+        groupBy: {
+          args: Prisma.user_semrush_keysGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.User_semrush_keysGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.user_semrush_keysCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.User_semrush_keysCountAggregateOutputType> | number
+        }
+      }
+    }
     merchant_monitor_rules: {
       payload: Prisma.$merchant_monitor_rulesPayload<ExtArgs>
       fields: Prisma.merchant_monitor_rulesFieldRefs
@@ -4075,6 +4209,25 @@ export const Ad_creativesScalarFieldEnum = {
 export type Ad_creativesScalarFieldEnum = (typeof Ad_creativesScalarFieldEnum)[keyof typeof Ad_creativesScalarFieldEnum]
 
 
+export const Ad_generation_jobsScalarFieldEnum = {
+  id: 'id',
+  campaign_id: 'campaign_id',
+  user_id: 'user_id',
+  types: 'types',
+  status: 'status',
+  stage: 'stage',
+  progress: 'progress',
+  result: 'result',
+  error: 'error',
+  attempt: 'attempt',
+  heartbeat_at: 'heartbeat_at',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Ad_generation_jobsScalarFieldEnum = (typeof Ad_generation_jobsScalarFieldEnum)[keyof typeof Ad_generation_jobsScalarFieldEnum]
+
+
 export const Publish_sitesScalarFieldEnum = {
   id: 'id',
   site_name: 'site_name',
@@ -4562,6 +4715,25 @@ export const User_serpapi_keysScalarFieldEnum = {
 export type User_serpapi_keysScalarFieldEnum = (typeof User_serpapi_keysScalarFieldEnum)[keyof typeof User_serpapi_keysScalarFieldEnum]
 
 
+export const User_semrush_keysScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  key_name: 'key_name',
+  username: 'username',
+  password: 'password',
+  user_id_3ue: 'user_id_3ue',
+  api_key: 'api_key',
+  node: 'node',
+  database: 'database',
+  is_active: 'is_active',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type User_semrush_keysScalarFieldEnum = (typeof User_semrush_keysScalarFieldEnum)[keyof typeof User_semrush_keysScalarFieldEnum]
+
+
 export const Merchant_monitor_rulesScalarFieldEnum = {
   id: 'id',
   user_id: 'user_id',
@@ -4926,6 +5098,15 @@ export const ad_creativesOrderByRelevanceFieldEnum = {
 export type ad_creativesOrderByRelevanceFieldEnum = (typeof ad_creativesOrderByRelevanceFieldEnum)[keyof typeof ad_creativesOrderByRelevanceFieldEnum]
 
 
+export const ad_generation_jobsOrderByRelevanceFieldEnum = {
+  status: 'status',
+  stage: 'stage',
+  error: 'error'
+} as const
+
+export type ad_generation_jobsOrderByRelevanceFieldEnum = (typeof ad_generation_jobsOrderByRelevanceFieldEnum)[keyof typeof ad_generation_jobsOrderByRelevanceFieldEnum]
+
+
 export const publish_sitesOrderByRelevanceFieldEnum = {
   site_name: 'site_name',
   domain: 'domain',
@@ -5181,6 +5362,19 @@ export const user_serpapi_keysOrderByRelevanceFieldEnum = {
 export type user_serpapi_keysOrderByRelevanceFieldEnum = (typeof user_serpapi_keysOrderByRelevanceFieldEnum)[keyof typeof user_serpapi_keysOrderByRelevanceFieldEnum]
 
 
+export const user_semrush_keysOrderByRelevanceFieldEnum = {
+  key_name: 'key_name',
+  username: 'username',
+  password: 'password',
+  user_id_3ue: 'user_id_3ue',
+  api_key: 'api_key',
+  node: 'node',
+  database: 'database'
+} as const
+
+export type user_semrush_keysOrderByRelevanceFieldEnum = (typeof user_semrush_keysOrderByRelevanceFieldEnum)[keyof typeof user_semrush_keysOrderByRelevanceFieldEnum]
+
+
 export const merchant_monitor_rulesOrderByRelevanceFieldEnum = {
   rule_type: 'rule_type'
 } as const
@@ -5429,6 +5623,7 @@ export type GlobalOmitConfig = {
   ad_groups?: Prisma.ad_groupsOmit
   keywords?: Prisma.keywordsOmit
   ad_creatives?: Prisma.ad_creativesOmit
+  ad_generation_jobs?: Prisma.ad_generation_jobsOmit
   publish_sites?: Prisma.publish_sitesOmit
   site_migrations?: Prisma.site_migrationsOmit
   articles?: Prisma.articlesOmit
@@ -5455,6 +5650,7 @@ export type GlobalOmitConfig = {
   atc_advertiser_domain_snapshot?: Prisma.atc_advertiser_domain_snapshotOmit
   ad_image_ocr_cache?: Prisma.ad_image_ocr_cacheOmit
   user_serpapi_keys?: Prisma.user_serpapi_keysOmit
+  user_semrush_keys?: Prisma.user_semrush_keysOmit
   merchant_monitor_rules?: Prisma.merchant_monitor_rulesOmit
   user_atc_watchlist?: Prisma.user_atc_watchlistOmit
   user_atc_alert_log?: Prisma.user_atc_alert_logOmit

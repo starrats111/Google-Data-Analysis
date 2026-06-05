@@ -634,6 +634,7 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
                   merchantName,
                   dailyBudgetUsd: semrushKwBudget,
                   maxCpcUsd: semrushKwMaxCpc,
+                  userId, // 方案-09：用发起员工自配的 SemRush 账号
                 });
               } catch (e) {
                 console.warn("[Extensions] D-091 SemRush 关键词查询异常（降级不阻断）:", e instanceof Error ? e.message : e);
@@ -863,7 +864,7 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
             (Array.isArray(cache!.semrushTitles) ? cache!.semrushTitles.length : 0) === 0) {
           try {
             const { SemRushClient } = await import("@/lib/semrush-client");
-            const _srClient = await SemRushClient.fromConfig(country);
+            const _srClient = await SemRushClient.fromUserConfig(userId, country);
             const _srResult = await _srClient.queryDomain(merchantUrl);
             if (_srResult.dedupedTitles.length > 0 || _srResult.keywords.length > 0) {
               (cache as any).semrushTitles = _srResult.dedupedTitles;

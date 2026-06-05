@@ -776,6 +776,7 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
       maxCpc: Number(adSettings?.max_cpc || 0.3),
       biddingStrategy: adSettings?.bidding_strategy || "MAXIMIZE_CLICKS",
       aiRuleProfile: (adSettings as any)?.ai_rule_profile,
+      userId: BigInt(user.userId),
     },
   ).catch((err) => console.error("[异步] 广告文案生成失败:", err));
 
@@ -908,6 +909,7 @@ async function triggerAdCopyGeneration(
     maxCpc?: number;
     biddingStrategy?: string;
     aiRuleProfile?: unknown;
+    userId?: bigint; // 方案-09：发起员工，用其自配 SemRush 账号
   } = {},
 ) {
   const lockKey = `adcopy-${adCreativeId}`;
@@ -939,7 +941,9 @@ async function triggerAdCopyGeneration(
     } else if (merchantUrl) {
       try {
         const { isPolicyRiskKeyword } = await import("@/lib/keyword-optimizer");
-        const client = await SemRushClient.fromConfig(country);
+        const client = options.userId != null
+          ? await SemRushClient.fromUserConfig(options.userId, country)
+          : await SemRushClient.fromConfig(country);
         const result = await client.queryDomain(merchantUrl);
         dedupedTitles = result.dedupedTitles;
         dedupedDescriptions = result.dedupedDescriptions;

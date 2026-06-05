@@ -68,6 +68,7 @@ export const ModelName = {
   ad_groups: 'ad_groups',
   keywords: 'keywords',
   ad_creatives: 'ad_creatives',
+  ad_generation_jobs: 'ad_generation_jobs',
   publish_sites: 'publish_sites',
   site_migrations: 'site_migrations',
   articles: 'articles',
@@ -94,6 +95,7 @@ export const ModelName = {
   atc_advertiser_domain_snapshot: 'atc_advertiser_domain_snapshot',
   ad_image_ocr_cache: 'ad_image_ocr_cache',
   user_serpapi_keys: 'user_serpapi_keys',
+  user_semrush_keys: 'user_semrush_keys',
   merchant_monitor_rules: 'merchant_monitor_rules',
   user_atc_watchlist: 'user_atc_watchlist',
   user_atc_alert_log: 'user_atc_alert_log',
@@ -466,6 +468,25 @@ export const Ad_creativesScalarFieldEnum = {
 } as const
 
 export type Ad_creativesScalarFieldEnum = (typeof Ad_creativesScalarFieldEnum)[keyof typeof Ad_creativesScalarFieldEnum]
+
+
+export const Ad_generation_jobsScalarFieldEnum = {
+  id: 'id',
+  campaign_id: 'campaign_id',
+  user_id: 'user_id',
+  types: 'types',
+  status: 'status',
+  stage: 'stage',
+  progress: 'progress',
+  result: 'result',
+  error: 'error',
+  attempt: 'attempt',
+  heartbeat_at: 'heartbeat_at',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Ad_generation_jobsScalarFieldEnum = (typeof Ad_generation_jobsScalarFieldEnum)[keyof typeof Ad_generation_jobsScalarFieldEnum]
 
 
 export const Publish_sitesScalarFieldEnum = {
@@ -955,6 +976,25 @@ export const User_serpapi_keysScalarFieldEnum = {
 export type User_serpapi_keysScalarFieldEnum = (typeof User_serpapi_keysScalarFieldEnum)[keyof typeof User_serpapi_keysScalarFieldEnum]
 
 
+export const User_semrush_keysScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  key_name: 'key_name',
+  username: 'username',
+  password: 'password',
+  user_id_3ue: 'user_id_3ue',
+  api_key: 'api_key',
+  node: 'node',
+  database: 'database',
+  is_active: 'is_active',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type User_semrush_keysScalarFieldEnum = (typeof User_semrush_keysScalarFieldEnum)[keyof typeof User_semrush_keysScalarFieldEnum]
+
+
 export const Merchant_monitor_rulesScalarFieldEnum = {
   id: 'id',
   user_id: 'user_id',
@@ -1319,6 +1359,15 @@ export const ad_creativesOrderByRelevanceFieldEnum = {
 export type ad_creativesOrderByRelevanceFieldEnum = (typeof ad_creativesOrderByRelevanceFieldEnum)[keyof typeof ad_creativesOrderByRelevanceFieldEnum]
 
 
+export const ad_generation_jobsOrderByRelevanceFieldEnum = {
+  status: 'status',
+  stage: 'stage',
+  error: 'error'
+} as const
+
+export type ad_generation_jobsOrderByRelevanceFieldEnum = (typeof ad_generation_jobsOrderByRelevanceFieldEnum)[keyof typeof ad_generation_jobsOrderByRelevanceFieldEnum]
+
+
 export const publish_sitesOrderByRelevanceFieldEnum = {
   site_name: 'site_name',
   domain: 'domain',
@@ -1572,6 +1621,19 @@ export const user_serpapi_keysOrderByRelevanceFieldEnum = {
 } as const
 
 export type user_serpapi_keysOrderByRelevanceFieldEnum = (typeof user_serpapi_keysOrderByRelevanceFieldEnum)[keyof typeof user_serpapi_keysOrderByRelevanceFieldEnum]
+
+
+export const user_semrush_keysOrderByRelevanceFieldEnum = {
+  key_name: 'key_name',
+  username: 'username',
+  password: 'password',
+  user_id_3ue: 'user_id_3ue',
+  api_key: 'api_key',
+  node: 'node',
+  database: 'database'
+} as const
+
+export type user_semrush_keysOrderByRelevanceFieldEnum = (typeof user_semrush_keysOrderByRelevanceFieldEnum)[keyof typeof user_semrush_keysOrderByRelevanceFieldEnum]
 
 
 export const merchant_monitor_rulesOrderByRelevanceFieldEnum = {

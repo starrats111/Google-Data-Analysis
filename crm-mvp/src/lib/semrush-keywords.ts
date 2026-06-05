@@ -85,8 +85,12 @@ async function runOnePipeline(
   merchantName: string,
   dailyBudgetUsd: number,
   maxCpcUsd: number,
+  userId?: string | number | bigint,
 ) {
-  const client = await SemRushClient.fromConfig(country);
+  // 方案-09：有 userId → 优先用员工自配账号（无则内部回退全局）；无 userId → 直接全局。
+  const client = userId != null
+    ? await SemRushClient.fromUserConfig(userId, country)
+    : await SemRushClient.fromConfig(country);
   const result = await client.queryDomain(merchantUrl);
   const domain = result.domain;
 
@@ -151,6 +155,8 @@ export interface SemrushKeywordsParams {
   merchantName: string;
   dailyBudgetUsd: number;
   maxCpcUsd: number;
+  /** 方案-09：发起广告生成的员工 ID，用于选用其自配 SemRush 账号（缺省回退全局） */
+  userId?: string | number | bigint;
 }
 
 export interface SemrushKeywordsResult {
@@ -171,13 +177,13 @@ export interface SemrushKeywordsResult {
  * 永不抛错——失败返回 ok:false + 分类信息，调用方自行决定 UI / 降级。
  */
 export async function fetchSemrushKeywords(params: SemrushKeywordsParams): Promise<SemrushKeywordsResult> {
-  const { merchantUrl, country, merchantName, dailyBudgetUsd, maxCpcUsd } = params;
+  const { merchantUrl, country, merchantName, dailyBudgetUsd, maxCpcUsd, userId } = params;
   const normalized = normalizeDomain(merchantUrl);
   const db = countryToDb(country);
 
   let firstErr: unknown = null;
   try {
-    const data = await runOnePipeline(merchantUrl, country, merchantName, dailyBudgetUsd, maxCpcUsd);
+    const data = await runOnePipeline(merchantUrl, country, merchantName, dailyBudgetUsd, maxCpcUsd, userId);
     void writeCache(normalized, db, data, data.raw_keyword_count);
     return {
       ok: true,
@@ -199,7 +205,7 @@ export async function fetchSemrushKeywords(params: SemrushKeywordsParams): Promi
       await new Promise((r) => setTimeout(r, OUTER_RETRY_DELAY_MS));
       try {
         console.log(`[SemRush] I7 路由层重试 1/1（已等待 ${OUTER_RETRY_DELAY_MS}ms）`);
-        const data = await runOnePipeline(merchantUrl, country, merchantName, dailyBudgetUsd, maxCpcUsd);
+        const data = await runOnePipeline(merchantUrl, country, merchantName, dailyBudgetUsd, maxCpcUsd, userId);
         void writeCache(normalized, db, data, data.raw_keyword_count);
         return {
           ok: true,

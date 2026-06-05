@@ -30,7 +30,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const client = await SemRushClient.fromConfig(country);
+    const client = await SemRushClient.fromUserConfig(user.userId, country);
     const result = await client.queryDomain(domain);
 
     // D-047: AI 从「自然词池(organic) + 付费词池(paid)」里选词（只选不造）

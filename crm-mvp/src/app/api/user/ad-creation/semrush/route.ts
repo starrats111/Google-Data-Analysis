@@ -32,7 +32,7 @@ export async function POST(req: NextRequest) {
   }
   if (!merchantUrl) return apiError("缺少商家 URL");
 
-  const result = await fetchSemrushKeywords({ merchantUrl, country, merchantName, dailyBudgetUsd, maxCpcUsd });
+  const result = await fetchSemrushKeywords({ merchantUrl, country, merchantName, dailyBudgetUsd, maxCpcUsd, userId: user.userId });
 
   if (!result.ok) {
     return Response.json(

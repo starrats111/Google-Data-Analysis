@@ -1036,6 +1036,29 @@ model user_serpapi_keys {
 }
 
 // -----------------------------------------------------------
+// 34b. 方案-09：员工自配 SemRush(3UE) 账号 —— 每员工各用各账号配额，根治共享账号批量设备超限
+// 字段对标全局 system_configs.semrush_*（username/password/user_id/api_key/node/database）
+// 密码明文存储（与现状 system_configs 一致，Q09-d）。
+// -----------------------------------------------------------
+model user_semrush_keys {
+  id          BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id     BigInt   @db.UnsignedBigInt
+  key_name    String   @db.VarChar(64) // 用户自定义备注名
+  username    String   @db.VarChar(128) // 3UE 登录用户名
+  password    String   @db.VarChar(255) // 3UE 登录密码（明文，Q09-d）
+  user_id_3ue String   @db.VarChar(64) // 3UE userId
+  api_key     String   @db.VarChar(128) // 3UE api_key
+  node        String   @default("3") @db.VarChar(8) // 节点
+  database    String   @default("us") @db.VarChar(8) // 默认库（按投放国动态覆盖）
+  is_active   Int      @default(1) @db.TinyInt
+  is_deleted  Int      @default(0) @db.TinyInt
+  created_at  DateTime @default(now()) @db.DateTime(0)
+  updated_at  DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([user_id, is_active], map: "idx_user_active")
+}
+
+// -----------------------------------------------------------
 // 35. ATC 广告情报 — 商家监控告警规则（Phase 2 预建）
 // -----------------------------------------------------------
 model merchant_monitor_rules {
