@@ -47,9 +47,13 @@ async function closeBrowserSafely(browser: any): Promise<void> {
 // 浏览器路径发现
 // ══════════════════════════════════════════════════════
 const BROWSER_CANDIDATES = [
-  // Linux 生产服务器（chromium-browser snap 安装在此路径）
-  "/usr/bin/chromium-browser", "/usr/bin/chromium",
+  // BUG-07：Linux 生产机优先非 snap 的真 Chrome。snap 版 chromium-browser 会把
+  // puppeteer 临时 profile 写进 snap 私有 /tmp（/tmp/snap-private-tmp/snap.chromium/tmp），
+  // 与宿主 /tmp 不同命名空间，puppeteer 正常 close 只能清宿主侧、清不到私有侧 → profile
+  // 永久堆积撑爆磁盘（实测 2919 个 / 28G）。google-chrome-stable 直接用宿主 /tmp，
+  // 正常 close 即自清理，从源头消除该泄漏；仅强杀路径残留（由 chromium-reaper.sh 兜底删）。
   "/usr/bin/google-chrome-stable", "/usr/bin/google-chrome",
+  "/usr/bin/chromium-browser", "/usr/bin/chromium",
   "/usr/bin/microsoft-edge-stable", "/usr/bin/microsoft-edge",
   // Windows
   "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
