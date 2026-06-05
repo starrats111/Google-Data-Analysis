@@ -287,13 +287,15 @@ async function executeTool(name: string, args: ToolArgs, userId: bigint): Promis
         AND transaction_time >= ? AND transaction_time <= ?
       GROUP BY dt
       ORDER BY dt
-    `, userId, new Date(`${from}T00:00:00.000Z`), new Date(`${to}T23:59:59.999Z`));
+    `, userId, new Date(`${from}T00:00:00+08:00`), new Date(`${to}T23:59:59+08:00`));
 
     const dailyComm = new Map(txnRows.map((r) => [String(r.dt), { total: Number(r.total_c || 0), approved: Number(r.approved_c || 0) }]));
 
     const daily: Record<string, { cost: number; clicks: number; orders: number; campaigns: Set<string> }> = {};
     for (const r of stats) {
-      const dt = String(r.date).slice(0, 10);
+      // BUG-06：ads_daily_stats.date 是 DATE 列(UTC午夜锚定的CST自然日)，须用 ISO 取日期，
+      // 不能用 String(Date) 的本地串（CST 服务器会得到 "Fri May 29"，与佣金 ISO key 对不上）
+      const dt = new Date(r.date).toISOString().slice(0, 10);
       if (!daily[dt]) daily[dt] = { cost: 0, clicks: 0, orders: 0, campaigns: new Set() };
       daily[dt].cost   += Number(r.cost ?? 0);
       daily[dt].clicks += Number(r.clicks ?? 0);
