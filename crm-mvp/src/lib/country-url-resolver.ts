@@ -28,7 +28,7 @@ export interface ResolveResult {
   finalUrl: string;
   brandRoot: string;
   switched: boolean;
-  reason: "cc_tld_ok" | "same_tld" | "nxdomain" | "tcp_timeout" | "invalid_input" | "cc_tld_parked";
+  reason: "cc_tld_ok" | "same_tld" | "nxdomain" | "tcp_timeout" | "invalid_input" | "cc_tld_parked" | "cc_tld_redirects_away";
   probeLog: ProbeLogEntry[];
 }
 
@@ -172,6 +172,10 @@ function cacheSet(key: string, result: ResolveResult) {
       // D-068：停放/待售状态较稳定，但留出"将来商家拿回域名"的余地，缓存 6h
       ttlMs = 6 * 60 * 60 * 1000; // 6h
       break;
+    case "cc_tld_redirects_away":
+      // D08-A：ccTLD 301 回跳 canonical 的配置很稳定（属商家长期重定向策略），缓存 24h
+      ttlMs = 24 * 60 * 60 * 1000; // 24h
+      break;
     case "tcp_timeout":
       ttlMs = 5 * 60 * 1000; // 5m（可能是临时故障，短 TTL）
       break;
@@ -196,6 +200,20 @@ function cacheGet(key: string): ResolveResult | null {
 }
 
 // ─── 工具函数 ────────────────────────────────────────────
+
+/**
+ * D08-A：判断两个 host 是否同一站点（忽略 www / 子域差异）。
+ * 用于"候选 ccTLD 是否 301 跳出到别的注册域"检测。
+ *   sameSite("wildbounds.com", "wildbounds.co.uk") → false（跨注册域，typically 回跳 canonical）
+ *   sameSite("www.x.co.uk", "x.co.uk") → true（仅 www 差异，同站）
+ *   sameSite("shop.x.co.uk", "x.co.uk") → true（子域，同站）
+ */
+function isSameSite(a: string, b: string): boolean {
+  const x = (a || "").toLowerCase().replace(/^www\./, "");
+  const y = (b || "").toLowerCase().replace(/^www\./, "");
+  if (!x || !y) return true; // 无法判定时按"同站"，不触发拒切（保留原有行为）
+  return x === y || x.endsWith(`.${y}`) || y.endsWith(`.${x}`);
+}
 
 /**
  * 从 host 里抽取 "brand root"（去 www，去 ccTLD，返回第一个 label）
@@ -318,7 +336,7 @@ async function probeTcp(host: string): Promise<{ ok: boolean; rttMs: number; rea
  *   - 页面 <title> 或正文前 ~30KB 命中停放/待售强文本信号。
  * 任何 fetch 失败/超时 → 返回 false（无法确认 → 不阻断切换，保留原有行为）。
  */
-async function probeParkedPage(host: string): Promise<{ parked: boolean; signal?: string }> {
+async function probeParkedPage(host: string): Promise<{ parked: boolean; signal?: string; redirectsAway?: boolean; finalHost?: string }> {
   // 先 https，失败（含证书过期/连接错误）回退 http —— 停放域名常证书过期且只在 http 才暴露
   // 到停放商的 302（实测 heidi.uk：https=CERT_HAS_EXPIRED，http→302 https://surname.uk/...）。
   const schemes = [`https://${host}/`, `http://${host}/`];
@@ -340,6 +358,14 @@ async function probeParkedPage(host: string): Promise<{ parked: boolean; signal?
         (p) => finalHost.includes(p) || resp.url.toLowerCase().includes(p),
       );
       if (providerHit) return { parked: true, signal: `provider:${providerHit}` };
+
+      // D08-A：候选 ccTLD 跟随重定向后落到"非自身站点"（典型：301 回跳 canonical，如
+      // wildbounds.co.uk → wildbounds.com）→ 该 ccTLD 不是独立本地店，只是转址壳。
+      // 切到它会：① 落地页多一跳重定向；② SemRush/sitelinks 查转址站取不到数据。
+      // 故判定"非本地店"，由调用方拒绝切换、保留商家原域名。
+      if (finalHost && !isSameSite(finalHost, host)) {
+        return { parked: false, redirectsAway: true, finalHost };
+      }
 
       if (!resp.ok && resp.status !== 403 && resp.status !== 406) {
         continue; // 该 scheme 不可用，试下一个
@@ -451,6 +477,7 @@ export async function resolveCountryUrl(merchantUrl: string, country: string): P
   let sawNxdomain = false;
   let sawTcpTimeout = false;
   let sawParked = false;
+  let sawRedirectAway = false;
   for (const candidateHost of candidates) {
     const dnsResult = await probeDns(candidateHost);
     if (dnsResult === "nxdomain" || dnsResult === "err") {
@@ -476,6 +503,15 @@ export async function resolveCountryUrl(merchantUrl: string, country: string): P
         probeLog.push({ host: candidateHost, dns: "ok", tcp: "ok", error: `parked:${parkedCheck.signal}` });
         continue; // 试下一个候选；都停放则不切换
       }
+      // D08-A：候选 301 跳出到非自身站点（典型回跳 canonical .com）→ 非独立本地店，拒绝切换。
+      if (parkedCheck.redirectsAway) {
+        sawRedirectAway = true;
+        console.warn(
+          `[CountryUrlResolver] D08-A 候选 ${candidateHost} 跟随重定向落到 ${parkedCheck.finalHost}（非独立本地站，疑似回跳 canonical），拒绝 ccTLD 切换，保留 ${originalHost}`,
+        );
+        probeLog.push({ host: candidateHost, dns: "ok", tcp: "ok", error: `redirects_away:${parkedCheck.finalHost}` });
+        continue; // 试下一个候选；都回跳则不切换
+      }
       // 切 URL：保留 path/query/hash，只换 host
       const newUrl = new URL(merchantUrl);
       newUrl.hostname = candidateHost;
@@ -493,7 +529,9 @@ export async function resolveCountryUrl(merchantUrl: string, country: string): P
   }
 
   // 4. 全部候选都没通
-  const reason: ResolveResult["reason"] = sawParked
+  const reason: ResolveResult["reason"] = sawRedirectAway
+    ? "cc_tld_redirects_away"
+    : sawParked
     ? "cc_tld_parked"
     : sawNxdomain && !sawTcpTimeout ? "nxdomain" : "tcp_timeout";
   const result: ResolveResult = {
