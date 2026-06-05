@@ -17,6 +17,13 @@
 
 const MAX_CONCURRENT_GENERATIONS = 2;
 
+// 看门狗安全网：任一 slot 被持有超过此时长则强制释放 + 唤醒队列。
+// 真因：handler 异常未走 finally / 进程在生成中途卡死，会导致 release 永不执行 →
+// _active 永不回收 → 累积占满 2 个后整条生成子系统死锁（只能重启）。
+// 整条生成正常含多次爬取 + AI + SemRush 关键词，可能数分钟，故取 15min 宽松值，
+// 只兜底真正泄漏、不误杀正常长任务。对齐 puppeteer-semaphore D-067 看门狗。
+const MAX_GENERATION_HOLD_MS = 900000;
+
 let _active = 0;
 const _waiters: Array<() => void> = [];
 
@@ -86,9 +93,11 @@ export async function acquireGenerationSlot(opts?: {
 
 function makeReleaser(): () => void {
   let done = false;
-  return () => {
+
+  const release = () => {
     if (done) return;
     done = true;
+    if (watchdog) clearTimeout(watchdog);
     if (isDisabled()) return;
     _active = Math.max(0, _active - 1);
     if (_waiters.length > 0 && _active < MAX_CONCURRENT_GENERATIONS) {
@@ -96,6 +105,19 @@ function makeReleaser(): () => void {
       next(); // onReady 内部自增 _active
     }
   };
+
+  // 看门狗：持有超过 MAX_GENERATION_HOLD_MS 仍未释放 → 强制释放，防永久泄漏死锁。
+  const watchdog = setTimeout(() => {
+    if (done) return;
+    console.warn(
+      `[GenerationGate] 槽位持有超过 ${MAX_GENERATION_HOLD_MS}ms，强制释放防死锁 ` +
+        `(active=${_active}/${MAX_CONCURRENT_GENERATIONS}, queued=${_waiters.length})`,
+    );
+    release();
+  }, MAX_GENERATION_HOLD_MS);
+  if (typeof watchdog.unref === "function") watchdog.unref();
+
+  return release;
 }
 
 /** 仅供诊断/日志用，勿用于业务分支。 */

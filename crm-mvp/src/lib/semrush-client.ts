@@ -24,6 +24,13 @@ const RPC_ORIGIN = "https://sem.3ue.co";
 const MIN_REQUEST_INTERVAL_MS = 1500;
 const RANDOM_JITTER_MAX_MS = 1000;
 
+// 看门狗 + 排队超时：防 release 漏调（异常路径）导致 SemRush 互斥锁永久死锁、
+// 所有后续关键词查询静默挂死直到进程重启。对齐 puppeteer-semaphore D-067。
+// 单次 queryDomain 含设备超限退避(4×最长8s)+多 RPC 重试，正常可达数分钟，故持有看门狗取 6min；
+// 排队超时取 8min（看门狗已保证锁必释放，此为二次保险，仅在病态场景触发）。
+const MAX_SEMRUSH_HOLD_MS = 360000;
+const SEMRUSH_QUEUE_TIMEOUT_MS = 480000;
+
 // SemRush 断链健壮化：curl 进程级连接失败（连接重置/TLS/连接超时/连接被拒/空回复）
 // 属瞬时网络抖动，单次失败不应让整条查询挂掉 → 在 curlFetch 最底层做连接级退避重试。
 const CURL_CONN_RETRIES = 2;                  // 连接级重试次数（不含首次）
@@ -101,7 +108,7 @@ const slotCtx = new AsyncLocalStorage<{ held: boolean }>();
 
 class SemrushGuard {
   private lastRequestTime = 0;
-  private queue: Array<{ resolve: () => void }> = [];
+  private queue: Array<{ resolve: () => void; cancelled?: boolean }> = [];
   private processing = false;
   private domainCache = new Map<string, CachedDomainResult>();
   private sessionCache: CachedSession | null = null;
@@ -120,6 +127,8 @@ class SemrushGuard {
       // 这是设备并发超限的结构性根因修复：任一时刻只允许一个 SemRush 会话在线，
       // 从源头杜绝"超出同一时间设备数量限制"。
       if (this.locked) break;
+      // 跳过已超时取消的队首（防其占锁）
+      if (this.queue[0].cancelled) { this.queue.shift(); continue; }
       const now = Date.now();
       const elapsed = now - this.lastRequestTime;
       const jitter = Math.floor(Math.random() * RANDOM_JITTER_MAX_MS);
@@ -128,6 +137,9 @@ class SemrushGuard {
         await new Promise((r) => setTimeout(r, requiredWait - elapsed));
       }
       if (this.locked) break; // 退避期间可能已被占用，二次确认
+      // 退避期间队首可能已超时取消，逐个清掉再派发
+      while (this.queue.length > 0 && this.queue[0].cancelled) this.queue.shift();
+      if (this.queue.length === 0) break;
       this.locked = true;
       const item = this.queue.shift();
       item?.resolve();
@@ -139,22 +151,60 @@ class SemrushGuard {
   // 否则会死锁后续所有 SemRush 请求。返回的 release 幂等。
   // BUG-04 C：若当前异步上下文已通过 withExclusive 持有独占槽，则本次 waitForSlot 直接返回 no-op
   // release（重入），不再二次抢锁——否则 queryDomain 外层已占槽、内部 login/rpc 再抢会自我死锁。
-  async waitForSlot(): Promise<() => void> {
+  async waitForSlot(timeoutMs = SEMRUSH_QUEUE_TIMEOUT_MS): Promise<() => void> {
     if (slotCtx.getStore()?.held) {
       return () => {};
     }
-    await new Promise<void>((resolve) => {
-      this.queue.push({ resolve });
+    const item: { resolve: () => void; cancelled?: boolean } = { resolve: () => {} };
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      let waitTimer: ReturnType<typeof setTimeout> | null = null;
+      item.resolve = () => {
+        if (settled) return;
+        settled = true;
+        if (waitTimer) clearTimeout(waitTimer);
+        resolve();
+      };
+      // 排队超时：等不到锁就放弃（调用方降级/走缓存兜底），不无限挂起。
+      if (timeoutMs > 0) {
+        waitTimer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          item.cancelled = true;
+          const idx = this.queue.indexOf(item);
+          if (idx >= 0) this.queue.splice(idx, 1);
+          const err = new Error(
+            `SemRush slot wait timeout after ${timeoutMs}ms (locked=${this.locked}, queued=${this.queue.length})`,
+          );
+          (err as Error & { code?: string }).code = "SEMRUSH_SLOT_TIMEOUT";
+          reject(err);
+        }, timeoutMs);
+        if (typeof waitTimer.unref === "function") waitTimer.unref();
+      }
+      this.queue.push(item);
       this.processQueue();
     });
+
+    // 已拿到锁（locked=true）。挂看门狗：持有超 MAX_SEMRUSH_HOLD_MS 仍未释放 → 强制释放，
+    // 防 release 漏调（异常路径）导致整个 SemRush 子系统永久死锁直到重启。
     let released = false;
-    return () => {
+    const release = () => {
       if (released) return;
       released = true;
+      if (watchdog) clearTimeout(watchdog);
       this.locked = false;
       this.lastRequestTime = Date.now();
       void this.processQueue();
     };
+    const watchdog = setTimeout(() => {
+      if (released) return;
+      console.warn(
+        `[SemrushGuard] 槽位持有超过 ${MAX_SEMRUSH_HOLD_MS}ms，强制释放防死锁 (queued=${this.queue.length})`,
+      );
+      release();
+    }, MAX_SEMRUSH_HOLD_MS);
+    if (typeof watchdog.unref === "function") watchdog.unref();
+    return release;
   }
 
   // BUG-04 C：在"整条查询"外层占一次独占槽，期间内部所有 waitForSlot 走重入 no-op。
