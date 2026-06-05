@@ -1748,65 +1748,56 @@ export async function buildCrawlCache(
   //   - locale+proxy / locale 完整 locale (/en-us/) → locale_short (/us/) 已覆盖，重复
   //   - 有代理分支的 http_* 三连 → puppeteer 已 break，永远走不到，dead code
   // ══════════════════════════════════════════════════════
-  // D-084 §2（fail-fast）：host 30 分钟内已被确认 CF/Datadome 硬挑战时，
-  // 多次 puppeteer 策略 100% 撞同一堵墙，只会 3×75s 空耗 + 把 2C 机器负载拖高、
-  // 诱发更多 buildCrawlCache hang → 僵尸雪崩。此处只保留 1 次 root+proxy 尝试，
-  // 让主爬取在 ~55-75s 内 crawlFailed=true，route 层据此走 SemRush/sitelink 优雅降级。
+  // CRAWL-02 T-restore（替代旧 D-084 §2 fail-fast）：旧策略在 host 被确认 CF/Datadome 挑战时
+  // 只保留 1 次 puppeteer + 压缩预算，目的是省 2C 机器、防僵尸雪崩；但这等于“反爬站直接放弃”，
+  // 与 07“一定要能爬到”冲突。资源根因已被 BUG-07（磁盘）+ ARCH-01 T0（内存 1600M）修掉，
+  // 故改为：challenged 仅用于“调整策略顺序（puppeteer+代理优先）”，不再削减策略数与预算。
   const challengedHost = getHostKey(merchantUrl);
   const isChallengedHost = !!challengedHost && isHostChallenged(challengedHost);
   if (isChallengedHost) {
-    console.warn(`[CrawlPipeline] D-084：host=${challengedHost} 已 challenged，主爬取启用 fail-fast（仅 1 次 puppeteer，预算压缩）`);
+    console.warn(`[CrawlPipeline] CRAWL-02：host=${challengedHost} 已 challenged（反爬），主爬取改为 puppeteer+代理优先 + 全量策略（恢复 5.10 健壮，取消 fail-fast）`);
   }
 
   type Strategy = { name: string; run: () => Promise<CrawlResultType> };
   const strategies: Strategy[] = [];
   if (merchantUrl) {
     // ══════════════════════════════════════════════════════
-    // C-150 B（反爬 + 省 CPU 根治）：始终先跑「轻量 HTTP（走住宅代理）」，质量够即跳过 Puppeteer。
-    //   背景实证：旧逻辑 `if (proxyUrl) → Puppeteer 优先` 导致**只要配了代理**，连服务端渲染的
-    //   Shopify 站（简单 GET 即返回完整 HTML，实测 200/800K-1.2M）也强开 Chrome 渲染，
-    //   在 2C 资源饿死时撞 90s 预算雪崩。改为 HTTP 先：住宅代理 IP 绕反爬 + crawlPage 拿到
-    //   ≥5 链接即返回 method=http（零 Chrome），仅真正 SPA/不足量才落 Puppeteer 兜底。
-    //   forcePuppeteer（如价格动态站显式要求渲染）时跳过 HTTP 先，保持原行为。
+    // CRAWL-02 T-restore：恢复 5.10 健壮策略（07：一定要能爬到）。
+    //   - 普通站：保留 C-150 HTTP-first —— Shopify/SSR 站简单 GET 即返回完整 HTML（实测 800K-1.2M），
+    //     拿到 ≥5 链接即返回 method=http、零 Chrome，省 2C CPU；不足量才落 Puppeteer。
+    //   - 已知反爬站（isChallengedHost）：HTTP 只会撞 CF/Datadome 挑战墙白费一轮，故**像 5.10 一样
+    //     puppeteer+住宅代理优先**，并把能试的策略全试一遍（取消 D-084/我的 R3 fail-fast），
+    //     HTTP 退为后置兜底（住宅代理 HTTP 偶尔能过）。
+    //   - forcePuppeteer（价格动态站显式要求渲染）跳过 HTTP-first。
+    //   能这样“试到底”的底气：BUG-07 修磁盘泄漏 + ARCH-01 T0 内存 900M→1600M，已消除当初逼出
+    //   fail-fast 的资源根因；总时长仍由 STRATEGY_BUDGET_MS + 外层 HANG_SAFETY_MS 双重封顶。
     // ══════════════════════════════════════════════════════
-    if (!options?.forcePuppeteer) {
+    const hasProxy = !!(options?.forcePuppeteer || proxyUrl || puppeteerProxyUrl);
+    const pushHttp = () => {
       strategies.push({ name: "http_root", run: () => crawlPage(merchantUrl, country) });
       if (localeUrlShort) strategies.push({ name: "http_locale_short", run: () => crawlPage(localeUrlShort!, country) });
-    }
-    if (options?.forcePuppeteer || proxyUrl || puppeteerProxyUrl) {
-      // 有代理 或 forcePuppeteer：Puppeteer+代理 作为 HTTP 不足时的兜底（JS 渲染 + IP 出口正确）
+    };
+    const pushPuppeteerProxy = () => {
+      // 全量 puppeteer+代理：root → locale_short（ccTLD 未匹配时）→ 直连兜底（代理彻底挂时）
       strategies.push({ name: "puppeteer_root+proxy", run: () => runPuppeteer(merchantUrl) });
-      if (!isChallengedHost) {
-        // locale_short 仅在 ccTLD 未匹配（通用 TLD 站如 sephora.com + ES 需 /es/）才生成
-        if (localeUrlShort) strategies.push({ name: "puppeteer_locale_short+proxy", run: () => runPuppeteer(localeUrlShort!) });
-        // 代理彻底挂（IP 校验失败/sid 全错国/网络异常）时的最后兜底
-        strategies.push({ name: "puppeteer_direct_fallback", run: () => runPuppeteerDirect(merchantUrl) });
+      if (localeUrlShort) strategies.push({ name: "puppeteer_locale_short+proxy", run: () => runPuppeteer(localeUrlShort!) });
+      strategies.push({ name: "puppeteer_direct_fallback", run: () => runPuppeteerDirect(merchantUrl) });
+    };
+    if (hasProxy) {
+      if (isChallengedHost && !options?.forcePuppeteer) {
+        // 反爬站：puppeteer+代理优先（5.10 行为），HTTP 后置兜底
+        pushPuppeteerProxy();
+        pushHttp();
+      } else {
+        // 普通站：HTTP-first（除非 forcePuppeteer），再 puppeteer+代理全量兜底
+        if (!options?.forcePuppeteer) pushHttp();
+        pushPuppeteerProxy();
       }
     } else {
-      // 无代理：Puppeteer 直连兜底
+      // 无代理：HTTP 先 + Puppeteer 直连兜底（root + locale_short）
+      if (!options?.forcePuppeteer) pushHttp();
       strategies.push({ name: "puppeteer_root", run: () => runPuppeteer(merchantUrl) });
-    }
-  }
-
-  // CRAWL-01 R2（sitemap 前置）：对已被反爬指纹标记 challenged 的 host，puppeteer+代理大概率过不去
-  // （实证 strategy-timeout 167 次、Cloudflare 88），但 `crawlViaSitemap` 是纯 HTTP GET（Googlebot UA +
-  // robots/sitemap.xml），反爬墙常拦不住它。提前抢一次 sitemap，拿到产品 URL 与图片：
-  //   - 即便主爬失败，站内链接也有数据 → 前端 D-027 会清掉「爬取失败」假象（CRAWL-01 R1 同向）；
-  //   - 顺带为下游图片/兜底准备素材。
-  // 仅对 challenged host 做（普通站走原瀑布流，避免给正常站多加一次网络往返）。
-  let preSitemap: Awaited<ReturnType<typeof crawlViaSitemap>> | null = null;
-  if (isChallengedHost && merchantUrl) {
-    try {
-      preSitemap = await crawlViaSitemap(merchantUrl);
-      const _n = preSitemap?.links?.length || 0;
-      const _i = preSitemap?.images?.length || 0;
-      if (_n > 0 || _i > 0) {
-        console.log(`[CrawlPipeline] CRAWL-01 R2：challenged host 预取 sitemap 得 ${_n} 链接 / ${_i} 图`);
-      } else {
-        console.log(`[CrawlPipeline] CRAWL-01 R2：challenged host 预取 sitemap 无结果（站点无 sitemap 或被拦）`);
-      }
-    } catch (e) {
-      console.warn("[CrawlPipeline] CRAWL-01 R2：预取 sitemap 失败（忽略）:", e instanceof Error ? e.message : e);
+      if (localeUrlShort) strategies.push({ name: "puppeteer_locale_short", run: () => runPuppeteer(localeUrlShort!) });
     }
   }
 
@@ -1818,12 +1809,11 @@ export async function buildCrawlCache(
   //   无代理 → 80s（至少容纳 1 次 puppeteer 55s 完整流程 + 余量）
   //   注意：单 puppeteer 流程 ~55s（goto 35s + sleep/scroll/waitForSelector 共 20s），
   //         总预算必须 ≥ 单 puppeteer 流程，否则 SPA 站永远拿不到水合后的 HTML。
-  // D-084 §2：challenged host fail-fast 时把总预算压到 80s（≈1 次 puppeteer 完整流程），
-  // 避免在注定过不去的站上长时间占槽、拖高负载。
-  // CRAWL-01 R3：实证 challenged 站 puppeteer+代理 75s 必超时、烧满预算才降级（D-090 166 次、
-  // elapsedMs 顶满 165002），还诱发僵尸任务。这类硬反爬站等再久也过不去；把 challenged 预算
-  // 从 80s 再压到 50s（配合 R2 已先用 sitemap 抢链接），缩短用户等待 + 减少 hang→zombie。
-  const STRATEGY_BUDGET_MS = isChallengedHost ? 50_000 : (puppeteerProxyUrl ? 160_000 : 90_000);
+  // CRAWL-02 T-restore：撤销 D-084/CRAWL-01 R3 对 challenged 站的预算压缩（80s/50s），
+  // 让反爬站也享有与普通站相同的足额预算（5.10 行为）——单 puppeteer 完整流程 ~55-75s，
+  // 160s 可容纳 2 次完整 puppeteer + HTTP 兜底，给 SPA/反爬站真正“试到底”的机会。
+  // 总时长仍由外层 HANG_SAFETY_MS（165s）二次封顶，不会无限拖。
+  const STRATEGY_BUDGET_MS = puppeteerProxyUrl ? 160_000 : 90_000;
   const strategyStartedAt = Date.now();
 
   for (const strategy of strategies) {
@@ -1867,31 +1857,10 @@ export async function buildCrawlCache(
   const crawlFailed = crawlResult.method === "failed";
   let html = crawlResult.html;
 
-  // CRAWL-01 R2：把预取的 sitemap 链接/图片并入结果（即便主爬失败）。
-  //   - links：仅当主爬没拿到任何链接时用 sitemap 补，避免覆盖主爬质量更高的导航链接；
-  //   - images：去重后追加，丰富候选。
-  // 这样反爬站即使 puppeteer 全失败，站内链接仍有数据可出，用户不再看到「爬取失败」。
-  if (preSitemap) {
-    if (crawlResult.links.length === 0 && Array.isArray(preSitemap.links) && preSitemap.links.length > 0) {
-      crawlResult.links = preSitemap.links.filter((l) => !isBadSitelinkUrl(l.url));
-      if (crawlResult.links.length > 0) {
-        console.log(`[CrawlPipeline] CRAWL-01 R2：主爬 links=0，用预取 sitemap 补 ${crawlResult.links.length} 个链接`);
-      }
-    }
-    if (Array.isArray(preSitemap.images) && preSitemap.images.length > 0) {
-      const _seen = new Set<string>(crawlResult.images);
-      for (const img of preSitemap.images) {
-        if (!_seen.has(img)) { _seen.add(img); crawlResult.images.push(img); }
-      }
-    }
-  }
-
   // ─── Sitemap 兜底：links=0 时（SPA 无法抽取导航链接 或 主爬取全失败），尝试从 sitemap 补充链接和图片 ───
   // SPA/Vite/React 站点常见：Puppeteer 渲染成功但导航链接无法提取，此时 sitemap 是获取产品 URL 的可靠途径。
   // 主爬取彻底失败（crawlFailed=true）时同样尝试，因 sitemap 仅需一次 HTTP GET，不依赖 Puppeteer。
-  // CRAWL-01 R2：challenged host 已在主爬前预取过 sitemap（preSitemap），若那次也没拿到链接，
-  // 此处再 fetch 一次只会重复浪费 ~15s，故 preSitemap 非空时跳过本兜底（结果已在上方合并）。
-  if (merchantUrl && crawlResult.links.length === 0 && !preSitemap) {
+  if (merchantUrl && crawlResult.links.length === 0) {
     try {
       console.log(`[CrawlPipeline] links=0，尝试 Sitemap 补充链接和图片: ${merchantUrl}`);
       const sitemapRes = await crawlViaSitemap(merchantUrl);
