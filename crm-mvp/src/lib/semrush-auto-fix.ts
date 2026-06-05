@@ -15,6 +15,7 @@ import prisma from "@/lib/prisma";
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36";
 const LOGIN_URL = "https://dash.3ue.co/api/account/login";
+const LOGOUT_URL = "https://dash.3ue.co/api/account/logout";
 const LOGIN_ORIGIN = "https://dash.3ue.co";
 const RPC_URL = "https://sem.3ue.co/dpa/rpc?__gmitm=ayWzA3*l4EVcTpZei43sW*qRvljSdU";
 const RPC_ORIGIN = "https://sem.3ue.co";
@@ -72,6 +73,34 @@ function buildConfig(node: string): string {
   });
 }
 
+/**
+ * BUG-07b：尽力登出本次诊断/修复刚开的 3UE 会话，释放它在账号侧占用的「在线设备」。
+ *
+ * 真因：semrush-health cron 每整点调 testConnection() 全新登录建会话却从不登出，
+ * 每小时在 3UE 侧累积一个僵尸设备；几小时后填满账号「同时在线设备」配额，
+ * 真正的广告生成/竞品查询再来就报「超出同一时间设备数量限制」（生产实证：
+ * 设备超限每天数百次、白天高峰每天 20-30 次最终失败）。诊断本身必须真实登录，
+ * 故正解是「用完即登出」。全程吞错 + 短超时，登出失败不影响诊断结果。
+ */
+async function bestEffortLogout(cookies: Record<string, string>): Promise<void> {
+  if (!cookies || Object.keys(cookies).length === 0) return;
+  try {
+    const cookieStr = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join("; ");
+    await curlFetch(LOGOUT_URL, {
+      method: "POST",
+      headers: {
+        "user-agent": USER_AGENT,
+        origin: LOGIN_ORIGIN,
+        accept: "application/json, text/plain, */*",
+        cookie: cookieStr,
+      },
+      timeoutMs: 6000,
+    });
+  } catch {
+    /* 登出失败不影响主流程 */
+  }
+}
+
 async function updateSystemConfig(key: string, value: string): Promise<void> {
   await prisma.system_configs.updateMany({
     where: { config_key: key, is_deleted: 0 },
@@ -103,9 +132,19 @@ export async function testConnection(): Promise<TestResult> {
   }
   steps.push({ step: "配置检查", status: "success", detail: `用户名: ${username}, UserID: ${userId}, 节点: ${node}` });
 
-  // Step 2: 登录
+  // BUG-07b：token/cookies 提到 try 外，无论从哪条 return 退出都在 finally 里登出，
+  // 释放本次诊断刚开的 3UE 设备，杜绝每小时健康检查累积僵尸设备 → 账号设备超限。
   let token = "";
   const cookies: Record<string, string> = {};
+  try {
+    return await runTestSteps();
+  } finally {
+    if (token) await bestEffortLogout(cookies);
+  }
+
+  // ── 内部：执行 Step 2~4 的实际诊断（共享外层 token/cookies 以便 finally 登出）──
+  async function runTestSteps(): Promise<TestResult> {
+  // Step 2: 登录
   try {
     const ts = Date.now();
     const loginUrl = `${LOGIN_URL}?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}&ts=${ts}`;
@@ -216,6 +255,7 @@ export async function testConnection(): Promise<TestResult> {
   }
 
   return { overall: "success", steps };
+  }
 }
 
 // ─── 2. 自动切换节点 ───
@@ -251,6 +291,8 @@ export async function trySwitchNode(): Promise<AutoFixResult> {
     return { action: "failed", detail: `登录异常: ${err instanceof Error ? err.message : String(err)}` };
   }
 
+  // BUG-07b：登录后无论成功/失败，结束都登出本次会话，释放 3UE 设备。
+  try {
   // 遍历节点 1-10，跳过当前节点
   const nodesToTry = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "1"].filter(n => n !== currentNode);
   nodesToTry.unshift(...(currentNode !== "2" ? ["2"] : [])); // 优先试节点 2
@@ -311,6 +353,9 @@ export async function trySwitchNode(): Promise<AutoFixResult> {
   }
 
   return { action: "failed", detail: `已尝试所有节点（跳过当前 ${currentNode}），均不可用` };
+  } finally {
+    if (token) await bestEffortLogout(cookies);
+  }
 }
 
 // ─── 3. 自动刷新 API Key ───
@@ -403,5 +448,8 @@ export async function refreshApiKey(): Promise<AutoFixResult> {
     };
   } catch (err) {
     return { action: "failed", detail: `页面访问异常: ${err instanceof Error ? err.message : String(err)}` };
+  } finally {
+    // BUG-07b：登出本次刷新会话，释放 3UE 设备
+    if (token) await bestEffortLogout(cookies);
   }
 }
