@@ -821,7 +821,17 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
         }
 
         // ─── Step 4：推送爬取状态 + 开始生成 ───
-        send("crawl_status", { crawl_failed: cache!.crawlFailed, crawl_method: cache!.crawlMethod });
+        // CRAWL-01 R1（外显诚实化）：crawlFailed 只表示「主爬取方法失败」，但只要 sitemap 抢到了
+        // 站内链接候选、或已有 SemRush 数据，下游就能正常出站内链接/文案——此时不应再吓唬用户「爬取失败」。
+        // 仅当主爬失败 **且** 连兜底产物（链接 / sitelink 候选 / SemRush 标题）都为空时，才向前端外显 crawl_failed=true。
+        const _hasLinks = Array.isArray(cache!.links) && cache!.links.length > 0;
+        const _hasSitelinkCands = Array.isArray((cache as any).sitelinkCandidates) && (cache as any).sitelinkCandidates.length > 0;
+        const _hasSemrush = Array.isArray(cache!.semrushTitles) && cache!.semrushTitles.length > 0;
+        const _surfaceCrawlFailed = !!cache!.crawlFailed && !_hasLinks && !_hasSitelinkCands && !_hasSemrush;
+        if (cache!.crawlFailed && !_surfaceCrawlFailed) {
+          console.log(`[Extensions] CRAWL-01 R1：主爬失败但兜底已有产物（links=${_hasLinks} sitelinkCands=${_hasSitelinkCands} semrush=${_hasSemrush}），不向前端外显爬取失败`);
+        }
+        send("crawl_status", { crawl_failed: _surfaceCrawlFailed, crawl_method: cache!.crawlMethod });
 
         if (cache!.detectedLanguageCode) {
           send("detected_language", { code: cache!.detectedLanguageCode });

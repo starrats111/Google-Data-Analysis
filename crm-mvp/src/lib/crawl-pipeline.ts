@@ -1788,6 +1788,28 @@ export async function buildCrawlCache(
     }
   }
 
+  // CRAWL-01 R2（sitemap 前置）：对已被反爬指纹标记 challenged 的 host，puppeteer+代理大概率过不去
+  // （实证 strategy-timeout 167 次、Cloudflare 88），但 `crawlViaSitemap` 是纯 HTTP GET（Googlebot UA +
+  // robots/sitemap.xml），反爬墙常拦不住它。提前抢一次 sitemap，拿到产品 URL 与图片：
+  //   - 即便主爬失败，站内链接也有数据 → 前端 D-027 会清掉「爬取失败」假象（CRAWL-01 R1 同向）；
+  //   - 顺带为下游图片/兜底准备素材。
+  // 仅对 challenged host 做（普通站走原瀑布流，避免给正常站多加一次网络往返）。
+  let preSitemap: Awaited<ReturnType<typeof crawlViaSitemap>> | null = null;
+  if (isChallengedHost && merchantUrl) {
+    try {
+      preSitemap = await crawlViaSitemap(merchantUrl);
+      const _n = preSitemap?.links?.length || 0;
+      const _i = preSitemap?.images?.length || 0;
+      if (_n > 0 || _i > 0) {
+        console.log(`[CrawlPipeline] CRAWL-01 R2：challenged host 预取 sitemap 得 ${_n} 链接 / ${_i} 图`);
+      } else {
+        console.log(`[CrawlPipeline] CRAWL-01 R2：challenged host 预取 sitemap 无结果（站点无 sitemap 或被拦）`);
+      }
+    } catch (e) {
+      console.warn("[CrawlPipeline] CRAWL-01 R2：预取 sitemap 失败（忽略）:", e instanceof Error ? e.message : e);
+    }
+  }
+
   let crawlResult: CrawlResultType = { html: "", links: [], images: [], method: "failed", error: "未配置商家 URL" };
   let crawlQuality: ReturnType<typeof assessCrawlQuality> = { score: 0, tier: "failed", issues: ["no_url"] };
 
@@ -1798,7 +1820,10 @@ export async function buildCrawlCache(
   //         总预算必须 ≥ 单 puppeteer 流程，否则 SPA 站永远拿不到水合后的 HTML。
   // D-084 §2：challenged host fail-fast 时把总预算压到 80s（≈1 次 puppeteer 完整流程），
   // 避免在注定过不去的站上长时间占槽、拖高负载。
-  const STRATEGY_BUDGET_MS = isChallengedHost ? 80_000 : (puppeteerProxyUrl ? 160_000 : 90_000);
+  // CRAWL-01 R3：实证 challenged 站 puppeteer+代理 75s 必超时、烧满预算才降级（D-090 166 次、
+  // elapsedMs 顶满 165002），还诱发僵尸任务。这类硬反爬站等再久也过不去；把 challenged 预算
+  // 从 80s 再压到 50s（配合 R2 已先用 sitemap 抢链接），缩短用户等待 + 减少 hang→zombie。
+  const STRATEGY_BUDGET_MS = isChallengedHost ? 50_000 : (puppeteerProxyUrl ? 160_000 : 90_000);
   const strategyStartedAt = Date.now();
 
   for (const strategy of strategies) {
@@ -1842,10 +1867,31 @@ export async function buildCrawlCache(
   const crawlFailed = crawlResult.method === "failed";
   let html = crawlResult.html;
 
+  // CRAWL-01 R2：把预取的 sitemap 链接/图片并入结果（即便主爬失败）。
+  //   - links：仅当主爬没拿到任何链接时用 sitemap 补，避免覆盖主爬质量更高的导航链接；
+  //   - images：去重后追加，丰富候选。
+  // 这样反爬站即使 puppeteer 全失败，站内链接仍有数据可出，用户不再看到「爬取失败」。
+  if (preSitemap) {
+    if (crawlResult.links.length === 0 && Array.isArray(preSitemap.links) && preSitemap.links.length > 0) {
+      crawlResult.links = preSitemap.links.filter((l) => !isBadSitelinkUrl(l.url));
+      if (crawlResult.links.length > 0) {
+        console.log(`[CrawlPipeline] CRAWL-01 R2：主爬 links=0，用预取 sitemap 补 ${crawlResult.links.length} 个链接`);
+      }
+    }
+    if (Array.isArray(preSitemap.images) && preSitemap.images.length > 0) {
+      const _seen = new Set<string>(crawlResult.images);
+      for (const img of preSitemap.images) {
+        if (!_seen.has(img)) { _seen.add(img); crawlResult.images.push(img); }
+      }
+    }
+  }
+
   // ─── Sitemap 兜底：links=0 时（SPA 无法抽取导航链接 或 主爬取全失败），尝试从 sitemap 补充链接和图片 ───
   // SPA/Vite/React 站点常见：Puppeteer 渲染成功但导航链接无法提取，此时 sitemap 是获取产品 URL 的可靠途径。
   // 主爬取彻底失败（crawlFailed=true）时同样尝试，因 sitemap 仅需一次 HTTP GET，不依赖 Puppeteer。
-  if (merchantUrl && crawlResult.links.length === 0) {
+  // CRAWL-01 R2：challenged host 已在主爬前预取过 sitemap（preSitemap），若那次也没拿到链接，
+  // 此处再 fetch 一次只会重复浪费 ~15s，故 preSitemap 非空时跳过本兜底（结果已在上方合并）。
+  if (merchantUrl && crawlResult.links.length === 0 && !preSitemap) {
     try {
       console.log(`[CrawlPipeline] links=0，尝试 Sitemap 补充链接和图片: ${merchantUrl}`);
       const sitemapRes = await crawlViaSitemap(merchantUrl);
