@@ -11,8 +11,11 @@ module.exports = {
       interpreter: '/usr/bin/node',
 
       // 内存限制：须高于 NODE_OPTIONS 堆上限 + 原生/缓冲 RSS，否则易在正常负载下被 PM2 误杀 → Nginx 502
-      // （此前 700M 与 --max-old-space-size=768 不一致，进程 RSS 常 >700M）
-      max_memory_restart: '900M',
+      // ARCH-01 T0a（2026-06-05）：900M 对 Next16+puppeteer+sharp+tesseract 过低，puppeteer 爬取
+      //   尖峰一冲过 900M 即被 PM2 SIGINT 重启（累计 129 次重启 → 近半数生成失败来自“任务僵死/重试耗尽”）。
+      //   提到 1600M：堆仍由 --max-old-space-size=768 自限，1600 只放宽对原生/缓冲 RSS 瞬时尖峰的容忍。
+      //   机器 3.6G + 8G swap，1.6G 留足余量。
+      max_memory_restart: '1600M',
 
       // 收到重启信号后多等待，让进行中的请求有机会结束（减轻部署/内存重启时的 502）
       kill_timeout: 10_000,

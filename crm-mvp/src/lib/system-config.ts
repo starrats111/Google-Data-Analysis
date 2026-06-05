@@ -50,8 +50,9 @@ export async function getSystemConfigsByPrefix(prefix: string): Promise<Record<s
 
 /**
  * 写入/更新单个系统配置值（best-effort，失败不抛出，仅警告）。
- * D-061：用于持久化 SemRush 运行时发现的可用节点（semrush_active_node），
+ * D-061：用于持久化 SemRush 运行时发现的可用节点（semrush_node），
  * 使进程重启后直接复用上次好节点，避免每次重启都撞已宕机的种子节点。
+ * ARCH-01 T0b：旧注释误写 semrush_active_node（已废弃孤儿 key），已更正为实际写入的 semrush_node。
  */
 export async function setSystemConfig(
   key: string,

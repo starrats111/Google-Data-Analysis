@@ -985,7 +985,8 @@ export class SemRushClient {
     try {
       const parsed = JSON.parse(body);
       // D-061：本次请求节点可用 → 记为进程内优先节点；若与种子节点不同（发生过故障转移），
-      // 持久化到 semrush_active_node，使进程重启后直接复用，不再撞已宕机的种子节点。
+      // 持久化到 semrush_node（= NODE_CONFIG_KEY，与 health-cron 同一真相源），使进程重启后直接复用，
+      // 不再撞已宕机的种子节点。ARCH-01 T0b：旧注释误写 semrush_active_node（已废弃的孤儿 key），此处更正。
       if (guard.getPreferredNode() !== node) {
         guard.setPreferredNode(node);
         if (this.creds.nodeConfig.semrushNode !== node) {
