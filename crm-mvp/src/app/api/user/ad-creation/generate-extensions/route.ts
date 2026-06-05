@@ -735,11 +735,16 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
           //     不再当作"业务超时降级"，hang 触发时直接 throw 真实错误
           //
           // D-090（后台 job 化后）：生成不再占用用户长连接，但仍要防止单条生成把 generation-gate
-          // 的并发槽长时间占死（300s）拖垮排队。故把 crawl 预算从 300s 收紧到 90s——
-          // 超时不再 throw 让整条生成失败，而是降级为 crawlFailed cache 继续：
+          // 的并发槽长时间占死拖垮排队。超时不再 throw 让整条生成失败，而是降级为 crawlFailed cache 继续：
           // 下游 D-083b SemRush 兜底 + 编排器自身的 SemRush 路径仍可产出文案；
           // 若 SemRush 也无数据，则由 L2 守门给出明确的 context_insufficient 提示（诚实失败）。
-          const HANG_SAFETY_MS = 90000;
+          //
+          // BUG-07c：外层预算原为 90s，但 crawl-pipeline 内层对「走代理的反爬站」给的是 160s
+          // （STRATEGY_BUDGET_MS）。90s < 160s → 反爬站注定在内层跑完前被外层砍掉降级
+          // （生产日志清一色 elapsedMs=90002，每天数十次「爬取失败」）。改为 165s 与内层对齐
+          // （留 5s 余量），让反爬站真正有机会跑完拿到 sitelink/正文；仍远小于 generation-gate
+          // 持有看门狗 15min 与 inflight 锁 360s，不会拖垮排队。
+          const HANG_SAFETY_MS = 165000;
           const LOCK_TIMEOUT_MS_LOCAL = HANG_SAFETY_MS + 10000;
           const buildStartedAt = Date.now();
           console.log(`[Extensions] D-090：buildCrawlCache 启动 crawl_budget=${HANG_SAFETY_MS / 1000}s（超时降级出文案）merchantUrl=${merchantUrl}`);
@@ -764,8 +769,8 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
               const msg = err instanceof Error ? err.message : String(err);
               const elapsedMs = Date.now() - buildStartedAt;
               if (msg === "buildCrawlCache-hang-safety") {
-                // D-090：crawl 预算超时（90s）→ 降级为 crawlFailed cache 继续生成，
-                // 不再 throw 让整条生成失败（后台 job 化后无长连接可断，但要释放并发槽）。
+                // BUG-07c：crawl 预算超时（165s，与内层 STRATEGY_BUDGET_MS 对齐）→ 降级为
+                // crawlFailed cache 继续生成，不再 throw 让整条生成失败（后台 job 化后无长连接可断，但要释放并发槽）。
                 console.error(`[Extensions] D-090：buildCrawlCache 超过 ${HANG_SAFETY_MS / 1000}s 预算，降级为 crawlFailed cache 继续（SemRush/编排器兜底出文案）elapsedMs=${elapsedMs}ms merchantUrl=${merchantUrl}`);
                 return {
                   links: [], images: [], pageText: "", features: [], navItems: [],
