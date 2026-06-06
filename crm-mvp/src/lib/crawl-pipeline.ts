@@ -1755,7 +1755,7 @@ export async function buildCrawlCache(
   const challengedHost = getHostKey(merchantUrl);
   const isChallengedHost = !!challengedHost && isHostChallenged(challengedHost);
   if (isChallengedHost) {
-    console.warn(`[CrawlPipeline] CRAWL-03：host=${challengedHost} 历史 challenged（反爬），仍走 HTTP-first（便宜兜底）→ 不足再 puppeteer+代理全量兜底（全量策略+足额预算，取消 fail-fast）`);
+    console.warn(`[CrawlPipeline] CRAWL-02：host=${challengedHost} 已 challenged（反爬），主爬取改为 puppeteer+代理优先 + 全量策略（恢复 5.10 健壮，取消 fail-fast）`);
   }
 
   type Strategy = { name: string; run: () => Promise<CrawlResultType> };
@@ -1784,16 +1784,15 @@ export async function buildCrawlCache(
       strategies.push({ name: "puppeteer_direct_fallback", run: () => runPuppeteerDirect(merchantUrl) });
     };
     if (hasProxy) {
-      // CRAWL-03（修复 CRAWL-02 T-restore 回归）：一律 HTTP-first（便宜、22s 封顶），
-      // HTTP 不足/被挑战才升级 puppeteer+代理全量兜底。无论是否 challenged 都如此。
-      // 撤销 T-restore 的「challenged → puppeteer+代理优先」：那会让 3 个 puppeteer+代理策略
-      // （各 75s）抢先烧光 160s 预算、165s 被外层硬杀，导致后置的 http_root 永不执行 ——
-      // 把本可直连秒爬的 CF+Shopify 站（实测 politesociety/foriawellness 直连首页 200 + products.json
-      // 200）逼成 pageText=0 必败。硬墙站（如 gamestop）HTTP 会 <1s 返回 403 快速失败再升级 puppeteer，
-      // HTTP-first 对硬站几乎零成本；故对「能直连的 CF 站」与「真硬墙站」两类都更优。
-      // 提前 break 仅在 HTTP 达标且有链接/图片时触发（CF 挑战页无真实链接/图片，不会误 break）。
-      if (!options?.forcePuppeteer) pushHttp();
-      pushPuppeteerProxy();
+      if (isChallengedHost && !options?.forcePuppeteer) {
+        // 反爬站：puppeteer+代理优先（5.10 行为），HTTP 后置兜底
+        pushPuppeteerProxy();
+        pushHttp();
+      } else {
+        // 普通站：HTTP-first（除非 forcePuppeteer），再 puppeteer+代理全量兜底
+        if (!options?.forcePuppeteer) pushHttp();
+        pushPuppeteerProxy();
+      }
     } else {
       // 无代理：HTTP 先 + Puppeteer 直连兜底（root + locale_short）
       if (!options?.forcePuppeteer) pushHttp();
