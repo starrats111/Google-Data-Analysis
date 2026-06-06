@@ -199,13 +199,12 @@ async function runQuickSync(startTime: number): Promise<NextResponse> {
       const beforeTs = await getMaxUpdatedAt(userId);
 
       const { fetchAllTransactions } = await import("@/lib/platform-api");
-      const userMerchants = await prisma.user_merchants.findMany({
-        where: { user_id: userId, is_deleted: 0 },
-        select: { id: true, merchant_id: true, platform: true, merchant_name: true },
-      });
-      const merchantMap = new Map(
-        userMerchants.map((m) => [`${normalizePlatformCode(m.platform)}_${m.merchant_id}`, m])
-      );
+      // PERF-01 F1：不再每轮全量加载该用户的全部商家（4-7万行/2-5s，压垮 2 核 DB），
+      //   改为按连接交易实际涉及的 merchant_id 增量加载（通常几十-几百行）。merchantMap
+      //   仅在下方交易循环里用 `${normalizePlatformCode(platform)}_${merchant_id}` 做 O(1) 匹配，
+      //   按需填充与全量预载行为等价，但 DB 扫描/内存占用大幅下降。
+      type MerchantLite = { id: bigint; merchant_id: string; platform: string; merchant_name: string };
+      const merchantMap = new Map<string, MerchantLite>();
       const redirectRules = getRedirectedMerchantKeys(userId);
 
       let upserted = 0;
@@ -236,6 +235,18 @@ async function runQuickSync(startTime: number): Promise<NextResponse> {
           const aggregatedTxns = aggRes.aggregated;
           if (aggRes.stats.merged_line_items > 0 || aggRes.stats.dropped_ghosts > 0) {
             log(`  ${user.username} ${platform}: raw=${aggRes.stats.raw_count} → ${aggregatedTxns.length} (merged=${aggRes.stats.merged_line_items}, dropped=${aggRes.stats.dropped_ghosts})`);
+          }
+
+          // PERF-01 F1：只加载本连接交易实际涉及的商家（按 merchant_id 批量），增量填充 merchantMap。
+          const txnMids = [...new Set(aggregatedTxns.map((t) => t.merchant_id).filter(Boolean))] as string[];
+          if (txnMids.length > 0) {
+            const neededMerchants = await prisma.user_merchants.findMany({
+              where: { user_id: userId, is_deleted: 0, merchant_id: { in: txnMids } },
+              select: { id: true, merchant_id: true, platform: true, merchant_name: true },
+            });
+            for (const m of neededMerchants) {
+              merchantMap.set(`${normalizePlatformCode(m.platform)}_${m.merchant_id}`, m);
+            }
           }
 
           for (const txn of aggregatedTxns) {
