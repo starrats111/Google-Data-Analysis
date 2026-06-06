@@ -579,7 +579,28 @@ export function deletePersona(profile: AiRuleProfile, personaId: string): AiRule
  *   - 大麻/CBD：要求产品形态后缀（cbd oil/gummies/vape…）避免误伤字母巧合
  *   - 武器：firearm/rifle/ammunition 等实体词，匹配枪械店的 main_products
  */
-export const PROHIBITED_BUSINESS_CATEGORY_PATTERNS: Array<{ label: string; cn: string; pattern: RegExp }> = [
+// ─── 武器类目高精度识别（BUG-08：修复"射击体验"被误判为"卖武器"）─────────────────
+// 背景：旧正则用裸词 \brifles?\b|\bshotguns?\b 匹配，导致体验礼物公司（如 intotheblue.co.uk
+// 的「飞碟射击/步枪射击体验日」）被误判成武器/弹药零售并硬阻断生成。
+// 修正口径：
+//   ① 高精度词（firearm/handgun/ammunition/ammo/assault rifle）→ 武器零售强信号，直接命中；
+//   ② 模糊词（rifle/shotgun/pistol）在射击运动/体验语境中常见 → 需叠加"枪械零售意图"才算命中；
+//   ③ 任何"体验/射击运动/礼物体验"语境 → 一律排除（这类是娱乐活动，非武器零售）。
+const WEAPON_HIGH_PRECISION = /\bfirearms?\b|\bhandguns?\b|\bammunition\b|\bammo\b|\bassault\s+(rifle|weapon)s?\b/i;
+const WEAPON_AMBIGUOUS = /\brifles?\b|\bshotguns?\b|\bpistols?\b/i;
+// 枪械零售意图：门店/经销/出售/库存/口径规格/弹药配件等
+const WEAPON_RETAIL_INTENT = /\b(gun\s?shops?|gun\s?stores?|firearms?\s+(dealer|retailer|store|shop)|\bffl\b|for\s+sale|on\s+sale|in\s+stock|add\s+to\s+(cart|basket)|calibre?s?|\bgauge\b|cartridges?|buy\s+(a\s+)?(gun|rifle|shotgun|pistol|firearm)|(order|purchase)\s+(ammo|ammunition))\b/i;
+// 体验/射击运动/礼物体验语境 → 非武器零售，排除（intotheblue.co.uk 等）
+const WEAPON_EXPERIENCE_EXCLUDE = /\b(experiences?|vouchers?|days?\s+out|things\s+to\s+do|clay\s+pigeon|target\s+shoot\w*|shooting\s+(experience|lesson|range|school|day|session|simulator|gallery)|airsoft|paintball|archery|laser\s+tag|taster|simulator|driving\s+experience|flying\s+experience|track\s?days?|activit(y|ies)|gift\s+(experience|voucher|idea))\b/i;
+
+function matchesWeaponsCategory(text: string): boolean {
+  if (WEAPON_EXPERIENCE_EXCLUDE.test(text)) return false; // ③ 体验/运动语境直接排除
+  if (WEAPON_HIGH_PRECISION.test(text)) return true;      // ① 高精度词直接命中
+  if (WEAPON_AMBIGUOUS.test(text) && WEAPON_RETAIL_INTENT.test(text)) return true; // ② 模糊词需叠加零售意图
+  return false;
+}
+
+export const PROHIBITED_BUSINESS_CATEGORY_PATTERNS: Array<{ label: string; cn: string; pattern?: RegExp; match?: (t: string) => boolean }> = [
   {
     label: "controlled_substances",
     cn: "管制物质/受管制药品（如氯胺酮、迷幻药、阿片类）",
@@ -593,20 +614,22 @@ export const PROHIBITED_BUSINESS_CATEGORY_PATTERNS: Array<{ label: string; cn: s
   {
     label: "weapons",
     cn: "武器/弹药（受限类目）",
-    pattern: /\bfirearms?\b|\bhandguns?\b|\brifles?\b|\bshotguns?\b|\bammunition\b|\bammo\b|\bassault\s+(rifle|weapon)/i,
+    match: matchesWeaponsCategory, // BUG-08：上下文感知，避免射击体验误判
   },
 ];
 
 /**
  * D-062：扫描业务文本，命中受限/禁止类目返回 {label, cn}，否则 null。
  * 供 policy-preflight 早期类目级阻断与提交硬卡共用同一判定口径。
+ * BUG-08：weapons 类目改用上下文感知 matcher（高精度词直判 / 模糊词需零售意图 / 体验语境排除）。
  */
 export function matchProhibitedBusinessCategory(
   text: string | null | undefined,
 ): { label: string; cn: string } | null {
   if (!text) return null;
   for (const rule of PROHIBITED_BUSINESS_CATEGORY_PATTERNS) {
-    if (rule.pattern.test(text)) return { label: rule.label, cn: rule.cn };
+    const hit = rule.match ? rule.match(text) : rule.pattern!.test(text);
+    if (hit) return { label: rule.label, cn: rule.cn };
   }
   return null;
 }
