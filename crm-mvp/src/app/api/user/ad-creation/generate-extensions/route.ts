@@ -585,24 +585,17 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
         // 立即告知前端正在爬取中（避免前端因无事件超时）
         send("crawl_pending", { status: "crawling" });
 
-        // ─── Step 1：国别 URL 解析（DNS + TCP，可能 5-30 s）───
-        // C-016: aerosus.nl + BE → aerosus.be（若 DNS+TCP 通）
-        const { resolveCountryUrl, extractBrandRoot } = await import("@/lib/country-url-resolver");
-        const resolverResult = await resolveCountryUrl(originalMerchantUrl, country);
-        let merchantUrl = resolverResult.finalUrl || originalMerchantUrl;
+        // ─── Step 1：以「商家自身 URL」为主爬取目标（用户指令：先尝试商家 URL）───
+        // 设计原则（2026-06 重构）：每个商家都有自己的 URL，先尝试商家 URL，能走通后用住宅代理爬取，
+        //   由真实爬取结果（navLinks/落地域）得到地区化落地页与链接；只有当商家 URL 整体爬不通
+        //   （crawlFailed / 正文为空 / 无链接）时，才退而求其次去试 ccTLD 本地候选域（见下方兜底块）。
+        // 取代旧流程：旧逻辑先用 DNS+TCP 猜一个 ccTLD 抢先替换商家 URL 再爬，曾把 coach.com 误切到
+        //   拦截壳 coach.co.uk(直连 436)、把 ukbreakaways.com 误切到挑战墙 ukbreakaways.uk(CF 403)，
+        //   导致爬虫直接对着「进不去的壳」抓空、整站文案/链接全无。住宅代理从目标国出口访问商家 .com
+        //   通常已天然拿到地区化版本，无需 DNS 猜测；故把 ccTLD 切换降级为「商家 URL 爬不通时的兜底」。
+        const { extractBrandRoot } = await import("@/lib/country-url-resolver");
+        let merchantUrl = originalMerchantUrl;
         const merchantName = extractBrandRoot(merchant.merchant_name || "");
-
-        if (resolverResult.switched && adCreativeId) {
-          console.warn(`[Extensions] C-016 ccTLD 切换: ${originalMerchantUrl} → ${merchantUrl}（reason=${resolverResult.reason}）`);
-          await prisma.ad_creatives.update({
-            where: { id: adCreativeId },
-            data: { final_url: merchantUrl, crawl_cache: null as any },
-          }).catch((e) => {
-            console.warn("[Extensions] 写 final_url/清 cache 失败:", e instanceof Error ? e.message : e);
-          });
-        } else if (process.env.NODE_ENV !== "production") {
-          console.log(`[Extensions] C-016 resolver reason=${resolverResult.reason}, switched=${resolverResult.switched}, brandRoot="${merchantName}"`);
-        }
 
         // ─── Step 2：读取 ad_default_settings ───
         const adSettings = await prisma.ad_default_settings.findFirst({
@@ -684,8 +677,57 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
           : Promise.resolve(null);
 
         // ─── Step 3：读取或构建爬取缓存（Puppeteer 可能 60-90 s）───
-        // ccTLD 切换时需清空缓存（切换后新域名无缓存）
-        let cache: CrawlCache | null = resolverResult.switched ? null : initialCache;
+        let cache: CrawlCache | null = initialCache;
+
+        // 爬取「走通」判定：主爬未标失败，且正文/链接/sitelink 候选至少有一项非空。
+        // 用于决定是否需要回退到 ccTLD 本地候选（见 Step 3 后兜底块）。
+        const crawlUsable = (c: CrawlCache | null): boolean => {
+          if (!c || c.crawlFailed) return false;
+          return (
+            (c.pageText?.length ?? 0) >= 200 ||
+            (Array.isArray(c.links) && c.links.length > 0) ||
+            (Array.isArray((c as any).sitelinkCandidates) && (c as any).sitelinkCandidates.length > 0)
+          );
+        };
+
+        // 复用的「带超时护栏 + 并发去重」爬取封装：商家 URL 主爬与 ccTLD 候选兜底共用同一套预算/降级逻辑。
+        // BUG-07c：crawl 预算 165s 与内层 STRATEGY_BUDGET_MS(160s)对齐，留 5s 余量，让反爬站有机会跑完；
+        //   仍远小于 generation-gate 看门狗，不会拖垮排队。超时降级为 crawlFailed cache 继续（不 throw）。
+        const runCrawlWithSafety = async (targetUrl: string, forcePuppeteer: boolean): Promise<CrawlCache> => {
+          const crawlKey = buildCrawlKey(targetUrl, country);
+          const HANG_SAFETY_MS = 165000;
+          const LOCK_TIMEOUT_MS_LOCAL = HANG_SAFETY_MS + 10000;
+          const buildStartedAt = Date.now();
+          console.log(`[Extensions] D-090：buildCrawlCache 启动 crawl_budget=${HANG_SAFETY_MS / 1000}s（超时降级出文案）merchantUrl=${targetUrl}`);
+          return withCrawlInflightLock(crawlKey, async () => {
+            const hangSafety = new Promise<CrawlCache>((_, reject) =>
+              setTimeout(() => reject(new Error("buildCrawlCache-hang-safety")), HANG_SAFETY_MS).unref?.(),
+            );
+            try {
+              const result = await Promise.race([
+                buildCrawlCache(targetUrl, merchantName, country, undefined, { forcePuppeteer }),
+                hangSafety,
+              ]);
+              console.log(`[Extensions] D-038b：buildCrawlCache 自然完成 elapsedMs=${Date.now() - buildStartedAt}ms merchantUrl=${targetUrl}`);
+              return result;
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              const elapsedMs = Date.now() - buildStartedAt;
+              if (msg === "buildCrawlCache-hang-safety") {
+                console.error(`[Extensions] D-090：buildCrawlCache 超过 ${HANG_SAFETY_MS / 1000}s 预算，降级为 crawlFailed cache 继续 elapsedMs=${elapsedMs}ms merchantUrl=${targetUrl}`);
+                return {
+                  links: [], images: [], pageText: "", features: [], navItems: [],
+                  phoneCandidates: [], sitelinkCandidates: [], semrushTitles: [], semrushDescriptions: [],
+                  promoRegex: null, priceRegex: [], crawledProducts: [],
+                  crawledAt: new Date().toISOString(), crawlMethod: "timeout-degraded", crawlFailed: true,
+                  crawlQualityScore: 0, crawlQualityIssues: ["crawl_budget_timeout"],
+                } as CrawlCache;
+              }
+              console.warn(`[Extensions] D-038b：buildCrawlCache 真实失败 elapsedMs=${elapsedMs}ms msg=${msg}`);
+              throw err;
+            }
+          }, LOCK_TIMEOUT_MS_LOCAL);
+        };
 
         const cachedPromo = cache?.promoRegex as Record<string, unknown> | null | undefined;
         const cachedPromoHasDiscount =
@@ -719,77 +761,8 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
             : forceRecrawlForSitelinks ? `用户点重新爬取 or sitelinkCandidates(${cache?.sitelinkCandidates?.length ?? 0})<3`
             : '缓存促销无有效折扣，重爬';
           console.log(`[Extensions] crawl_cache ${reason}，重新爬取... forcePuppeteer=${cacheNeedsRefreshForPromo}`);
-          // C-027 FIX-B：同一 merchantUrl × country 并发去重（共享同一个 Promise）
-          const crawlKey = buildCrawlKey(merchantUrl, country);
-          // D-038b（2026-05-28，方案 G）：删除 D-028 v9 / D-031 / D-031b2 引入的外层 Promise.race
-          // 强制砍切 + timeout-stub 占位 cache 的"假成功"机制。
-          //
-          // 删除原因：
-          // ①D-031b2 把外层 timeout 调到 180s/200s 后，buildCrawlCache 内层 puppeteer 跑完
-          //  自然 60-120s，本来正常完成，但 race 机制制造了"timeout-stub"占位 cache
-          //  伪装成功（crawlFailed=true），再被 L2 守门 emit context_insufficient 拦截，
-          //  形成"全员看到网站爬取失败"假象。
-          // ②真实失败（puppeteer 全死 / 网络挂）应该走 buildCrawlCache 内部错误处理，
-          //  throw 真实错误后被外层 catch 设为 crawlFailed=true，而不是 race timeout 后
-          //  伪造一个看似 schema 完整的 stub cache 让下游误认为"爬到了什么"。
-          // ③5/25 之前（D-028/D-031 commit 链之前）没有外层 race 也跑得通，91.7% 成功率。
-          //
-          // 现行为：
-          //   - buildCrawlCache 自然完成 → 真实返回（无论 ok 还是 partial）
-          //   - 内部抛错 → 外层 catch 设 crawlFailed=true 走真实失败路径
-          //   - 极端 hang 兜底：300s（5 分钟）防 puppeteer 死锁，仅作 safety net
-          //     不再当作"业务超时降级"，hang 触发时直接 throw 真实错误
-          //
-          // D-090（后台 job 化后）：生成不再占用用户长连接，但仍要防止单条生成把 generation-gate
-          // 的并发槽长时间占死拖垮排队。超时不再 throw 让整条生成失败，而是降级为 crawlFailed cache 继续：
-          // 下游 D-083b SemRush 兜底 + 编排器自身的 SemRush 路径仍可产出文案；
-          // 若 SemRush 也无数据，则由 L2 守门给出明确的 context_insufficient 提示（诚实失败）。
-          //
-          // BUG-07c：外层预算原为 90s，但 crawl-pipeline 内层对「走代理的反爬站」给的是 160s
-          // （STRATEGY_BUDGET_MS）。90s < 160s → 反爬站注定在内层跑完前被外层砍掉降级
-          // （生产日志清一色 elapsedMs=90002，每天数十次「爬取失败」）。改为 165s 与内层对齐
-          // （留 5s 余量），让反爬站真正有机会跑完拿到 sitelink/正文；仍远小于 generation-gate
-          // 持有看门狗 15min 与 inflight 锁 360s，不会拖垮排队。
-          const HANG_SAFETY_MS = 165000;
-          const LOCK_TIMEOUT_MS_LOCAL = HANG_SAFETY_MS + 10000;
-          const buildStartedAt = Date.now();
-          console.log(`[Extensions] D-090：buildCrawlCache 启动 crawl_budget=${HANG_SAFETY_MS / 1000}s（超时降级出文案）merchantUrl=${merchantUrl}`);
-          const newCache: CrawlCache = await withCrawlInflightLock(crawlKey, async () => {
-            const hangSafety = new Promise<CrawlCache>((_, reject) =>
-              setTimeout(
-                () => reject(new Error("buildCrawlCache-hang-safety")),
-                HANG_SAFETY_MS,
-              ).unref?.(),
-            );
-            try {
-              const result = await Promise.race([
-                buildCrawlCache(merchantUrl, merchantName, country, undefined, {
-                  forcePuppeteer: cacheNeedsRefreshForPromo,
-                }),
-                hangSafety,
-              ]);
-              const elapsedMs = Date.now() - buildStartedAt;
-              console.log(`[Extensions] D-038b：buildCrawlCache 自然完成 elapsedMs=${elapsedMs}ms merchantUrl=${merchantUrl}`);
-              return result;
-            } catch (err) {
-              const msg = err instanceof Error ? err.message : String(err);
-              const elapsedMs = Date.now() - buildStartedAt;
-              if (msg === "buildCrawlCache-hang-safety") {
-                // BUG-07c：crawl 预算超时（165s，与内层 STRATEGY_BUDGET_MS 对齐）→ 降级为
-                // crawlFailed cache 继续生成，不再 throw 让整条生成失败（后台 job 化后无长连接可断，但要释放并发槽）。
-                console.error(`[Extensions] D-090：buildCrawlCache 超过 ${HANG_SAFETY_MS / 1000}s 预算，降级为 crawlFailed cache 继续（SemRush/编排器兜底出文案）elapsedMs=${elapsedMs}ms merchantUrl=${merchantUrl}`);
-                return {
-                  links: [], images: [], pageText: "", features: [], navItems: [],
-                  phoneCandidates: [], sitelinkCandidates: [], semrushTitles: [], semrushDescriptions: [],
-                  promoRegex: null, priceRegex: [], crawledProducts: [],
-                  crawledAt: new Date().toISOString(), crawlMethod: "timeout-degraded", crawlFailed: true,
-                  crawlQualityScore: 0, crawlQualityIssues: ["crawl_budget_timeout"],
-                } as CrawlCache;
-              }
-              console.warn(`[Extensions] D-038b：buildCrawlCache 真实失败 elapsedMs=${elapsedMs}ms msg=${msg}`);
-              throw err;
-            }
-          }, LOCK_TIMEOUT_MS_LOCAL);
+          // 商家 URL 主爬（住宅代理）。超时/失败降级逻辑封装在 runCrawlWithSafety（见 Step 3 头部）。
+          const newCache: CrawlCache = await runCrawlWithSafety(merchantUrl, cacheNeedsRefreshForPromo);
           const newPromo = newCache.promoRegex as Record<string, unknown> | null;
           const newHasDiscount = (newPromo?.discount_percent ? Number(newPromo.discount_percent) : 0) > 0 ||
             (newPromo?.discount_amount ? Number(newPromo.discount_amount) : 0) > 0;
@@ -810,6 +783,40 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
               cache = freshRecord!.crawl_cache as any;
               console.log(`[Extensions] 保留 DB 中更好的 cache（已有折扣）`);
             }
+          }
+        }
+
+        // ─── ccTLD 本地候选兜底（仅当「商家自身 URL」整体爬不通时才触发）───
+        // 用户指令：先尝试商家 URL，能走通就用住宅代理爬取拿真实落地页/链接（住宅代理从目标国出口
+        //   通常已天然拿到地区化版本）。只有商家 URL 爬空（crawlFailed / 正文为空 / 无任何链接）时，
+        //   才退一步用 country-url-resolver 找一个 ccTLD 本地候选域（resolver 已内置 D-068 停放、
+        //   D08-A 回跳 canonical、BUG-09 机器人挑战墙 三道护栏，不会再切到 coach.co.uk / ukbreakaways.uk
+        //   这类壳）。候选能爬通才采用，否则保留商家原 URL（至少不更差）。
+        if (!crawlUsable(cache)) {
+          try {
+            const { resolveCountryUrl } = await import("@/lib/country-url-resolver");
+            const fb = await resolveCountryUrl(originalMerchantUrl, country);
+            if (fb.switched && fb.finalUrl && fb.finalUrl !== merchantUrl) {
+              console.warn(`[Extensions] 商家 URL 爬取不通（crawlFailed/空），回退尝试 ccTLD 本地候选：${merchantUrl} → ${fb.finalUrl}（reason=${fb.reason}）`);
+              const fbCache = await runCrawlWithSafety(fb.finalUrl, cacheNeedsRefreshForPromo);
+              if (crawlUsable(fbCache)) {
+                merchantUrl = fb.finalUrl;
+                cache = fbCache;
+                if (adCreativeId) {
+                  await prisma.ad_creatives.update({
+                    where: { id: adCreativeId },
+                    data: { final_url: merchantUrl, crawl_cache: cache as any },
+                  }).catch(() => {});
+                }
+                console.warn(`[Extensions] ccTLD 候选 ${merchantUrl} 爬取成功，采用为落地页/链接来源`);
+              } else {
+                console.warn(`[Extensions] ccTLD 候选 ${fb.finalUrl} 同样爬取不通，保留商家原 URL ${merchantUrl}（下游 SemRush/编排器兜底）`);
+              }
+            } else {
+              console.warn(`[Extensions] 商家 URL 爬取不通，且无可用 ccTLD 本地候选（reason=${fb.reason}），保留商家原 URL ${merchantUrl}`);
+            }
+          } catch (e) {
+            console.warn("[Extensions] ccTLD 候选兜底失败（忽略，保留商家原 URL）:", e instanceof Error ? e.message : e);
           }
         }
 

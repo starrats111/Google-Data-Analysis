@@ -28,7 +28,7 @@ export interface ResolveResult {
   finalUrl: string;
   brandRoot: string;
   switched: boolean;
-  reason: "cc_tld_ok" | "same_tld" | "nxdomain" | "tcp_timeout" | "invalid_input" | "cc_tld_parked" | "cc_tld_redirects_away";
+  reason: "cc_tld_ok" | "same_tld" | "nxdomain" | "tcp_timeout" | "invalid_input" | "cc_tld_parked" | "cc_tld_redirects_away" | "cc_tld_challenged";
   probeLog: ProbeLogEntry[];
 }
 
@@ -175,6 +175,10 @@ function cacheSet(key: string, result: ResolveResult) {
     case "cc_tld_redirects_away":
       // D08-A：ccTLD 301 回跳 canonical 的配置很稳定（属商家长期重定向策略），缓存 24h
       ttlMs = 24 * 60 * 60 * 1000; // 24h
+      break;
+    case "cc_tld_challenged":
+      // BUG-09：候选 ccTLD 的机器人挑战墙（CF/Incapsula）属长期防护策略，较稳定，缓存 6h
+      ttlMs = 6 * 60 * 60 * 1000; // 6h
       break;
     case "tcp_timeout":
       ttlMs = 5 * 60 * 1000; // 5m（可能是临时故障，短 TTL）
@@ -336,7 +340,7 @@ async function probeTcp(host: string): Promise<{ ok: boolean; rttMs: number; rea
  *   - 页面 <title> 或正文前 ~30KB 命中停放/待售强文本信号。
  * 任何 fetch 失败/超时 → 返回 false（无法确认 → 不阻断切换，保留原有行为）。
  */
-async function probeParkedPage(host: string): Promise<{ parked: boolean; signal?: string; redirectsAway?: boolean; finalHost?: string }> {
+async function probeParkedPage(host: string): Promise<{ parked: boolean; signal?: string; redirectsAway?: boolean; finalHost?: string; challenged?: boolean }> {
   // 先 https，失败（含证书过期/连接错误）回退 http —— 停放域名常证书过期且只在 http 才暴露
   // 到停放商的 302（实测 heidi.uk：https=CERT_HAS_EXPIRED，http→302 https://surname.uk/...）。
   const schemes = [`https://${host}/`, `http://${host}/`];
@@ -367,12 +371,29 @@ async function probeParkedPage(host: string): Promise<{ parked: boolean; signal?
         return { parked: false, redirectsAway: true, finalHost };
       }
 
+      // 读取 body 一次（供「机器人挑战墙检测」+「停放文本检测」复用）
+      const cfMitig = (resp.headers.get("cf-mitigated") || "").toLowerCase();
+      let raw = "";
+      try { raw = (await resp.text()).slice(0, 30000); } catch { raw = ""; }
+
+      // BUG-09：候选 ccTLD 处于「主动机器人挑战墙」（Cloudflare cf-mitigated:challenge /
+      // Incapsula JS 挑战）→ 连隐身 Puppeteer 也过不去，切到它必然爬空（pageText=0 → L2 上下文
+      // 不足 → 文案全无）。实证 ukbreakaways.uk=CF 403 challenge、www.ukbreakaways.com=Incapsula。
+      // 这类候选不是「可用的本地站」，拒绝切换、保留商家原域名（原域名至少不是更差，常更可爬）。
+      // 注意：仅命中「主动挑战」信号才拒切；普通 403 WAF（无挑战）仍按原逻辑视为站点真实、允许切换。
+      const challenged =
+        cfMitig.includes("challenge") ||
+        /_Incapsula_Resource|Incapsula incident|\/_Incapsula_/i.test(raw) ||
+        /cf-browser-verification|challenge-platform|__cf_chl_|cf_chl_opt|Just a moment\b/i.test(raw);
+      if (challenged) {
+        return { parked: false, challenged: true };
+      }
+
       if (!resp.ok && resp.status !== 403 && resp.status !== 406) {
         continue; // 该 scheme 不可用，试下一个
       }
 
       // 2. 文本信号（只读前 ~30KB，足够覆盖 title + 首屏）
-      const raw = (await resp.text()).slice(0, 30000);
       for (const re of PARKED_TEXT_SIGNALS) {
         if (re.test(raw)) return { parked: true, signal: re.source.slice(0, 40) };
       }
@@ -478,6 +499,7 @@ export async function resolveCountryUrl(merchantUrl: string, country: string): P
   let sawTcpTimeout = false;
   let sawParked = false;
   let sawRedirectAway = false;
+  let sawChallenged = false;
   for (const candidateHost of candidates) {
     const dnsResult = await probeDns(candidateHost);
     if (dnsResult === "nxdomain" || dnsResult === "err") {
@@ -512,6 +534,16 @@ export async function resolveCountryUrl(merchantUrl: string, country: string): P
         probeLog.push({ host: candidateHost, dns: "ok", tcp: "ok", error: `redirects_away:${parkedCheck.finalHost}` });
         continue; // 试下一个候选；都回跳则不切换
       }
+      // BUG-09：候选处于「主动机器人挑战墙」(Cloudflare cf-mitigated:challenge / Incapsula JS 挑战)
+      //   → 连隐身 Puppeteer 也过不去，切到它必然爬空（pageText=0 → 文案全无）。拒绝切换，保留商家原域名。
+      if (parkedCheck.challenged) {
+        sawChallenged = true;
+        console.warn(
+          `[CountryUrlResolver] BUG-09 候选 ${candidateHost} 命中主动机器人挑战墙（Cloudflare/Incapsula challenge），切过去必爬空，拒绝 ccTLD 切换，保留 ${originalHost}`,
+        );
+        probeLog.push({ host: candidateHost, dns: "ok", tcp: "ok", error: "challenged" });
+        continue; // 试下一个候选；都被挑战则不切换
+      }
       // 切 URL：保留 path/query/hash，只换 host
       const newUrl = new URL(merchantUrl);
       newUrl.hostname = candidateHost;
@@ -529,7 +561,9 @@ export async function resolveCountryUrl(merchantUrl: string, country: string): P
   }
 
   // 4. 全部候选都没通
-  const reason: ResolveResult["reason"] = sawRedirectAway
+  const reason: ResolveResult["reason"] = sawChallenged
+    ? "cc_tld_challenged"
+    : sawRedirectAway
     ? "cc_tld_redirects_away"
     : sawParked
     ? "cc_tld_parked"
