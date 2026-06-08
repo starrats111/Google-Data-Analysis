@@ -825,12 +825,16 @@ function deduplicateCdnImages(images: string[]): string[] {
 // ══════════════════════════════════════════════════════
 export function imageStemKey(url: string): string {
   let path = url;
+  let host = "";
   try {
-    path = new URL(url).pathname;
+    const u = new URL(url);
+    path = u.pathname;
+    host = u.hostname.replace(/^www\./, "").toLowerCase();
   } catch {
     path = url.split("?")[0].split("#")[0];
   }
-  const last = path.split("/").filter(Boolean).pop() || path;
+  const segs = path.split("/").filter(Boolean);
+  const last = (segs.pop() || path);
   let stem = last.split("?")[0].split("#")[0].toLowerCase();
   stem = stem.replace(/\.(jpg|jpeg|png|webp|avif|gif|pjpg)$/i, "");
   stem = stem
@@ -840,7 +844,12 @@ export function imageStemKey(url: string): string {
     .replace(/[-_]\d{1,4}$/g, "")               // 结尾 -123 尺寸/序号
     .replace(/[-_]+$/g, "")
     .trim();
-  return stem || last.toLowerCase();
+  // 关键修复（underpar.com 实证）：唯一标识在「目录」、文件名是通用渲染名（carousel/tile/large/
+  //   original/image/default/thumb…）的资产型 CDN（如 media.underpar.com/assets/<hash>/carousel），
+  //   只按文件名词干去重会把同站所有图塌缩成 1~2 张（80 张 → 仅 carousel+tile）。故把「目录路径」并入
+  //   key：同目录的尺寸/倍率变体（banner.png / banner@2x.png）仍合并，不同目录的同名图不再被误合并。
+  const dir = segs.join("/");
+  return `${host}/${dir}/${stem || last.toLowerCase()}`;
 }
 
 export function dedupeByImageStem(images: string[]): string[] {
