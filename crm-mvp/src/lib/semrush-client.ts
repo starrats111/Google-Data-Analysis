@@ -272,6 +272,40 @@ class SemrushGuard {
     void this.clearPersistedSession();
   }
 
+  // SEM-单设备：优雅登出当前会话（awaitable）。与 invalidateSession 的区别是「等登出完成」——
+  // 确保 3UE 侧设备在槽位释放、下一条查询登录之前就被回收，从根上杜绝「上一条会话还没登出、
+  // 下一条又登录」造成的同账号双设备 → 设备数超限。登出失败吞错，不阻塞主流程。
+  async gracefulLogout(): Promise<void> {
+    const cur = this.sessionCache;
+    this.sessionCache = null;
+    try { await this.clearPersistedSession(); } catch { /* 清持久化失败不阻塞 */ }
+    if (cur) {
+      try {
+        await logout3ue(cur);
+        console.log("[SemRush] SEM-单设备：查询完成，已优雅登出释放设备");
+      } catch { /* 登出失败不影响主流程 */ }
+    }
+  }
+
+  // SEM-单设备：登录前登出「上一台残留设备」。正常流程每条查询查完都会 gracefulLogout，
+  // 残留只发生在上条查询进程崩溃/被强杀未走 finally 时（持久化里仍留着那台设备的 cookie）。
+  // 把它显式登出，避免僵尸设备长期占用账号「同时在线设备」名额。
+  async logoutStaleDevice(username: string): Promise<void> {
+    let stale = this.sessionCache;
+    this.sessionCache = null;
+    if (!stale) {
+      stale = await this.loadPersistedSession(username); // 命中会写回 sessionCache，下面再清
+      this.sessionCache = null;
+    }
+    if (stale) {
+      try {
+        await logout3ue(stale);
+        console.log("[SemRush] SEM-单设备：登录前已登出上一台残留设备");
+      } catch { /* 吞错 */ }
+      try { await this.clearPersistedSession(); } catch { /* 吞错 */ }
+    }
+  }
+
   // BUG-04 A：写持久化会话（fire-and-forget，失败仅警告，不影响主流程）
   private async persistSession(s: CachedSession): Promise<void> {
     try {
@@ -1175,6 +1209,12 @@ export class SemRushClient {
     // BUG-04 C：整条查询（login + 全部 rpc + copies）外层占一次独占槽，内部 waitForSlot 走重入
     // no-op，保证一条 queryDomain = 一个连续会话，且全进程任一时刻仅一条查询在飞（真串行=1）。
     return this.guard.withExclusive(async () => {
+    // SEM-单设备（用户方案）：每次查询都用一次性会话 —— 先登出上一台残留设备 → CRM 全新登录 →
+    //   查询 → finally 优雅登出释放设备。彻底杜绝僵尸设备累积导致的「同时在线设备数已达上限」
+    //   （此前即使只生成一个广告，账号设备名额也会被旧/残留会话占满而失败）。
+    await this.guard.logoutStaleDevice(this.creds.username);
+    this.token = null; // 强制 login() 走全新登录，不复用任何内存/持久化会话
+    try {
     console.log(`[SemRush] 开始查询: ${domain} (db=${this.creds.database})（队列状态: ${JSON.stringify(this.guard.getStats())}）`);
     await this.login();
 
@@ -1277,6 +1317,10 @@ export class SemRushClient {
     this.guard.setCachedDomain(cacheKey, result);
     console.log(`[SemRush] 查询完成: ${domain} (db=${this.creds.database}, ${kws.length} 关键词, ${ads.length} 广告)`);
     return result;
+    } finally {
+      // SEM-单设备：无论成功失败，查完都优雅登出（awaitable），在槽位释放前回收 3UE 设备。
+      await this.guard.gracefulLogout();
+    }
     }); // BUG-04 C：withExclusive 结束
   }
 
