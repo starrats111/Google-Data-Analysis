@@ -2067,16 +2067,47 @@ export async function buildCrawlCache(
   //   只能从主页 a 标签随便选，对 byfood.com 这类 SPA + CF 强保护站，主页几乎没有产品图链接 → 子页爬空。
   //   新方案：先 await sitelinkCandidates，把 url 列表作为 prioritySubpageUrls 传给 collectImages。
   //   其余轻量任务继续并行。
-  const sitelinkCandidates = await discoverSitelinkCandidates(merchantUrl, crawlResult.links, country, puppeteerCache?.navLinks, puppeteerProxyUrl).catch(() => [] as Awaited<ReturnType<typeof discoverSitelinkCandidates>>);
+  // ─── 尾段预算封顶（BUG-10）───
+  // 背景：策略瀑布有 STRATEGY_BUDGET_MS(160s)封顶，但其后的「站内链接探查 + 图片采集 + 促销/价格子页」
+  //   尾段无任何预算控制，只靠 route 层外层 HANG_SAFETY(165s)硬砍。慢站(endnote/Clarivate)主爬已渲染、
+  //   sitelink 也已抓到 6 条，却因 collectImages(逐个 Puppeteer 取图)拖过 165s → 整个 buildCrawlCache 被
+  //   外层当 crawlFailed 空壳「整体丢弃」，连那 6 条链接一起没了 → 缓存永远存不下 → 反复重爬+超时死循环。
+  // 处理：给尾段设一个相对 strategyStartedAt 的软截止时间(155s，留 ~10s 给最终装配+返回，确保早于外层 165s)，
+  //   每个尾段任务超时即返回部分/空结果，但 buildCrawlCache 正常返回已抓到的主体(含 sitelinkCandidates)。
+  //   优先级：先把剩余预算留给 sitelink 探查(最有价值)，剩下的再给 collectImages/促销/价格。
+  const TAIL_DEADLINE_AT = strategyStartedAt + 155_000;
+  const tailRemainingMs = () => Math.max(2_000, TAIL_DEADLINE_AT - Date.now());
+  const withTailDeadline = <T>(p: Promise<T>, fallback: T, label: string): Promise<T> => {
+    const ms = tailRemainingMs();
+    let timer: NodeJS.Timeout;
+    const guard = new Promise<T>((resolve) => {
+      timer = setTimeout(() => {
+        console.warn(`[CrawlPipeline] 尾段 ${label} 超过剩余预算 ${ms}ms，返回部分/空结果（保留主体含站内链接，避免被外层 165s 整体丢弃）`);
+        resolve(fallback);
+      }, ms);
+      timer.unref?.();
+    });
+    return Promise.race([p.then((v) => { clearTimeout(timer); return v; }), guard]);
+  };
+
+  const sitelinkCandidates = await withTailDeadline(
+    discoverSitelinkCandidates(merchantUrl, crawlResult.links, country, puppeteerCache?.navLinks, puppeteerProxyUrl).catch(() => [] as Awaited<ReturnType<typeof discoverSitelinkCandidates>>),
+    [] as Awaited<ReturnType<typeof discoverSitelinkCandidates>>,
+    "sitelink探查",
+  );
   const sitelinkUrls = (sitelinkCandidates || []).map((c) => c.url).filter(Boolean);
 
   const [images, features, navItems, phoneCandidates, promoRegex, priceRegex, crawledProducts] = await Promise.all([
-    collectImages(crawlResult.images, crawlResult.links, merchantUrl, merchantName, puppeteerCache?.images, proxyUrl ?? undefined, puppeteerProxyUrl ?? undefined, sitelinkUrls).catch(() => [] as string[]),
+    withTailDeadline(
+      collectImages(crawlResult.images, crawlResult.links, merchantUrl, merchantName, puppeteerCache?.images, proxyUrl ?? undefined, puppeteerProxyUrl ?? undefined, sitelinkUrls).catch(() => [] as string[]),
+      [] as string[],
+      "图片采集",
+    ),
     Promise.resolve(html ? extractMerchantFeatures(html, [...(puppeteerCache?.heroTexts ?? []), ...(puppeteerCache?.uspTexts ?? [])]) : []),
     Promise.resolve(html ? extractNavItems(html, puppeteerCache?.categoryNames) : []),
     Promise.resolve(html ? extractPhoneCandidates(html, country) : []),
-    extractPromoWithSubPage().catch(() => null),
-    extractPriceWithProductPages().catch(() => [] as ReturnType<typeof extractPriceInfo>),
+    withTailDeadline(extractPromoWithSubPage().catch(() => null), null, "促销子页"),
+    withTailDeadline(extractPriceWithProductPages().catch(() => [] as ReturnType<typeof extractPriceInfo>), [] as ReturnType<typeof extractPriceInfo>, "价格子页"),
     Promise.resolve(html ? extractProducts(html, merchantUrl, country) : []),
   ]);
 

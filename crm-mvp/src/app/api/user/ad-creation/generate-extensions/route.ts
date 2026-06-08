@@ -747,10 +747,17 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
           !!cache && (cache.pageText ?? "").length < 200 &&
           (!Array.isArray(cache.semrushTitles) || cache.semrushTitles.length === 0);
 
+        // 站内链接重爬阈值（用户规则）：只有「缓存里的优质站内链接候选不足 6 条」时才触发重爬。
+        // 背景：旧逻辑下 sitelinks-only 生成「无条件强制重爬」，导致 Shopify/反爬站(HTTP L0 全失败 →
+        //   逐个 Puppeteer 验证，每轮 ~40s)被反复无效重爬：日志可见同一商家「最终候选 6 条」重复跑 3+ 轮。
+        //   而 Google Ads sitelink 上限本就是 6 条，缓存已有 ≥6 条优质候选时再爬没有任何收益。
+        // 现规则：涉及站内链接生成(sitelinks 或 core)时，缓存优质候选 < 6 才重爬；≥6 直接复用缓存。
+        const SITELINK_QUALITY_TARGET = 6;
+        const cachedSitelinkCount = cache?.sitelinkCandidates?.length ?? 0;
+        const wantsSitelinkGeneration =
+          (types as string[]).includes("sitelinks") || (types as string[]).includes("core");
         const forceRecrawlForSitelinks =
-          (types as string[]).includes("sitelinks") && !(types as string[]).includes("core")
-            ? true
-            : (cache?.sitelinkCandidates?.length ?? 0) < 3 && !!cache;
+          !!cache && wantsSitelinkGeneration && cachedSitelinkCount < SITELINK_QUALITY_TARGET;
 
         if (!cache || !cache.crawledAt || cache.crawlFailed || cacheNeedsRefreshForPromo || cacheLowQuality || cacheHasEmptyLinks || cachePageTextTooShort || forceRecrawlForSitelinks) {
           const reason = !cache || !cache.crawledAt ? '为空'
@@ -758,7 +765,7 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
             : cacheLowQuality ? `质量低（score=${cache.crawlQualityScore}, issues=[${cache.crawlQualityIssues?.join(",")}]）`
             : cacheHasEmptyLinks ? 'links 为空（旧缓存命中 splash 页）'
             : cachePageTextTooShort ? `pageText 过短 (${(cache.pageText ?? "").length}<200) 且无 SemRush，旧脏 cache 重爬`
-            : forceRecrawlForSitelinks ? `用户点重新爬取 or sitelinkCandidates(${cache?.sitelinkCandidates?.length ?? 0})<3`
+            : forceRecrawlForSitelinks ? `优质站内链接候选(${cachedSitelinkCount})<${SITELINK_QUALITY_TARGET}，重爬补足`
             : '缓存促销无有效折扣，重爬';
           console.log(`[Extensions] crawl_cache ${reason}，重新爬取... forcePuppeteer=${cacheNeedsRefreshForPromo}`);
           // 商家 URL 主爬（住宅代理）。超时/失败降级逻辑封装在 runCrawlWithSafety（见 Step 3 头部）。
