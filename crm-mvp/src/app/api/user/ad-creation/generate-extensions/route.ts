@@ -3271,6 +3271,9 @@ async function buildRealSitelinks(opts: {
       if (!isSameSite(l.url)) continue;
       const segs = u.pathname.split("/").filter(Boolean);
       if (segs.length < 1 || segs.length > 2) continue; // 只要顶层栏目页（首页和深层产品页都排除）
+      // BUG-12：排除"本地化首页"（/en-us、/us、/en）——它只有 1 段路径会骗过上面的 segs 过滤，
+      //   被当成栏目页生成出"点进去就是首页"的无效 sitelink（diptyque 预览里那条 /en-us/ 即此）。
+      if (/^\/[a-z]{2}([-_][a-z]{2})?\/?$/i.test(u.pathname)) continue;
       if (isBadSitelinkUrl(l.url)) continue;
       const key = (u.origin + u.pathname).replace(/\/$/, "").toLowerCase();
       if (seen.has(key)) continue;

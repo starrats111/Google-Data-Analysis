@@ -1493,6 +1493,73 @@ async function discoverSitelinkCandidates(
     console.warn(`[SitelinkFilter] 深度+1 完成，候选数: ${candidates.length}`);
   }
 
+  // ════════════════════════════════════════════════════════════════════
+  // BUG-12（用户硬性要求：站内链接必须凑够 6 条、主营业务相关、有吸引力、不能为空）
+  //   前面所有"逐子页 HTTP/Puppeteer 二次校验"对 WAF 站极不稳定：校验返回的 finalUrl 会
+  //   非确定性塌缩到同一个 URL（dup），把渲染页里 8 条真实导航砍到只剩 1 条（diptyque 实证）。
+  //   这里加一道"信任渲染 DOM 导航"的确定性保底：渲染页里的 navLinks/pageLinks 本就是真实、
+  //   可达、商家自己展示的主营分类（Fragrances / Candles & Home / Bath & Body…），其锚文本
+  //   天然就是有吸引力的 sitelink 标题。候选不足 6 时直接用它们按业务相关度补足，不再二次抓取
+  //   （确定性、不塌缩、不依赖数据中心代理能否穿透 WAF——Google 自家爬虫访问这些导航本就畅通）。
+  if (candidates.length < 6) {
+    const before = candidates.length;
+    const existingPaths = new Set<string>();
+    for (const c of candidates) {
+      try { existingPaths.add(new URL(c.url).pathname.replace(/\/+$/, "").toLowerCase()); } catch {}
+    }
+    // 信息/账户/政策类页面降权（不排除，仅排到产品分类之后；真正的垃圾页由 isBadSitelinkUrl/
+    // isLowValueSitelink/BAD_LINK_TEXTS 排除）
+    const INFO_RE = /\/(about|contact|faq|help|support|careers?|jobs|press|legal|privacy|terms|cookie|account|login|sign-?in|register|store-?locator|find-?(a-)?(store|boutique)|newsletter|sitemap|gift-?card|wishlist|cart|checkout|returns?|shipping)\b/i;
+    const scoreNav = (l: { url: string; text: string }): number => {
+      let s = 0;
+      try {
+        const p = new URL(l.url).pathname;
+        const depth = p.split("/").filter(Boolean).length;
+        if (depth >= 1 && depth <= 2) s += 5;   // 顶层/二级分类最适合做 sitelink
+        if (depth >= 4) s -= 3;                  // 过深的具体页降权
+        if (INFO_RE.test(p)) s -= 6;             // 信息/账户/政策页降权
+      } catch {}
+      const t = (l.text || "").trim();
+      if (t.length >= 3 && t.length <= 24) s += 2; // 简洁锚文本契合 25 字标题上限
+      return s;
+    };
+    const navPool = [...(puppeteerNavLinks ?? []), ...pageLinks]
+      .map((l) => (country ? { ...l, url: normalizeLocaleInUrl(l.url, country) } : l))
+      .filter((l) => {
+        try {
+          const u = new URL(l.url);
+          if (!isSameMerchantSite(u.hostname)) return false;
+          if (u.search) return false;
+          const path = u.pathname.replace(/\/+$/, "");
+          if (path === "") return false;                         // 跳过裸首页 "/"
+          if (/^\/[a-z]{2}([-_][a-z]{2})?$/i.test(path)) return false; // 跳过本地化首页 /en-us /us /en
+          return true;
+        } catch { return false; }
+      })
+      .filter((l) => !isBadSitelinkUrl(l.url))
+      .filter((l) => {
+        const t = sanitizeAdText(decodeHtmlEntities((l.text || "").trim()));
+        return t.length >= 2 && !BAD_LINK_TEXTS.includes(t.toLowerCase());
+      })
+      .sort((a, b) => scoreNav(b) - scoreNav(a));
+
+    for (const l of navPool) {
+      if (candidates.length >= 6) break;
+      let path = "";
+      try { path = new URL(l.url).pathname.replace(/\/+$/, "").toLowerCase(); } catch { continue; }
+      if (existingPaths.has(path)) continue;
+      let title = smartTruncate(sanitizeAdText(decodeHtmlEntities(l.text.trim())), 25);
+      if (!title || title.length < 2) title = titleFromUrlPath(l.url);
+      if (!title || title.length < 2) continue;
+      if (isLowValueSitelink(l.url, title)) continue;
+      existingPaths.add(path);
+      candidates.push({ url: l.url, title, description: "" });
+    }
+    if (candidates.length > before) {
+      console.warn(`[Sitelinks] BUG-12 信任渲染导航保底补足 ${candidates.length - before} 条（${before}→${candidates.length}），来源=渲染DOM navLinks/pageLinks（不二次抓取，确定性）`);
+    }
+  }
+
   // C-015 §4：最终汇总行 + 拒因统计（console.warn 必落盘，方便事后诊断）
   console.warn(
     `[Sitelinks] 最终候选 ${candidates.length} 条 / merchantDomain=${merchantDomain} country=${country ?? "-"} ` +
