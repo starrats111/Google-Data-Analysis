@@ -825,6 +825,54 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
           console.log(`[Extensions] 路径级 locale 命中: ${prevUrl} → ${localizedUrl}`);
         }
 
+        // ─── D-096：ccTLD 切换/落地域校正（修复 coach.com→coach.co.uk 误切）───
+        // 背景：country-url-resolver 仅凭 DNS+TCP 把 coach.com 切成 coach.co.uk，但该 ccTLD
+        //   实为「转址壳/WAF 拦截壳」（直连返回 436），真实英国店在 uk.coach.com（只有浏览器/
+        //   Puppeteer 进得去）。爬虫渲染出的 navLinks 才是「实际落地域」的权威信号。
+        // 处理：若 navLinks 主导域与当前 merchantUrl 不同注册域、但同品牌 label，则以主导域校正
+        //   merchantUrl + final_url —— 保证后续 D-094 同站闸不再误删站内链接，且 sitelink 域与
+        //   final_url 域一致（否则提交 Google Ads 会被判跨域拒登）。
+        // 安全护栏：要求 ≥2 条 navLinks 指向该域、品牌 label 相同、且非子域关系（子域本就同站，
+        //   不需校正），避免被单条跨域链接（如 avis.de 混入的 secure.avis.co.uk）带偏。
+        try {
+          const navHostCount = new Map<string, number>();
+          for (const l of ((cache as CrawlCache | null)?.navLinks || [])) {
+            let h = "";
+            try { h = new URL(l.url).hostname.replace(/^www\./, "").toLowerCase(); } catch { continue; }
+            if (h) navHostCount.set(h, (navHostCount.get(h) || 0) + 1);
+          }
+          let dominantHost = "";
+          let dominantCount = 0;
+          for (const [h, c] of navHostCount) {
+            if (c > dominantCount) { dominantHost = h; dominantCount = c; }
+          }
+          let curHost = "";
+          try { curHost = new URL(merchantUrl).hostname.replace(/^www\./, "").toLowerCase(); } catch {}
+          if (
+            dominantHost && curHost && dominantHost !== curHost && dominantCount >= 2 &&
+            !curHost.endsWith(`.${dominantHost}`) && !dominantHost.endsWith(`.${curHost}`)
+          ) {
+            const { extractHostBrandLabel } = await import("@/lib/country-url-resolver");
+            if (extractHostBrandLabel(dominantHost) === extractHostBrandLabel(curHost)) {
+              const prevUrl = merchantUrl;
+              const landedRoot = `${new URL(merchantUrl).protocol}//${dominantHost}/`;
+              merchantUrl = landedRoot;
+              if (adCreativeId) {
+                await prisma.ad_creatives.update({
+                  where: { id: adCreativeId },
+                  data: { final_url: landedRoot },
+                }).catch(() => {});
+              }
+              console.warn(
+                `[Extensions] D-096 落地域校正：navLinks 主导域=${dominantHost}(${dominantCount} 条) ` +
+                `与落地页 host=${curHost} 不同注册域但同品牌，校正 merchantUrl/final_url：${prevUrl} → ${landedRoot}`,
+              );
+            }
+          }
+        } catch (e) {
+          console.warn("[Extensions] D-096 落地域校正失败（忽略，保留原 merchantUrl）:", e instanceof Error ? e.message : e);
+        }
+
         // ─── Step 4：推送爬取状态 + 开始生成 ───
         // CRAWL-01 R1（外显诚实化）：crawlFailed 只表示「主爬取方法失败」，但只要 sitemap 抢到了
         // 站内链接候选、或已有 SemRush 数据，下游就能正常出站内链接/文案——此时不应再吓唬用户「爬取失败」。

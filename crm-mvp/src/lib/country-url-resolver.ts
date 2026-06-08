@@ -221,7 +221,7 @@ function isSameSite(a: string, b: string): boolean {
  * www.aerosus.co.uk → aerosus
  * shop.example.com → example
  */
-function extractHostBrandLabel(host: string): string {
+export function extractHostBrandLabel(host: string): string {
   const h = host.toLowerCase().replace(/^www\./, "");
   const parts = h.split(".");
   if (parts.length < 2) return h;
