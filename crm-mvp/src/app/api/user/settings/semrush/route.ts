@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withUser } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
+import { getSystemConfigsByPrefix } from "@/lib/system-config";
 
 // 方案-09：员工自配 SemRush(3UE) 账号。对标 SerpApi 的 user_serpapi_keys，
 // 每员工各用各账号配额，根治共享账号批量并发设备超限。密码明文存储（Q09-d，与全局 system_configs 一致）。
@@ -43,12 +44,11 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
     user_id_3ue?: string; api_key?: string; node?: string; database?: string;
   };
 
+  // SEM-01：员工只填【用户名+密码】，UserID/ApiKey/节点/默认库 均跟管理台全局，不再要求填写。
   const username = (body.username ?? "").trim();
   const password = (body.password ?? "").trim();
-  const userId3ue = (body.user_id_3ue ?? "").trim();
-  const apiKey = (body.api_key ?? "").trim();
-  if (!username || !password || !userId3ue || !apiKey) {
-    return NextResponse.json({ code: -1, message: "用户名/密码/UserID/ApiKey 均不能为空" }, { status: 400 });
+  if (!username || !password) {
+    return NextResponse.json({ code: -1, message: "用户名/密码不能为空" }, { status: 400 });
   }
 
   const existing = await prisma.user_semrush_keys.findFirst({
@@ -59,16 +59,17 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
   const count = await prisma.user_semrush_keys.count({ where: { user_id: userId, is_deleted: 0 } });
   const keyName = (body.key_name ?? "").trim() || `账号 ${count + 1}`;
 
+  // user_id_3ue/api_key 在 DB 层 NOT NULL，且抓取时由 fromUserConfig 合并全局值，这里存空串占位。
   await prisma.user_semrush_keys.create({
     data: {
       user_id: userId,
       key_name: keyName,
       username,
       password,
-      user_id_3ue: userId3ue,
-      api_key: apiKey,
-      node: (body.node ?? "").trim() || "3",
-      database: (body.database ?? "").trim() || "us",
+      user_id_3ue: "",
+      api_key: "",
+      node: "3",
+      database: "us",
     },
   });
   return NextResponse.json({ code: 0, message: "添加成功" });
@@ -122,25 +123,31 @@ export const PUT = withUser(async (req: NextRequest, { user }) => {
     user_id_3ue?: string; api_key?: string; node?: string; database?: string;
   };
 
+  // SEM-01：测试连接只认【用户名+密码】；UserID/ApiKey/节点/默认库 取管理台全局。
   let username = (body.username ?? "").trim();
   let password = (body.password ?? "").trim();
-  let userId3ue = (body.user_id_3ue ?? "").trim();
-  let apiKey = (body.api_key ?? "").trim();
-  let node = (body.node ?? "").trim() || "3";
-  let database = (body.database ?? "").trim() || "us";
 
-  // 未直接传凭据但传了 id → 从库取（PATCH 后再测、或列表里点测试）
-  if ((!username || !password || !userId3ue || !apiKey) && body.id) {
+  // 未直接传凭据但传了 id → 从库取用户名/密码（列表里点测试、或新账号未保存）
+  if ((!username || !password) && body.id) {
     const row = await prisma.user_semrush_keys.findFirst({
       where: { id: BigInt(body.id), user_id: userId, is_deleted: 0 },
     });
     if (!row) return NextResponse.json({ code: -1, message: "账号不存在" }, { status: 404 });
-    username = row.username; password = row.password; userId3ue = row.user_id_3ue;
-    apiKey = row.api_key; node = row.node || "3"; database = row.database || "us";
+    username = row.username; password = row.password;
   }
 
-  if (!username || !password || !userId3ue || !apiKey) {
-    return NextResponse.json({ code: -1, message: "请填写完整凭据或提供已保存账号 id" }, { status: 400 });
+  if (!username || !password) {
+    return NextResponse.json({ code: -1, message: "请填写用户名和密码，或提供已保存账号 id" }, { status: 400 });
+  }
+
+  // UserID/ApiKey/节点/默认库 跟全局
+  const configs = await getSystemConfigsByPrefix("semrush_");
+  const userId3ue = configs["semrush_user_id"] || "";
+  const apiKey = configs["semrush_api_key"] || "";
+  const node = configs["semrush_node"] || "3";
+  const database = configs["semrush_database"] || "us";
+  if (!userId3ue || !apiKey) {
+    return NextResponse.json({ code: -1, message: "管理台尚未配置 SemRush 全局 UserID/ApiKey，请联系管理员" }, { status: 400 });
   }
 
   try {

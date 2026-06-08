@@ -730,14 +730,24 @@ export class SemRushClient {
         where: { user_id: uid, is_active: 1, is_deleted: 0 },
         orderBy: { created_at: "asc" },
       });
-      if (row?.username && row.password && row.user_id_3ue && row.api_key) {
-        const db = country ? countryToDatabase(country) : (row.database || "us");
-        const seedNode = row.node || "3";
+      // SEM-01：员工只配【用户名+密码】即视为有效；UserID/ApiKey/节点/默认库 始终跟管理台全局。
+      //   - 兼容老记录：若该行自带 user_id_3ue/api_key/node 则优先用其自有值；新记录为空时用全局。
+      //   - database 运行时始终按全局（有投放国则 countryToDatabase 覆盖）。
+      if (row?.username && row.password) {
+        const configs = await getSystemConfigsByPrefix("semrush_");
+        const userId3ue = row.user_id_3ue || configs["semrush_user_id"];
+        const apiKey = row.api_key || configs["semrush_api_key"];
+        if (!userId3ue || !apiKey) {
+          console.warn("[SemRush] 员工账号无 UserID/ApiKey 且全局未配置，回退全局账号");
+          return SemRushClient.fromConfig(country);
+        }
+        const db = country ? countryToDatabase(country) : (configs["semrush_database"] || "us");
+        const seedNode = configs[NODE_CONFIG_KEY] || row.node || "3";
         return new SemRushClient({
           username: row.username,
           password: row.password,
-          userId: row.user_id_3ue,
-          apiKey: row.api_key,
+          userId: userId3ue,
+          apiKey,
           database: db,
           nodeConfig: { chatNode: seedNode, chatLang: "zh_CN", semrushNode: seedNode, semrushLang: "zh" },
         });

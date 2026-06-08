@@ -1081,12 +1081,11 @@ function SemRushTab() {
   const [saving, setSaving] = useState(false);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [testingNew, setTestingNew] = useState(false);
-  const [form, setForm] = useState({
-    key_name: "", username: "", password: "", user_id_3ue: "", api_key: "", node: "3", database: "us",
-  });
+  // SEM-01：员工只填【用户名+密码】，UserID/ApiKey/节点/默认库 跟管理台全局。
+  const [form, setForm] = useState({ key_name: "", username: "", password: "" });
 
   const setField = (k: keyof typeof form, v: string) => setForm((p) => ({ ...p, [k]: v }));
-  const resetForm = () => setForm({ key_name: "", username: "", password: "", user_id_3ue: "", api_key: "", node: "3", database: "us" });
+  const resetForm = () => setForm({ key_name: "", username: "", password: "" });
 
   const fetchKeys = async () => {
     setLoading(true);
@@ -1098,8 +1097,8 @@ function SemRushTab() {
   useEffect(() => { fetchKeys(); }, []);
 
   const handleAdd = async () => {
-    if (!form.username.trim() || !form.password.trim() || !form.user_id_3ue.trim() || !form.api_key.trim()) {
-      message.warning("用户名/密码/UserID/ApiKey 均必填"); return;
+    if (!form.username.trim() || !form.password.trim()) {
+      message.warning("用户名/密码必填"); return;
     }
     setSaving(true);
     const res = await fetch("/api/user/settings/semrush", {
@@ -1136,8 +1135,8 @@ function SemRushTab() {
   };
 
   const handleTestNew = async () => {
-    if (!form.username.trim() || !form.password.trim() || !form.user_id_3ue.trim() || !form.api_key.trim()) {
-      message.warning("请先填完整凭据再测试"); return;
+    if (!form.username.trim() || !form.password.trim()) {
+      message.warning("请先填用户名和密码再测试"); return;
     }
     setTestingNew(true);
     const res = await fetch("/api/user/settings/semrush", {
@@ -1148,10 +1147,9 @@ function SemRushTab() {
   };
 
   const columns = [
-    { title: "备注名", dataIndex: "key_name", width: 110, render: (v: string) => <Text strong>{v}</Text> },
-    { title: "用户名", dataIndex: "username", width: 120, render: (v: string) => <Text code style={{ fontSize: 12 }}>{v}</Text> },
-    { title: "ApiKey（脱敏）", dataIndex: "masked_api_key", render: (v: string) => <Text code style={{ fontSize: 12 }}>{v}</Text> },
-    { title: "节点/库", width: 90, render: (_: unknown, r: SemrushKeyRow) => <Text type="secondary" style={{ fontSize: 12 }}>{r.node}/{r.database}</Text> },
+    { title: "备注名", dataIndex: "key_name", width: 120, render: (v: string) => <Text strong>{v}</Text> },
+    { title: "用户名", dataIndex: "username", render: (v: string) => <Text code style={{ fontSize: 12 }}>{v}</Text> },
+    { title: "节点/库", width: 120, render: () => <Text type="secondary" style={{ fontSize: 12 }}>跟随全局</Text> },
     { title: "状态", dataIndex: "is_active", width: 70, render: (v: boolean) => v ? <Tag color="green">启用</Tag> : <Tag color="default">禁用</Tag> },
     {
       title: "操作", width: 190,
@@ -1201,21 +1199,10 @@ function SemRushTab() {
                   <Text type="secondary" style={{ display: "block", marginBottom: 4 }}>密码 *</Text>
                   <Input.Password placeholder="3UE 登录密码" value={form.password} onChange={(e) => setField("password", e.target.value)} />
                 </Col>
-                <Col span={8}>
-                  <Text type="secondary" style={{ display: "block", marginBottom: 4 }}>UserID *</Text>
-                  <Input placeholder="3UE userId" value={form.user_id_3ue} onChange={(e) => setField("user_id_3ue", e.target.value)} />
-                </Col>
-                <Col span={8}>
-                  <Text type="secondary" style={{ display: "block", marginBottom: 4 }}>ApiKey *</Text>
-                  <Input.Password placeholder="3UE api_key" value={form.api_key} onChange={(e) => setField("api_key", e.target.value)} />
-                </Col>
-                <Col span={4}>
-                  <Text type="secondary" style={{ display: "block", marginBottom: 4 }}>节点</Text>
-                  <Input placeholder="3" value={form.node} onChange={(e) => setField("node", e.target.value)} />
-                </Col>
-                <Col span={4}>
-                  <Text type="secondary" style={{ display: "block", marginBottom: 4 }}>默认库</Text>
-                  <Input placeholder="us" value={form.database} onChange={(e) => setField("database", e.target.value)} />
+                <Col span={24}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    UserID / ApiKey / 节点 / 默认库 均自动跟随管理台全局配置，无需填写。
+                  </Text>
                 </Col>
                 <Col span={24}>
                   <Space>
@@ -1230,8 +1217,8 @@ function SemRushTab() {
 
           <div style={{ background: "#f6f8fa", borderRadius: 6, padding: "10px 14px", fontSize: 12, color: "#666", lineHeight: "1.8" }}>
             <div><strong>为什么自配</strong>：每人各用各的 3UE 账号配额，避免共用一个账号被批量生成打满「设备数超限」。</div>
+            <div><strong>只填用户名+密码</strong>：UserID / ApiKey / 节点 / 默认库 全部跟随管理台全局配置，无需员工填写。</div>
             <div><strong>选取策略</strong>：广告生成 / 关键词查询优先用你启用中的账号（按账号各自串行、不同员工并行）。</div>
-            <div><strong>默认库</strong>：按投放国自动覆盖（如 GB→uk），此处仅为兜底默认。</div>
             <div><strong>未配置</strong>：过渡期回退全局兜底账号，建议尽快配置自己的账号。</div>
           </div>
         </div>
