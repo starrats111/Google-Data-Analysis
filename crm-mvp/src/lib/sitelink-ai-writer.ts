@@ -15,8 +15,9 @@
  */
 
 import { callAiWithFallback } from "@/lib/ai-service";
-import { resolveLanguageName } from "@/lib/ad-market";
+import { resolveLanguageName, getAdMarketConfig } from "@/lib/ad-market";
 import { sanitizeAdText, smartTruncate, titleFromUrlPath, decodeHtmlEntities, extractJsonFromAi } from "@/lib/crawl-pipeline";
+import { enforceLanguageConsistency, targetLanguageScript } from "@/lib/ad-language-guard";
 
 export interface SitelinkInput {
   url: string;
@@ -140,7 +141,7 @@ ${block}`;
     );
   } catch (e) {
     console.warn("[SitelinkAI] 调用失败，使用页面 meta 兜底:", e instanceof Error ? e.message : e);
-    return fallbackAll(candidates, brand);
+    return await localizeSitelinks(fallbackAll(candidates, brand), opts);
   }
 
   // C-023 诊断开关：SITELINK_AI_DUMP=1 时 dump AI 原始响应全文（仅排查期打开，生产默认关闭）
@@ -170,7 +171,7 @@ ${block}`;
       e instanceof Error ? e.message : e,
       "raw_preview:", raw.slice(0, 200).replace(/\s+/g, " "),
     );
-    return fallbackAll(candidates, brand);
+    return await localizeSitelinks(fallbackAll(candidates, brand), opts);
   }
 
   const arr: Array<{ title?: string; desc1?: string; desc2?: string }> =
@@ -194,7 +195,41 @@ ${block}`;
   console.warn(
     `[SitelinkAI] AI 映射匹配 ${matched}/${candidates.length}（arr_len=${arr.length}）`,
   );
-  return results;
+  return await localizeSitelinks(results, opts);
+}
+
+/**
+ * LANG-01-R3：sitelink 文案语言一致性守卫。
+ * AI 路径已要求翻译，但 buildOne/fallbackAll 的兜底会回退到英文页面 meta；
+ * 故对非拉丁目标语言，统一对 title/desc1/desc2 做语言检测 + 本地化重写 + 同语言兜底。
+ */
+async function localizeSitelinks(
+  items: SitelinkOutput[],
+  opts: { brandRoot: string; country: string; languageCode?: string },
+): Promise<SitelinkOutput[]> {
+  const langCode = opts.languageCode || getAdMarketConfig(opts.country).languageCode;
+  if (targetLanguageScript(langCode) === "latin" || items.length === 0) return items;
+  const languageName = resolveLanguageName(opts.country, opts.languageCode);
+  try {
+    const tg = await enforceLanguageConsistency(items.map((s) => s.title), {
+      langCode, languageName, fieldKind: "short", maxLen: 25,
+      merchantName: opts.brandRoot, country: opts.country, label: "sitelink标题",
+    });
+    const dg = await enforceLanguageConsistency(items.flatMap((s) => [s.desc1, s.desc2]), {
+      langCode, languageName, fieldKind: "short", maxLen: 35,
+      merchantName: opts.brandRoot, country: opts.country, label: "sitelink描述",
+    });
+    if (!tg.changed && !dg.changed) return items;
+    return items.map((s, i) => ({
+      url: s.url,
+      title: smartTruncate(tg.items[i] || s.title, 25),
+      desc1: smartTruncate(dg.items[i * 2] || s.desc1, 35),
+      desc2: smartTruncate(dg.items[i * 2 + 1] || s.desc2, 35),
+    }));
+  } catch (e) {
+    console.warn("[SitelinkAI] 语言一致性守卫异常（不阻断）:", e instanceof Error ? e.message : e);
+    return items;
+  }
 }
 
 function buildOne(

@@ -27,6 +27,7 @@ import { matchParkedTextSignal } from "@/lib/country-url-resolver";
 import { humanizeAdCopyBatch, AD_COPY_ANTI_AI_BLOCK } from "@/lib/humanizer";
 import { autoExpandSitelinks } from "@/lib/sitelink-auto-expand";
 import { generateSitelinkTexts } from "@/lib/sitelink-ai-writer";
+import { enforceLanguageConsistency } from "@/lib/ad-language-guard";
 // C-112 / D-046.C — AI 广告创建 8 步智能闭环
 import {
   runIntelligentAdCreation,
@@ -454,7 +455,6 @@ export async function loadGenContext(
   payload: GenerationRequestPayload,
 ): Promise<{ ctx: GenContext } | { error: string; status: number }> {
   const types = (payload.types || []) as string[];
-  const ad_language = payload.ad_language ?? undefined;
   const requestKeywords = (payload.keywords || []) as string[];
   const body = { optionalTypes: (payload.optionalTypes || []) as string[] };
 
@@ -462,6 +462,11 @@ export async function loadGenContext(
     where: { id: BigInt(campaignIdRaw), user_id: userId, is_deleted: 0 },
   });
   if (!campaign) return { error: "广告系列不存在", status: 404 };
+
+  // LANG-01-R1：目标广告语言后端权威化。前端 ad_language 优先（员工可能手改），其次回退到
+  // campaign.language_id（创建时"确认的广告语言"），最后由下游按 country/market 兜底。
+  // 防止前端漏传/异常时丢失"已确认语言"这一权威来源。
+  const ad_language = payload.ad_language ?? (campaign.language_id || undefined);
 
   const merchant = await prisma.user_merchants.findFirst({
     where: { id: campaign.user_merchant_id, is_deleted: 0 },
@@ -1655,6 +1660,48 @@ ${isNonEnglish ? `\n⚠️ FINAL REMINDER: ALL headlines and descriptions MUST b
     }
 
     let descriptions = descResult.items;
+
+    // ═════════════════════════════════════════════════════════════════
+    // LANG-01-R2：语言一致性后置闸
+    //   目标语言为非拉丁(zh/ja/ko/ru…)时，逐条检测"写成英文/拉丁"的漂移条目，
+    //   AI 批量本地化重写；仍失败的用同语言模板兜底。让"语言与文案一定对得上"。
+    //   try/catch 不阻断主流程；正常（无漂移）不触发任何额外 AI 调用。
+    // ═════════════════════════════════════════════════════════════════
+    try {
+      const effectiveLangCode = adLanguageCode || market.languageCode;
+      const hlGuard = await enforceLanguageConsistency(headlines, {
+        langCode: effectiveLangCode,
+        languageName,
+        fieldKind: "headline",
+        maxLen: 30,
+        merchantName,
+        country,
+        label: "标题",
+      });
+      if (hlGuard.changed) {
+        headlines = hlGuard.items;
+        send("headlines", headlines);
+        send("language_rewrite", { field: "headline", rewritten: hlGuard.rewrittenCount, fallback: hlGuard.fallbackCount, language: languageName });
+      }
+      const descGuard = await enforceLanguageConsistency(descriptions, {
+        langCode: effectiveLangCode,
+        languageName,
+        fieldKind: "description",
+        maxLen: 90,
+        minLen: 40,
+        merchantName,
+        country,
+        label: "描述",
+      });
+      if (descGuard.changed) {
+        descriptions = descGuard.items;
+        send("descriptions", descriptions);
+        send("language_rewrite", { field: "description", rewritten: descGuard.rewrittenCount, fallback: descGuard.fallbackCount, language: languageName });
+      }
+    } catch (langErr) {
+      console.warn("[Core] 语言一致性守卫异常（不阻断）:", langErr instanceof Error ? langErr.message : langErr);
+    }
+
     const headlineFix = hlResult.fix;
     const descFix = descResult.fix;
 
@@ -1856,7 +1903,7 @@ ${isNonEnglish ? `\n⚠️ FINAL REMINDER: ALL headlines and descriptions MUST b
         ...sharedBusinessContext,
       });
       send("headlines", headlines);
-      const descriptions = await padDescriptions([], merchantName, country, 4, {
+      let descriptions = await padDescriptions([], merchantName, country, 4, {
         referenceItems: cache.semrushDescriptions,
         keywords: fallbackKeywords,
         dailyBudget: Number(adSettings?.daily_budget || 2),
@@ -1909,6 +1956,24 @@ ${isNonEnglish ? `\n⚠️ FINAL REMINDER: ALL headlines and descriptions MUST b
         }
       } catch (alignErr) {
         console.warn("[Core] fallback 主题对齐校验异常（不阻断）:", alignErr instanceof Error ? alignErr.message : alignErr);
+      }
+
+      // LANG-01-R2：fallback 路径同样过语言一致性闸（padHeadlines/padDescriptions 兜底也可能出英文）
+      try {
+        const effectiveLangCode = adLanguageCode || getAdMarketConfig(country).languageCode;
+        const languageNameFb = resolveLanguageName(country, adLanguageCode);
+        const hlG = await enforceLanguageConsistency(headlines, {
+          langCode: effectiveLangCode, languageName: languageNameFb, fieldKind: "headline",
+          maxLen: 30, merchantName, country, label: "fallback标题",
+        });
+        if (hlG.changed) { headlines = hlG.items; send("headlines", headlines); }
+        const dG = await enforceLanguageConsistency(descriptions, {
+          langCode: effectiveLangCode, languageName: languageNameFb, fieldKind: "description",
+          maxLen: 90, minLen: 40, merchantName, country, label: "fallback描述",
+        });
+        if (dG.changed) { descriptions = dG.items; send("descriptions", descriptions); }
+      } catch (langErr) {
+        console.warn("[Core] fallback 语言一致性守卫异常（不阻断）:", langErr instanceof Error ? langErr.message : langErr);
       }
 
       // C-016: sitelinks 由独立 pipeline 负责（不在 fallback 分支重复生成）
@@ -2490,6 +2555,14 @@ Return ONLY a valid JSON object with the applicable keys:
         callouts = calloutFix.items;
         if (calloutFix.fixed.length > 0) send("compliance_auto_fix", { fixed: calloutFix.fixed, count: calloutFix.fixed.length });
         callouts = humanizeAdCopyBatch(callouts, 2, 25);
+        // LANG-01-R3：标注语言一致性守卫（仅非拉丁目标语言生效）
+        try {
+          const g = await enforceLanguageConsistency(callouts.slice(0, 6), {
+            langCode: adLanguageCode || market.languageCode, languageName, fieldKind: "short",
+            maxLen: 25, merchantName, country, label: "callout",
+          });
+          if (g.changed) callouts = g.items.filter((c) => c && c.length >= 2 && c.length <= 25);
+        } catch { /* 不阻断 */ }
         send("callouts", callouts.slice(0, 6));
       }
 
@@ -2502,6 +2575,14 @@ Return ONLY a valid JSON object with the applicable keys:
             .filter((v: string) => v.length >= 2 && v.length <= 25)
             .slice(0, 10);
           values = humanizeAdCopyBatch(values, 2, 25);
+          // LANG-01-R3：结构化摘要值语言一致性守卫（header 取 Google 固定枚举不动，仅守 values）
+          try {
+            const g = await enforceLanguageConsistency(values, {
+              langCode: adLanguageCode || market.languageCode, languageName, fieldKind: "short",
+              maxLen: 25, merchantName, country, label: "snippet值",
+            });
+            if (g.changed) values = g.items.filter((v) => v && v.length >= 2 && v.length <= 25);
+          } catch { /* 不阻断 */ }
           send("structured_snippet", values.length >= 3 ? { header: validHeader, values } : null);
         } else {
           send("structured_snippet", null);
