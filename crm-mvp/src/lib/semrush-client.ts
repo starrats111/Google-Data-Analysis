@@ -272,38 +272,20 @@ class SemrushGuard {
     void this.clearPersistedSession();
   }
 
-  // SEM-单设备：优雅登出当前会话（awaitable）。与 invalidateSession 的区别是「等登出完成」——
-  // 确保 3UE 侧设备在槽位释放、下一条查询登录之前就被回收，从根上杜绝「上一条会话还没登出、
-  // 下一条又登录」造成的同账号双设备 → 设备数超限。登出失败吞错，不阻塞主流程。
-  async gracefulLogout(): Promise<void> {
-    const cur = this.sessionCache;
-    this.sessionCache = null;
-    try { await this.clearPersistedSession(); } catch { /* 清持久化失败不阻塞 */ }
-    if (cur) {
-      try {
-        await logout3ue(cur);
-        console.log("[SemRush] SEM-单设备：查询完成，已优雅登出释放设备");
-      } catch { /* 登出失败不影响主流程 */ }
-    }
-  }
-
-  // SEM-单设备：登录前登出「上一台残留设备」。正常流程每条查询查完都会 gracefulLogout，
-  // 残留只发生在上条查询进程崩溃/被强杀未走 finally 时（持久化里仍留着那台设备的 cookie）。
-  // 把它显式登出，避免僵尸设备长期占用账号「同时在线设备」名额。
-  async logoutStaleDevice(username: string): Promise<void> {
-    let stale = this.sessionCache;
-    this.sessionCache = null;
-    if (!stale) {
-      stale = await this.loadPersistedSession(username); // 命中会写回 sessionCache，下面再清
-      this.sessionCache = null;
-    }
-    if (stale) {
-      try {
-        await logout3ue(stale);
-        console.log("[SemRush] SEM-单设备：登录前已登出上一台残留设备");
-      } catch { /* 吞错 */ }
-      try { await this.clearPersistedSession(); } catch { /* 吞错 */ }
-    }
+  // SEM-单设备（修正版核心）：即将「全新登录」前，先登出上一台旧设备。
+  //   关键点：读持久化里的旧 token 时**忽略本地 30 分钟 TTL**——本地 TTL 到期 ≠ 3UE 侧设备已下线，
+  //   旧 token 对应的"在线设备"仍占着账号名额。若不先登出就直接再登一台，30 分钟一到期就 +1 台僵尸，
+  //   单用户用一天也能把设备名额占满 → "同时在线设备数超限"。先登出旧的再建新的 → 任一时刻恒为 1 台。
+  //   仅在 login() 确认缓存/持久化均无可复用会话（即真要新建设备）时调用；正常复用路径不触发、无额外开销。
+  async logoutPreviousDeviceBeforeRelogin(): Promise<void> {
+    try {
+      const raw = await getSystemConfig(this.sessionConfigKey);
+      if (!raw) return;
+      const o = JSON.parse(raw) as { username?: string; token?: string; cookies?: Record<string, string> };
+      if (!o?.token || !o.cookies || Object.keys(o.cookies).length === 0) return;
+      await logout3ue({ token: o.token, cookies: o.cookies, username: o.username || "", expiresAt: 0 });
+      console.log("[SemRush] SEM-单设备：新建会话前已登出上一台旧设备（保持账号恒为 1 台在线）");
+    } catch { /* 登出失败吞错，不阻塞登录 */ }
   }
 
   // BUG-04 A：写持久化会话（fire-and-forget，失败仅警告，不影响主流程）
@@ -872,6 +854,11 @@ export class SemRushClient {
       return persisted.token;
     }
 
+    // SEM-单设备（修正版）：走到这里说明内存/持久化均无可复用会话，即将全新登录、新建一台设备。
+    //   先登出上一台旧设备（忽略本地 TTL，旧 token 对应的在线设备可能仍占名额），再建新设备，
+    //   保证账号任一时刻只占 1 台，根治 30 分钟 TTL 到期反复登录累积僵尸 → "设备数超限"。
+    await this.guard.logoutPreviousDeviceBeforeRelogin();
+
     const releaseLogin = await this.guard.waitForSlot();
     const ts = Date.now();
     const url = `${LOGIN_URL}?username=${encodeURIComponent(this.creds.username)}&password=${encodeURIComponent(this.creds.password)}&ts=${ts}`;
@@ -1209,12 +1196,10 @@ export class SemRushClient {
     // BUG-04 C：整条查询（login + 全部 rpc + copies）外层占一次独占槽，内部 waitForSlot 走重入
     // no-op，保证一条 queryDomain = 一个连续会话，且全进程任一时刻仅一条查询在飞（真串行=1）。
     return this.guard.withExclusive(async () => {
-    // SEM-单设备（用户方案）：每次查询都用一次性会话 —— 先登出上一台残留设备 → CRM 全新登录 →
-    //   查询 → finally 优雅登出释放设备。彻底杜绝僵尸设备累积导致的「同时在线设备数已达上限」
-    //   （此前即使只生成一个广告，账号设备名额也会被旧/残留会话占满而失败）。
-    await this.guard.logoutStaleDevice(this.creds.username);
-    this.token = null; // 强制 login() 走全新登录，不复用任何内存/持久化会话
-    try {
+    // SEM-单设备（修正版）：复用同一台长会话设备，不再每查一次就重登。真正的单设备 = 一台
+    //   长期复用的会话；只有当会话 TTL 到期/失效需要重建时，才在 login() 内部「先登出旧设备
+    //   再建新设备」（见 login()）。此前"每查一次登出→重登"反而每查新建一台设备，3UE 登出有
+    //   延迟 → 同账号瞬间多台并存 → 设备数超限，方向错误，已撤销。
     console.log(`[SemRush] 开始查询: ${domain} (db=${this.creds.database})（队列状态: ${JSON.stringify(this.guard.getStats())}）`);
     await this.login();
 
@@ -1317,10 +1302,6 @@ export class SemRushClient {
     this.guard.setCachedDomain(cacheKey, result);
     console.log(`[SemRush] 查询完成: ${domain} (db=${this.creds.database}, ${kws.length} 关键词, ${ads.length} 广告)`);
     return result;
-    } finally {
-      // SEM-单设备：无论成功失败，查完都优雅登出（awaitable），在槽位释放前回收 3UE 设备。
-      await this.guard.gracefulLogout();
-    }
     }); // BUG-04 C：withExclusive 结束
   }
 
