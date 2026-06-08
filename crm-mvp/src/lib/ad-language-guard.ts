@@ -10,14 +10,22 @@
  *       语言兜底，**绝不留下与目标语言不符的条目**。
  *
  * 设计取舍：拉丁语系互相之间(en/de/fr/es…)纯启发式难以可靠区分，易误伤，故本守卫
- *       **只对非拉丁脚本目标语言生效**（CJK / 谚文 / 西里尔），正好覆盖 07 的繁體场景。
+ *       **只对非拉丁脚本目标语言生效**。覆盖 ad-market.ts 里所有非拉丁文字市场：
+ *       CJK(zh) / 假名(ja) / 谚文(ko) / 西里尔(ru,bg…) / 天城文(hi,mr…) /
+ *       阿拉伯(ar,fa,ur) / 泰文(th) / 希腊(el)。
+ *       LANG-01-R3（adidas.co.in 实证）：印度市场目标语言=Hindi(天城文)，旧守卫只认 CJK/西里尔，
+ *       把 hi 误判为 latin 直接跳过 → AI 看着全英文的落地页把标题/描述写成英文也无人拦截，
+ *       导致「广告语言=印地语、站内链接=印地语，但标题/描述=英文」的语言分叉。
  */
 
 import { callAiWithFallback } from "@/lib/ai-service";
 import { extractJsonFromAi } from "@/lib/crawl-pipeline";
 import { fillSafeHeadline, fillSafeDescription } from "@/lib/safe-ad-template";
 
-type ScriptKind = "han" | "kana" | "hangul" | "cyrillic" | "latin";
+type ScriptKind =
+  | "han" | "kana" | "hangul" | "cyrillic"
+  | "devanagari" | "arabic" | "thai" | "greek"
+  | "latin";
 
 /** 目标语言代码 → 期望脚本类型。拉丁语系统一归 "latin"（本守卫跳过，避免误伤）。 */
 export function targetLanguageScript(langCode?: string): ScriptKind {
@@ -26,7 +34,11 @@ export function targetLanguageScript(langCode?: string): ScriptKind {
   if (l.startsWith("zh")) return "han";
   if (l.startsWith("ja")) return "kana"; // 日文：汉字 + 假名
   if (l.startsWith("ko")) return "hangul";
-  if (l.startsWith("ru") || l.startsWith("uk") || l.startsWith("be") || l.startsWith("bg") || l.startsWith("sr")) return "cyrillic";
+  if (l.startsWith("ru") || l.startsWith("uk") || l.startsWith("be") || l.startsWith("bg") || l.startsWith("sr") || l.startsWith("mk")) return "cyrillic";
+  if (l.startsWith("hi") || l.startsWith("mr") || l.startsWith("ne")) return "devanagari"; // 印地语/马拉地语/尼泊尔语
+  if (l.startsWith("ar") || l.startsWith("fa") || l.startsWith("ur") || l.startsWith("ps")) return "arabic"; // 阿拉伯语/波斯语/乌尔都语
+  if (l.startsWith("th")) return "thai";
+  if (l.startsWith("el")) return "greek";
   return "latin";
 }
 
@@ -37,6 +49,14 @@ const SCRIPT_REGEX: Record<Exclude<ScriptKind, "latin">, RegExp> = {
   kana: /[\u3040-\u309f\u30a0-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/g,
   hangul: /[\uac00-\ud7a3\u1100-\u11ff\u3130-\u318f]/g,
   cyrillic: /[\u0400-\u04ff\u0500-\u052f]/g,
+  // 天城文（印地语/马拉地语/尼泊尔语）
+  devanagari: /[\u0900-\u097f]/g,
+  // 阿拉伯文（含补充区 + 表现形式区，覆盖波斯语/乌尔都语扩展字母）
+  arabic: /[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff\ufb50-\ufdff\ufe70-\ufeff]/g,
+  // 泰文
+  thai: /[\u0e00-\u0e7f]/g,
+  // 希腊文（含扩展区）
+  greek: /[\u0370-\u03ff\u1f00-\u1fff]/g,
 };
 
 /** 统计文本中"字母类"字符数（Unicode 字母），用于做脚本占比分母。 */
