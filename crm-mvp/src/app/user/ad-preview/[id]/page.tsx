@@ -827,7 +827,7 @@ export default function AdPreviewPage() {
       setSemrushFailMsg("");
       const kws = (json.data?.keywords as unknown[]) || [];
       if (kws.length === 0) {
-        message.warning("SemRush 未找到该商家的关键词，请手动输入");
+        message.warning("该商家在 SemRush 无关键词数据（0 条），请手动填写关键词");
         if (!opts?.manual) {
           try { localStorage.setItem(`semrush_fetched_${campaignId}`, JSON.stringify({ ts: Date.now(), status: "empty" })); } catch {}
         }
@@ -1164,8 +1164,21 @@ export default function AdPreviewPage() {
         const kf = data as { category?: string; message?: string };
         setKwAutoQuerying(false);
         setSemrushFailed(true);
-        setSemrushFailMsg(kf?.message || "SemRush 关键词获取未成功，可点右上角「从 SemRush 获取关键词」手动重试");
-        message.warning({ content: "SemRush 关键词暂未获取到，已用网站内容生成文案；如需关键词可手动获取", duration: 6 });
+        // no_data：该商家在 SemRush 确实无关键词数据(0 条)，非系统故障 —— 明确提示员工手动填写；
+        //   其它分类(超时/账号异常/不稳定)沿用"获取未成功、可手动重试"。
+        const isNoData = kf?.category === "no_data";
+        setSemrushFailMsg(
+          kf?.message ||
+            (isNoData
+              ? "该商家在 SemRush 无关键词数据（0 条），请手动填写关键词"
+              : "SemRush 关键词获取未成功，可点右上角「从 SemRush 获取关键词」手动重试"),
+        );
+        message.warning({
+          content: isNoData
+            ? "该商家在 SemRush 无关键词数据（0 条），已用网站内容生成文案，请手动填写关键词"
+            : "SemRush 关键词暂未获取到，已用网站内容生成文案；如需关键词可手动获取",
+          duration: 6,
+        });
         return;
       }
 

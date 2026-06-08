@@ -668,8 +668,15 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
                 }
                 console.log(`[Extensions] D-091 SemRush 关键词就绪并实时推送 ${semrushSelectedPhrases.length} 个，titles=${semrushTitlesFromKw.length}，fromCache=${kwRes.fromCache}`);
               } else {
-                const category = kwRes?.errorCategory || "timeout_or_empty";
-                send("keywords_failed", { category, message: kwRes?.errorMessage || "" });
+                // 区分两种「无关键词」：① 查询成功但该商家在 SemRush 无数据(0 条) —— 小众品牌未被收录，
+                //   非系统故障；② 查询失败/超时/账号异常。前者必须明确告诉员工"该商家 0 关键词、请手动填写"，
+                //   不要笼统报"获取失败/超时"，否则会误以为是系统问题反复重试。
+                const isEmptyNoData = !!kwRes && kwRes.ok && kwRes.keywords.length === 0;
+                const category = isEmptyNoData ? "no_data" : kwRes?.errorCategory || "timeout_or_empty";
+                const message = isEmptyNoData
+                  ? "该商家在 SemRush 暂无关键词数据（0 条），已用网站内容生成文案，请手动填写关键词"
+                  : kwRes?.errorMessage || "";
+                send("keywords_failed", { category, message });
                 console.warn(`[Extensions] D-091 SemRush 关键词未就绪（category=${category}），文案降级用爬取/兜底词`);
               }
               return kwRes;
@@ -849,17 +856,29 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
         // 安全护栏：要求 ≥2 条 navLinks 指向该域、品牌 label 相同、且非子域关系（子域本就同站，
         //   不需校正），避免被单条跨域链接（如 avis.de 混入的 secure.avis.co.uk）带偏。
         try {
-          const navHostCount = new Map<string, number>();
-          for (const l of ((cache as CrawlCache | null)?.navLinks || [])) {
-            let h = "";
-            try { h = new URL(l.url).hostname.replace(/^www\./, "").toLowerCase(); } catch { continue; }
-            if (h) navHostCount.set(h, (navHostCount.get(h) || 0) + 1);
-          }
+          // D-096 强化（mingwangknits.com → mingwang.com 实证）：
+          //   旧逻辑只数 navLinks 求主导域，但 WAF/JS 重的 Shopify 站常 navLinks=0、真实链接全落在
+          //   sitelinkCandidates（由 pageLinks/Puppeteer 兜底发现）。此时旧逻辑永不触发，merchantUrl
+          //   仍是跳转前的别名域(mingwangknits.com)，而候选全在跳转后真实域(mingwang.com)，被 D-094
+          //   同域闸全删→站内链接 0 条。故主导域统计改为 navLinks ∪ sitelinkCandidates 一起算。
+          const hostCount = new Map<string, number>();
+          const tally = (arr?: Array<{ url: string }>) => {
+            for (const l of arr || []) {
+              let h = "";
+              try { h = new URL(l.url).hostname.replace(/^www\./, "").toLowerCase(); } catch { continue; }
+              if (h) hostCount.set(h, (hostCount.get(h) || 0) + 1);
+            }
+          };
+          tally((cache as CrawlCache | null)?.navLinks);
+          tally((cache as any)?.sitelinkCandidates);
           let dominantHost = "";
           let dominantCount = 0;
-          for (const [h, c] of navHostCount) {
+          let totalHits = 0;
+          for (const [h, c] of hostCount) {
+            totalHits += c;
             if (c > dominantCount) { dominantHost = h; dominantCount = c; }
           }
+          const dominantShare = totalHits > 0 ? dominantCount / totalHits : 0;
           let curHost = "";
           try { curHost = new URL(merchantUrl).hostname.replace(/^www\./, "").toLowerCase(); } catch {}
           if (
@@ -867,7 +886,13 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
             !curHost.endsWith(`.${dominantHost}`) && !dominantHost.endsWith(`.${curHost}`)
           ) {
             const { extractHostBrandLabel } = await import("@/lib/country-url-resolver");
-            if (extractHostBrandLabel(dominantHost) === extractHostBrandLabel(curHost)) {
+            const sameBrand = extractHostBrandLabel(dominantHost) === extractHostBrandLabel(curHost);
+            // 压倒性主导：真实链接几乎全集中在同一个非落地域（如 mingwangknits.com 跳转到的
+            //   mingwang.com，候选 6/6=100%）—— 这是「商家 URL 跨域跳转/别名到真实站点」的强信号；
+            //   而页面里偶混的单条跨域链接（avis.de 里的 secure.avis.co.uk）绝不可能占到这个比例，
+            //   故即使品牌 label 不同（mingwang vs mingwangknits）也可安全校正。
+            const overwhelmingRedirect = dominantCount >= 3 && dominantShare >= 0.8;
+            if (sameBrand || overwhelmingRedirect) {
               const prevUrl = merchantUrl;
               const landedRoot = `${new URL(merchantUrl).protocol}//${dominantHost}/`;
               merchantUrl = landedRoot;
@@ -878,8 +903,9 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
                 }).catch(() => {});
               }
               console.warn(
-                `[Extensions] D-096 落地域校正：navLinks 主导域=${dominantHost}(${dominantCount} 条) ` +
-                `与落地页 host=${curHost} 不同注册域但同品牌，校正 merchantUrl/final_url：${prevUrl} → ${landedRoot}`,
+                `[Extensions] D-096 落地域校正：主导域=${dominantHost}(${dominantCount} 条/${(dominantShare * 100).toFixed(0)}%) ` +
+                `与落地页 host=${curHost} 不同注册域（${sameBrand ? "同品牌" : "跨域跳转/别名-压倒性主导"}），` +
+                `校正 merchantUrl/final_url：${prevUrl} → ${landedRoot}`,
               );
             }
           }
