@@ -959,6 +959,11 @@ export async function fetchPageImages(pageUrl: string): Promise<string[]> {
       const resolve = (raw: string) => {
         let s = raw.trim();
         if (!s || s.startsWith("data:") || s.startsWith("blob:")) return "";
+        // BUG-11：先还原 HTML 实体（&amp; → &），否则带 query 的 CDN 图 URL（如 ctfassets
+        //   ?fm=avif&amp;w=1920）会因非法参数被 CDN 拒为 HTTP 400。
+        if (s.indexOf("&") !== -1) {
+          s = s.replace(/&amp;/gi, "&").replace(/&#0*38;/g, "&").replace(/&#x0*26;/gi, "&");
+        }
         if (s.startsWith("//")) s = "https:" + s;
         if (s.startsWith("/")) s = baseDomain + s;
         if (!s.startsWith("http")) return "";

@@ -1503,6 +1503,22 @@ async function discoverSitelinkCandidates(
 
 // ─── 图片收集 ───
 
+// BUG-11：HTML 实体解码（图片 URL 专用）。raw HTML 中 & 被编码为 &amp;（含数字实体），
+//   若不还原直接拿去请求，CDN 会因非法 query 参数返回 400。只解码会破坏 URL 的少数关键实体
+//   （& / ' "），不做整页解码以免误伤路径里的合法字符。
+function decodeUrlHtmlEntities(u: string): string {
+  if (!u || u.indexOf("&") === -1) return u;
+  return u
+    .replace(/&amp;/gi, "&")
+    .replace(/&#0*38;/g, "&")
+    .replace(/&#x0*26;/gi, "&")
+    .replace(/&#0*47;/g, "/")
+    .replace(/&#x0*2f;/gi, "/")
+    .replace(/&#0*39;/g, "'")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#0*34;/g, '"');
+}
+
 // 目标：缓存层至少积累 60 张原始图片候选，保证前端过滤后仍有 20+ 张可用
 const IMG_COLLECT_TARGET = 60;
 
@@ -1525,6 +1541,11 @@ async function collectImages(
   const allImgs: string[] = [];
   const seen = new Set<string>();
   const addImg = (img: string) => {
+    // BUG-11：图片 URL 必须先做 HTML 实体解码再入库/抓取。正则从 raw HTML 抽出的 src/srcset
+    //   会保留 &amp;（如 Contentful/ctfassets 的 ?fm=avif&amp;w=1920&amp;q=90），CDN 收到非法
+    //   参数 amp;w=... 直接回 HTTP 400 → 图片代理把整个 host 标记反爬 → 同 host 所有图全失败。
+    //   diptyqueparis.com 全站图走 images.ctfassets.net，正是此问题导致"图片无法生成"。
+    img = decodeUrlHtmlEntities(img);
     if (seen.has(img)) return;
     if (!isQualityImageUrl(img, merchantDomain)) return;
     seen.add(img);
@@ -2214,7 +2235,7 @@ export async function buildCrawlCache(
   // D-059: 把 JSON-LD 产品图（extractProducts 已提取但此前未并入 images）合并为图片兜底候选，
   // 追加在 collectImages 结果之后（低优先），经质量过滤 + 去重，缓解主爬/子页采图为空时的 0 图问题。
   const productImageUrls = (crawledProducts || [])
-    .map((p) => p?.imageUrl)
+    .map((p) => (p?.imageUrl ? decodeUrlHtmlEntities(p.imageUrl) : p?.imageUrl)) // BUG-11：JSON-LD 产品图也需实体解码
     .filter((u): u is string => typeof u === "string" && /^https?:\/\//.test(u) && isQualityImageUrl(u, merchantUrl));
   const mergedImagesRaw = productImageUrls.length > 0
     ? Array.from(new Set([...images, ...productImageUrls]))
