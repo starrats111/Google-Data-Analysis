@@ -37,6 +37,13 @@ export interface ReachabilityOptions {
   maxRedirects?: number;
   /** 重试间退避基数 ms，默认 1500（指数退避 1.5s/3s/6s） */
   retryBaseMs?: number;
+  /**
+   * 目标国家代码（如 US/GB）。CRAWL-04：当直连产生「连接级失败」（timeout/network_error/server_error）
+   * 时，本服务器出口 IP 可能被目标站按地域/IP 封锁（实测 rcwilley.com 对腾讯云机房直连超时、
+   * 对美国住宅代理却 200+50 图）——这与「Google 美国爬虫仍可达」是同一种情况。
+   * 配了该国爬取代理时，用代理再探一次，避免把「我们到不了」误判成「站点死了」而硬卡提交。
+   */
+  country?: string;
 }
 
 /**
@@ -104,11 +111,80 @@ export async function checkReachability(
     }
   }
 
+  // CRAWL-04：直连「连接级失败」时走该国代理兜底探一次。
+  //   仅对 timeout / network_error / server_error 触发——这些是「连不上/服务端抖动」，
+  //   本机出口 IP 被地域封锁恰属此类（rcwilley 实证）；4xx（404/410/403…）有明确 HTTP 应答、
+  //   不属「连不上」，不走代理（避免给真死链/真 403 蒙混）。代理探到 2xx 即视为可达放行。
+  if (!lastResult.reachable && opts.country) {
+    const fr = lastResult.failureReason || "";
+    const isConnLevel = fr.startsWith("network_error") || fr === "timeout" || fr === "server_error";
+    if (isConnLevel) {
+      // 代理链路比直连慢（实测 SOCKS5 取 rcwilley ~6.3s），给更宽松超时避免临界误判
+      const viaProxy = await probeViaProxy(url, opts.country, Math.max(timeoutMs, 15000), maxRedirects).catch(() => null);
+      if (viaProxy && viaProxy.reachable) {
+        console.warn(`[Reachability] CRAWL-04：直连失败(${fr})但 ${opts.country} 代理可达，判定为可达放行 finalUrl=${viaProxy.finalUrl} status=${viaProxy.statusCode}`);
+        lastResult = viaProxy;
+      }
+    }
+  }
+
   return {
     ...lastResult,
     attempts,
     elapsedMs: Date.now() - startedAt,
   };
+}
+
+/**
+ * CRAWL-04：经该国爬取代理探测可达性（直连失败时兜底）。
+ * 复用 crawl-proxy 的 SOCKS5 代理 + fetchViaProxy（内部跟随重定向）。
+ * 未配代理 / 探测失败 → 返回 null，调用方维持直连结论。
+ */
+async function probeViaProxy(
+  url: string,
+  country: string,
+  timeoutMs: number,
+  maxRedirects: number,
+): Promise<Omit<ReachabilityResult, "attempts" | "elapsedMs"> | null> {
+  const { getProxyUrlForCountry, fetchViaProxy } = await import("@/lib/crawl-proxy");
+  const proxyUrl = await getProxyUrlForCountry(country).catch(() => null);
+  if (!proxyUrl) return null;
+
+  const ctrl = new AbortController();
+  const tm = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const resp = await fetchViaProxy(
+      url,
+      {
+        method: "GET",
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+          "Accept-Language": "en-US,en;q=0.9",
+        },
+        signal: ctrl.signal,
+      },
+      proxyUrl,
+      maxRedirects,
+    );
+    const reachable = resp.status >= 200 && resp.status < 300;
+    return {
+      finalUrl: resp.url || url,
+      statusCode: resp.status,
+      reachable,
+      redirectHops: 0,
+      failureReason: reachable
+        ? undefined
+        : resp.status >= 500
+          ? "server_error"
+          : "client_error",
+      chain: [],
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(tm);
+  }
 }
 
 /**

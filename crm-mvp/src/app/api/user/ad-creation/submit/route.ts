@@ -136,7 +136,7 @@ export async function POST(req: NextRequest) {
   //   对 401/403/429（多为反爬/限流，Google 爬虫仍可达）放行，避免误杀正常落地页。
   // ═════════════════════════════════════════════════════════════════
   try {
-    const reach = await checkReachability(finalUrl, { maxRetries: 3, timeoutMs: 8000 });
+    const reach = await checkReachability(finalUrl, { maxRetries: 3, timeoutMs: 8000, country: campaign.target_country || "US" });
     if (isHardUnreachable(reach)) {
       console.warn(`[AdSubmit] D-050 落地页硬卡阻断: ${finalUrl} reason=${reach.failureReason} status=${reach.statusCode}`);
       return apiError(

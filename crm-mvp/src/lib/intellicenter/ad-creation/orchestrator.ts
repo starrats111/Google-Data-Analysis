@@ -174,7 +174,7 @@ export async function runIntelligentAdCreation(
         elapsedMs: 0,
         chain: [],
       }
-    : await checkReachability(ctx.finalUrl);
+    : await checkReachability(ctx.finalUrl, { country: ctx.targetCountry });
   timings.step1_reachability = Date.now() - t1;
   if (!reachability.reachable) {
     emit("url_unreachable_warning", {
