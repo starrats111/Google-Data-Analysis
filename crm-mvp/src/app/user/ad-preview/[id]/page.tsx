@@ -2036,7 +2036,9 @@ export default function AdPreviewPage() {
   }, [initialized, currentStep, preview, autoStartGeneration]);
 
   // ─── 提交 ───
-  const handleSubmit = useCallback(async () => {
+  // confirmReachable：用户在「落地页无法访问」硬卡弹窗点「我已确认可访问，仍要提交」后再次提交时为 true，
+  //   后端据此跳过 D-050 连接级硬卡（我们机房/代理到不了 ≠ Google 到不了）。
+  const handleSubmit = useCallback(async (confirmReachable: boolean = false) => {
     const validH = headlines.filter((h) => h.trim().length > 0);
     const validD = descriptions.filter((d) => d.trim().length > 0);
     if (validH.length < 3) { message.error("至少需要 3 条标题"); return; }
@@ -2090,6 +2092,7 @@ export default function AdPreviewPage() {
 
       const submitBody: Record<string, any> = {
         campaign_id: campaignId,
+        ...(confirmReachable ? { confirm_reachable: true } : {}),
         headlines: validH,
         descriptions: validD,
         keywords: kwList,
@@ -2144,6 +2147,27 @@ export default function AdPreviewPage() {
           message.success("广告已提交到 Google Ads！");
           setTimeout(() => router.push("/user/data-center"), 1500);
         }
+      } else if ((res.data as any)?.reason === "landing_unreachable_overridable") {
+        // CRAWL-04 / 07-B：落地页可达性硬卡，但属「我们机房/代理到不了」的连接级失败（Akamai/地域封锁等），
+        //   站点对用户浏览器与 Google 爬虫可能完全正常。给用户二次确认覆盖，确认后带 confirm_reachable 重提。
+        const lpUrl = (res.data as any)?.finalUrl || "";
+        modal.confirm({
+          title: "落地页我们这边探测不到",
+          content: (
+            <div>
+              <div>{res.message || "落地页无法访问"}</div>
+              <div style={{ marginTop: 8, color: "#888", fontSize: 13 }}>
+                这通常是目标站对服务器/代理出口 IP 的封锁（如 Akamai、地域限制），并不代表网站真的打不开。
+                请你先在浏览器确认 {lpUrl ? <a href={lpUrl} target="_blank" rel="noreferrer">{lpUrl}</a> : "落地页"} 能正常打开，确认无误后可强制提交。
+              </div>
+            </div>
+          ),
+          okText: "我已确认可访问，仍要提交",
+          cancelText: "取消",
+          width: 520,
+          okButtonProps: { danger: true },
+          onOk: () => handleSubmit(true),
+        });
       } else {
         const errMsg = res.message || "提交失败";
         if (errMsg.includes("政策违规") || errMsg.includes("政策规定") || errMsg.includes("被拒绝") || errMsg.length > 100) {
@@ -3481,7 +3505,7 @@ export default function AdPreviewPage() {
           <Popconfirm
             title="确认提交广告到 Google Ads？"
             description="提交后将在 Google Ads 中创建广告系列、广告组和广告。"
-            onConfirm={handleSubmit}
+            onConfirm={() => handleSubmit()}
             okText="确认提交"
             cancelText="取消"
             disabled={submitting || !!preview.campaign?.google_campaign_id || headlines.filter(h => h.trim()).length < 3}

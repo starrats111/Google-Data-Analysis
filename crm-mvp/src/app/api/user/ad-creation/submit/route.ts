@@ -71,6 +71,9 @@ export async function POST(req: NextRequest) {
   const bodyFinalUrlSuffix: string | undefined = body.final_url_suffix ?? undefined;
   // C-088: 用户在广告预览页"广告系列名(可修改)"输入框填的值（可选）
   const bodyCampaignNameCustom: string | undefined = body.campaign_name_custom ?? undefined;
+  // CRAWL-04 / 07-B：用户在「落地页无法访问」硬卡弹窗里点「我已确认可访问，仍要提交」后，
+  // 前端带上 confirm_reachable=true，跳过 D-050 连接级硬卡（我们机房/代理到不了 ≠ Google 到不了）。
+  const confirmReachable: boolean = body.confirm_reachable === true;
 
   if (!campaign_id) return apiError("缺少 campaign_id");
   if (!headlines?.length || headlines.length < 3) return apiError("至少需要 3 条标题");
@@ -138,11 +141,30 @@ export async function POST(req: NextRequest) {
   try {
     const reach = await checkReachability(finalUrl, { maxRetries: 3, timeoutMs: 8000, country: campaign.target_country || "US" });
     if (isHardUnreachable(reach)) {
-      console.warn(`[AdSubmit] D-050 落地页硬卡阻断: ${finalUrl} reason=${reach.failureReason} status=${reach.statusCode}`);
-      return apiError(
-        `落地页无法访问（${reach.failureReason}${reach.statusCode ? `, HTTP ${reach.statusCode}` : ""}），为避免被 Google 以「目标网址无效」拒登，已阻止本次提交。请确认 ${reach.finalUrl || finalUrl} 能正常打开后再提交。`,
-        422,
-      );
+      // CRAWL-04 / 07-B：连接级失败（timeout/network_error/server_error）多为「本服务器出口 IP 被
+      //   目标站 CDN(Akamai 等)/地域封锁」——我们到不了 ≠ 站点死了，Google 全球爬虫独立可达。
+      //   故对这类失败提供「二次确认覆盖」：用户在弹窗确认落地页可正常打开后带 confirm_reachable=true，
+      //   即放行提交（仍记日志留痕）。404/410 这类「服务器明确说页面没了」不在覆盖范围内（见下）。
+      const fr = reach.failureReason || "";
+      const isConnLevel = fr.startsWith("network_error") || fr === "timeout" || fr === "server_error";
+      const overridable = isConnLevel; // 仅连接级失败可被用户确认覆盖；404/410 死链不可
+      if (confirmReachable && overridable) {
+        console.warn(`[AdSubmit] D-050 落地页硬卡：用户已确认可访问，覆盖放行 ${finalUrl} reason=${fr} status=${reach.statusCode}`);
+      } else {
+        console.warn(`[AdSubmit] D-050 落地页硬卡阻断: ${finalUrl} reason=${fr} status=${reach.statusCode} overridable=${overridable}`);
+        const msg = `落地页无法访问（${fr}${reach.statusCode ? `, HTTP ${reach.statusCode}` : ""}），为避免被 Google 以「目标网址无效」拒登，已阻止本次提交。请确认 ${reach.finalUrl || finalUrl} 能正常打开后再提交。`;
+        // overridable=true 时附带 data 标志，前端据此弹出「我已确认可访问，仍要提交」二次确认按钮。
+        return Response.json(
+          {
+            code: -1,
+            message: msg,
+            data: overridable
+              ? { reason: "landing_unreachable_overridable", finalUrl: reach.finalUrl || finalUrl, failureReason: fr }
+              : null,
+          },
+          { status: 422 },
+        );
+      }
     }
     if (!reach.reachable) {
       console.warn(`[AdSubmit] D-050 落地页可达性存疑（放行，疑似反爬/限流）: ${finalUrl} reason=${reach.failureReason} status=${reach.statusCode}`);
