@@ -2321,8 +2321,11 @@ export async function buildCrawlCache(
 
   // BUG-02 A+C（设计方案.md §四点五）：文件名词干去重 + 同目录配额，
   // 去掉「不同 URL 同一张图」与「单目录霸屏」造成的候选图同质化。输入按现有分数顺序。
+  // BUG-13：原 4/目录 对 Shopify(/cdn/shop/files/)、Magento(/media/catalog/product/) 这类
+  //   「全站图片都在同一个目录」的电商站过严——会把几十张不同产品图直接砍到 4 张（实证 Ashworth Golf）。
+  //   真正的「同图/视觉重复」已由下方 BUG-02 D 感知哈希去重兜住，这里放宽到 15/目录，给足候选。
   const afterStem = dedupeByImageStem(mergedImagesRaw);
-  let mergedImages = capImagesPerDirectory(afterStem, 4);
+  let mergedImages = capImagesPerDirectory(afterStem, 15);
   if (mergedImages.length < mergedImagesRaw.length) {
     console.log(`[CrawlPipeline] BUG-02 去同质：${mergedImagesRaw.length} → 词干去重 ${afterStem.length} → 目录配额 ${mergedImages.length}`);
   }
