@@ -2185,10 +2185,18 @@ export async function buildCrawlCache(
   );
   const sitelinkUrls = (sitelinkCandidates || []).map((c) => c.url).filter(Boolean);
 
+  // BUG-12：重站(airBaltic 等)主爬已渲染、HTML 里有图，但 collectImages 的逐个 Puppeteer 增强
+  //   在尾段剩余预算内跑不完 → withTailDeadline 回退 [] → 连主爬已抓到的图也一起丢 → "图片找不到"。
+  //   处理：预先把主爬图片做质量过滤当作「基底兜底」，collectImages 超时/异常时回退到基底而非空，
+  //   保证重站至少保留首页/og/hero 图。不改任何超时预算，零额外负载。
+  let imgMerchantDomain: string | undefined;
+  try { imgMerchantDomain = new URL(merchantUrl).hostname; } catch { /* ignore */ }
+  const baseCrawlImages = (crawlResult.images || []).filter((u) => isQualityImageUrl(u, imgMerchantDomain)).slice(0, 100);
+
   const [images, features, navItems, phoneCandidates, promoRegex, priceRegex, crawledProducts] = await Promise.all([
     withTailDeadline(
-      collectImages(crawlResult.images, crawlResult.links, merchantUrl, merchantName, puppeteerCache?.images, proxyUrl ?? undefined, puppeteerProxyUrl ?? undefined, sitelinkUrls).catch(() => [] as string[]),
-      [] as string[],
+      collectImages(crawlResult.images, crawlResult.links, merchantUrl, merchantName, puppeteerCache?.images, proxyUrl ?? undefined, puppeteerProxyUrl ?? undefined, sitelinkUrls).catch(() => baseCrawlImages),
+      baseCrawlImages,
       "图片采集",
     ),
     Promise.resolve(html ? extractMerchantFeatures(html, [...(puppeteerCache?.heroTexts ?? []), ...(puppeteerCache?.uspTexts ?? [])]) : []),

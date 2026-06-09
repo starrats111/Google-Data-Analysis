@@ -70,11 +70,11 @@ export async function PATCH(req: NextRequest) {
 
   const updates: Promise<unknown>[] = [];
 
-  // 更新 final_url
+  // 更新 final_url —— LAND-01：用户手动设定落地页即加锁，后续生成/提交不再自动改写覆盖
   if (fixedUrl) {
     updates.push(prisma.ad_creatives.update({
       where: { id: adCreative.id },
-      data: { final_url: fixedUrl },
+      data: { final_url: fixedUrl, final_url_locked: 1 },
     }));
   }
 

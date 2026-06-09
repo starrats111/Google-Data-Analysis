@@ -439,6 +439,7 @@ interface GenContext {
   adCreativeId: bigint | null;
   initialCache: CrawlCache | null;
   originalMerchantUrl: string;
+  finalUrlLocked: boolean;
   country: string;
   optionalNeedsPromo: boolean;
   dbKeywordsForFallback: string[];
@@ -491,13 +492,16 @@ export async function loadGenContext(
   const adCreative = adGroup
     ? await prisma.ad_creatives.findFirst({
       where: { ad_group_id: adGroup.id, is_deleted: 0 },
-      select: { id: true, final_url: true, crawl_cache: true },
+      select: { id: true, final_url: true, final_url_locked: true, crawl_cache: true },
     })
     : null;
 
   // 优先使用用户明确设定的落地页 URL（用户可能已改成本地化路径如 /en-us/）
   // merchant_url 是商家层面的默认 URL，可能带旧地区前缀（如 /en-sg/）
   const originalMerchantUrl = adCreative?.final_url || merchant.merchant_url || "";
+  // LAND-01：用户在落地页处手动「修改+保存」过 → final_url_locked=1，本次生成全程不再自动改写落地页
+  //   （跳过 ccTLD 兜底 / C-016 路径本地化 / D-096 落地域校正 对 final_url 的覆盖）。
+  const finalUrlLocked = adCreative?.final_url_locked === 1 && !!adCreative?.final_url;
   const country = campaign.target_country || "US";
   const needsOptional = types.includes("optional");
   const optionalNeedsPromo = needsOptional && (body.optionalTypes || []).some((t: string) => ["promotion", "price"].includes(t));
@@ -513,6 +517,7 @@ export async function loadGenContext(
       adCreativeId,
       initialCache,
       originalMerchantUrl,
+      finalUrlLocked,
       country,
       optionalNeedsPromo,
       dbKeywordsForFallback,
@@ -534,6 +539,7 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
     adCreativeId,
     initialCache,
     originalMerchantUrl,
+    finalUrlLocked,
     country,
     optionalNeedsPromo,
     dbKeywordsForFallback,
@@ -806,7 +812,7 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
         //   才退一步用 country-url-resolver 找一个 ccTLD 本地候选域（resolver 已内置 D-068 停放、
         //   D08-A 回跳 canonical、BUG-09 机器人挑战墙 三道护栏，不会再切到 coach.co.uk / ukbreakaways.uk
         //   这类壳）。候选能爬通才采用，否则保留商家原 URL（至少不更差）。
-        if (!crawlUsable(cache)) {
+        if (!crawlUsable(cache) && !finalUrlLocked) {
           try {
             const { resolveCountryUrl } = await import("@/lib/country-url-resolver");
             const fb = await resolveCountryUrl(originalMerchantUrl, country);
@@ -834,9 +840,9 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
           }
         }
 
-        // C-016: 路径级 locale 写回（/en-sg/ → /en-us/）
+        // C-016: 路径级 locale 写回（/en-sg/ → /en-us/）—— LAND-01 锁定时跳过，保留用户落地页
         const localizedUrl = (cache as CrawlCache | null)?.localizedMerchantUrl;
-        if (localizedUrl && localizedUrl !== merchantUrl && adCreativeId) {
+        if (!finalUrlLocked && localizedUrl && localizedUrl !== merchantUrl && adCreativeId) {
           const prevUrl = merchantUrl;
           merchantUrl = localizedUrl;
           await prisma.ad_creatives.update({
@@ -882,6 +888,7 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
           let curHost = "";
           try { curHost = new URL(merchantUrl).hostname.replace(/^www\./, "").toLowerCase(); } catch {}
           if (
+            !finalUrlLocked && // LAND-01：用户锁定落地页时不做落地域校正
             dominantHost && curHost && dominantHost !== curHost && dominantCount >= 2 &&
             !curHost.endsWith(`.${dominantHost}`) && !dominantHost.endsWith(`.${curHost}`)
           ) {
