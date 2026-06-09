@@ -37,6 +37,42 @@ import {
   type OrchestratorTask,
 } from "@/lib/intellicenter/ad-creation";
 
+/**
+ * CRAWL-05：判定「商家原域是否仍然存活」。
+ * 只要原域返回**任何 HTTP 状态码**（含 403/429/503 等反爬/限流响应）即视为存活——站点在、
+ *   只是拒绝我们的爬虫；仅当连接级彻底失败（DNS 解析失败 / 连接被拒 / 整体超时，拿不到任何
+ *   HTTP 应答）才判为「真不可达」。
+ * 用途：ccTLD 换域回退守门。存活站绝不能切到「同名不同后缀」的异主域
+ *   （如 mpb.com[二手相机平台] 被反爬 403 时，误切到 mpb.co.uk[另一家土木工程公司]，
+ *    会拿错公司的链接/图片/文案）。
+ */
+async function probeOriginAlive(url: string, country?: string): Promise<boolean> {
+  // 1) 反爬缓存命中：主爬过程中若撞 403/挑战墙，host 已被 markHostChallenged → 必然存活
+  try {
+    const { getHostKey, isHostChallenged } = await import("@/lib/crawl-host-cache");
+    const hk = getHostKey(url);
+    if (hk && isHostChallenged(hk)) return true;
+  } catch {}
+  // 2) 主动探一次（代理优先，再直连），任一拿到 HTTP 状态码即存活
+  const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36";
+  const tryFetch = async (useProxy: boolean): Promise<boolean> => {
+    try {
+      if (useProxy && country) {
+        const { getProxyUrlForCountry, fetchViaProxy } = await import("@/lib/crawl-proxy");
+        const px = await getProxyUrlForCountry(country).catch(() => null);
+        if (!px) return false;
+        const r = await fetchViaProxy(url, { headers: { "user-agent": UA }, signal: AbortSignal.timeout(9000) }, px);
+        return typeof r?.status === "number" && r.status > 0;
+      }
+      const r = await fetch(url, { headers: { "user-agent": UA }, redirect: "follow", signal: AbortSignal.timeout(9000) });
+      return typeof r.status === "number" && r.status > 0;
+    } catch { return false; }
+  };
+  if (await tryFetch(true)) return true;
+  if (await tryFetch(false)) return true;
+  return false;
+}
+
 function formatAiRuleBlock(profile: unknown | null | undefined, section: "sitelinks" | "ad_copy" | "compliance"): string {
   if (!profile) return "";
   const text = buildAiRulePrompt(profile, section);
@@ -812,7 +848,15 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
         //   才退一步用 country-url-resolver 找一个 ccTLD 本地候选域（resolver 已内置 D-068 停放、
         //   D08-A 回跳 canonical、BUG-09 机器人挑战墙 三道护栏，不会再切到 coach.co.uk / ukbreakaways.uk
         //   这类壳）。候选能爬通才采用，否则保留商家原 URL（至少不更差）。
-        if (!crawlUsable(cache) && !finalUrlLocked) {
+        // CRAWL-05 错域回退守门：403/反爬/限流 ≠ 域名失效。站点仍存活、只是拒绝我们的爬虫；此时若切到
+        //   「同名不同后缀」域（实测 mpb.com 被反爬 403 → 误切 mpb.co.uk，后者是另一家土木工程公司）
+        //   会拿错公司的链接/图片/文案。故仅当原商家域「真正不可达」（无任何 HTTP 应答）时才允许 ccTLD 回退。
+        const originAlive = (!crawlUsable(cache) && !finalUrlLocked)
+          ? await probeOriginAlive(originalMerchantUrl, country).catch(() => false)
+          : false;
+        if (!crawlUsable(cache) && !finalUrlLocked && originAlive) {
+          console.warn(`[Extensions] CRAWL-05：商家域 ${merchantUrl} 仍返回 HTTP 应答（反爬/限流，站点存活），不做 ccTLD 换域回退，保留原 URL（爬取交由 Puppeteer/SemRush/手动兜底）`);
+        } else if (!crawlUsable(cache) && !finalUrlLocked) {
           try {
             const { resolveCountryUrl } = await import("@/lib/country-url-resolver");
             const fb = await resolveCountryUrl(originalMerchantUrl, country);

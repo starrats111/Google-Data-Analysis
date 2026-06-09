@@ -1873,8 +1873,13 @@ export async function buildCrawlCache(
     };
     if (hasProxy) {
       if (isChallengedHost && !options?.forcePuppeteer) {
-        // 反爬站：puppeteer+代理优先（5.10 行为），HTTP 后置兜底
-        pushPuppeteerProxy();
+        // 反爬站：puppeteer+代理优先（5.10 行为），HTTP 后置兜底。
+        // CRAWL-05 B（快速止损）：硬反爬站（如 mpb.com，连英国住宅代理也回 403）只给「一次足额浏览器
+        //   尝试」puppeteer_root+proxy（能解 CF/JS 挑战的站这一发就够），**砍掉 locale_short+proxy /
+        //   direct_fallback 两个冗余 Puppeteer 策略**——它们与 root 撞同一道硬阻断、几乎不可能成功，却各
+        //   烧 ~75s，正是把 165s 预算拖满的元凶。保留 HTTP 兜底（住宅代理 HTTP 偶尔能过）。这样硬反爬站
+        //   最坏 ~75s(puppeteer)+~22s(http) 即止损，而非空耗 165s。
+        strategies.push({ name: "puppeteer_root+proxy", run: () => runPuppeteer(merchantUrl) });
         pushHttp();
       } else {
         // 普通站：HTTP-first（除非 forcePuppeteer），再 puppeteer+代理全量兜底
