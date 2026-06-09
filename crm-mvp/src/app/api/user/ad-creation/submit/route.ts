@@ -32,7 +32,7 @@ async function loadImageAsBase64(imageUrl: string): Promise<{ data: string; name
       return { data: buffer.toString("base64"), name: filename };
     }
     if (imageUrl.startsWith("http://") || imageUrl.startsWith("https://")) {
-      const resp = await fetch(imageUrl, { signal: AbortSignal.timeout(15000) });
+      const resp = await fetch(imageUrl, { signal: AbortSignal.timeout(10000) });
       if (!resp.ok) return null;
       const buffer = Buffer.from(await resp.arrayBuffer());
       if (buffer.length > 5 * 1024 * 1024) return null;
@@ -1546,8 +1546,16 @@ export async function POST(req: NextRequest) {
         const assetOps: Record<string, unknown>[] = [];
         let imgTempId = -100;
         let totalBytes = 0;
-        for (const url of (image_urls as string[]).slice(0, MAX_IMAGES)) {
-          const img = await loadImageAsBase64(url);
+        // CRAWL-04：原为「逐张 await 加载」，对图床被 CDN(Akamai)/地域封锁的商家（如 etihad）会
+        //   每张 fetch 超时累计——20 张 × 15s 串行可拖到数分钟，整个提交请求被前端/nginx 当超时
+        //   → 用户「发不出去」。图片上传本就非致命，故改为「并行加载 + 总预算封顶」：加载不到就跳过，
+        //   绝不阻塞主广告创建。总耗时由单张超时（10s）+ 30s 总预算双重封顶。
+        const urls = (image_urls as string[]).slice(0, MAX_IMAGES);
+        const imgLoadDeadline = new Promise<null>((resolve) => setTimeout(() => resolve(null), 30_000));
+        const loadedImgs = await Promise.all(
+          urls.map((u) => Promise.race([loadImageAsBase64(u).catch(() => null), imgLoadDeadline])),
+        );
+        for (const img of loadedImgs) {
           if (!img) continue;
           const imgBytes = Buffer.byteLength(img.data, "base64");
           if (totalBytes + imgBytes > MAX_TOTAL_IMAGE_BYTES) break;
