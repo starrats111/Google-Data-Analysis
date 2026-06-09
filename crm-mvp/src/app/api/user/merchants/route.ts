@@ -4,7 +4,6 @@ import { apiSuccess, apiError } from "@/lib/constants";
 import { withUser } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import { buildDraftCampaignName } from "@/lib/campaign-naming";
-import { buildKeywordCreateManyInput } from "@/lib/ad-keyword-pipeline";
 import { loadConnectionAccountMap, buildConnectionAccounts } from "@/lib/merchant-connection";
 import { extractDomain } from "@/lib/atc-service";
 
@@ -919,58 +918,19 @@ async function triggerAdCopyGeneration(
   }
   adCopyGeneratingSet.add(lockKey);
   try {
-    const { SemRushClient } = await import("@/lib/semrush-client");
     const { buildCrawlCache } = await import("@/lib/crawl-pipeline");
 
-    let dedupedTitles: string[] = [];
-    let dedupedDescriptions: string[] = [];
-    let paidKeywordsForDb: Array<{ phrase: string; volume: number; competition?: string | number | null; suggested_bid?: number | null; cpc?: number | null; source: string; recommended_match_type: string }> = [];
+    const dedupedTitles: string[] = [];
+    const dedupedDescriptions: string[] = [];
 
-    // D-092：DataCollect（竞品预收集）与广告生成共用同一个 3UE 账号。两者并行时会叠加 3UE 会话/
-    // 节点切换，触发「设备数超限」（见 14:39 线上日志）。SemRush 客户端虽有进程级串行 guard(D-087)，
-    // 但仍是两个独立消费者互相排队、放大查询量。这里加一道闸：若当前有整条广告生成在跑，
-    // DataCollect 跳过自己的 SemRush 查询（关键词改由生成流程 D-091 补齐），只保留爬取，错峰 3UE。
-    let skipSemrushDueToGen = false;
-    try {
-      const { generationGateStats } = await import("@/lib/generation-gate");
-      skipSemrushDueToGen = generationGateStats().active > 0;
-    } catch { /* 取不到状态则照常查询 */ }
+    // SEM-02 R2：加商家时的后台"竞品预收集"不再登录 3UE 取词。
+    //   原因：预收集跑在广告创建之外、且用发起员工自己的 3UE 账号登录，会与员工本人浏览器
+    //   抢同一账号的唯一在线设备名额，导致"绑账号后查流量平台总被要求重新登录"。
+    //   3UE 只在真正广告创建/取词时登录（generate-extensions / ad-creation-semrush 路径，
+    //   D-091 生成流程会现取关键词），其余时间默认登出。这里只保留爬取主站构建缓存。
 
-    if (merchantUrl && skipSemrushDueToGen) {
-      console.log("[DataCollect] 跳过 SemRush 查询：当前有广告生成在跑（共用 3UE），错峰避免设备数超限；关键词由生成流程补齐");
-    } else if (merchantUrl) {
-      try {
-        const { isPolicyRiskKeyword } = await import("@/lib/keyword-optimizer");
-        const client = options.userId != null
-          ? await SemRushClient.fromUserConfig(options.userId, country)
-          : await SemRushClient.fromConfig(country);
-        const result = await client.queryDomain(merchantUrl);
-        dedupedTitles = result.dedupedTitles;
-        dedupedDescriptions = result.dedupedDescriptions;
-        // 从付费关键词中按 trafficPercent × volume 取 top 2，带 source 标记
-        paidKeywordsForDb = result.paidKeywords
-          .filter((kw) => kw.phrase && !isPolicyRiskKeyword(kw.phrase))
-          .sort((a, b) => ((b.trafficPercent ?? 0) * (b.volume ?? 0)) - ((a.trafficPercent ?? 0) * (a.volume ?? 0)))
-          .slice(0, 2)
-          .map((kw) => ({
-            phrase: kw.phrase,
-            volume: kw.volume ?? 0,
-            competition: kw.competition ?? null,
-            suggested_bid: kw.suggested_bid ?? kw.cpc ?? null,
-            cpc: kw.cpc ?? null,
-            source: "semrush_paid",
-            recommended_match_type: "EXACT",
-          }));
-        console.log(`[DataCollect] SemRush 获取成功: ${dedupedTitles.length} 标题, ${dedupedDescriptions.length} 描述, 付费词 ${paidKeywordsForDb.length} 个`);
-      } catch (err) {
-        console.warn("[DataCollect] SemRush 获取失败:", err);
-      }
-    }
-
-    // 关键词写入 DB（仅付费词，source=semrush_paid）
-    const keywordsTask = paidKeywordsForDb.length > 0
-      ? prisma.keywords.createMany({ data: buildKeywordCreateManyInput(adGroupId, paidKeywordsForDb) })
-      : Promise.resolve();
+    // 关键词不再在预收集阶段写入（改由广告创建流程现取）
+    const keywordsTask = Promise.resolve();
 
     // 爬取主站 + 构建缓存（含站内链接发现、图片收集、特征提取等）
     const crawlCache = await buildCrawlCache(merchantUrl, merchantName, country, {
@@ -990,7 +950,7 @@ async function triggerAdCopyGeneration(
       }),
     ]);
 
-    console.log(`[DataCollect] 完成: ${paidKeywordsForDb.length} 付费关键词, 站内链接候选 ${crawlCache.sitelinkCandidates.length}, 图片 ${crawlCache.images.length}`);
+    console.log(`[DataCollect] 完成（SEM-02：预收集不取词）: 站内链接候选 ${crawlCache.sitelinkCandidates.length}, 图片 ${crawlCache.images.length}`);
   } catch (err) {
     console.error("[DataCollect] 数据收集异常:", err);
   } finally {

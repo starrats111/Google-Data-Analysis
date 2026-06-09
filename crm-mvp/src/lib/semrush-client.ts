@@ -43,6 +43,11 @@ const CURL_TRANSIENT_MSG_RE =
   /reset by peer|connection reset|recv failure|send failure|connection timed out|operation timed out|could not resolve|couldn't resolve|empty reply|ssl|gnutls|tls|transfer closed|http2|stream was reset/i;
 const DOMAIN_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const SESSION_TTL_MS = 30 * 60 * 1000;
+// SEM-02 R1：广告创建以外默认登出。每次查询结束后臂定一个空闲计时器，超过该时长无新查询即
+// 主动登出 3UE 并清会话（内存+持久化），把账号唯一在线设备名额还给员工自己的浏览器登录。
+// 取 30s：足够覆盖一次广告创建/取词内多次查询的间隔（批内不抖动、不触发设备超限），
+// 又能在员工离开广告创建后很快释放设备。
+const SESSION_IDLE_LOGOUT_MS = 30 * 1000;
 
 // BUG-04 A：跨进程/跨重启共享会话。会话仅存内存时，每次冷启动（ad-automation 累计重启 121 次）
 // 都会在 3UE 侧新开一台"在线设备"且从不释放 → 设备配额被僵尸会话占满。持久化到 system_configs，
@@ -119,6 +124,9 @@ class SemrushGuard {
 
   // D-087：true 时表示已有一个 SemRush 请求在飞（互斥锁占用），新请求必须等其 release。
   private locked = false;
+
+  // SEM-02 R1：空闲登出计时器。每条查询结束臂定，新查询取消重臂；触发即登出+清会话。
+  private idleLogoutTimer: ReturnType<typeof setTimeout> | null = null;
 
   // 方案-09：每个 3UE 账号一个 guard 实例（不同员工账号各自串行、互不阻塞），
   // 会话持久化键按账号区分，避免多账号互相覆盖 session（旧全局账号过渡期仍单独一键）。
@@ -222,12 +230,42 @@ class SemrushGuard {
       // 已在独占上下文内（理论上不会嵌套，防御性处理）
       return fn();
     }
+    // SEM-02 R1：新查询进入，取消挂起的空闲登出（避免查询途中把当前会话登出）。
+    this.cancelIdleLogout();
     const release = await this.waitForSlot();
     try {
       return await slotCtx.run({ held: true }, fn);
     } finally {
       release();
+      // SEM-02 R1：本条查询结束，臂定空闲登出；若 30s 内有新查询会被取消重臂。
+      this.armIdleLogout();
     }
+  }
+
+  // SEM-02 R1：取消挂起的空闲登出计时器。
+  cancelIdleLogout() {
+    if (this.idleLogoutTimer) {
+      clearTimeout(this.idleLogoutTimer);
+      this.idleLogoutTimer = null;
+    }
+  }
+
+  // SEM-02 R1：臂定空闲登出。超过 SESSION_IDLE_LOGOUT_MS 无新查询即登出 3UE 并清会话，
+  // 把账号唯一在线设备名额还给员工自己的登录。登出全程吞错，不影响任何主流程。
+  armIdleLogout() {
+    this.cancelIdleLogout();
+    if (!this.sessionCache) return; // 无会话无需登出
+    this.idleLogoutTimer = setTimeout(() => {
+      this.idleLogoutTimer = null;
+      const old = this.sessionCache;
+      this.sessionCache = null;
+      if (old) {
+        console.log("[SemRush] SEM-02：空闲超时，主动登出 3UE 释放设备（广告创建以外默认登出）");
+        void logout3ue(old);
+      }
+      void this.clearPersistedSession();
+    }, SESSION_IDLE_LOGOUT_MS);
+    if (typeof this.idleLogoutTimer.unref === "function") this.idleLogoutTimer.unref();
   }
 
   getCachedDomain(domain: string): SemRushResult | null {
