@@ -122,7 +122,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       >
         <div className="sidebar-logo">
           <AppstoreOutlined style={{ fontSize: 20, color: COLORS.primary, marginRight: collapsed ? 0 : 8 }} />
-          {!collapsed && <span className="sidebar-logo-text">CRM 总控制台</span>}
+          {!collapsed && <span className="sidebar-logo-text">广告自动化平台 · 总控制台</span>}
         </div>
         <Menu
           mode="inline"
@@ -145,7 +145,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             lineHeight: "56px",
           }}
         >
-          <Text strong style={{ fontSize: 15, color: COLORS.textPrimary }}>CRM 管理控制台</Text>
+          <Text strong style={{ fontSize: 15, color: COLORS.textPrimary }}>广告自动化平台 · 管理控制台</Text>
           <Space size={16}>
             <Dropdown
               menu={{
