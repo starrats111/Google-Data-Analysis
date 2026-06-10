@@ -1230,7 +1230,9 @@ export async function batchFetchMetaViaPuppeteer(
     ];
 
     // C-015 §2：Cloudflare / Datadome / PerimeterX 挑战页标题黑名单
-    // 命中则视为未通过（ok=false, isSoft404=true），不会被当成合法 sitelink 候选
+    // 命中则视为「未能验证页面内容」（ok=false），但 **不等于 soft404**——
+    // CRAWL-07：挑战页只代表我们的爬虫没过人机验证，页面本身在浏览器/Googlebot 下可正常打开，
+    // 不能据此判 isSoft404=true（否则 jjshouse 这类整站 CF 保护的真实页会被「验证」误杀为无效链接）。
     const CHALLENGE_TITLES = [
       "just a moment",
       "attention required",
@@ -1295,7 +1297,9 @@ export async function batchFetchMetaViaPuppeteer(
           description: isChallenge ? "" : data.description,
           finalUrl: data.finalUrl || url,
           ok,
-          isSoft404: isChallenge || isSoft404,
+          // CRAWL-07：CF 挑战页 ≠ 页面不存在。isSoft404 只反映真正的 404 信号，
+          // 挑战页一律 isSoft404=false（ok=false 已表达「未能取到 meta」），避免误判真实页为无效链接。
+          isSoft404,
         });
       } catch (e) {
         result.set(url, { title: "", description: "", finalUrl: url, ok: false, isSoft404: false });
