@@ -34,3 +34,8 @@ export {
   serializeForLog,
   type LogPolicyViolationContext,
 } from "./violation-logger";
+
+export {
+  rewriteAdCopyForPolicy,
+  type PolicyRewriteResult,
+} from "./ai-policy-fix";

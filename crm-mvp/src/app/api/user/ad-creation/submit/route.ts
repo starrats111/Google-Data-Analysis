@@ -11,7 +11,7 @@ import { extractJsonFromAi } from "@/lib/crawl-pipeline";
 import { isPolicyRiskKeyword } from "@/lib/keyword-optimizer";
 import { mutateGoogleAds, dollarsToMicros, queryGoogleAds, parseGoogleAdsErrors, formatGoogleAdsErrorMessage, isOperationNotPermittedError } from "@/lib/google-ads";
 import type { GoogleAdsViolation } from "@/lib/google-ads";
-import { parsePolicyError, logPolicyViolations, type ParsedPolicyError } from "@/lib/policy-hub";
+import { parsePolicyError, logPolicyViolations, rewriteAdCopyForPolicy, type ParsedPolicyError } from "@/lib/policy-hub";
 import { checkReachability, isHardUnreachable } from "@/lib/intellicenter/ad-creation";
 import { assignFormalCampaignNameBeforeSubmit, resolvePlatformLabel } from "@/lib/campaign-naming";
 import { readFile } from "fs/promises";
@@ -1297,6 +1297,8 @@ export async function POST(req: NextRequest) {
     // ─── 发送批量 Mutate 请求（含 DUPLICATE_CAMPAIGN_NAME / POLICY_ERROR 自动重试） ───
     let result: Record<string, unknown>;
     let skippedKeywords: string[] = [];
+    // D-152：记录 Google 拒登后 AI 自动改写的明细，成功时回传给前端，让员工知道文案被自动修过
+    const aiPolicyFixNotes: string[] = [];
     try {
       result = await mutateGoogleAds(credentials, customerId, operations) as Record<string, unknown>;
     } catch (mutateErr) {
@@ -1414,50 +1416,103 @@ export async function POST(req: NextRequest) {
           // Google 上只有广告系列+广告组、没有广告的"空壳"状态。
           const RSA_AD_INDEX = 5;
           if (violatingIndices.has(RSA_AD_INDEX)) {
-            // D-041：优先用 policy-hub 深度解析的 readableMessage（含「标题3 触发 TRADEMARK_VIOLATION」位置 + 政策原文 URL + 修复建议）
-            const readable = parsedPolicyError?.readableMessage;
-            if (readable && readable.trim().length > 0) {
-              throw new Error(readable);
+            // ─── D-152：广告文案被 Google 拒登 → 自动「被拒文案 + Google 拒登原因」喂给 AI 改写后重提 ───
+            // 取代旧的「直接 throw 让员工人工改」。本地规则违规早有 AI 自动改写（generate-more），
+            // 这里把 Google 真实拒登也接入同一条 AI 修复闭环。最多 N 轮；AI 改不动 / 改后仍被拒 → 回落人工提示。
+            const MAX_AI_POLICY_ROUNDS = 2;
+            const nonRsaViolating = new Set<number>([...violatingIndices].filter((i) => i !== RSA_AD_INDEX));
+            const aiFixNotes: string[] = [];
+            let lastParsed: ParsedPolicyError | null = parsedPolicyError;
+            let aiFixed = false;
+            for (let round = 1; round <= MAX_AI_POLICY_ROUNDS && !result!; round++) {
+              const rw = await rewriteAdCopyForPolicy({
+                headlines: headlines as string[],
+                descriptions: descriptions as string[],
+                parsed: lastParsed,
+                merchantName: (submitMerchant as { merchant_name?: string })?.merchant_name || campaign.campaign_name || "",
+                languageName: adTextLang,
+              });
+              if (!rw.changed) break; // AI 无法改写 → 退出，走人工回落
+              // 写回本地变量：成功后会把 headlines/descriptions 落库，须与实际提交一致
+              (headlines as string[]).splice(0, (headlines as string[]).length, ...rw.headlines);
+              (descriptions as string[]).splice(0, (descriptions as string[]).length, ...rw.descriptions);
+              aiFixNotes.push(...rw.notes);
+
+              // 用改写后的文案重建 RSA 操作（贴合限长 + 去重，与首次构造同口径）
+              const rhFit = await fitAdTextBatch((headlines as string[]).slice(0, 15).map((h) => sanitizeAdText(h, { allowExclamation: true })), 30, adTextLang);
+              const rhAssets = rhFit.map((text: string) => ({ text })).filter((h, i, arr) => h.text.length > 0 && arr.findIndex((x) => x.text.toLowerCase() === h.text.toLowerCase()) === i);
+              const rdFit = await fitAdTextBatch((descriptions as string[]).slice(0, 4).map((d) => sanitizeAdText(d, { allowExclamation: true })), 90, adTextLang);
+              const rdAssets = rdFit.map((text: string) => ({ text })).filter((d, i, arr) => d.text.length > 0 && arr.findIndex((x) => x.text.toLowerCase() === d.text.toLowerCase()) === i);
+              const newRsaInfo: Record<string, unknown> = { ...rsaInfo, headlines: rhAssets, descriptions: rdAssets };
+              // 同时丢弃其它非 RSA 的违规操作（关键词/资源），与 filteredOps 同策略；
+              // 被丢弃的均在 index>5（关键词/扩展在 RSA 之后 push），不影响 0~5 的响应解析顺序。
+              const retryOps = operations
+                .map((op, i) => (i === RSA_AD_INDEX
+                  ? { ad_group_ad_operation: { create: { ad_group: adGroupTempRn, status: "ENABLED", ad: { responsive_search_ad: newRsaInfo, final_urls: [finalUrl] } } } }
+                  : op))
+                .filter((_, i) => !nonRsaViolating.has(i));
+
+              console.log(`[AdSubmit] D-152 AI 政策改写第 ${round}/${MAX_AI_POLICY_ROUNDS} 轮，改写 ${rw.notes.length} 处后重提`);
+              try {
+                result = await mutateGoogleAds(credentials, customerId, retryOps) as Record<string, unknown>;
+                aiFixed = true;
+                aiPolicyFixNotes.push(...aiFixNotes);
+                console.log(`[AdSubmit] D-152 AI 改写后重提成功：\n${aiFixNotes.join("\n")}`);
+              } catch (reErr) {
+                const reBody = (reErr as { rawBody?: string })?.rawBody;
+                const reMsg = reErr instanceof Error ? reErr.message : String(reErr);
+                const stillPolicy = !!(reBody && (reBody.includes("POLICY_ERROR") || reBody.includes("policyViolationError") || reBody.includes("PROHIBITED") || reBody.includes("disapproved")))
+                  || reMsg.includes("POLICY_ERROR") || reMsg.includes("PROHIBITED") || reMsg.includes("disapproved");
+                if (!stillPolicy) throw reErr; // 新错误非政策类（配额/参数等）→ 交外层处理
+                lastParsed = reBody ? parsePolicyError(reBody) : null; // 带新一轮原因继续改
+              }
             }
-            // 兜底（policy-hub 未解析出 policyViolationDetails 时）：
-            // 只提炼真正的广告文案触发词，过滤掉广告系列名 / 纯数字级联占位 / 关键词噪音，
-            // 不再把「操作[N]、关键词、关联资源」整串堆给用户（那些是级联失败，非真正原因）。
-            const campaignNm = (campaign.campaign_name || "").trim();
-            const adTextTriggers = Array.from(new Set(
-              (errViolations || [])
-                .map((v) => (v.trigger || "").trim())
-                .filter((t) =>
-                  t
-                  && !/^-?\d+$/.test(t)
-                  && t !== campaignNm
-                  && !skippedKeywords.includes(t)),
-            ));
-            const triggerHint = adTextTriggers.length > 0
-              ? `（疑似触发词：${adTextTriggers.map((t) => `「${t}」`).join("、")}）`
-              : "";
-            throw new Error(
-              `Google Ads 以政策原因拒绝了广告素材${triggerHint}。`
-              + `常见原因是标题或描述中含有商标/品牌词或其它受限表述；`
-              + `请修改标题、描述后重新提交。若确为商家自有品牌，可在 Google Ads 后台对该广告点「申诉」。`,
-            );
+
+            if (!aiFixed) {
+              // 回落人工提示（保留 D-041 逻辑），并附上已尝试的 AI 改写明细
+              const readable = parsedPolicyError?.readableMessage;
+              const prefix = aiFixNotes.length > 0
+                ? `Google Ads 拒登广告，已自动用 AI 改写文案重试仍未通过，请人工修改。\n已尝试改写：\n${aiFixNotes.join("\n")}\n\n`
+                : "";
+              if (readable && readable.trim().length > 0) {
+                throw new Error(`${prefix}${readable}`);
+              }
+              const campaignNm = (campaign.campaign_name || "").trim();
+              const adTextTriggers = Array.from(new Set(
+                (errViolations || [])
+                  .map((v) => (v.trigger || "").trim())
+                  .filter((t) => t && !/^-?\d+$/.test(t) && t !== campaignNm && !skippedKeywords.includes(t)),
+              ));
+              const triggerHint = adTextTriggers.length > 0
+                ? `（疑似触发词：${adTextTriggers.map((t) => `「${t}」`).join("、")}）`
+                : "";
+              throw new Error(
+                `${prefix}Google Ads 以政策原因拒绝了广告素材${triggerHint}。`
+                + `常见原因是标题或描述中含有商标/品牌词或其它受限表述；`
+                + `请修改标题、描述后重新提交。若确为商家自有品牌，可在 Google Ads 后台对该广告点「申诉」。`,
+              );
+            }
           }
 
-          const filteredOps = operations.filter((_, i) => !violatingIndices.has(i));
-          console.log(`[AdSubmit] 移除 ${violatingIndices.size} 个违规操作 (${skippedDetails.join(", ")}), 剩余 ${filteredOps.length} 个操作`);
+          // RSA 已通过 AI 改写修复（result 已置）时跳过此段，避免对同一批操作重复提交
+          if (!result!) {
+            const filteredOps = operations.filter((_, i) => !violatingIndices.has(i));
+            console.log(`[AdSubmit] 移除 ${violatingIndices.size} 个违规操作 (${skippedDetails.join(", ")}), 剩余 ${filteredOps.length} 个操作`);
 
-          if (filteredOps.length >= 6) {
-            result = await mutateGoogleAds(credentials, customerId, filteredOps) as Record<string, unknown>;
-          } else {
-            // D-041：同样优先用 policy-hub readableMessage
-            const readable = parsedPolicyError?.readableMessage;
-            if (readable && readable.trim().length > 0) {
-              throw new Error(`Google Ads 因政策违规拒绝了 ${violatingIndices.size} 个操作，移除后剩余操作不足。\n\n${readable}`);
+            if (filteredOps.length >= 6) {
+              result = await mutateGoogleAds(credentials, customerId, filteredOps) as Record<string, unknown>;
+            } else {
+              // D-041：同样优先用 policy-hub readableMessage
+              const readable = parsedPolicyError?.readableMessage;
+              if (readable && readable.trim().length > 0) {
+                throw new Error(`Google Ads 因政策违规拒绝了 ${violatingIndices.size} 个操作，移除后剩余操作不足。\n\n${readable}`);
+              }
+              const triggerList = errViolations
+                ?.filter((v) => v.trigger && !/^-?\d+$/.test(v.trigger.trim()))
+                .map((v) => `「${v.trigger}」`) || [];
+              const triggerHint = triggerList.length > 0 ? `（触发违规的内容: ${triggerList.join(", ")}）` : "";
+              throw new Error(`Google Ads 因政策违规拒绝了 ${violatingIndices.size} 个操作（${skippedDetails.join("、")}），移除后剩余操作不足，无法创建广告。${triggerHint}请修改相关关键词或广告文案后重新提交。`);
             }
-            const triggerList = errViolations
-              ?.filter((v) => v.trigger && !/^-?\d+$/.test(v.trigger.trim()))
-              .map((v) => `「${v.trigger}」`) || [];
-            const triggerHint = triggerList.length > 0 ? `（触发违规的内容: ${triggerList.join(", ")}）` : "";
-            throw new Error(`Google Ads 因政策违规拒绝了 ${violatingIndices.size} 个操作（${skippedDetails.join("、")}），移除后剩余操作不足，无法创建广告。${triggerHint}请修改相关关键词或广告文案后重新提交。`);
           }
         } else {
           throw mutateErr;
@@ -1667,6 +1722,9 @@ export async function POST(req: NextRequest) {
     }
 
     const msgParts: string[] = ["广告创建成功"];
+    if (aiPolicyFixNotes.length > 0) {
+      msgParts.push(`广告曾被 Google 拒登，系统已自动用 AI 改写 ${aiPolicyFixNotes.length} 处文案后发布成功（建议复核：${aiPolicyFixNotes.join("；")}）`);
+    }
     if (skippedKeywords.length > 0) {
       msgParts.push(`已跳过 ${skippedKeywords.length} 个违反政策的关键词: ${skippedKeywords.join(", ")}`);
     }
