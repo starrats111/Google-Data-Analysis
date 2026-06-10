@@ -308,7 +308,7 @@ export default function UserLayout({ children }: { children: React.ReactNode }) 
       >
         <div className="sidebar-logo">
           <AppstoreOutlined style={{ fontSize: 20, color: COLORS.primary, marginRight: collapsed ? 0 : 8 }} />
-          {!collapsed && <span className="sidebar-logo-text">CRM 管理平台</span>}
+          {!collapsed && <span className="sidebar-logo-text">广告自动化平台</span>}
         </div>
         <Menu
           mode="inline"
@@ -331,7 +331,7 @@ export default function UserLayout({ children }: { children: React.ReactNode }) 
             lineHeight: "56px",
           }}
         >
-          <Text strong style={{ fontSize: 15, color: COLORS.textPrimary }}>CRM 用户管理平台</Text>
+          <Text strong style={{ fontSize: 15, color: COLORS.textPrimary }}>广告自动化平台</Text>
           <Space size={16}>
             <Popover
               content={notificationContent}
