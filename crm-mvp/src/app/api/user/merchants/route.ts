@@ -6,6 +6,7 @@ import prisma from "@/lib/prisma";
 import { buildDraftCampaignName } from "@/lib/campaign-naming";
 import { loadConnectionAccountMap, buildConnectionAccounts } from "@/lib/merchant-connection";
 import { extractDomain } from "@/lib/atc-service";
+import { parseTxnDateStart, parseTxnDateEndExclusive } from "@/lib/date-utils";
 
 // 国家 → Google Ads 语言代码（创建 campaign 时自动设置）
 const COUNTRY_TO_LANG_CODE: Record<string, string> = {
@@ -33,6 +34,51 @@ const POLICY_CATEGORY_CN: Record<string, string> = {
 
 // 冷却 60s：避免每次 GET 都触发 autoLinkAndClaimMerchants
 const _autoLinkCooldown = new Map<string, number>();
+
+// D-153：拒付率/结算率全员维度排序支持。
+// 拒付率/结算率与拒付商家 tab 同源（全员聚合 affiliate_transactions，时间窗默认 2025-11-01 至今），
+// 是前端按行合并的展示列，不在 user_merchants 表内，故需在此单独算费率 map 后做服务端排序。
+const RATE_SORT_FIELDS = new Set(["chargeback_rate", "settlement_rate"]);
+const RATE_MAP_DATE_START = "2025-11-01";
+
+interface MerchantRate { cb: number; settle: number }
+
+/**
+ * 全员维度按 platform+merchant_id 聚合拒付率/结算率。
+ * 拒付率 = rejected / 全部状态佣金；结算率 = (approved + paid) / 全部状态佣金。
+ * 仅在用户主动按费率列排序时调用（正常浏览不触发，避免热路径多一次聚合）。
+ */
+async function buildMerchantRateMap(): Promise<Map<string, MerchantRate>> {
+  const start = parseTxnDateStart(RATE_MAP_DATE_START);
+  const end = parseTxnDateEndExclusive(new Date().toISOString().slice(0, 10));
+  const rows = await prisma.$queryRawUnsafe<Array<{
+    platform: string; merchant_id: string; cb_rate: number | string | null; settle_rate: number | string | null;
+  }>>(`
+    SELECT
+      platform,
+      merchant_id,
+      ROUND(SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END)
+            / NULLIF(SUM(CAST(commission_amount AS DECIMAL(14,4))), 0) * 100, 2) AS cb_rate,
+      ROUND(SUM(CASE WHEN status IN ('approved','paid') THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END)
+            / NULLIF(SUM(CAST(commission_amount AS DECIMAL(14,4))), 0) * 100, 2) AS settle_rate
+    FROM affiliate_transactions
+    WHERE is_deleted = 0 AND transaction_time >= ? AND transaction_time < ?
+    GROUP BY platform, merchant_id
+    LIMIT 5000
+  `, start, end);
+  const map = new Map<string, MerchantRate>();
+  for (const r of rows) {
+    map.set(`${r.platform}-${r.merchant_id}`, { cb: Number(r.cb_rate || 0), settle: Number(r.settle_rate || 0) });
+  }
+  return map;
+}
+
+/** 取某商家的排序费率值；无交易记录返回 -1（排序时沉底） */
+function rateSortValue(map: Map<string, MerchantRate>, platform: string, merchantId: string, field: string): number {
+  const r = map.get(`${platform}-${merchantId}`);
+  if (!r) return -1;
+  return field === "settlement_rate" ? r.settle : r.cb;
+}
 
 /**
  * 批量匹配推荐/违规/政策标签
@@ -401,6 +447,14 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
     if (!sortField) {
       const STATUS_PRIORITY: Record<string, number> = { ENABLED: 0, PAUSED: 1, NOT_SUBMITTED: 2, UNKNOWN: 3 };
       allWithStatus.sort((a, b) => (STATUS_PRIORITY[a._adStatus] ?? 9) - (STATUS_PRIORITY[b._adStatus] ?? 9));
+    } else if (RATE_SORT_FIELDS.has(sortField)) {
+      // D-153：按全员拒付率/结算率排序（无数据沉底）
+      const rateMap = await buildMerchantRateMap();
+      allWithStatus.sort((a, b) => {
+        const ra = rateSortValue(rateMap, a._m.platform, a._m.merchant_id, sortField);
+        const rb = rateSortValue(rateMap, b._m.platform, b._m.merchant_id, sortField);
+        return sortOrder === "asc" ? ra - rb : rb - ra;
+      });
     }
 
     // 分页：在全局排序后截取当前页
@@ -505,15 +559,41 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
       { platform: "asc" },
       { merchant_name: "asc" },
     ]);
-    const [total, merchants] = await Promise.all([
-      prisma.user_merchants.count({ where: where as never }),
-      prisma.user_merchants.findMany({
+    let total: number;
+    let merchants: any[];
+    if (RATE_SORT_FIELDS.has(sortField)) {
+      // D-153：按全员拒付率/结算率排序 —— 轻量取全量 id 排序后再取当前页整行
+      const lite = await prisma.user_merchants.findMany({
         where: where as never,
-        orderBy: availOrderBy as never,
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-      }),
-    ]);
+        select: { id: true, platform: true, merchant_id: true },
+      });
+      total = lite.length;
+      const rateMap = await buildMerchantRateMap();
+      lite.sort((a, b) => {
+        const ra = rateSortValue(rateMap, a.platform, a.merchant_id, sortField);
+        const rb = rateSortValue(rateMap, b.platform, b.merchant_id, sortField);
+        return sortOrder === "asc" ? ra - rb : rb - ra;
+      });
+      const pageIds = lite.slice((page - 1) * pageSize, page * pageSize).map((x) => x.id);
+      const rows = pageIds.length > 0
+        ? await prisma.user_merchants.findMany({ where: { id: { in: pageIds } } as never })
+        : [];
+      const orderIdx = new Map(pageIds.map((id, i) => [id.toString(), i]));
+      merchants = rows.sort((a: { id: bigint }, b: { id: bigint }) =>
+        (orderIdx.get(a.id.toString()) ?? 0) - (orderIdx.get(b.id.toString()) ?? 0));
+    } else {
+      const [t, m] = await Promise.all([
+        prisma.user_merchants.count({ where: where as never }),
+        prisma.user_merchants.findMany({
+          where: where as never,
+          orderBy: availOrderBy as never,
+          skip: (page - 1) * pageSize,
+          take: pageSize,
+        }),
+      ]);
+      total = t;
+      merchants = m;
+    }
 
     // 附加推荐/违规标签 + 在投人数
     const withLabels = await enrichWithLabels(merchants);

@@ -182,12 +182,20 @@ export default function MerchantsPage() {
     threshold: 0,
   }), []);
   const { data: cbHitsData } = useApiWithParams<{
-    items: Array<{ platform: string; merchant_id: string; rate: number }>;
+    items: Array<{ platform: string; merchant_id: string; rate: number; settle_rate: number }>;
   }>((tab === "available" || tab === "claimed") ? "/api/user/merchants/chargebacks" : null, cbHitsParams);
   const chargebackHitMap = useMemo(() => {
     const m = new Map<string, number>();
     for (const it of cbHitsData?.items || []) {
       m.set(`${it.platform}-${it.merchant_id}`, it.rate);
+    }
+    return m;
+  }, [cbHitsData]);
+  // D-153：结算率全员 map（(已批准+已支付)/总佣金），与拒付率同源、同时间窗
+  const settlementRateMap = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const it of cbHitsData?.items || []) {
+      m.set(`${it.platform}-${it.merchant_id}`, it.settle_rate);
     }
     return m;
   }, [cbHitsData]);
@@ -814,6 +822,18 @@ export default function MerchantsPage() {
     );
   }, [chargebackHitMap]);
 
+  // D-153：结算率列渲染（全员维度，(已批准+已支付)/全部状态佣金，时间窗 2025-11-01 至今）。无交易记录显示「-」。
+  const renderSettlementRateCol = useCallback((_: unknown, rec: Merchant) => {
+    const rate = settlementRateMap.get(`${rec.platform}-${rec.merchant_id}`);
+    if (rate === undefined) return <span style={{ color: "#bfbfbf" }}>-</span>;
+    const color = rate >= 70 ? "#52c41a" : rate >= 40 ? "#faad14" : "#ff4d4f";
+    return (
+      <Tooltip title="全员维度结算率（（已批准+已支付）佣金 / 全部状态佣金），时间窗 2025-11-01 至今">
+        <span style={{ color, fontWeight: 600 }}>{rate.toFixed(2)}%</span>
+      </Tooltip>
+    );
+  }, [settlementRateMap]);
+
   const claimedCols = useMemo(() => [
     { title: "商家名称", dataIndex: "merchant_name", width: 240, sorter: true, sortOrder: colSortOrder("merchant_name"), render: (_: string, rec: Merchant) => <MerchantNameCell rec={rec} /> },
     { title: "平台", dataIndex: "platform", width: 80, render: (v: string) => <Tag color={PC[v] || "default"} style={{ fontWeight: 600 }}>{v}</Tag> },
@@ -821,6 +841,7 @@ export default function MerchantsPage() {
     { title: "主营业务", dataIndex: "category", width: 130, ellipsis: true, render: (v: string | null) => catCn(v) },
     { title: "佣金率", dataIndex: "commission_rate", width: 110, sorter: true, sortOrder: colSortOrder("commission_rate"), render: (v: string | null) => <CommissionCell v={v} /> },
     { title: "拒付率", dataIndex: "chargeback_rate", width: 100, align: "center" as const, render: renderChargebackRateCol },
+    { title: "结算率", dataIndex: "settlement_rate", width: 100, align: "center" as const, sorter: true, sortOrder: colSortOrder("settlement_rate"), render: renderSettlementRateCol },
     { title: "支持地区", dataIndex: "supported_regions", width: 150, render: (v: unknown[] | null) => <RB r={v} /> },
     { title: "状态", dataIndex: "ad_status", width: 90, render: (v: string) => v === "ENABLED" ? <Tag color="green">已启用</Tag> : v === "PAUSED" ? <Tag color="orange">已暂停</Tag> : v === "NOT_SUBMITTED" ? <Tag color="blue">已领取</Tag> : <Tag>未知</Tag> },
     { title: "ATC竞争度", width: 180, render: renderAtcCompetitionCol },
@@ -831,7 +852,7 @@ export default function MerchantsPage() {
         <Popconfirm title="确认取消领取？" onConfirm={() => doRelease(rec.id)}><Button size="small" danger>取消领取</Button></Popconfirm>
       </Space>
     ) },
-  ], [doRelease, showActiveAdv, sortField, sortOrder, renderAtcCompetitionCol, renderChargebackRateCol]);
+  ], [doRelease, showActiveAdv, sortField, sortOrder, renderAtcCompetitionCol, renderChargebackRateCol, renderSettlementRateCol]);
   const availCols = useMemo(() => [
     { title: "商家名称", dataIndex: "merchant_name", width: 280, sorter: true, sortOrder: colSortOrder("merchant_name"), render: (_: string, rec: Merchant) => {
       const hitRate = chargebackHitMap.get(`${rec.platform}-${rec.merchant_id}`);
@@ -851,6 +872,7 @@ export default function MerchantsPage() {
     { title: "主营业务", dataIndex: "category", width: 130, ellipsis: true, render: (v: string | null) => catCn(v) },
     { title: "佣金率", dataIndex: "commission_rate", width: 110, sorter: true, sortOrder: colSortOrder("commission_rate"), render: (v: string | null) => <CommissionCell v={v} /> },
     { title: "拒付率", dataIndex: "chargeback_rate", width: 100, align: "center" as const, render: renderChargebackRateCol },
+    { title: "结算率", dataIndex: "settlement_rate", width: 100, align: "center" as const, sorter: true, sortOrder: colSortOrder("settlement_rate"), render: renderSettlementRateCol },
     { title: "支持地区", dataIndex: "supported_regions", width: 150, render: (v: unknown[] | null) => <RB r={v} /> },
     // C-091：选取商家 tab 也加 ATC 竞争度列，与"我的商家"完全一致——
     // 点 N 个 → 弹广告主列表 Modal → 操作列「查情报」跳转 /user/intelligence
@@ -862,7 +884,7 @@ export default function MerchantsPage() {
         {rec.policy_status === "prohibited" ? <Button size="small" disabled>禁止领取</Button> : <Button type="primary" size="small" icon={<CheckOutlined />} onClick={() => doClaim(rec)}>{rec.policy_status === "restricted" ? "领取(限制)" : "领取"}</Button>}
       </Space>
     ) },
-  ], [doClaim, showActiveAdv, sortField, sortOrder, chargebackHitMap, renderAtcCompetitionCol, renderChargebackRateCol]);
+  ], [doClaim, showActiveAdv, sortField, sortOrder, chargebackHitMap, renderAtcCompetitionCol, renderChargebackRateCol, renderSettlementRateCol]);
   // C-019 拒付商家 Tab 的列定义
   const chargebackCols = useMemo(() => [
     { title: "平台", dataIndex: "platform", width: 80, render: (v: string) => <Tag color={PC[v] || "default"} style={{ fontWeight: 600 }}>{v}</Tag> },

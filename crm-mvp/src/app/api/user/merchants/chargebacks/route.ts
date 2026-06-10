@@ -65,6 +65,12 @@ export const GET = withUser(async (req: NextRequest) => {
                      THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END), 2) AS total_settled,
       ROUND(SUM(CASE WHEN status = 'rejected'
                      THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END), 2) AS rejected,
+      -- D-153：结算率 = (已批准 approved + 已支付 paid) / 全部状态佣金（与拒付率互补）
+      ROUND(
+        SUM(CASE WHEN status IN ('approved','paid') THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END)
+        / NULLIF(SUM(CAST(commission_amount AS DECIMAL(14,4))), 0) * 100,
+        2
+      ) AS settle_rate,
       -- R1.2：分母改为 SUM(commission_amount) 全部状态（§19.6.8）
       ROUND(
         SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END)
@@ -91,6 +97,7 @@ export const GET = withUser(async (req: NextRequest) => {
     total_all: number | string | null;
     total_settled: number | string | null;
     rejected: number | string | null;
+    settle_rate: number | string | null;
     rate: number | string | null;
   }>>(sql, ...params);
 
@@ -102,6 +109,7 @@ export const GET = withUser(async (req: NextRequest) => {
     total_all: Number(r.total_all || 0),
     total_settled: Number(r.total_settled || 0),
     rejected: Number(r.rejected || 0),
+    settle_rate: Number(r.settle_rate || 0),
     rate: Number(r.rate || 0),
   }));
 
