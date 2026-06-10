@@ -404,6 +404,11 @@ async function crawlWithHttp(url: string, country?: string, proxyUrl?: string): 
       if (i > 0) await randomDelay(500, 1500);
 
       const headers = buildStealthHeaders(tryUrl, shuffledUAs[i], country);
+      // CRAWL-06 真因修复：仅当走匹配目标国家的代理时才发该国 Accept-Language（代理出口 IP=目标国，
+      //   IP 与语言一致，站点返回正确市场链接）。直连时出口 IP 在本机（新加坡），若仍带目标国语言，
+      //   Shopify 等会按"IP国(SG)+显式语言(en-US)"吐出错市场本地化 URL（/en-sg/...）。实测直连且不带
+      //   Accept-Language 时返回正确的主市场根链接（/collections/...）。故直连一律剔除该 header。
+      if (!proxyUrl) delete headers["Accept-Language"];
       try {
         const ctrl = new AbortController();
         const t = setTimeout(() => ctrl.abort(), 20000);
@@ -2428,7 +2433,14 @@ export function extractPageMeta(html: string): { title: string; description: str
 export async function crawlPage(url: string, country?: string): Promise<CrawlResult> {
   const proxyUrl = country ? await getProxyUrlForCountry(country) : null;
   if (proxyUrl) console.log(`[Crawler] 使用 ${country} 代理爬取: ${url}`);
-  else console.log(`[Crawler] 开始爬取: ${url}${country ? ` (country: ${country})` : ""}`);
+  else if (country) {
+    // CRAWL-06：目标国指定了却拿不到代理（模板未配/已停用/DB 读失败），主爬会从本机出口（新加坡）
+    //   直连目标站。这正是 /en-sg/ 错市场链接的温床，打 WARN 便于排障；crawlWithHttp 已在直连时
+    //   剔除 Accept-Language 兜底，避免按"IP国+语言"被改写成错市场本地化 URL。
+    console.warn(`[Crawler] ⚠ country=${country} 但未取得代理，将从本机出口直连爬取（locale 可能不匹配）: ${url}`);
+  } else {
+    console.log(`[Crawler] 开始爬取: ${url}`);
+  }
 
   // 1. HTTP 多 UA 隐身爬取（带内容质量评分 + 难度检测）
   const httpResult = await crawlWithHttp(url, country, proxyUrl ?? undefined);

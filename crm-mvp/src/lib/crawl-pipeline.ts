@@ -998,49 +998,11 @@ const COUNTRY_TO_LOCALE: Record<string, string> = {
   HK: "en-hk",
 };
 
-/**
- * 检测 URL 路径开头的 locale/country 段，替换为目标国家对应的正确前缀。
- *
- * 支持两种格式：
- *   - 全 locale 格式：/en-sg/ /fr-fr/ /de-de/  → 替换为目标 locale（如 /en-us/）
- *   - 2 字母国家码格式：/sg/ /us/ /de/          → 替换为目标国家码（如 /us/）
- */
-function normalizeLocaleInUrl(url: string, targetCountry: string): string {
-  try {
-    const u = new URL(url);
-    const target = targetCountry.toUpperCase();
-
-    // Case 1：完整 locale 前缀（en-sg, fr-fr 等）
-    const m1 = u.pathname.match(/^\/([a-z]{2}[-_][a-z]{2})\//i);
-    if (m1) {
-      const existingCountry = m1[1].toLowerCase().replace("_", "-").split("-")[1]?.toUpperCase();
-      if (existingCountry === target) return url; // 已正确
-      const targetLocale = COUNTRY_TO_LOCALE[target];
-      u.pathname = targetLocale
-        ? "/" + targetLocale + u.pathname.slice(m1[0].length - 1)
-        : "/" + u.pathname.slice(m1[0].length); // 未知 locale 则剥离前缀
-      return u.toString();
-    }
-
-    // Case 2：纯 2 字母国家码前缀（/sg/ /us/ /de/ 等）
-    const m2 = u.pathname.match(/^\/([a-z]{2})\//i);
-    if (m2) {
-      // 排除常见非国家码的 2 字母路径段（页面路径可能恰好 2 字母，如 /en/ 是语言不是国家）
-      const KNOWN_COUNTRY_CODES = new Set([
-        "us", "gb", "au", "ca", "ie", "nz", "sg", "in", "hk",
-        "de", "at", "ch", "fr", "it", "es", "nl", "be", "se",
-        "no", "dk", "fi", "jp", "kr", "cn", "tw", "br", "pt", "mx",
-      ]);
-      const existing2 = m2[1].toLowerCase();
-      if (!KNOWN_COUNTRY_CODES.has(existing2)) return url; // 非国家码，不处理
-      if (existing2 === target.toLowerCase()) return url; // 已正确
-      u.pathname = "/" + target.toLowerCase() + u.pathname.slice(m2[0].length - 1);
-      return u.toString();
-    }
-
-    return url;
-  } catch { return url; }
-}
+// CRAWL-06：normalizeLocaleInUrl 已切除。原函数靠"猜目标国家 → 改写 URL 路径里的 locale 段"
+//   来补救站内链接，属有害补丁：对 mizubatea 这类美国主市场在根域的站，会把误爬到的 /en-sg/ 改成
+//   /en-us/（该站根本无此前缀 = 404 死链，被 Google Ads 判无效拒登），对无前缀根链接又不改。
+//   真因是直连新加坡 IP 又带目标国 Accept-Language 触发站点错市场本地化，已在 crawler.ts 直连
+//   剔除 Accept-Language 从源头修复；站内链接一律采用真实代理爬到的真实 URL 原样。
 
 async function discoverSitelinkCandidates(
   merchantUrl: string,
@@ -1120,7 +1082,10 @@ async function discoverSitelinkCandidates(
     const useMetaText = !isBotBlockRedirect;
     if (isBotBlockRedirect) rejectStats.botBlockFallback++;
 
-    const realUrl = country ? normalizeLocaleInUrl(usedRawUrl, country) : usedRawUrl;
+    // CRAWL-06：站内链接一律采用真实代理爬到的真实 URL（原样），不再做 locale 规范化（已切除
+    //   normalizeLocaleInUrl 这块"猜国家、改路径"的补丁——真因是直连 SG 带 en-US 导致的错市场链接，
+    //   已在 crawler.ts 直连剔除 Accept-Language 从源头修复）。
+    const realUrl = usedRawUrl;
     try {
       const p = new URL(realUrl).pathname;
       if (p === "/" || p === "") {
@@ -1175,16 +1140,15 @@ async function discoverSitelinkCandidates(
         return pa - pb;
       } catch { return 0; }
     });
-    // 对提取到的链接先做 locale 规范化：若无代理，直连从新加坡 IP 爬取的页面会包含
-    // /en-sg/ 之类的路径段，需替换为目标国家 locale（如 /en-us/）再探查
+    // CRAWL-06：直接采用爬到的真实链接（原样），不再 locale 规范化。真正的 /en-sg/ 来源是
+    //   直连 SG IP 又带 en-US Accept-Language 触发 Shopify 错市场本地化，已在 crawler.ts 源头修复。
     // D-028 v2：在 fetchUrlMeta 前先用 isBadSitelinkUrl 剔除社交平台 / 第三方 host，
     // 避免把 twitter.com / facebook.com / instagram.com 等 puppeteer 必败 URL
     // 喂给 puppeteer 兜底浪费 slot。
     const linksToTry = prioritized
       .filter(l => { try { return !new URL(l.url).search; } catch { return true; } })
       .filter(l => !isBadSitelinkUrl(l.url))
-      .slice(0, 20)
-      .map(l => country ? { ...l, url: normalizeLocaleInUrl(l.url, country) } : l);
+      .slice(0, 20);
 
     // C-027 FIX-C：HTTP L0 快速短路
     //   对 CF 整站保护型站点（如 aerosus.be），HTTP L0 长期 ok=0/20。
@@ -1321,8 +1285,7 @@ async function discoverSitelinkCandidates(
             return isSameMerchantSite(u.hostname) && !u.search && l.text.length >= 2;
           } catch { return false; }
         })
-        .map(l => country ? { ...l, url: normalizeLocaleInUrl(l.url, country) } : l)
-        .slice(0, 20);
+        .slice(0, 20); // CRAWL-06：采用 Puppeteer 真实 nav links 原样，不再 locale 规范化
 
       // D-038b（2026-05-28，方案 G）：删除 D-028 v6 challenged 短路（原会让 challenged host
       // 的 navLinks 全标 ok=false 跳过 fetchUrlMeta 直接进 v3 短路）。
@@ -1403,7 +1366,7 @@ async function discoverSitelinkCandidates(
         const isBotBlockRedirect = botBlockMode && (rawPath === "/" || rawPath === "") && linkPath !== "/" && linkPath !== "";
         const usedRawUrl = isBotBlockRedirect ? link.url : rawUrl;
         const useMetaText = !isBotBlockRedirect;
-        const realUrl = country ? normalizeLocaleInUrl(usedRawUrl, country) : usedRawUrl;
+        const realUrl = usedRawUrl; // CRAWL-06：真实 URL 原样，不做 locale 规范化
         try { const p = new URL(realUrl).pathname; if (p === "/" || p === "") continue; } catch {}
         const norm = realUrl.replace(/\/$/, "").replace(/^http:/, "https:");
         if (existingNormalized.has(norm)) continue;
@@ -1524,7 +1487,7 @@ async function discoverSitelinkCandidates(
       return s;
     };
     const navPool = [...(puppeteerNavLinks ?? []), ...pageLinks]
-      .map((l) => (country ? { ...l, url: normalizeLocaleInUrl(l.url, country) } : l))
+      // CRAWL-06：真实链接原样，不做 locale 规范化
       .filter((l) => {
         try {
           const u = new URL(l.url);
