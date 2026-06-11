@@ -87,6 +87,13 @@ jobs:
             rm -rf .next.old 2>/dev/null || true
             mv .next .next.old 2>/dev/null || true
             mv .next.tmp .next
+            # D-159: 把上一版 build 的静态资源合并进新 .next（-n 不覆盖新文件、-a 保留 mtime）。
+            # 否则每次部署旧 chunk 全部消失，所有在途旧标签页下一次路由跳转必然 ChunkLoadError；
+            # 而部署窗口期对这些 chunk 的 404/502 一旦被 CDN 负缓存（见 D-159 Nginx 修复），用户硬刷新都救不回。
+            # 旧资源由健康检查后的 -mtime +7 清理保留 7 天宽限期。
+            if [ -d .next.old/static ]; then
+              cp -an .next.old/static/. .next/static/ 2>/dev/null || true
+            fi
 
             echo "===== 6. Verify build ====="
             if [ ! -f "$CRM_DIR/.next/BUILD_ID" ]; then
@@ -130,8 +137,9 @@ jobs:
 
             if [ "$HTTP_CODE" = "200" ]; then
               echo "Health check PASSED (HTTP $HTTP_CODE)"
-              # D-057: 原地增量构建会累积旧 chunk，清理 7 天前的孤儿 chunk（保留一周宽限期给在途旧标签页），防磁盘膨胀。
-              find "$CRM_DIR/.next/static/chunks" -type f -mtime +7 -delete 2>/dev/null || true
+              # D-057/D-159: 合并保留的旧静态资源累积 7 天后清理（保留一周宽限期给在途旧标签页），防磁盘膨胀。
+              find "$CRM_DIR/.next/static" -type f -mtime +7 -delete 2>/dev/null || true
+              find "$CRM_DIR/.next/static" -type d -empty -delete 2>/dev/null || true
               rm -rf "$CRM_DIR/.next.old" 2>/dev/null || true
             else
               echo "Health check FAILED after $MAX_RETRIES attempts (HTTP $HTTP_CODE)"
