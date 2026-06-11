@@ -1388,6 +1388,9 @@ export async function POST(req: NextRequest) {
         || hasRawBodyRetriable;
       if (isRetriableError) {
         console.log("[AdSubmit] 检测到可恢复错误，尝试移除违规操作后重试...");
+        // D-156：打印「首个错误原始体」（重试前）——旧逻辑只在最外层 catch 记录最终错误，
+        // 第一次全量 mutate 的真错误会被本 catch 吞掉走重试，导致根因不可见、只看到被污染的级联错误。
+        console.warn(`[AdSubmit] D-156 首个错误原始体（重试前，用于定位真因）: ${(rawErrBody || finalMsg).slice(0, 1500)}`);
         // Parse violating indices: prefer rawBody (raw JSON) > transformed message > violations[].operationIndex
         let violatingIndices = parsePolicyViolationIndices(finalMsg);
         if (violatingIndices.size === 0 && rawErrBody) {
@@ -1420,7 +1423,10 @@ export async function POST(req: NextRequest) {
             // 取代旧的「直接 throw 让员工人工改」。本地规则违规早有 AI 自动改写（generate-more），
             // 这里把 Google 真实拒登也接入同一条 AI 修复闭环。最多 N 轮；AI 改不动 / 改后仍被拒 → 回落人工提示。
             const MAX_AI_POLICY_ROUNDS = 2;
-            const nonRsaViolating = new Set<number>([...violatingIndices].filter((i) => i !== RSA_AD_INDEX));
+            // D-156：随 RSA 重提一并丢弃的「非 RSA 违规操作」只能是 index>5 的可选附加（关键词/扩展/图片）。
+            // 基础骨架 budget0/campaign1/geo2/lang3/adGroup4 通过临时资源名 -1/-2/-3 互相引用，删任何一个都会让
+            // RSA 广告引用的 adGroups/-3 悬空 → RESOURCE_NOT_FOUND 自残式级联。故用 i>RSA_AD_INDEX 而非 i!==RSA_AD_INDEX。
+            const nonRsaViolating = new Set<number>([...violatingIndices].filter((i) => i > RSA_AD_INDEX));
             const aiFixNotes: string[] = [];
             let lastParsed: ParsedPolicyError | null = parsedPolicyError;
             let aiFixed = false;
@@ -1496,23 +1502,23 @@ export async function POST(req: NextRequest) {
 
           // RSA 已通过 AI 改写修复（result 已置）时跳过此段，避免对同一批操作重复提交
           if (!result!) {
-            const filteredOps = operations.filter((_, i) => !violatingIndices.has(i));
-            console.log(`[AdSubmit] 移除 ${violatingIndices.size} 个违规操作 (${skippedDetails.join(", ")}), 剩余 ${filteredOps.length} 个操作`);
-
-            if (filteredOps.length >= 6) {
-              result = await mutateGoogleAds(credentials, customerId, filteredOps) as Record<string, unknown>;
-            } else {
-              // D-041：同样优先用 policy-hub readableMessage
+            // ─── D-156：只移除 index>5 的可选附加操作（关键词/扩展/图片），基础骨架 0~5 绝不可删 ───
+            // 操作骨架恒为 budget0/campaign1/geo2/lang3/adGroup4/RSA广告5，靠临时资源名 -1/-2/-3 互相引用，
+            // 删任何一个都会让后续操作的引用悬空（如广告引用 adGroups/-3 → RESOURCE_NOT_FOUND 自残式级联）。
+            // 旧逻辑直接按 violatingIndices 删 + 仅靠 filteredOps.length>=6 护栏（只数剩余数量），
+            // 当 parsePolicyViolationIndices 把级联下标解析进基础下标（如 index4 的 adGroup）时会误删骨架。
+            const removableViolating = new Set([...violatingIndices].filter((i) => i > RSA_AD_INDEX));
+            if (removableViolating.size === 0) {
+              // 违规下标里只剩基础/级联下标 → 问题出在骨架本身，删除只会制造悬空级联，必须把真错误抛给用户。
               const readable = parsedPolicyError?.readableMessage;
               if (readable && readable.trim().length > 0) {
-                throw new Error(`Google Ads 因政策违规拒绝了 ${violatingIndices.size} 个操作，移除后剩余操作不足。\n\n${readable}`);
+                throw new Error(readable);
               }
-              const triggerList = errViolations
-                ?.filter((v) => v.trigger && !/^-?\d+$/.test(v.trigger.trim()))
-                .map((v) => `「${v.trigger}」`) || [];
-              const triggerHint = triggerList.length > 0 ? `（触发违规的内容: ${triggerList.join(", ")}）` : "";
-              throw new Error(`Google Ads 因政策违规拒绝了 ${violatingIndices.size} 个操作（${skippedDetails.join("、")}），移除后剩余操作不足，无法创建广告。${triggerHint}请修改相关关键词或广告文案后重新提交。`);
+              throw mutateErr;
             }
+            const filteredOps = operations.filter((_, i) => !removableViolating.has(i));
+            console.log(`[AdSubmit] 移除 ${removableViolating.size} 个可选违规操作 (${skippedDetails.join(", ")}), 剩余 ${filteredOps.length} 个操作（基础骨架 0~5 已保留）`);
+            result = await mutateGoogleAds(credentials, customerId, filteredOps) as Record<string, unknown>;
           }
         } else {
           throw mutateErr;
