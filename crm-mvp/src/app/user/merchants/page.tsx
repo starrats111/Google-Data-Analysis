@@ -835,26 +835,26 @@ export default function MerchantsPage() {
   }, [settlementRateMap]);
 
   const claimedCols = useMemo(() => [
-    { title: "商家名称", dataIndex: "merchant_name", width: 240, sorter: true, sortOrder: colSortOrder("merchant_name"), render: (_: string, rec: Merchant) => <MerchantNameCell rec={rec} /> },
-    { title: "平台", dataIndex: "platform", width: 80, render: (v: string) => <Tag color={PC[v] || "default"} style={{ fontWeight: 600 }}>{v}</Tag> },
-    { title: "MID", dataIndex: "merchant_id", width: 100, ellipsis: true },
-    { title: "主营业务", dataIndex: "category", width: 130, ellipsis: true, render: (v: string | null) => catCn(v) },
-    { title: "佣金率", dataIndex: "commission_rate", width: 110, sorter: true, sortOrder: colSortOrder("commission_rate"), render: (v: string | null) => <CommissionCell v={v} /> },
-    { title: "拒付率", dataIndex: "chargeback_rate", width: 100, align: "center" as const, render: renderChargebackRateCol },
-    { title: "结算率", dataIndex: "settlement_rate", width: 100, align: "center" as const, sorter: true, sortOrder: colSortOrder("settlement_rate"), render: renderSettlementRateCol },
-    { title: "支持地区", dataIndex: "supported_regions", width: 150, render: (v: unknown[] | null) => <RB r={v} /> },
+    { title: "商家名称", dataIndex: "merchant_name", width: 184, sorter: true, sortOrder: colSortOrder("merchant_name"), render: (_: string, rec: Merchant) => <MerchantNameCell rec={rec} /> },
+    { title: "平台", dataIndex: "platform", width: 56, render: (v: string) => <Tag color={PC[v] || "default"} style={{ fontWeight: 600 }}>{v}</Tag> },
+    { title: "MID", dataIndex: "merchant_id", width: 74, ellipsis: true },
+    { title: "主营业务", dataIndex: "category", width: 100, ellipsis: true, render: (v: string | null) => catCn(v) },
+    { title: "佣金率", dataIndex: "commission_rate", width: 84, sorter: true, sortOrder: colSortOrder("commission_rate"), render: (v: string | null) => <CommissionCell v={v} /> },
+    { title: "拒付率", dataIndex: "chargeback_rate", width: 76, align: "center" as const, render: renderChargebackRateCol },
+    { title: "结算率", dataIndex: "settlement_rate", width: 76, align: "center" as const, sorter: true, sortOrder: colSortOrder("settlement_rate"), render: renderSettlementRateCol },
+    { title: "支持地区", dataIndex: "supported_regions", width: 116, render: (v: unknown[] | null) => <RB r={v} /> },
     { title: "状态", dataIndex: "ad_status", width: 90, render: (v: string) => v === "ENABLED" ? <Tag color="green">已启用</Tag> : v === "PAUSED" ? <Tag color="orange">已暂停</Tag> : v === "NOT_SUBMITTED" ? <Tag color="blue">已领取</Tag> : <Tag>未知</Tag> },
-    { title: "ATC竞争度", width: 180, render: renderAtcCompetitionCol },
-    { title: "在投人数", dataIndex: "active_advertisers", width: 90, align: "center" as const, render: (v: number, rec: Merchant) => { const n = v || 0; return n > 0 ? <Button size="small" type="link" style={{ padding: 0, fontWeight: 600 }} onClick={() => showActiveAdv(rec)}>{n} 人</Button> : <span style={{ color: "#bfbfbf" }}>0</span>; } },
-    { title: "标签", width: 120, render: (_: unknown, rec: any) => { const labels = rec.labels || []; if (labels.length === 0) return <span style={{ color: "#ccc" }}>-</span>; return <Space size={4} wrap>{labels.map((l: any, i: number) => <Tooltip key={i} title={l.detail}><Tag color={l.color} style={{ cursor: "pointer" }}>{l.text}</Tag></Tooltip>)}</Space>; } },
-    { title: "操作", width: 110, render: (_: unknown, rec: Merchant) => (
+    { title: "ATC竞争度", width: 148, render: renderAtcCompetitionCol },
+    { title: "在投人数", dataIndex: "active_advertisers", width: 70, align: "center" as const, render: (v: number, rec: Merchant) => { const n = v || 0; return n > 0 ? <Button size="small" type="link" style={{ padding: 0, fontWeight: 600 }} onClick={() => showActiveAdv(rec)}>{n} 人</Button> : <span style={{ color: "#bfbfbf" }}>0</span>; } },
+    { title: "标签", width: 92, render: (_: unknown, rec: any) => { const labels = rec.labels || []; if (labels.length === 0) return <span style={{ color: "#ccc" }}>-</span>; return <Space size={4} wrap>{labels.map((l: any, i: number) => <Tooltip key={i} title={l.detail}><Tag color={l.color} style={{ cursor: "pointer", marginInlineEnd: 0 }}>{l.text}</Tag></Tooltip>)}</Space>; } },
+    { title: "操作", width: 92, render: (_: unknown, rec: Merchant) => (
       <Space size={4}>
         <Popconfirm title="确认取消领取？" onConfirm={() => doRelease(rec.id)}><Button size="small" danger>取消领取</Button></Popconfirm>
       </Space>
     ) },
   ], [doRelease, showActiveAdv, sortField, sortOrder, renderAtcCompetitionCol, renderChargebackRateCol, renderSettlementRateCol]);
   const availCols = useMemo(() => [
-    { title: "商家名称", dataIndex: "merchant_name", width: 280, sorter: true, sortOrder: colSortOrder("merchant_name"), render: (_: string, rec: Merchant) => {
+    { title: "商家名称", dataIndex: "merchant_name", width: 188, sorter: true, sortOrder: colSortOrder("merchant_name"), render: (_: string, rec: Merchant) => {
       const hitRate = chargebackHitMap.get(`${rec.platform}-${rec.merchant_id}`);
       return (
         <Space size={6} wrap>
@@ -867,19 +867,19 @@ export default function MerchantsPage() {
         </Space>
       );
     } },
-    { title: "平台", dataIndex: "platform", width: 80, render: (v: string) => <Tag color={PC[v] || "default"} style={{ fontWeight: 600 }}>{v}</Tag> },
-    { title: "MID", dataIndex: "merchant_id", width: 100, ellipsis: true },
-    { title: "主营业务", dataIndex: "category", width: 130, ellipsis: true, render: (v: string | null) => catCn(v) },
-    { title: "佣金率", dataIndex: "commission_rate", width: 110, sorter: true, sortOrder: colSortOrder("commission_rate"), render: (v: string | null) => <CommissionCell v={v} /> },
-    { title: "拒付率", dataIndex: "chargeback_rate", width: 100, align: "center" as const, render: renderChargebackRateCol },
-    { title: "结算率", dataIndex: "settlement_rate", width: 100, align: "center" as const, sorter: true, sortOrder: colSortOrder("settlement_rate"), render: renderSettlementRateCol },
-    { title: "支持地区", dataIndex: "supported_regions", width: 150, render: (v: unknown[] | null) => <RB r={v} /> },
+    { title: "平台", dataIndex: "platform", width: 56, render: (v: string) => <Tag color={PC[v] || "default"} style={{ fontWeight: 600 }}>{v}</Tag> },
+    { title: "MID", dataIndex: "merchant_id", width: 74, ellipsis: true },
+    { title: "主营业务", dataIndex: "category", width: 100, ellipsis: true, render: (v: string | null) => catCn(v) },
+    { title: "佣金率", dataIndex: "commission_rate", width: 84, sorter: true, sortOrder: colSortOrder("commission_rate"), render: (v: string | null) => <CommissionCell v={v} /> },
+    { title: "拒付率", dataIndex: "chargeback_rate", width: 76, align: "center" as const, render: renderChargebackRateCol },
+    { title: "结算率", dataIndex: "settlement_rate", width: 76, align: "center" as const, sorter: true, sortOrder: colSortOrder("settlement_rate"), render: renderSettlementRateCol },
+    { title: "支持地区", dataIndex: "supported_regions", width: 116, render: (v: unknown[] | null) => <RB r={v} /> },
     // C-091：选取商家 tab 也加 ATC 竞争度列，与"我的商家"完全一致——
     // 点 N 个 → 弹广告主列表 Modal → 操作列「查情报」跳转 /user/intelligence
-    { title: "ATC竞争度", width: 180, render: renderAtcCompetitionCol },
-    { title: "在投人数", dataIndex: "active_advertisers", width: 90, align: "center" as const, render: (v: number, rec: Merchant) => { const n = v || 0; return n > 0 ? <Button size="small" type="link" style={{ padding: 0, fontWeight: 600 }} onClick={() => showActiveAdv(rec)}>{n} 人</Button> : <span style={{ color: "#bfbfbf" }}>0</span>; } },
-    { title: "标签", width: 140, render: (_: unknown, rec: any) => { const labels = rec.labels || []; if (labels.length === 0) return <span style={{ color: "#ccc" }}>-</span>; return <Space size={4} wrap>{labels.map((l: any, i: number) => <Tooltip key={i} title={l.detail}><Tag color={l.color} style={{ cursor: "pointer" }}>{l.text}</Tag></Tooltip>)}</Space>; } },
-    { title: "操作", width: 110, render: (_: unknown, rec: Merchant) => (
+    { title: "ATC竞争度", width: 148, render: renderAtcCompetitionCol },
+    { title: "在投人数", dataIndex: "active_advertisers", width: 70, align: "center" as const, render: (v: number, rec: Merchant) => { const n = v || 0; return n > 0 ? <Button size="small" type="link" style={{ padding: 0, fontWeight: 600 }} onClick={() => showActiveAdv(rec)}>{n} 人</Button> : <span style={{ color: "#bfbfbf" }}>0</span>; } },
+    { title: "标签", width: 96, render: (_: unknown, rec: any) => { const labels = rec.labels || []; if (labels.length === 0) return <span style={{ color: "#ccc" }}>-</span>; return <Space size={4} wrap>{labels.map((l: any, i: number) => <Tooltip key={i} title={l.detail}><Tag color={l.color} style={{ cursor: "pointer", marginInlineEnd: 0 }}>{l.text}</Tag></Tooltip>)}</Space>; } },
+    { title: "操作", width: 96, render: (_: unknown, rec: Merchant) => (
       <Space size={4}>
         {rec.policy_status === "prohibited" ? <Button size="small" disabled>禁止领取</Button> : <Button type="primary" size="small" icon={<CheckOutlined />} onClick={() => doClaim(rec)}>{rec.policy_status === "restricted" ? "领取(限制)" : "领取"}</Button>}
       </Space>
@@ -1149,7 +1149,7 @@ export default function MerchantsPage() {
           },
           getCheckboxProps: () => ({ disabled: batchRunning }),
         }}
-        pagination={{ current: page, pageSize, total, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"], showTotal: (t: number) => `共 ${t} 条`, onChange: (p, ps) => { if (ps !== pageSize) { setPageSize(ps); setPage(1); } else setPage(p); } }} scroll={{ x: 1100 }} size="small" />}
+        pagination={{ current: page, pageSize, total, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"], showTotal: (t: number) => `共 ${t} 条`, onChange: (p, ps) => { if (ps !== pageSize) { setPageSize(ps); setPage(1); } else setPage(p); } }} tableLayout="fixed" size="small" />}
       {tab === "available" && <Table columns={availCols} dataSource={merchants} rowKey="id" loading={ml} onChange={handleTableChange}
         rowSelection={{
           selectedRowKeys: batchSelectedKeys,
@@ -1166,7 +1166,7 @@ export default function MerchantsPage() {
           },
           getCheckboxProps: () => ({ disabled: batchRunning }),
         }}
-        pagination={{ current: page, pageSize, total, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"], showTotal: (t: number) => `共 ${t} 条`, onChange: (p, ps) => { if (ps !== pageSize) { setPageSize(ps); setPage(1); } else setPage(p); } }} scroll={{ x: 1380 }} size="small" />}
+        pagination={{ current: page, pageSize, total, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"], showTotal: (t: number) => `共 ${t} 条`, onChange: (p, ps) => { if (ps !== pageSize) { setPageSize(ps); setPage(1); } else setPage(p); } }} tableLayout="fixed" size="small" />}
       {tab === "violations" && (<div>
         {vioError && <div style={{ marginBottom: 12, padding: "8px 12px", background: "#fff2f0", border: "1px solid #ffccc7", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <span><WarningOutlined style={{ color: "#ff4d4f", marginRight: 6 }} />加载违规商家失败：{vioError.message || "请求异常"}</span>
