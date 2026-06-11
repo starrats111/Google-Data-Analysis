@@ -769,8 +769,14 @@ export async function POST(req: NextRequest) {
       : "DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING";
 
     // 最终到达网址后缀：优先使用前端传入值，其次取 DB 中保存的值
-    const finalUrlSuffix: string | undefined =
+    const rawFinalUrlSuffix: string | undefined =
       (bodyFinalUrlSuffix ?? ((campaign as any).final_url_suffix as string | null) ?? undefined) || undefined;
+    // D-157：Google Ads 要求 final_url_suffix 是合法 query string，**不能以 '?' 或 '&' 开头**（否则 INVALID_ARGUMENT，
+    // 报 "The final url suffix cannot begin with '?' or '&'…"）。前端/联盟后缀常带前导 '?'（如 ?utm_source=...&clickId=...），
+    // 这里统一剥掉前导 ?/& 与首尾空白、去掉尾部多余 &，兼容已存库的脏值。
+    const finalUrlSuffix: string | undefined = rawFinalUrlSuffix
+      ? (rawFinalUrlSuffix.trim().replace(/^[?&\s]+/, "").replace(/[?&\s]+$/, "").trim() || undefined)
+      : undefined;
 
     operations.push({
       campaign_operation: {

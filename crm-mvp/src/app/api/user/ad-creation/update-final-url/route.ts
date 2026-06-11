@@ -88,7 +88,10 @@ export async function PATCH(req: NextRequest) {
 
   // 更新最终到达网址后缀（保存到 campaigns.final_url_suffix）
   if (hasSuffix) {
-    const suffixVal = typeof final_url_suffix === "string" ? final_url_suffix.trim() : null;
+    // D-157：保存即归一化——剥掉前导 '?'/'&'（Google Ads final_url_suffix 不能以其开头）+ 去首尾空白与尾部多余 &
+    const suffixVal = typeof final_url_suffix === "string"
+      ? (final_url_suffix.trim().replace(/^[?&\s]+/, "").replace(/[?&\s]+$/, "").trim() || null)
+      : null;
     updates.push(prisma.campaigns.update({
       where: { id: campaign.id },
       data: { final_url_suffix: suffixVal || null } as any,
