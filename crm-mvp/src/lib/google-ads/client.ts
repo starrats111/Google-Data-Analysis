@@ -411,6 +411,99 @@ export async function mutateGoogleAds(
   throw new Error("Google Ads API 修改重试次数已耗尽");
 }
 
+export interface UnlinkCidResult {
+  /** 是否真正执行了置 INACTIVE 的 mutate */
+  unlinked: boolean;
+  /** 该 CID 与此 MCC 之间不存在 ACTIVE 关联（已解绑/从未绑定），无需操作 */
+  alreadyInactive: boolean;
+  /** Google Ads 返回的 customerClientLink 资源名 */
+  resourceName?: string;
+}
+
+/**
+ * 从 MCC（manager）侧将某个子账户 CID 解绑（移除管理关系）。
+ *
+ * 机制：先以 MCC 为目标查 `customer_client_link` 拿到该 CID 对应的 resource_name + status，
+ * 若存在 ACTIVE 关联，则调用专用端点 `customers/{MCC}/customerClientLinks:mutate`
+ * 把 `status` 置为 `INACTIVE`（即从 MCC 解绑该客户账户）。
+ *
+ * ⚠️ 不可逆：解绑后该 MCC 不再管理此账户、拉不到其数据；恢复需重新邀请并由对方接受。
+ * ⚠️ 需 Service Account 在该 MCC 具备管理权限，否则 PERMISSION_DENIED。
+ */
+export async function unlinkCidFromMcc(
+  credentials: MccCredentials,
+  customerId: string,
+): Promise<UnlinkCidResult> {
+  const mcc = credentials.mcc_id.replace(/-/g, "");
+  const cid = customerId.replace(/-/g, "");
+
+  // 1) 从 MCC 侧查该 CID 的 client link
+  const rows = await queryGoogleAds(credentials, credentials.mcc_id, `
+    SELECT
+      customer_client_link.resource_name,
+      customer_client_link.client_customer,
+      customer_client_link.manager_link_id,
+      customer_client_link.status
+    FROM customer_client_link
+    WHERE customer_client_link.client_customer = 'customers/${cid}'
+  `);
+
+  let resourceName = "";
+  let foundActive = false;
+  for (const row of rows) {
+    const link = row.customerClientLink as Record<string, unknown> | undefined;
+    const rn = String(link?.resourceName ?? "");
+    const status = String(link?.status ?? "");
+    if (rn && !resourceName) resourceName = rn;
+    if (status === "ACTIVE" && rn) {
+      resourceName = rn;
+      foundActive = true;
+      break;
+    }
+  }
+
+  if (!foundActive) {
+    return { unlinked: false, alreadyInactive: true, resourceName: resourceName || undefined };
+  }
+
+  // 2) 置 INACTIVE（专用端点 customerClientLinks:mutate，单 operation）
+  const devToken = resolveDevToken(credentials.developer_token);
+  const token = await getAccessToken(credentials.service_account_json);
+  const headers = buildHeaders(token, devToken, credentials.mcc_id);
+  const apiUrl = `${ADS_BASE_URL}/customers/${mcc}/customerClientLinks:mutate`;
+  const resp = await fetch(apiUrl, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      operation: {
+        update: { resourceName, status: "INACTIVE" },
+        updateMask: "status",
+      },
+    }),
+    signal: AbortSignal.timeout(MUTATE_TIMEOUT_MS),
+  });
+
+  if (resp.ok) {
+    return { unlinked: true, alreadyInactive: false, resourceName };
+  }
+
+  const errBody = await resp.text().catch(() => "");
+  if (resp.status === 401 || errBody.includes("UNAUTHENTICATED")) {
+    throw new Error("解绑失败：Google Ads 认证失败，Service Account 凭证无效或已过期，请检查该 MCC 配置的服务账号 JSON。");
+  }
+  if (errBody.includes("PERMISSION_DENIED")) {
+    throw new Error("解绑失败：Service Account 在该 MCC 无管理权限（PERMISSION_DENIED），无法从 MCC 移除该 CID。请确认该服务账号在此 MCC 拥有管理员权限。");
+  }
+  if (errBody.includes("DEVELOPER_TOKEN_NOT_APPROVED")) {
+    throw new Error("解绑失败：Developer Token 仅被批准用于测试账号，无法操作正式账号。请在 Google Ads API Center 申请标准访问权限。");
+  }
+  const violations = parseGoogleAdsErrors(errBody);
+  if (violations.length > 0) {
+    throw new Error(formatGoogleAdsErrorMessage(violations, resp.status) || `从 MCC 移除 CID 失败 (${resp.status})`);
+  }
+  throw new Error(`从 MCC 移除 CID 失败 (${resp.status}): ${errBody.slice(0, 800)}`);
+}
+
 /**
  * 金额转换：美元 → micros（Google Ads 使用 micros 单位）
  */
