@@ -316,8 +316,15 @@ export async function POST(req: NextRequest) {
     console.warn("[D-082] 提交阶段禁止词自动改写异常（不阻断，转下方硬挡）：", e instanceof Error ? e.message : e);
   }
 
+  // BUG-15：提前取商家名传入硬规则校验，品牌词（Miraclesuit ⊃ miracle）豁免误杀
+  const merchantRec = await prisma.user_merchants.findFirst({
+    where: { id: campaign.user_merchant_id, is_deleted: 0 },
+    select: { merchant_name: true },
+  });
+
   const aiRuleViolations = collectAiRuleViolations({
     profile: adSettings?.ai_rule_profile,
+    merchantName: merchantRec?.merchant_name || "",
     keywords,
     headlines,
     descriptions,
@@ -341,10 +348,7 @@ export async function POST(req: NextRequest) {
     const { rewriteViolationsOnly } = await import("@/lib/ai-retry-loop");
     const { extractBrandRoot } = await import("@/lib/country-url-resolver");
 
-    const merchantRec = await prisma.user_merchants.findFirst({
-      where: { id: campaign.user_merchant_id, is_deleted: 0 },
-      select: { merchant_name: true },
-    });
+    // BUG-15：商家名已在上方硬规则校验前查询，此处直接复用
     const brandRoot = extractBrandRoot(merchantRec?.merchant_name || "");
     const market = getAdMarketConfig(campaign.target_country || "US");
     const country = campaign.target_country || "US";

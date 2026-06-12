@@ -611,9 +611,26 @@ export function matchProhibitedBusinessCategory(
   return null;
 }
 
-const BASIC_POLICY_RISK_PATTERNS: Array<{ label: string; pattern: RegExp }> = [
+/**
+ * BUG-15：miracle 这类模糊词必须叠加医疗语境才算「医疗治愈类承诺」。
+ * Google 真正禁的是 miracle cure（奇迹疗法）式宣称；泳衣品牌 Miraclesuit 的
+ * 「Miracle bathing suits」属正常品牌表述，裸词匹配会误杀。
+ */
+const MEDICAL_CONTEXT_RE = /\b(cures?|cured|heal(?:s|ing)?|treat(?:s|ment|ments)?|therapy|remed(?:y|ies)|pills?|drugs?|supplements?|medicine|medical|diseases?|illness|diagnos\w*|pain\s+relief|relieves?\s+pain|weight\s*loss|lose\s+weight|fat\s+burn\w*|anti[-\s]?aging|acne|arthritis|diabetes|cancer|inflammation|immune|detox)\b|治疗|治愈|疗效|药/i;
+
+type PolicyRiskRule = {
+  label: string;
+  pattern: RegExp;
+  /** 模糊词额外要求的语境（不命中语境则不判违规） */
+  requiresContext?: RegExp;
+  /** 命中词若是商家品牌名一部分（如 Miraclesuit ⊃ miracle）则豁免 */
+  brandExemptible?: boolean;
+};
+
+const BASIC_POLICY_RISK_PATTERNS: PolicyRiskRule[] = [
   { label: "保证结果/零风险承诺", pattern: /\bguaranteed?\s+results?\b|\bzero\s+risk\b|\brisk[\s-]?free\b|\b100%\s+safe\b|\binstant\s+approval\b/i },
-  { label: "医疗治愈类承诺", pattern: /\bcures?\b|\bmiracle\b|\bheals?\b|治疗|治愈|神药/i },
+  { label: "医疗治愈类承诺", pattern: /\bcures?\b|\bheals?\b|治疗|治愈|神药/i, brandExemptible: true },
+  { label: "医疗治愈类承诺", pattern: /\bmiracle\b/i, requiresContext: MEDICAL_CONTEXT_RE, brandExemptible: true },
   { label: "快速致富类承诺", pattern: /\bmake\s+money\s+fast\b|\bget\s+rich\s+quick\b|快速赚钱|暴富/i },
   { label: "误导性前后对比承诺", pattern: /\bbefore\s+and\s+after\b|\bbefore\/after\b|前后对比/i },
   { label: "管制物质/毒品相关", pattern: /\bshrooms?\b|\bpsilocybin|\bpsilocybe|\bpsychedelic|\bhallucino|\b(lsd|mdma|ecstasy)\b|\bcocaine|\bheroin|\bmethamphet|\bkratom|\bayahuasca|\bdmt\b|\bketamine|\bopiat|\bopioid|\bfentanyl/i },
@@ -805,9 +822,31 @@ export async function autoRewriteForbiddenTerms(
   return out;
 }
 
+/**
+ * BUG-15：统一的政策风险匹配入口。
+ *   - requiresContext 的模糊词（miracle）需同句叠加医疗语境才判；
+ *   - brandExemptible 的命中词若是商家品牌名一部分（Miraclesuit ⊃ miracle）则豁免。
+ * 返回命中的规则，全部豁免/未命中返回 null。
+ */
+function matchPolicyRiskRule(text: string, merchantName?: string | null): PolicyRiskRule | null {
+  const brandNorm = String(merchantName || "").toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "");
+  for (const rule of BASIC_POLICY_RISK_PATTERNS) {
+    const m = rule.pattern.exec(text);
+    if (!m) continue;
+    if (rule.requiresContext && !rule.requiresContext.test(text)) continue;
+    if (rule.brandExemptible && brandNorm) {
+      const word = m[0].toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "");
+      if (word && brandNorm.includes(word)) continue;
+    }
+    return rule;
+  }
+  return null;
+}
+
 export function checkItemViolations(
   items: string[],
   profileRaw: unknown,
+  merchantName?: string | null,
 ): Array<{ index: number; text: string; reasons: string[] }> {
   const profile = normalizeAiRuleProfile(profileRaw);
   const persona = getActivePersona(profile);
@@ -823,9 +862,8 @@ export function checkItemViolations(
     if (matched) reasons.push(`命中禁止词「${matched}」`);
 
     if (persona.enforce_policy_check || profile.enforce_policy_check) {
-      for (const rule of BASIC_POLICY_RISK_PATTERNS) {
-        if (rule.pattern.test(text)) { reasons.push(rule.label); break; }
-      }
+      const rule = matchPolicyRiskRule(text, merchantName);
+      if (rule) reasons.push(rule.label);
     }
     if (isPolicyRiskKeyword(text) && !reasons.some((r) => r.includes("管制") || r.includes("大麻"))) {
       reasons.push("管制物质/政策风险词（组合检测）");
@@ -837,6 +875,8 @@ export function checkItemViolations(
 
 export function collectAiRuleViolations(payload: {
   profile: unknown;
+  /** BUG-15：商家名（用于品牌词豁免，如 Miraclesuit ⊃ miracle） */
+  merchantName?: string | null;
   keywords?: Array<string | { text?: string | null }>;
   headlines?: string[];
   descriptions?: string[];
@@ -900,15 +940,10 @@ export function collectAiRuleViolations(payload: {
       )),
     ];
     for (const text of policyTexts) {
-      let matched = false;
-      for (const rule of BASIC_POLICY_RISK_PATTERNS) {
-        if (rule.pattern.test(text)) {
-          violations.push(`内容「${text}」疑似触发 Google Ads 风险表达：${rule.label}`);
-          matched = true;
-          break;
-        }
-      }
-      if (!matched && isPolicyRiskKeyword(text)) {
+      const rule = matchPolicyRiskRule(text, payload.merchantName);
+      if (rule) {
+        violations.push(`内容「${text}」疑似触发 Google Ads 风险表达：${rule.label}`);
+      } else if (isPolicyRiskKeyword(text)) {
         violations.push(`内容「${text}」疑似触发 Google Ads 风险表达：管制物质/政策风险词（组合检测）`);
       }
     }
