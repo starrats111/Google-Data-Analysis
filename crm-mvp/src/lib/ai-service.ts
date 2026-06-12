@@ -610,48 +610,11 @@ function getFallbackDescriptionCandidates(
   ];
 }
 
-/** 从 ai_providers 表获取第一个可用的 Provider 作为默认配置 */
-async function getFirstActiveProvider(_scene?: string): Promise<AiModelConfig[]> {
-  const provider = await prisma.ai_providers.findFirst({
-    where: { status: "active", is_deleted: 0 },
-    orderBy: { id: "asc" },
-  });
-  if (!provider || !provider.api_key) return [];
-
-  const providerConfigs = await prisma.ai_model_configs.findMany({
-    where: { provider_id: provider.id, is_active: 1, is_deleted: 0 },
-    orderBy: { priority: "asc" },
-  });
-
-  if (providerConfigs.length > 0) {
-    return providerConfigs.map((c) => ({
-      providerName: provider.provider_name,
-      apiKey: provider.api_key!,
-      baseUrl: provider.api_base_url || "https://api.openai.com",
-      modelName: c.model_name,
-      maxTokens: c.max_tokens || 4096,
-      temperature: Number(c.temperature ?? 0.7),
-    }));
-  }
-
-  const fallbackModels = [
-    "[特价]claude-sonnet-4-6",
-    "[福利]claude-sonnet-4-6",
-    "[官B]claude-sonnet-4-6",
-    "deepseek-chat",
-  ];
-
-  return fallbackModels.map((modelName) => ({
-    providerName: provider.provider_name,
-    apiKey: provider.api_key!,
-    baseUrl: provider.api_base_url || "https://api.openai.com",
-    modelName,
-    maxTokens: 4096,
-    temperature: 0.7,
-  }));
-}
-
-/** 获取指定场景的 AI 模型配置（按 priority 排序，支持 fallback） */
+/**
+ * 获取指定场景的 AI 模型配置（按 priority 排序）。
+ * COST-01（07 决策）：移除一切硬编码兜底模型——管理台 ai_model_configs 是唯一真相源，
+ * 场景无可用配置时直接报错，绝不偷偷调用配置之外的模型。
+ */
 async function getSceneModels(scene: string): Promise<AiModelConfig[]> {
   const models = await prisma.ai_model_configs.findMany({
     where: { scene, is_active: 1, is_deleted: 0 },
@@ -659,11 +622,6 @@ async function getSceneModels(scene: string): Promise<AiModelConfig[]> {
   });
 
   if (models.length === 0) {
-    const fallbacks = await getFirstActiveProvider(scene);
-    if (fallbacks.length > 0) {
-      console.log(`[AI] 场景 ${scene} 无专属配置，使用第一个可用 Provider: ${fallbacks[0].providerName}/${fallbacks.map((f) => f.modelName).join(",")}`);
-      return fallbacks;
-    }
     throw new Error(`AI 未配置：场景 ${scene} 无可用模型，请在 AI 配置中添加供应商或场景模型`);
   }
 
@@ -689,11 +647,7 @@ async function getSceneModels(scene: string): Promise<AiModelConfig[]> {
     .filter(Boolean) as AiModelConfig[];
 
   if (result.length === 0) {
-    const fallbacks = await getFirstActiveProvider(scene);
-    if (fallbacks.length > 0) {
-      console.warn(`[AI] 场景 ${scene} 的 provider 均不可用，使用第一个可用 Provider: ${fallbacks[0].providerName}/${fallbacks.map((f) => f.modelName).join(",")}`);
-      return fallbacks;
-    }
+    throw new Error(`AI 未配置：场景 ${scene} 关联的 Provider 均不可用（status!=active 或缺 API Key），请在 AI 配置中检查`);
   }
 
   return result;
@@ -935,7 +889,11 @@ async function callAi(
   throw new Error(`AI API 限流 (${config.modelName}): 重试 ${MAX_RETRIES} 次后仍被限流`);
 }
 
-/** 带 fallback 的 AI 调用：场景模型 → 回退模型链 → 全部失败才报错 */
+/**
+ * 带 fallback 的 AI 调用：按场景配置的 priority 依次尝试，全部失败即报错。
+ * COST-01（07 决策）：移除 deepseek-chat / gpt-4o-mini 紧急兜底——只允许调用
+ * 管理台为该场景显式配置的模型，杜绝配置之外的隐性 AI 花费。
+ */
 export async function callAiWithFallback(
   scene: string,
   messages: { role: string; content: string }[],
@@ -955,30 +913,6 @@ export async function callAiWithFallback(
       console.warn(`[AI] ${model.modelName} 失败，尝试下一个:`, lastError.message);
       if (lastError.message.includes("insufficient_user_quota")) {
         throw lastError;
-      }
-    }
-  }
-
-  // 场景模型全部失败时，尝试 deepseek-chat 兜底
-  const fallbackProvider = await prisma.ai_providers.findFirst({
-    where: { status: "active", is_deleted: 0 },
-    orderBy: { id: "asc" },
-  });
-  if (fallbackProvider?.api_key) {
-    const emergencyModels = ["deepseek-chat", "gpt-4o-mini"];
-    for (const modelName of emergencyModels) {
-      try {
-        console.warn(`[AI] 场景 ${scene} 全部失败，尝试兜底模型: ${modelName}`);
-        return await callAi({
-          providerName: fallbackProvider.provider_name,
-          apiKey: fallbackProvider.api_key,
-          baseUrl: fallbackProvider.api_base_url || "https://api.openai.com",
-          modelName,
-          maxTokens: maxTokens || 4096,
-          temperature: 0.7,
-        }, messages, maxTokens);
-      } catch (err) {
-        console.warn(`[AI] 兜底模型 ${modelName} 也失败:`, err instanceof Error ? err.message : err);
       }
     }
   }
