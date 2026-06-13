@@ -433,25 +433,17 @@ function main() {
       }
     } catch (e) { Logger.log('Account ' + account.getName() + ' error: ' + e.message); }
 
-    // 采集广告系列创建信息（用于「今日投放商家」，creation_time 在账户时区）
+    // 采集广告系列信息（用于「今日投放商家」，start_date 在账户时区）
     try {
+      // 注意：GAQL 无 campaign.creation_time 字段（会报 UNRECOGNIZED_FIELD）。
+      // 用 campaign.start_date（账户时区的 yyyy-MM-dd）作为系列创建日期的近似值。
       var infoReport = AdsApp.report(
-        "SELECT campaign.id, campaign.name, campaign.status, campaign.creation_time FROM campaign WHERE campaign.status != 'REMOVED'"
+        "SELECT campaign.id, campaign.name, campaign.status, campaign.start_date FROM campaign WHERE campaign.status != 'REMOVED'"
       );
       var infoRows = infoReport.rows();
       while (infoRows.hasNext()) {
         var infoRow = infoRows.next();
-        var creationTime = infoRow['campaign.creation_time'] || '';
-        var creationDateCST = '';
-        if (creationTime) {
-          try {
-            // creation_time 在账户时区，转换为北京时间 (Asia/Shanghai) 日期
-            var parsedDt = Utilities.parseDate(creationTime, tz, 'yyyy-MM-dd HH:mm:ss');
-            creationDateCST = Utilities.formatDate(parsedDt, 'Asia/Shanghai', 'yyyy-MM-dd');
-          } catch(pe) {
-            creationDateCST = creationTime.slice(0, 10);
-          }
-        }
+        var creationDateCST = (infoRow['campaign.start_date'] || '').slice(0, 10);
         campaignInfoRows.push([infoRow['campaign.id'], infoRow['campaign.name'], infoRow['campaign.status'], creationDateCST, account.getCustomerId()]);
       }
     } catch (e) { Logger.log('CampaignInfo error for ' + account.getName() + ': ' + e.message); }
