@@ -166,6 +166,23 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      // C-088：软删被合并掉的历史子行（同一订单的非代表 line item id），
+      // 收敛 RW 等"拒原行+建新行"残留的陈旧行，避免一笔订单重复计数 / 状态错乱。
+      if (aggRes.absorbedTxnIds.length > 0) {
+        let absorbedDeleted = 0;
+        for (let ci = 0; ci < aggRes.absorbedTxnIds.length; ci += 200) {
+          const batch = aggRes.absorbedTxnIds.slice(ci, ci + 200);
+          const res = await prisma.affiliate_transactions.updateMany({
+            where: { platform, user_id: userId, transaction_id: { in: batch }, is_deleted: 0 },
+            data: { is_deleted: 1 },
+          });
+          absorbedDeleted += res.count;
+        }
+        if (absorbedDeleted > 0) {
+          console.log(`[sync-txn] ${platform}/${label}: 软删了 ${absorbedDeleted} 条被合并的历史子行`);
+        }
+      }
+
       const redirectRules = getRedirectedMerchantKeys(userId);
 
       // C-020 R1.1：domain 兜底——仅对 source=url_direct 的商家，按 domain 回填 user_merchant_id

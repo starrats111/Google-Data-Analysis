@@ -884,6 +884,18 @@ async function syncAllUsersTransactions(): Promise<unknown> {
             }
           }
 
+          // C-088：软删被合并掉的历史子行（同一订单的非代表 line item id），
+          // 收敛 RW 等"拒原行+建新行"残留的陈旧行，避免一笔订单重复计数 / 状态错乱。
+          if (aggRes.absorbedTxnIds.length > 0) {
+            for (let ci = 0; ci < aggRes.absorbedTxnIds.length; ci += 200) {
+              const batch = aggRes.absorbedTxnIds.slice(ci, ci + 200);
+              await prisma.affiliate_transactions.updateMany({
+                where: { platform, user_id: userId, transaction_id: { in: batch }, is_deleted: 0 },
+                data: { is_deleted: 1 },
+              });
+            }
+          }
+
           for (const txn of aggregatedTxns) {
             if (!txn.transaction_id) continue;
             const mid = txn.merchant_id || "";
@@ -1075,6 +1087,9 @@ async function syncAllUsersPayments(): Promise<unknown> {
   });
 
   const results: Record<string, unknown> = {};
+  // 病灶根除：联盟支付接口按 api_key（账号级）返回，同一物理账号(api_key)即使被
+  // 配置成多条连接 / 挂在不同成员名下，也只能同步一次，否则同一打款单会重复入库。
+  const syncedAccounts = new Set<string>();
 
   for (const user of users) {
     try {
@@ -1084,7 +1099,12 @@ async function syncAllUsersPayments(): Promise<unknown> {
       });
       const validConns = conns.filter(
         (c) => c.api_key && c.api_key.length > 5 && platformSupportsPayments(normalizePlatformCode(c.platform)),
-      );
+      ).filter((c) => {
+        const key = `${normalizePlatformCode(c.platform)}::${c.api_key}`;
+        if (syncedAccounts.has(key)) return false;
+        syncedAccounts.add(key);
+        return true;
+      });
       if (validConns.length === 0) continue;
 
       let synced = 0;

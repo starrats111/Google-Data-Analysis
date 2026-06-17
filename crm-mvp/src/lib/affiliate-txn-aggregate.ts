@@ -32,8 +32,13 @@ import type { PlatformTransaction } from "@/lib/platform-api";
  *     - 1 个聚合组 = 1 个真实订单（与联盟平台后台 distinct order_id 口径对齐）
  *     - 选稳定主 id = 字典序最小的 transaction_id（与 API 返回顺序无关，幂等）
  *     - commission_amount = SUM, order_amount = SUM
- *     - status 按优先级取最高（已审核状态优先于待审核）
- *     - 被淘汰的 line items 不写入 DB（同步代码直接跳过它们）
+ *     - status **优先由「带佣金(commission≠0)的行」决定**（C-088）：RW 等平台在订单
+ *       状态翻转时会把原始 tracking 行佣金清零并标 rejected、另建一条带佣金的 approved
+ *       新行；若按全部行取最高优先级，会被这条 0 佣金 rejected 残行劫持成"拒付"。
+ *       故只用带佣金的行判定状态；仅当整单所有行佣金都为 0 时，才回退取全部行的最高
+ *       优先级（保留真·全拒单 / 0 佣金 lead 单语义）。
+ *     - 被淘汰的 line items 不写入 DB；其 transaction_id 通过 absorbedTxnIds 返回，
+ *       供同步层软删库里历史遗留的子行（避免一笔订单同时存在代表行与旧子行重复计数）
  *
  * **C-086 起不再过滤 0/0 幽灵组**：平台后台显示 distinct order_id 时会包含整单
  * commission=0 amount=0 的 lead 订单（如 Rula 的"未转化"订单），CRM 必须保留以对齐
@@ -68,6 +73,12 @@ function pickHigherPriorityStatus(a: string, b: string): string {
 
 export interface AggregateResult {
   aggregated: AggregatedTransaction[];
+  /**
+   * 被合并掉的 line item transaction_id（同一订单组里的非代表行）。
+   * 同步代码应据此把库里残留的旧子行软删，避免一笔订单在库里同时存在
+   * 「代表行」与历史遗留的「子行」造成重复计数 / 状态错乱（C-086 之前写入的旧行）。
+   */
+  absorbedTxnIds: string[];
   stats: {
     raw_count: number;
     after_id_dedup: number;
@@ -95,14 +106,27 @@ export function aggregateRawTransactions(raw: PlatformTransaction[]): AggregateR
   }
   const afterIdDedup = byTxnId.size;
 
+  type StatusPick = { status: string; raw: string };
   type Group = {
     rep: PlatformTransaction;
     sumCommission: number;
     sumAmount: number;
-    bestStatus: string;
-    rawStatus: string;
+    // 仅由"带佣金的行"得出的状态（C-088，优先用于判定）；整单全 0 佣金时为 null
+    nz: StatusPick | null;
+    // 全部行得出的状态（整单佣金全为 0 时回退用）
+    all: StatusPick;
+    memberIds: string[];
     lineCount: number;
   };
+
+  // 以更高优先级的状态覆盖（顺序同 pickHigherPriorityStatus），并带上其 raw_status。
+  const mergePick = (cur: StatusPick | null, status: string, raw: string): StatusPick => {
+    if (!cur) return { status, raw };
+    const winner = pickHigherPriorityStatus(cur.status, status);
+    if (winner === status && status !== cur.status) return { status, raw: raw || cur.raw };
+    return cur;
+  };
+
   const groups = new Map<string, Group>();
   const noMerchantId: PlatformTransaction[] = [];
 
@@ -116,12 +140,14 @@ export function aggregateRawTransactions(raw: PlatformTransaction[]): AggregateR
     // 若 API 未返回 order_id（部分老平台），降级回 C-079 的 transaction_time 维度。
     const orderKey = (t.order_id && t.order_id.trim()) || "";
     const key = orderKey ? `${mid}|oid:${orderKey}` : `${mid}|t:${t.transaction_time}`;
+    const comm = t.commission_amount || 0;
     const g = groups.get(key);
     if (g) {
-      g.sumCommission += (t.commission_amount || 0);
+      g.sumCommission += comm;
       g.sumAmount += (t.order_amount || 0);
-      g.bestStatus = pickHigherPriorityStatus(g.bestStatus, t.status);
-      g.rawStatus = pickHigherPriorityStatus(g.bestStatus, t.status) === t.status ? (t.raw_status || g.rawStatus) : g.rawStatus;
+      g.all = mergePick(g.all, t.status, t.raw_status || "");
+      if (comm !== 0) g.nz = mergePick(g.nz, t.status, t.raw_status || "");
+      g.memberIds.push(t.transaction_id);
       g.lineCount++;
       if (t.transaction_id < g.rep.transaction_id) {
         g.rep = t;
@@ -129,10 +155,11 @@ export function aggregateRawTransactions(raw: PlatformTransaction[]): AggregateR
     } else {
       groups.set(key, {
         rep: t,
-        sumCommission: t.commission_amount || 0,
+        sumCommission: comm,
         sumAmount: t.order_amount || 0,
-        bestStatus: t.status,
-        rawStatus: t.raw_status || "",
+        all: { status: t.status, raw: t.raw_status || "" },
+        nz: comm !== 0 ? { status: t.status, raw: t.raw_status || "" } : null,
+        memberIds: [t.transaction_id],
         lineCount: 1,
       });
     }
@@ -140,15 +167,23 @@ export function aggregateRawTransactions(raw: PlatformTransaction[]): AggregateR
 
   let mergedLineItems = 0;
   const afterLineMerge: PlatformTransaction[] = [];
+  const absorbedTxnIds: string[] = [];
   for (const g of groups.values()) {
     if (g.lineCount > 1) mergedLineItems += (g.lineCount - 1);
+    // C-088 病灶根除：被清零(佣金=0)的 rejected 残行不参与状态判定——只要订单里存在带佣金
+    // 的 approved/paid 行，整单状态就取带佣金行(nz)；仅当整单所有行佣金都为 0 时才回退到 all。
+    const pick = g.nz ?? g.all;
     afterLineMerge.push({
       ...g.rep,
       commission_amount: g.sumCommission,
       order_amount: g.sumAmount,
-      status: g.bestStatus,
-      raw_status: g.rawStatus,
+      status: pick.status,
+      raw_status: pick.raw,
     });
+    // 收集非代表行 id，供同步层软删库里历史遗留的子行
+    for (const id of g.memberIds) {
+      if (id !== g.rep.transaction_id) absorbedTxnIds.push(id);
+    }
   }
   for (const t of noMerchantId) afterLineMerge.push(t);
 
@@ -169,6 +204,7 @@ export function aggregateRawTransactions(raw: PlatformTransaction[]): AggregateR
 
   return {
     aggregated,
+    absorbedTxnIds,
     stats: {
       raw_count: rawCount,
       after_id_dedup: afterIdDedup,
