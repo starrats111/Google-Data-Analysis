@@ -131,11 +131,17 @@ export async function GET(req: NextRequest) {
   const paidParams: unknown[] = [...userIds, start, end];
   let paidPlatformClause = "";
   if (platform) { paidPlatformClause = " AND platform = ?"; paidParams.push(platform); }
+  // 病灶根除：联盟支付接口按 api_key（账号级）返回，同一物理账号若有多条连接，
+  // 同一笔打款单(payment_no)会重复入库。先按 (platform, payment_no) 折叠为单笔
+  // （平台内 payment_no 全局唯一，重复行金额一致，取 MAX 即原值），再求和，避免重复计入。
   const paidRows = await prisma.$queryRawUnsafe<{ paid_commission: number }[]>(`
-    SELECT SUM(CAST(amount AS DECIMAL(14,4))) AS paid_commission
-    FROM affiliate_payments
-    WHERE user_id IN (${uidPlaceholders}) AND is_deleted = 0 AND status = 'paid'
-      AND paid_date >= ? AND paid_date < ?${paidPlatformClause}
+    SELECT SUM(amount) AS paid_commission FROM (
+      SELECT MAX(CAST(amount AS DECIMAL(14,4))) AS amount
+      FROM affiliate_payments
+      WHERE user_id IN (${uidPlaceholders}) AND is_deleted = 0 AND status = 'paid'
+        AND paid_date >= ? AND paid_date < ?${paidPlatformClause}
+      GROUP BY platform, payment_no
+    ) t
   `, ...paidParams);
   const paidCommission = Number(paidRows[0]?.paid_commission || 0);
 

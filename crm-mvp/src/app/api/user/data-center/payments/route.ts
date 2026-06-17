@@ -60,10 +60,12 @@ export async function GET(req: NextRequest) {
     ...(platform ? { platform } : {}),
   } as const;
 
-  const rows = await prisma.affiliate_payments.findMany({
+  // 取原始行：同一总帐号下若配置了多个渠道(连接)，重复行会显著放大行数，
+  // 适当放宽上限，避免重复行把真实明细挤出截断窗口（去重后再分页展示）。
+  const rowsRaw = await prisma.affiliate_payments.findMany({
     where,
     orderBy: { paid_date: "desc" },
-    take: 1000,
+    take: 5000,
     select: {
       id: true, platform: true, payment_no: true, source_kind: true,
       paid_date: true, amount: true, gross_amount: true, currency: true,
@@ -72,16 +74,46 @@ export async function GET(req: NextRequest) {
     },
   });
 
-  // 关联账号名（platform_connections.account_name）；组长视图附带员工名便于区分
-  const connIds = [...new Set(rows.map((r) => r.platform_connection_id).filter((x): x is bigint => x != null))];
-  const conns = connIds.length
+  // 关联账号名 / 收款人（platform_connections）。先取出全部原始行涉及的连接，
+  // 以便去重时优先保留「带收款人的主连接」，避免折叠后丢失收款人/账号归属信息。
+  const allConnIds = [...new Set(rowsRaw.map((r) => r.platform_connection_id).filter((x): x is bigint => x != null))];
+  const conns = allConnIds.length
     ? await prisma.platform_connections.findMany({
-        where: { id: { in: connIds } },
+        where: { id: { in: allConnIds } },
         select: { id: true, account_name: true, payee: true },
       })
     : [];
   const connNameMap = new Map(conns.map((c) => [String(c.id), c.account_name || ""]));
   const connPayeeMap = new Map(conns.map((c) => [String(c.id), c.payee || ""]));
+
+  // 病灶根除（读取端兜底）：同一「总帐号」下的多个渠道(连接)各自配置了不同 api_key，
+  // 联盟支付接口按账号返回同一笔打款单(payment_no)，导致同一笔实付按渠道在库里存了多行。
+  // payment_no 在平台内全局唯一 → 按 (platform, payment_no) 折叠为「一个总帐号一笔」，
+  // 只展示并计入一次（列表/按平台/总额）。折叠时优先保留带「收款人」、其次带账号名的
+  // 主连接行，确保归属落在总帐号上（其余渠道 API 仅作为同一总帐号的来源，不重复计）。
+  const connScore = (r: (typeof rowsRaw)[number]): number => {
+    const cid = r.platform_connection_id ? String(r.platform_connection_id) : "";
+    const hasPayee = cid && connPayeeMap.get(cid) ? 2 : 0;
+    const hasName = cid && connNameMap.get(cid) ? 1 : 0;
+    return hasPayee + hasName;
+  };
+  const bestByPayment = new Map<string, (typeof rowsRaw)[number]>();
+  for (const r of rowsRaw) {
+    const key = `${r.platform}::${r.payment_no}`;
+    const cur = bestByPayment.get(key);
+    // 优先级：主连接得分高者 > 打款日较新者 > id 较小者（稳定）
+    if (
+      !cur ||
+      connScore(r) > connScore(cur) ||
+      (connScore(r) === connScore(cur) &&
+        (r.paid_date?.getTime() ?? 0) > (cur.paid_date?.getTime() ?? 0))
+    ) {
+      bestByPayment.set(key, r);
+    }
+  }
+  const rows = [...bestByPayment.values()].sort(
+    (a, b) => (b.paid_date?.getTime() ?? 0) - (a.paid_date?.getTime() ?? 0),
+  );
 
   let userNameMap = new Map<string, string>();
   if (isLeader) {

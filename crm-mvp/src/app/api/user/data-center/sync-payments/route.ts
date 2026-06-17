@@ -47,9 +47,20 @@ export async function POST(req: NextRequest) {
 
     const { fetchPlatformPayments, platformSupportsPayments } = await import("@/lib/payment-api");
 
-    const validConns = connections
+    const validConnsRaw = connections
       .filter((c) => c.api_key && c.api_key.length > 5 && platformSupportsPayments(normalizePlatformCode(c.platform)))
       .sort((a, b) => Number(b.id) - Number(a.id));
+
+    // 病灶根除：联盟「支付/打款」接口按 api_key（账号级）返回，与连接(channel/成员)无关。
+    // 同一物理账号若配置了多条连接（如同一 CG 账号挂在不同成员名下），逐条同步会把
+    // 同一笔打款单写成多行。按 (platform, api_key) 去重，每个物理账号只同步一次。
+    const seenAccounts = new Set<string>();
+    const validConns = validConnsRaw.filter((c) => {
+      const key = `${normalizePlatformCode(c.platform)}::${c.api_key}`;
+      if (seenAccounts.has(key)) return false;
+      seenAccounts.add(key);
+      return true;
+    });
 
     if (validConns.length === 0) {
       return apiError(
