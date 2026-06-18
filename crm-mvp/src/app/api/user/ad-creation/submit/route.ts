@@ -514,9 +514,81 @@ export async function POST(req: NextRequest) {
 
   const submitMerchant = await prisma.user_merchants.findFirst({
     where: { id: campaign.user_merchant_id, is_deleted: 0 },
-    select: { merchant_name: true, merchant_id: true, platform: true, platform_connection_id: true },
+    select: {
+      merchant_name: true, merchant_id: true, platform: true, platform_connection_id: true,
+      tracking_link: true, campaign_link: true, connection_campaign_links: true,
+      tracking_status: true, parent_network: true, parent_blacklisted: true, parent_checked_at: true,
+    },
   });
   if (!submitMerchant) return apiError("商家不存在", 404);
+
+  // ═════════════════════════════════════════════════════════════════
+  // D-101 追踪链接 + 上级联盟自动巡航硬闸（创建广告时）
+  //   按投放国代理跟随联盟追踪链接的整条跳转链，识别上级联盟；命中该平台黑名单 → 硬拦截。
+  //   结果缓存在 user_merchants（7 天 TTL）：复用避免每次提交都巡航。
+  //   仅「黑名单」硬阻断；no_tracking / resolve_failed 仅记录（主 CRM 追踪走 final_url_suffix，
+  //   且可达性另有 D-050 闸门），不阻断提交。
+  // ═════════════════════════════════════════════════════════════════
+  try {
+    // 取该商家本平台账号的联盟追踪链接（优先账号级 campaign_link，其次通用字段）
+    let affiliateUrl = "";
+    const connLinks = (submitMerchant.connection_campaign_links || null) as Record<string, string> | null;
+    if (connLinks && submitMerchant.platform_connection_id) {
+      affiliateUrl = String(connLinks[String(submitMerchant.platform_connection_id)] || "").trim();
+    }
+    if (!affiliateUrl) affiliateUrl = String(submitMerchant.campaign_link || "").trim();
+    if (!affiliateUrl) affiliateUrl = String(submitMerchant.tracking_link || "").trim();
+
+    if (affiliateUrl && /^https?:\/\//i.test(affiliateUrl)) {
+      const TTL_MS = 7 * 24 * 60 * 60 * 1000;
+      const checkedAt = submitMerchant.parent_checked_at ? new Date(submitMerchant.parent_checked_at).getTime() : 0;
+      const cacheFresh = checkedAt > 0 && Date.now() - checkedAt < TTL_MS && submitMerchant.tracking_status !== "unchecked";
+
+      let blocked = false;
+      let blockedNetwork = submitMerchant.parent_network || "";
+
+      if (cacheFresh) {
+        // 复用缓存：仅看黑名单结论
+        blocked = submitMerchant.parent_blacklisted === 1 || submitMerchant.tracking_status === "forbidden_network";
+      } else {
+        // 现场巡航（纯 HTTP，足以识别跳板域名/上级联盟；总超时 60s）
+        const { resolveAffiliateLink } = await import("@/lib/affiliate-link-resolver");
+        const cruise = await Promise.race([
+          resolveAffiliateLink(affiliateUrl, campaign.target_country || "US", submitMerchant.platform || null),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 60000)),
+        ]);
+        if (cruise) {
+          blocked = cruise.status === "forbidden_network";
+          blockedNetwork = cruise.parentNetwork || blockedNetwork;
+          await prisma.user_merchants.update({
+            where: { id: campaign.user_merchant_id! },
+            data: {
+              parent_network: cruise.parentNetwork,
+              parent_blacklisted: cruise.status === "forbidden_network" ? 1 : 0,
+              tracking_status: cruise.status,
+              resolved_final_url: cruise.finalUrl?.slice(0, 1024) || null,
+              resolve_chain: cruise.chain.slice(0, 20) as unknown as object,
+              parent_checked_at: new Date(),
+              parent_check_reason: (cruise.error || (cruise.status === "ok" ? "巡航通过" : cruise.status)).slice(0, 255),
+            },
+          }).catch((e) => console.warn("[AdSubmit] D-101 巡航结果写回失败:", e instanceof Error ? e.message : e));
+        } else {
+          console.warn("[AdSubmit] D-101 巡航超时（60s），放行本次提交（不阻断）");
+        }
+      }
+
+      if (blocked) {
+        console.warn(`[AdSubmit] D-101 上级联盟黑名单拦截: merchant=${submitMerchant.merchant_name} platform=${submitMerchant.platform} parent=${blockedNetwork}`);
+        return apiError(
+          `该商家的联盟追踪链接属于上级联盟「${blockedNetwork || "未知"}」，已被「${submitMerchant.platform}」平台列入黑名单，不能投放。请更换商家或联系组长调整黑名单后重试。`,
+          422,
+        );
+      }
+    }
+  } catch (cruiseErr) {
+    // 巡航本身异常不阻断提交（黑名单拦截已在上方 return；此处仅兜底）
+    console.warn("[AdSubmit] D-101 巡航异常（不阻断提交）:", cruiseErr instanceof Error ? cruiseErr.message : cruiseErr);
+  }
 
   const submitAdSettings = await prisma.ad_default_settings.findFirst({
     where: { user_id: userId, is_deleted: 0 },

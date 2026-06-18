@@ -77,6 +77,16 @@ export type platform_connections = Prisma.platform_connectionsModel
  */
 export type user_merchants = Prisma.user_merchantsModel
 /**
+ * Model parent_networks
+ * 
+ */
+export type parent_networks = Prisma.parent_networksModel
+/**
+ * Model platform_blacklist
+ * 
+ */
+export type platform_blacklist = Prisma.platform_blacklistModel
+/**
  * Model ad_rejection_feedback
  * 
  */

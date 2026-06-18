@@ -47,6 +47,7 @@ const menuItems: MenuItem[] = [
     type: "group" as const,
     children: [
       { key: "/admin/merchant-sheet", icon: <SafetyCertificateOutlined />, label: "商家黑名单" },
+      { key: "/admin/affiliate-networks", icon: <GlobalOutlined />, label: "上级联盟与黑名单" },
       { key: "/admin/policy-categories", icon: <AuditOutlined />, label: "政策类别管理" },
       { key: "/admin/policy-violations", icon: <AuditOutlined />, label: "Google Ads 政策违规" },
     ],

@@ -58,6 +58,8 @@ export const ModelName = {
   system_configs: 'system_configs',
   platform_connections: 'platform_connections',
   user_merchants: 'user_merchants',
+  parent_networks: 'parent_networks',
+  platform_blacklist: 'platform_blacklist',
   ad_rejection_feedback: 'ad_rejection_feedback',
   merchant_violations: 'merchant_violations',
   merchant_recommendations: 'merchant_recommendations',
@@ -251,6 +253,13 @@ export const User_merchantsScalarFieldEnum = {
   link_status: 'link_status',
   link_checked_at: 'link_checked_at',
   link_check_reason: 'link_check_reason',
+  parent_network: 'parent_network',
+  parent_blacklisted: 'parent_blacklisted',
+  tracking_status: 'tracking_status',
+  resolved_final_url: 'resolved_final_url',
+  resolve_chain: 'resolve_chain',
+  parent_checked_at: 'parent_checked_at',
+  parent_check_reason: 'parent_check_reason',
   kyads_referer_url: 'kyads_referer_url',
   atc_advertiser_count: 'atc_advertiser_count',
   atc_last_synced_at: 'atc_last_synced_at',
@@ -261,6 +270,33 @@ export const User_merchantsScalarFieldEnum = {
 } as const
 
 export type User_merchantsScalarFieldEnum = (typeof User_merchantsScalarFieldEnum)[keyof typeof User_merchantsScalarFieldEnum]
+
+
+export const Parent_networksScalarFieldEnum = {
+  id: 'id',
+  label: 'label',
+  display_name: 'display_name',
+  match_keywords: 'match_keywords',
+  note: 'note',
+  status: 'status',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Parent_networksScalarFieldEnum = (typeof Parent_networksScalarFieldEnum)[keyof typeof Parent_networksScalarFieldEnum]
+
+
+export const Platform_blacklistScalarFieldEnum = {
+  id: 'id',
+  platform: 'platform',
+  parent_label: 'parent_label',
+  note: 'note',
+  status: 'status',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Platform_blacklistScalarFieldEnum = (typeof Platform_blacklistScalarFieldEnum)[keyof typeof Platform_blacklistScalarFieldEnum]
 
 
 export const Ad_rejection_feedbackScalarFieldEnum = {
@@ -450,6 +486,7 @@ export const Ad_creativesScalarFieldEnum = {
   id: 'id',
   ad_group_id: 'ad_group_id',
   final_url: 'final_url',
+  final_url_locked: 'final_url_locked',
   display_path1: 'display_path1',
   display_path2: 'display_path2',
   headlines: 'headlines',
@@ -1235,11 +1272,35 @@ export const user_merchantsOrderByRelevanceFieldEnum = {
   policy_category_code: 'policy_category_code',
   link_status: 'link_status',
   link_check_reason: 'link_check_reason',
+  parent_network: 'parent_network',
+  tracking_status: 'tracking_status',
+  resolved_final_url: 'resolved_final_url',
+  parent_check_reason: 'parent_check_reason',
   kyads_referer_url: 'kyads_referer_url',
   atc_sync_status: 'atc_sync_status'
 } as const
 
 export type user_merchantsOrderByRelevanceFieldEnum = (typeof user_merchantsOrderByRelevanceFieldEnum)[keyof typeof user_merchantsOrderByRelevanceFieldEnum]
+
+
+export const parent_networksOrderByRelevanceFieldEnum = {
+  label: 'label',
+  display_name: 'display_name',
+  note: 'note',
+  status: 'status'
+} as const
+
+export type parent_networksOrderByRelevanceFieldEnum = (typeof parent_networksOrderByRelevanceFieldEnum)[keyof typeof parent_networksOrderByRelevanceFieldEnum]
+
+
+export const platform_blacklistOrderByRelevanceFieldEnum = {
+  platform: 'platform',
+  parent_label: 'parent_label',
+  note: 'note',
+  status: 'status'
+} as const
+
+export type platform_blacklistOrderByRelevanceFieldEnum = (typeof platform_blacklistOrderByRelevanceFieldEnum)[keyof typeof platform_blacklistOrderByRelevanceFieldEnum]
 
 
 export const ad_rejection_feedbackOrderByRelevanceFieldEnum = {

@@ -159,6 +159,14 @@ model user_merchants {
   link_status               String    @default("unchecked") @db.VarChar(16) // unchecked / valid / invalid
   link_checked_at           DateTime? @db.DateTime(0)
   link_check_reason         String?   @db.VarChar(255)
+  // D-1xx 追踪链接 + 上级联盟自动巡航（创建广告时按投放国代理跟随联盟追踪链接的跳转链）
+  parent_network            String?   @db.VarChar(64) // 识别到的上级联盟 label（小写，如 awin / impact / cj）
+  parent_blacklisted        Int       @default(0) @db.TinyInt // 该平台下命中上级联盟黑名单 = 1
+  tracking_status           String    @default("unchecked") @db.VarChar(20) // unchecked / ok / no_tracking / forbidden_network / resolve_failed
+  resolved_final_url        String?   @db.VarChar(1024) // 巡航跟到的最终落地 URL
+  resolve_chain             Json? // 整条跳转链（每一跳 URL）
+  parent_checked_at         DateTime? @db.DateTime(0) // 上次巡航时间（做 TTL 复用）
+  parent_check_reason       String?   @db.VarChar(255) // 巡航结论说明 / 失败原因
   // 换链接相关
   kyads_referer_url         String?   @db.VarChar(1024) // 手动覆盖来路URL（为空则自动取最新已发布文章URL）
   // ATC 广告情报字段
@@ -179,6 +187,44 @@ model user_merchants {
   // WHERE merchant_id + platform 查询无前缀 user_id，旧索引全部失效导致全表扫描 644K 行 / 6.6s。
   // 加 (merchant_id, platform) 复合索引后单次查询 < 5ms。
   @@index([merchant_id, platform], map: "idx_merchant_platform")
+}
+
+// -----------------------------------------------------------
+// 6a1. 上级联盟库（追踪链接巡航识别用）
+//   原 hermes-crm/门户维护，现在主 CRM 自建为权威源。
+//   label：上级联盟名（小写，如 awin / impact / cj / shareasale）
+//   match_keywords：识别关键词数组（小写，含名字 / 跳板域名 / 特征参数），
+//     整条跳转链命中任一关键词即判定属于该上级联盟。
+// -----------------------------------------------------------
+model parent_networks {
+  id             BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  label          String   @unique(map: "uk_parent_label") @db.VarChar(64)
+  display_name   String?  @db.VarChar(128)
+  match_keywords Json // string[]（小写）
+  note           String?  @db.VarChar(255)
+  status         String   @default("active") @db.VarChar(16) // active / disabled
+  created_at     DateTime @default(now()) @db.DateTime(0)
+  updated_at     DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([status], map: "idx_parent_status")
+}
+
+// -----------------------------------------------------------
+// 6a1b. 各联盟平台的上级联盟黑名单（命中即创建广告时硬拦截）
+//   platform：联盟平台代号（user_merchants.platform），* 表示全平台
+//   parent_label：引用 parent_networks.label（小写）
+// -----------------------------------------------------------
+model platform_blacklist {
+  id           BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  platform     String   @db.VarChar(16)
+  parent_label String   @db.VarChar(64)
+  note         String?  @db.VarChar(255)
+  status       String   @default("active") @db.VarChar(16) // active / disabled
+  created_at   DateTime @default(now()) @db.DateTime(0)
+  updated_at   DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@unique([platform, parent_label], map: "uk_platform_parent")
+  @@index([platform], map: "idx_bl_platform")
 }
 
 // -----------------------------------------------------------

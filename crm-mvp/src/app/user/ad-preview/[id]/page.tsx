@@ -13,6 +13,7 @@ import {
   SoundOutlined, CheckCircleOutlined, ExclamationCircleOutlined,
   InboxOutlined, WarningOutlined, TranslationOutlined,
   PhoneOutlined, DollarOutlined, TagOutlined, UnorderedListOutlined,
+  GlobalOutlined,
 } from "@ant-design/icons";
 import { useApiWithParams, mutateApi } from "@/lib/swr";
 import { describeClientError } from "@/lib/client-error";
@@ -303,6 +304,14 @@ export default function AdPreviewPage() {
   const [savingSuffix, setSavingSuffix] = useState(false);
   const [suffixTestState, setSuffixTestState] = useState<"idle" | "testing" | "ok" | "fail">("idle");
   const [suffixTestMsg, setSuffixTestMsg] = useState("");
+
+  // 上级联盟巡航
+  const [cruiseRunning, setCruiseRunning] = useState(false);
+  const [cruiseResult, setCruiseResult] = useState<{
+    status: string; parentNetwork: string | null; blacklisted: boolean;
+    landingUrl: string | null; trackingLink: string | null; finalUrl: string | null;
+    chain: string[]; error: string | null;
+  } | null>(null);
 
   // MCC / CID 选择
   // D-007（2026-05-16）：CID 选择器去"占用/可用"二元限制，改为显示三段计数 + 「刷新数量」按钮
@@ -1902,6 +1911,34 @@ export default function AdPreviewPage() {
     }
   }, [suffixInput, campaignId, message, mutate]);
 
+  // ─── 测试巡航：跟随联盟追踪链接，识别上级联盟 + 黑名单 + 追踪参数 ───
+  const handleCruise = useCallback(async () => {
+    const merchantId = preview?.merchant?.id;
+    if (!merchantId) { message.warning("缺少商家信息，无法巡航"); return; }
+    setCruiseRunning(true);
+    setCruiseResult(null);
+    try {
+      const res = await fetch(`/api/user/merchants/${merchantId}/cruise`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ country: preview?.campaign?.target_country || undefined }),
+      });
+      const data = await res.json();
+      if (data.code === 0) {
+        setCruiseResult(data.data);
+        if (data.data.status === "forbidden_network") message.error(`命中黑名单上级联盟：${data.data.parentNetwork}`);
+        else if (data.data.status === "ok") message.success("巡航通过");
+        else message.warning(`巡航结果：${data.data.status}`);
+      } else {
+        message.error(data.message || "巡航失败");
+      }
+    } catch {
+      message.error("巡航请求失败");
+    } finally {
+      setCruiseRunning(false);
+    }
+  }, [preview, message]);
+
   // ─── 测试最终到达网址后缀（拼接落地页 URL + 后缀，检查可达性） ───
   const handleTestSuffix = useCallback(async () => {
     const landingUrl = preview?.adCreative?.final_url || preview?.merchant?.merchant_url || "";
@@ -3429,6 +3466,53 @@ export default function AdPreviewPage() {
                 </div>
               )}
             </div>
+            {/* ── 上级联盟巡航 ── */}
+            {!preview.campaign?.google_campaign_id && (
+              <div style={{ marginTop: 10 }}>
+                <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>上级联盟巡航：</Text>
+                  <Button
+                    size="small"
+                    icon={cruiseRunning ? <LoadingOutlined /> : <GlobalOutlined />}
+                    loading={cruiseRunning}
+                    onClick={handleCruise}
+                  >测试巡航</Button>
+                  <Text type="secondary" style={{ fontSize: 11 }}>按投放国跟随联盟追踪链接，识别上级联盟并核对黑名单</Text>
+                </div>
+                {cruiseResult && (
+                  <div style={{ marginTop: 6, fontSize: 12, lineHeight: 1.9 }}>
+                    <div>
+                      上级联盟：
+                      {cruiseResult.parentNetwork
+                        ? <Tag color={cruiseResult.blacklisted ? "red" : "blue"}>{cruiseResult.parentNetwork}{cruiseResult.blacklisted ? " · 黑名单" : ""}</Tag>
+                        : <Tag>未识别</Tag>}
+                      <Tag color={cruiseResult.status === "ok" ? "green" : cruiseResult.status === "forbidden_network" ? "red" : "orange"}>
+                        {cruiseResult.status === "ok" ? "可投放" : cruiseResult.status === "forbidden_network" ? "禁止投放（黑名单）" : cruiseResult.status === "no_tracking" ? "无追踪参数" : "未跟到落地页"}
+                      </Tag>
+                    </div>
+                    {cruiseResult.finalUrl && (
+                      <div style={{ color: "#888", wordBreak: "break-all" }}>最终落地：{cruiseResult.finalUrl}</div>
+                    )}
+                    {cruiseResult.trackingLink && (
+                      <div style={{ color: "#888", wordBreak: "break-all" }}>追踪参数：<Text code style={{ fontSize: 11 }}>{cruiseResult.trackingLink}</Text></div>
+                    )}
+                    {cruiseResult.error && (
+                      <div style={{ color: "#ff4d4f" }}>{cruiseResult.error}</div>
+                    )}
+                    {cruiseResult.chain?.length > 1 && (
+                      <details style={{ color: "#aaa" }}>
+                        <summary style={{ cursor: "pointer", fontSize: 11 }}>跳转链（{cruiseResult.chain.length} 跳）</summary>
+                        <ol style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                          {cruiseResult.chain.map((u, i) => (
+                            <li key={i} style={{ wordBreak: "break-all", fontSize: 11 }}>{u}</li>
+                          ))}
+                        </ol>
+                      </details>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
             {/* ── 最终到达网址后缀 ── */}
             {!preview.campaign?.google_campaign_id && (
               <div style={{ marginTop: 10 }}>

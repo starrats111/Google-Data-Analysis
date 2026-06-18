@@ -29,12 +29,14 @@ export type AggregateAd_creatives = {
 export type Ad_creativesAvgAggregateOutputType = {
   id: number | null
   ad_group_id: number | null
+  final_url_locked: number | null
   is_deleted: number | null
 }
 
 export type Ad_creativesSumAggregateOutputType = {
   id: bigint | null
   ad_group_id: bigint | null
+  final_url_locked: number | null
   is_deleted: number | null
 }
 
@@ -42,6 +44,7 @@ export type Ad_creativesMinAggregateOutputType = {
   id: bigint | null
   ad_group_id: bigint | null
   final_url: string | null
+  final_url_locked: number | null
   display_path1: string | null
   display_path2: string | null
   logo_url: string | null
@@ -54,6 +57,7 @@ export type Ad_creativesMaxAggregateOutputType = {
   id: bigint | null
   ad_group_id: bigint | null
   final_url: string | null
+  final_url_locked: number | null
   display_path1: string | null
   display_path2: string | null
   logo_url: string | null
@@ -66,6 +70,7 @@ export type Ad_creativesCountAggregateOutputType = {
   id: number
   ad_group_id: number
   final_url: number
+  final_url_locked: number
   display_path1: number
   display_path2: number
   headlines: number
@@ -88,12 +93,14 @@ export type Ad_creativesCountAggregateOutputType = {
 export type Ad_creativesAvgAggregateInputType = {
   id?: true
   ad_group_id?: true
+  final_url_locked?: true
   is_deleted?: true
 }
 
 export type Ad_creativesSumAggregateInputType = {
   id?: true
   ad_group_id?: true
+  final_url_locked?: true
   is_deleted?: true
 }
 
@@ -101,6 +108,7 @@ export type Ad_creativesMinAggregateInputType = {
   id?: true
   ad_group_id?: true
   final_url?: true
+  final_url_locked?: true
   display_path1?: true
   display_path2?: true
   logo_url?: true
@@ -113,6 +121,7 @@ export type Ad_creativesMaxAggregateInputType = {
   id?: true
   ad_group_id?: true
   final_url?: true
+  final_url_locked?: true
   display_path1?: true
   display_path2?: true
   logo_url?: true
@@ -125,6 +134,7 @@ export type Ad_creativesCountAggregateInputType = {
   id?: true
   ad_group_id?: true
   final_url?: true
+  final_url_locked?: true
   display_path1?: true
   display_path2?: true
   headlines?: true
@@ -233,6 +243,7 @@ export type Ad_creativesGroupByOutputType = {
   id: bigint
   ad_group_id: bigint
   final_url: string
+  final_url_locked: number
   display_path1: string | null
   display_path2: string | null
   headlines: runtime.JsonValue
@@ -277,6 +288,7 @@ export type ad_creativesWhereInput = {
   id?: Prisma.BigIntFilter<"ad_creatives"> | bigint | number
   ad_group_id?: Prisma.BigIntFilter<"ad_creatives"> | bigint | number
   final_url?: Prisma.StringFilter<"ad_creatives"> | string
+  final_url_locked?: Prisma.IntFilter<"ad_creatives"> | number
   display_path1?: Prisma.StringNullableFilter<"ad_creatives"> | string | null
   display_path2?: Prisma.StringNullableFilter<"ad_creatives"> | string | null
   headlines?: Prisma.JsonFilter<"ad_creatives">
@@ -298,6 +310,7 @@ export type ad_creativesOrderByWithRelationInput = {
   id?: Prisma.SortOrder
   ad_group_id?: Prisma.SortOrder
   final_url?: Prisma.SortOrder
+  final_url_locked?: Prisma.SortOrder
   display_path1?: Prisma.SortOrderInput | Prisma.SortOrder
   display_path2?: Prisma.SortOrderInput | Prisma.SortOrder
   headlines?: Prisma.SortOrder
@@ -323,6 +336,7 @@ export type ad_creativesWhereUniqueInput = Prisma.AtLeast<{
   NOT?: Prisma.ad_creativesWhereInput | Prisma.ad_creativesWhereInput[]
   ad_group_id?: Prisma.BigIntFilter<"ad_creatives"> | bigint | number
   final_url?: Prisma.StringFilter<"ad_creatives"> | string
+  final_url_locked?: Prisma.IntFilter<"ad_creatives"> | number
   display_path1?: Prisma.StringNullableFilter<"ad_creatives"> | string | null
   display_path2?: Prisma.StringNullableFilter<"ad_creatives"> | string | null
   headlines?: Prisma.JsonFilter<"ad_creatives">
@@ -344,6 +358,7 @@ export type ad_creativesOrderByWithAggregationInput = {
   id?: Prisma.SortOrder
   ad_group_id?: Prisma.SortOrder
   final_url?: Prisma.SortOrder
+  final_url_locked?: Prisma.SortOrder
   display_path1?: Prisma.SortOrderInput | Prisma.SortOrder
   display_path2?: Prisma.SortOrderInput | Prisma.SortOrder
   headlines?: Prisma.SortOrder
@@ -373,6 +388,7 @@ export type ad_creativesScalarWhereWithAggregatesInput = {
   id?: Prisma.BigIntWithAggregatesFilter<"ad_creatives"> | bigint | number
   ad_group_id?: Prisma.BigIntWithAggregatesFilter<"ad_creatives"> | bigint | number
   final_url?: Prisma.StringWithAggregatesFilter<"ad_creatives"> | string
+  final_url_locked?: Prisma.IntWithAggregatesFilter<"ad_creatives"> | number
   display_path1?: Prisma.StringNullableWithAggregatesFilter<"ad_creatives"> | string | null
   display_path2?: Prisma.StringNullableWithAggregatesFilter<"ad_creatives"> | string | null
   headlines?: Prisma.JsonWithAggregatesFilter<"ad_creatives">
@@ -394,6 +410,7 @@ export type ad_creativesCreateInput = {
   id?: bigint | number
   ad_group_id: bigint | number
   final_url: string
+  final_url_locked?: number
   display_path1?: string | null
   display_path2?: string | null
   headlines: Prisma.JsonNullValueInput | runtime.InputJsonValue
@@ -415,6 +432,7 @@ export type ad_creativesUncheckedCreateInput = {
   id?: bigint | number
   ad_group_id: bigint | number
   final_url: string
+  final_url_locked?: number
   display_path1?: string | null
   display_path2?: string | null
   headlines: Prisma.JsonNullValueInput | runtime.InputJsonValue
@@ -436,6 +454,7 @@ export type ad_creativesUpdateInput = {
   id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   ad_group_id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   final_url?: Prisma.StringFieldUpdateOperationsInput | string
+  final_url_locked?: Prisma.IntFieldUpdateOperationsInput | number
   display_path1?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   display_path2?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   headlines?: Prisma.JsonNullValueInput | runtime.InputJsonValue
@@ -457,6 +476,7 @@ export type ad_creativesUncheckedUpdateInput = {
   id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   ad_group_id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   final_url?: Prisma.StringFieldUpdateOperationsInput | string
+  final_url_locked?: Prisma.IntFieldUpdateOperationsInput | number
   display_path1?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   display_path2?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   headlines?: Prisma.JsonNullValueInput | runtime.InputJsonValue
@@ -478,6 +498,7 @@ export type ad_creativesCreateManyInput = {
   id?: bigint | number
   ad_group_id: bigint | number
   final_url: string
+  final_url_locked?: number
   display_path1?: string | null
   display_path2?: string | null
   headlines: Prisma.JsonNullValueInput | runtime.InputJsonValue
@@ -499,6 +520,7 @@ export type ad_creativesUpdateManyMutationInput = {
   id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   ad_group_id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   final_url?: Prisma.StringFieldUpdateOperationsInput | string
+  final_url_locked?: Prisma.IntFieldUpdateOperationsInput | number
   display_path1?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   display_path2?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   headlines?: Prisma.JsonNullValueInput | runtime.InputJsonValue
@@ -520,6 +542,7 @@ export type ad_creativesUncheckedUpdateManyInput = {
   id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   ad_group_id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   final_url?: Prisma.StringFieldUpdateOperationsInput | string
+  final_url_locked?: Prisma.IntFieldUpdateOperationsInput | number
   display_path1?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   display_path2?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   headlines?: Prisma.JsonNullValueInput | runtime.InputJsonValue
@@ -547,6 +570,7 @@ export type ad_creativesCountOrderByAggregateInput = {
   id?: Prisma.SortOrder
   ad_group_id?: Prisma.SortOrder
   final_url?: Prisma.SortOrder
+  final_url_locked?: Prisma.SortOrder
   display_path1?: Prisma.SortOrder
   display_path2?: Prisma.SortOrder
   headlines?: Prisma.SortOrder
@@ -567,6 +591,7 @@ export type ad_creativesCountOrderByAggregateInput = {
 export type ad_creativesAvgOrderByAggregateInput = {
   id?: Prisma.SortOrder
   ad_group_id?: Prisma.SortOrder
+  final_url_locked?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
 }
 
@@ -574,6 +599,7 @@ export type ad_creativesMaxOrderByAggregateInput = {
   id?: Prisma.SortOrder
   ad_group_id?: Prisma.SortOrder
   final_url?: Prisma.SortOrder
+  final_url_locked?: Prisma.SortOrder
   display_path1?: Prisma.SortOrder
   display_path2?: Prisma.SortOrder
   logo_url?: Prisma.SortOrder
@@ -586,6 +612,7 @@ export type ad_creativesMinOrderByAggregateInput = {
   id?: Prisma.SortOrder
   ad_group_id?: Prisma.SortOrder
   final_url?: Prisma.SortOrder
+  final_url_locked?: Prisma.SortOrder
   display_path1?: Prisma.SortOrder
   display_path2?: Prisma.SortOrder
   logo_url?: Prisma.SortOrder
@@ -597,6 +624,7 @@ export type ad_creativesMinOrderByAggregateInput = {
 export type ad_creativesSumOrderByAggregateInput = {
   id?: Prisma.SortOrder
   ad_group_id?: Prisma.SortOrder
+  final_url_locked?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
 }
 
@@ -606,6 +634,7 @@ export type ad_creativesSelect<ExtArgs extends runtime.Types.Extensions.Internal
   id?: boolean
   ad_group_id?: boolean
   final_url?: boolean
+  final_url_locked?: boolean
   display_path1?: boolean
   display_path2?: boolean
   headlines?: boolean
@@ -629,6 +658,7 @@ export type ad_creativesSelectScalar = {
   id?: boolean
   ad_group_id?: boolean
   final_url?: boolean
+  final_url_locked?: boolean
   display_path1?: boolean
   display_path2?: boolean
   headlines?: boolean
@@ -646,7 +676,7 @@ export type ad_creativesSelectScalar = {
   updated_at?: boolean
 }
 
-export type ad_creativesOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "ad_group_id" | "final_url" | "display_path1" | "display_path2" | "headlines" | "descriptions" | "headlines_zh" | "descriptions_zh" | "sitelinks" | "callouts" | "image_urls" | "logo_url" | "selling_points" | "crawl_cache" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["ad_creatives"]>
+export type ad_creativesOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "ad_group_id" | "final_url" | "final_url_locked" | "display_path1" | "display_path2" | "headlines" | "descriptions" | "headlines_zh" | "descriptions_zh" | "sitelinks" | "callouts" | "image_urls" | "logo_url" | "selling_points" | "crawl_cache" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["ad_creatives"]>
 
 export type $ad_creativesPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "ad_creatives"
@@ -655,6 +685,7 @@ export type $ad_creativesPayload<ExtArgs extends runtime.Types.Extensions.Intern
     id: bigint
     ad_group_id: bigint
     final_url: string
+    final_url_locked: number
     display_path1: string | null
     display_path2: string | null
     headlines: runtime.JsonValue
@@ -1042,6 +1073,7 @@ export interface ad_creativesFieldRefs {
   readonly id: Prisma.FieldRef<"ad_creatives", 'BigInt'>
   readonly ad_group_id: Prisma.FieldRef<"ad_creatives", 'BigInt'>
   readonly final_url: Prisma.FieldRef<"ad_creatives", 'String'>
+  readonly final_url_locked: Prisma.FieldRef<"ad_creatives", 'Int'>
   readonly display_path1: Prisma.FieldRef<"ad_creatives", 'String'>
   readonly display_path2: Prisma.FieldRef<"ad_creatives", 'String'>
   readonly headlines: Prisma.FieldRef<"ad_creatives", 'Json'>

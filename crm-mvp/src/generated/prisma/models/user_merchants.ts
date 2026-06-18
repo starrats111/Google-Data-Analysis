@@ -31,6 +31,7 @@ export type User_merchantsAvgAggregateOutputType = {
   user_id: number | null
   cookie_duration: number | null
   platform_connection_id: number | null
+  parent_blacklisted: number | null
   atc_advertiser_count: number | null
   is_deleted: number | null
 }
@@ -40,6 +41,7 @@ export type User_merchantsSumAggregateOutputType = {
   user_id: bigint | null
   cookie_duration: number | null
   platform_connection_id: bigint | null
+  parent_blacklisted: number | null
   atc_advertiser_count: number | null
   is_deleted: number | null
 }
@@ -73,6 +75,12 @@ export type User_merchantsMinAggregateOutputType = {
   link_status: string | null
   link_checked_at: Date | null
   link_check_reason: string | null
+  parent_network: string | null
+  parent_blacklisted: number | null
+  tracking_status: string | null
+  resolved_final_url: string | null
+  parent_checked_at: Date | null
+  parent_check_reason: string | null
   kyads_referer_url: string | null
   atc_advertiser_count: number | null
   atc_last_synced_at: Date | null
@@ -111,6 +119,12 @@ export type User_merchantsMaxAggregateOutputType = {
   link_status: string | null
   link_checked_at: Date | null
   link_check_reason: string | null
+  parent_network: string | null
+  parent_blacklisted: number | null
+  tracking_status: string | null
+  resolved_final_url: string | null
+  parent_checked_at: Date | null
+  parent_check_reason: string | null
   kyads_referer_url: string | null
   atc_advertiser_count: number | null
   atc_last_synced_at: Date | null
@@ -151,6 +165,13 @@ export type User_merchantsCountAggregateOutputType = {
   link_status: number
   link_checked_at: number
   link_check_reason: number
+  parent_network: number
+  parent_blacklisted: number
+  tracking_status: number
+  resolved_final_url: number
+  resolve_chain: number
+  parent_checked_at: number
+  parent_check_reason: number
   kyads_referer_url: number
   atc_advertiser_count: number
   atc_last_synced_at: number
@@ -167,6 +188,7 @@ export type User_merchantsAvgAggregateInputType = {
   user_id?: true
   cookie_duration?: true
   platform_connection_id?: true
+  parent_blacklisted?: true
   atc_advertiser_count?: true
   is_deleted?: true
 }
@@ -176,6 +198,7 @@ export type User_merchantsSumAggregateInputType = {
   user_id?: true
   cookie_duration?: true
   platform_connection_id?: true
+  parent_blacklisted?: true
   atc_advertiser_count?: true
   is_deleted?: true
 }
@@ -209,6 +232,12 @@ export type User_merchantsMinAggregateInputType = {
   link_status?: true
   link_checked_at?: true
   link_check_reason?: true
+  parent_network?: true
+  parent_blacklisted?: true
+  tracking_status?: true
+  resolved_final_url?: true
+  parent_checked_at?: true
+  parent_check_reason?: true
   kyads_referer_url?: true
   atc_advertiser_count?: true
   atc_last_synced_at?: true
@@ -247,6 +276,12 @@ export type User_merchantsMaxAggregateInputType = {
   link_status?: true
   link_checked_at?: true
   link_check_reason?: true
+  parent_network?: true
+  parent_blacklisted?: true
+  tracking_status?: true
+  resolved_final_url?: true
+  parent_checked_at?: true
+  parent_check_reason?: true
   kyads_referer_url?: true
   atc_advertiser_count?: true
   atc_last_synced_at?: true
@@ -287,6 +322,13 @@ export type User_merchantsCountAggregateInputType = {
   link_status?: true
   link_checked_at?: true
   link_check_reason?: true
+  parent_network?: true
+  parent_blacklisted?: true
+  tracking_status?: true
+  resolved_final_url?: true
+  resolve_chain?: true
+  parent_checked_at?: true
+  parent_check_reason?: true
   kyads_referer_url?: true
   atc_advertiser_count?: true
   atc_last_synced_at?: true
@@ -414,6 +456,13 @@ export type User_merchantsGroupByOutputType = {
   link_status: string
   link_checked_at: Date | null
   link_check_reason: string | null
+  parent_network: string | null
+  parent_blacklisted: number
+  tracking_status: string
+  resolved_final_url: string | null
+  resolve_chain: runtime.JsonValue | null
+  parent_checked_at: Date | null
+  parent_check_reason: string | null
   kyads_referer_url: string | null
   atc_advertiser_count: number | null
   atc_last_synced_at: Date | null
@@ -477,6 +526,13 @@ export type user_merchantsWhereInput = {
   link_status?: Prisma.StringFilter<"user_merchants"> | string
   link_checked_at?: Prisma.DateTimeNullableFilter<"user_merchants"> | Date | string | null
   link_check_reason?: Prisma.StringNullableFilter<"user_merchants"> | string | null
+  parent_network?: Prisma.StringNullableFilter<"user_merchants"> | string | null
+  parent_blacklisted?: Prisma.IntFilter<"user_merchants"> | number
+  tracking_status?: Prisma.StringFilter<"user_merchants"> | string
+  resolved_final_url?: Prisma.StringNullableFilter<"user_merchants"> | string | null
+  resolve_chain?: Prisma.JsonNullableFilter<"user_merchants">
+  parent_checked_at?: Prisma.DateTimeNullableFilter<"user_merchants"> | Date | string | null
+  parent_check_reason?: Prisma.StringNullableFilter<"user_merchants"> | string | null
   kyads_referer_url?: Prisma.StringNullableFilter<"user_merchants"> | string | null
   atc_advertiser_count?: Prisma.IntNullableFilter<"user_merchants"> | number | null
   atc_last_synced_at?: Prisma.DateTimeNullableFilter<"user_merchants"> | Date | string | null
@@ -517,6 +573,13 @@ export type user_merchantsOrderByWithRelationInput = {
   link_status?: Prisma.SortOrder
   link_checked_at?: Prisma.SortOrderInput | Prisma.SortOrder
   link_check_reason?: Prisma.SortOrderInput | Prisma.SortOrder
+  parent_network?: Prisma.SortOrderInput | Prisma.SortOrder
+  parent_blacklisted?: Prisma.SortOrder
+  tracking_status?: Prisma.SortOrder
+  resolved_final_url?: Prisma.SortOrderInput | Prisma.SortOrder
+  resolve_chain?: Prisma.SortOrderInput | Prisma.SortOrder
+  parent_checked_at?: Prisma.SortOrderInput | Prisma.SortOrder
+  parent_check_reason?: Prisma.SortOrderInput | Prisma.SortOrder
   kyads_referer_url?: Prisma.SortOrderInput | Prisma.SortOrder
   atc_advertiser_count?: Prisma.SortOrderInput | Prisma.SortOrder
   atc_last_synced_at?: Prisma.SortOrderInput | Prisma.SortOrder
@@ -561,6 +624,13 @@ export type user_merchantsWhereUniqueInput = Prisma.AtLeast<{
   link_status?: Prisma.StringFilter<"user_merchants"> | string
   link_checked_at?: Prisma.DateTimeNullableFilter<"user_merchants"> | Date | string | null
   link_check_reason?: Prisma.StringNullableFilter<"user_merchants"> | string | null
+  parent_network?: Prisma.StringNullableFilter<"user_merchants"> | string | null
+  parent_blacklisted?: Prisma.IntFilter<"user_merchants"> | number
+  tracking_status?: Prisma.StringFilter<"user_merchants"> | string
+  resolved_final_url?: Prisma.StringNullableFilter<"user_merchants"> | string | null
+  resolve_chain?: Prisma.JsonNullableFilter<"user_merchants">
+  parent_checked_at?: Prisma.DateTimeNullableFilter<"user_merchants"> | Date | string | null
+  parent_check_reason?: Prisma.StringNullableFilter<"user_merchants"> | string | null
   kyads_referer_url?: Prisma.StringNullableFilter<"user_merchants"> | string | null
   atc_advertiser_count?: Prisma.IntNullableFilter<"user_merchants"> | number | null
   atc_last_synced_at?: Prisma.DateTimeNullableFilter<"user_merchants"> | Date | string | null
@@ -601,6 +671,13 @@ export type user_merchantsOrderByWithAggregationInput = {
   link_status?: Prisma.SortOrder
   link_checked_at?: Prisma.SortOrderInput | Prisma.SortOrder
   link_check_reason?: Prisma.SortOrderInput | Prisma.SortOrder
+  parent_network?: Prisma.SortOrderInput | Prisma.SortOrder
+  parent_blacklisted?: Prisma.SortOrder
+  tracking_status?: Prisma.SortOrder
+  resolved_final_url?: Prisma.SortOrderInput | Prisma.SortOrder
+  resolve_chain?: Prisma.SortOrderInput | Prisma.SortOrder
+  parent_checked_at?: Prisma.SortOrderInput | Prisma.SortOrder
+  parent_check_reason?: Prisma.SortOrderInput | Prisma.SortOrder
   kyads_referer_url?: Prisma.SortOrderInput | Prisma.SortOrder
   atc_advertiser_count?: Prisma.SortOrderInput | Prisma.SortOrder
   atc_last_synced_at?: Prisma.SortOrderInput | Prisma.SortOrder
@@ -649,6 +726,13 @@ export type user_merchantsScalarWhereWithAggregatesInput = {
   link_status?: Prisma.StringWithAggregatesFilter<"user_merchants"> | string
   link_checked_at?: Prisma.DateTimeNullableWithAggregatesFilter<"user_merchants"> | Date | string | null
   link_check_reason?: Prisma.StringNullableWithAggregatesFilter<"user_merchants"> | string | null
+  parent_network?: Prisma.StringNullableWithAggregatesFilter<"user_merchants"> | string | null
+  parent_blacklisted?: Prisma.IntWithAggregatesFilter<"user_merchants"> | number
+  tracking_status?: Prisma.StringWithAggregatesFilter<"user_merchants"> | string
+  resolved_final_url?: Prisma.StringNullableWithAggregatesFilter<"user_merchants"> | string | null
+  resolve_chain?: Prisma.JsonNullableWithAggregatesFilter<"user_merchants">
+  parent_checked_at?: Prisma.DateTimeNullableWithAggregatesFilter<"user_merchants"> | Date | string | null
+  parent_check_reason?: Prisma.StringNullableWithAggregatesFilter<"user_merchants"> | string | null
   kyads_referer_url?: Prisma.StringNullableWithAggregatesFilter<"user_merchants"> | string | null
   atc_advertiser_count?: Prisma.IntNullableWithAggregatesFilter<"user_merchants"> | number | null
   atc_last_synced_at?: Prisma.DateTimeNullableWithAggregatesFilter<"user_merchants"> | Date | string | null
@@ -689,6 +773,13 @@ export type user_merchantsCreateInput = {
   link_status?: string
   link_checked_at?: Date | string | null
   link_check_reason?: string | null
+  parent_network?: string | null
+  parent_blacklisted?: number
+  tracking_status?: string
+  resolved_final_url?: string | null
+  resolve_chain?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  parent_checked_at?: Date | string | null
+  parent_check_reason?: string | null
   kyads_referer_url?: string | null
   atc_advertiser_count?: number | null
   atc_last_synced_at?: Date | string | null
@@ -729,6 +820,13 @@ export type user_merchantsUncheckedCreateInput = {
   link_status?: string
   link_checked_at?: Date | string | null
   link_check_reason?: string | null
+  parent_network?: string | null
+  parent_blacklisted?: number
+  tracking_status?: string
+  resolved_final_url?: string | null
+  resolve_chain?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  parent_checked_at?: Date | string | null
+  parent_check_reason?: string | null
   kyads_referer_url?: string | null
   atc_advertiser_count?: number | null
   atc_last_synced_at?: Date | string | null
@@ -769,6 +867,13 @@ export type user_merchantsUpdateInput = {
   link_status?: Prisma.StringFieldUpdateOperationsInput | string
   link_checked_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   link_check_reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  parent_network?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  parent_blacklisted?: Prisma.IntFieldUpdateOperationsInput | number
+  tracking_status?: Prisma.StringFieldUpdateOperationsInput | string
+  resolved_final_url?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  resolve_chain?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  parent_checked_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  parent_check_reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   kyads_referer_url?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   atc_advertiser_count?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   atc_last_synced_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
@@ -809,6 +914,13 @@ export type user_merchantsUncheckedUpdateInput = {
   link_status?: Prisma.StringFieldUpdateOperationsInput | string
   link_checked_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   link_check_reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  parent_network?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  parent_blacklisted?: Prisma.IntFieldUpdateOperationsInput | number
+  tracking_status?: Prisma.StringFieldUpdateOperationsInput | string
+  resolved_final_url?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  resolve_chain?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  parent_checked_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  parent_check_reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   kyads_referer_url?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   atc_advertiser_count?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   atc_last_synced_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
@@ -849,6 +961,13 @@ export type user_merchantsCreateManyInput = {
   link_status?: string
   link_checked_at?: Date | string | null
   link_check_reason?: string | null
+  parent_network?: string | null
+  parent_blacklisted?: number
+  tracking_status?: string
+  resolved_final_url?: string | null
+  resolve_chain?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  parent_checked_at?: Date | string | null
+  parent_check_reason?: string | null
   kyads_referer_url?: string | null
   atc_advertiser_count?: number | null
   atc_last_synced_at?: Date | string | null
@@ -889,6 +1008,13 @@ export type user_merchantsUpdateManyMutationInput = {
   link_status?: Prisma.StringFieldUpdateOperationsInput | string
   link_checked_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   link_check_reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  parent_network?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  parent_blacklisted?: Prisma.IntFieldUpdateOperationsInput | number
+  tracking_status?: Prisma.StringFieldUpdateOperationsInput | string
+  resolved_final_url?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  resolve_chain?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  parent_checked_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  parent_check_reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   kyads_referer_url?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   atc_advertiser_count?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   atc_last_synced_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
@@ -929,6 +1055,13 @@ export type user_merchantsUncheckedUpdateManyInput = {
   link_status?: Prisma.StringFieldUpdateOperationsInput | string
   link_checked_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   link_check_reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  parent_network?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  parent_blacklisted?: Prisma.IntFieldUpdateOperationsInput | number
+  tracking_status?: Prisma.StringFieldUpdateOperationsInput | string
+  resolved_final_url?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  resolve_chain?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  parent_checked_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  parent_check_reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   kyads_referer_url?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   atc_advertiser_count?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   atc_last_synced_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
@@ -975,6 +1108,13 @@ export type user_merchantsCountOrderByAggregateInput = {
   link_status?: Prisma.SortOrder
   link_checked_at?: Prisma.SortOrder
   link_check_reason?: Prisma.SortOrder
+  parent_network?: Prisma.SortOrder
+  parent_blacklisted?: Prisma.SortOrder
+  tracking_status?: Prisma.SortOrder
+  resolved_final_url?: Prisma.SortOrder
+  resolve_chain?: Prisma.SortOrder
+  parent_checked_at?: Prisma.SortOrder
+  parent_check_reason?: Prisma.SortOrder
   kyads_referer_url?: Prisma.SortOrder
   atc_advertiser_count?: Prisma.SortOrder
   atc_last_synced_at?: Prisma.SortOrder
@@ -989,6 +1129,7 @@ export type user_merchantsAvgOrderByAggregateInput = {
   user_id?: Prisma.SortOrder
   cookie_duration?: Prisma.SortOrder
   platform_connection_id?: Prisma.SortOrder
+  parent_blacklisted?: Prisma.SortOrder
   atc_advertiser_count?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
 }
@@ -1022,6 +1163,12 @@ export type user_merchantsMaxOrderByAggregateInput = {
   link_status?: Prisma.SortOrder
   link_checked_at?: Prisma.SortOrder
   link_check_reason?: Prisma.SortOrder
+  parent_network?: Prisma.SortOrder
+  parent_blacklisted?: Prisma.SortOrder
+  tracking_status?: Prisma.SortOrder
+  resolved_final_url?: Prisma.SortOrder
+  parent_checked_at?: Prisma.SortOrder
+  parent_check_reason?: Prisma.SortOrder
   kyads_referer_url?: Prisma.SortOrder
   atc_advertiser_count?: Prisma.SortOrder
   atc_last_synced_at?: Prisma.SortOrder
@@ -1060,6 +1207,12 @@ export type user_merchantsMinOrderByAggregateInput = {
   link_status?: Prisma.SortOrder
   link_checked_at?: Prisma.SortOrder
   link_check_reason?: Prisma.SortOrder
+  parent_network?: Prisma.SortOrder
+  parent_blacklisted?: Prisma.SortOrder
+  tracking_status?: Prisma.SortOrder
+  resolved_final_url?: Prisma.SortOrder
+  parent_checked_at?: Prisma.SortOrder
+  parent_check_reason?: Prisma.SortOrder
   kyads_referer_url?: Prisma.SortOrder
   atc_advertiser_count?: Prisma.SortOrder
   atc_last_synced_at?: Prisma.SortOrder
@@ -1074,6 +1227,7 @@ export type user_merchantsSumOrderByAggregateInput = {
   user_id?: Prisma.SortOrder
   cookie_duration?: Prisma.SortOrder
   platform_connection_id?: Prisma.SortOrder
+  parent_blacklisted?: Prisma.SortOrder
   atc_advertiser_count?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
 }
@@ -1111,6 +1265,13 @@ export type user_merchantsSelect<ExtArgs extends runtime.Types.Extensions.Intern
   link_status?: boolean
   link_checked_at?: boolean
   link_check_reason?: boolean
+  parent_network?: boolean
+  parent_blacklisted?: boolean
+  tracking_status?: boolean
+  resolved_final_url?: boolean
+  resolve_chain?: boolean
+  parent_checked_at?: boolean
+  parent_check_reason?: boolean
   kyads_referer_url?: boolean
   atc_advertiser_count?: boolean
   atc_last_synced_at?: boolean
@@ -1153,6 +1314,13 @@ export type user_merchantsSelectScalar = {
   link_status?: boolean
   link_checked_at?: boolean
   link_check_reason?: boolean
+  parent_network?: boolean
+  parent_blacklisted?: boolean
+  tracking_status?: boolean
+  resolved_final_url?: boolean
+  resolve_chain?: boolean
+  parent_checked_at?: boolean
+  parent_check_reason?: boolean
   kyads_referer_url?: boolean
   atc_advertiser_count?: boolean
   atc_last_synced_at?: boolean
@@ -1162,7 +1330,7 @@ export type user_merchantsSelectScalar = {
   updated_at?: boolean
 }
 
-export type user_merchantsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "platform" | "merchant_id" | "merchant_name" | "merchant_url" | "logo_url" | "category" | "commission_rate" | "cookie_duration" | "supported_regions" | "status" | "claimed_at" | "target_country" | "holiday_name" | "tracking_link" | "campaign_link" | "source" | "listing_status" | "violation_status" | "violation_time" | "recommendation_status" | "recommendation_time" | "policy_status" | "policy_category_code" | "platform_connection_id" | "connection_campaign_links" | "link_status" | "link_checked_at" | "link_check_reason" | "kyads_referer_url" | "atc_advertiser_count" | "atc_last_synced_at" | "atc_sync_status" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["user_merchants"]>
+export type user_merchantsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "platform" | "merchant_id" | "merchant_name" | "merchant_url" | "logo_url" | "category" | "commission_rate" | "cookie_duration" | "supported_regions" | "status" | "claimed_at" | "target_country" | "holiday_name" | "tracking_link" | "campaign_link" | "source" | "listing_status" | "violation_status" | "violation_time" | "recommendation_status" | "recommendation_time" | "policy_status" | "policy_category_code" | "platform_connection_id" | "connection_campaign_links" | "link_status" | "link_checked_at" | "link_check_reason" | "parent_network" | "parent_blacklisted" | "tracking_status" | "resolved_final_url" | "resolve_chain" | "parent_checked_at" | "parent_check_reason" | "kyads_referer_url" | "atc_advertiser_count" | "atc_last_synced_at" | "atc_sync_status" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["user_merchants"]>
 
 export type $user_merchantsPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "user_merchants"
@@ -1198,6 +1366,13 @@ export type $user_merchantsPayload<ExtArgs extends runtime.Types.Extensions.Inte
     link_status: string
     link_checked_at: Date | null
     link_check_reason: string | null
+    parent_network: string | null
+    parent_blacklisted: number
+    tracking_status: string
+    resolved_final_url: string | null
+    resolve_chain: runtime.JsonValue | null
+    parent_checked_at: Date | null
+    parent_check_reason: string | null
     kyads_referer_url: string | null
     atc_advertiser_count: number | null
     atc_last_synced_at: Date | null
@@ -1604,6 +1779,13 @@ export interface user_merchantsFieldRefs {
   readonly link_status: Prisma.FieldRef<"user_merchants", 'String'>
   readonly link_checked_at: Prisma.FieldRef<"user_merchants", 'DateTime'>
   readonly link_check_reason: Prisma.FieldRef<"user_merchants", 'String'>
+  readonly parent_network: Prisma.FieldRef<"user_merchants", 'String'>
+  readonly parent_blacklisted: Prisma.FieldRef<"user_merchants", 'Int'>
+  readonly tracking_status: Prisma.FieldRef<"user_merchants", 'String'>
+  readonly resolved_final_url: Prisma.FieldRef<"user_merchants", 'String'>
+  readonly resolve_chain: Prisma.FieldRef<"user_merchants", 'Json'>
+  readonly parent_checked_at: Prisma.FieldRef<"user_merchants", 'DateTime'>
+  readonly parent_check_reason: Prisma.FieldRef<"user_merchants", 'String'>
   readonly kyads_referer_url: Prisma.FieldRef<"user_merchants", 'String'>
   readonly atc_advertiser_count: Prisma.FieldRef<"user_merchants", 'Int'>
   readonly atc_last_synced_at: Prisma.FieldRef<"user_merchants", 'DateTime'>

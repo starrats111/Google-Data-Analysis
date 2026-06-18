@@ -391,6 +391,8 @@ export const ModelName = {
   system_configs: 'system_configs',
   platform_connections: 'platform_connections',
   user_merchants: 'user_merchants',
+  parent_networks: 'parent_networks',
+  platform_blacklist: 'platform_blacklist',
   ad_rejection_feedback: 'ad_rejection_feedback',
   merchant_violations: 'merchant_violations',
   merchant_recommendations: 'merchant_recommendations',
@@ -450,7 +452,7 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
     omit: GlobalOmitOptions
   }
   meta: {
-    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "ad_rejection_feedback" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "holiday_calendar" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "ad_generation_jobs" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "google_mcc_accounts" | "affiliate_transactions" | "affiliate_payments" | "notifications" | "notification_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "user_serpapi_keys" | "user_semrush_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log" | "semrush_keyword_cache" | "semrush_health_logs" | "policy_violations"
+    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "parent_networks" | "platform_blacklist" | "ad_rejection_feedback" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "holiday_calendar" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "ad_generation_jobs" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "google_mcc_accounts" | "affiliate_transactions" | "affiliate_payments" | "notifications" | "notification_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "user_serpapi_keys" | "user_semrush_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log" | "semrush_keyword_cache" | "semrush_health_logs" | "policy_violations"
     txIsolationLevel: TransactionIsolationLevel
   }
   model: {
@@ -913,6 +915,138 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         count: {
           args: Prisma.user_merchantsCountArgs<ExtArgs>
           result: runtime.Types.Utils.Optional<Prisma.User_merchantsCountAggregateOutputType> | number
+        }
+      }
+    }
+    parent_networks: {
+      payload: Prisma.$parent_networksPayload<ExtArgs>
+      fields: Prisma.parent_networksFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.parent_networksFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$parent_networksPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.parent_networksFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$parent_networksPayload>
+        }
+        findFirst: {
+          args: Prisma.parent_networksFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$parent_networksPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.parent_networksFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$parent_networksPayload>
+        }
+        findMany: {
+          args: Prisma.parent_networksFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$parent_networksPayload>[]
+        }
+        create: {
+          args: Prisma.parent_networksCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$parent_networksPayload>
+        }
+        createMany: {
+          args: Prisma.parent_networksCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.parent_networksDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$parent_networksPayload>
+        }
+        update: {
+          args: Prisma.parent_networksUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$parent_networksPayload>
+        }
+        deleteMany: {
+          args: Prisma.parent_networksDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.parent_networksUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.parent_networksUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$parent_networksPayload>
+        }
+        aggregate: {
+          args: Prisma.Parent_networksAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateParent_networks>
+        }
+        groupBy: {
+          args: Prisma.parent_networksGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Parent_networksGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.parent_networksCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Parent_networksCountAggregateOutputType> | number
+        }
+      }
+    }
+    platform_blacklist: {
+      payload: Prisma.$platform_blacklistPayload<ExtArgs>
+      fields: Prisma.platform_blacklistFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.platform_blacklistFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$platform_blacklistPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.platform_blacklistFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$platform_blacklistPayload>
+        }
+        findFirst: {
+          args: Prisma.platform_blacklistFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$platform_blacklistPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.platform_blacklistFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$platform_blacklistPayload>
+        }
+        findMany: {
+          args: Prisma.platform_blacklistFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$platform_blacklistPayload>[]
+        }
+        create: {
+          args: Prisma.platform_blacklistCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$platform_blacklistPayload>
+        }
+        createMany: {
+          args: Prisma.platform_blacklistCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.platform_blacklistDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$platform_blacklistPayload>
+        }
+        update: {
+          args: Prisma.platform_blacklistUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$platform_blacklistPayload>
+        }
+        deleteMany: {
+          args: Prisma.platform_blacklistDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.platform_blacklistUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.platform_blacklistUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$platform_blacklistPayload>
+        }
+        aggregate: {
+          args: Prisma.Platform_blacklistAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregatePlatform_blacklist>
+        }
+        groupBy: {
+          args: Prisma.platform_blacklistGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Platform_blacklistGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.platform_blacklistCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Platform_blacklistCountAggregateOutputType> | number
         }
       }
     }
@@ -3990,6 +4124,13 @@ export const User_merchantsScalarFieldEnum = {
   link_status: 'link_status',
   link_checked_at: 'link_checked_at',
   link_check_reason: 'link_check_reason',
+  parent_network: 'parent_network',
+  parent_blacklisted: 'parent_blacklisted',
+  tracking_status: 'tracking_status',
+  resolved_final_url: 'resolved_final_url',
+  resolve_chain: 'resolve_chain',
+  parent_checked_at: 'parent_checked_at',
+  parent_check_reason: 'parent_check_reason',
   kyads_referer_url: 'kyads_referer_url',
   atc_advertiser_count: 'atc_advertiser_count',
   atc_last_synced_at: 'atc_last_synced_at',
@@ -4000,6 +4141,33 @@ export const User_merchantsScalarFieldEnum = {
 } as const
 
 export type User_merchantsScalarFieldEnum = (typeof User_merchantsScalarFieldEnum)[keyof typeof User_merchantsScalarFieldEnum]
+
+
+export const Parent_networksScalarFieldEnum = {
+  id: 'id',
+  label: 'label',
+  display_name: 'display_name',
+  match_keywords: 'match_keywords',
+  note: 'note',
+  status: 'status',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Parent_networksScalarFieldEnum = (typeof Parent_networksScalarFieldEnum)[keyof typeof Parent_networksScalarFieldEnum]
+
+
+export const Platform_blacklistScalarFieldEnum = {
+  id: 'id',
+  platform: 'platform',
+  parent_label: 'parent_label',
+  note: 'note',
+  status: 'status',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Platform_blacklistScalarFieldEnum = (typeof Platform_blacklistScalarFieldEnum)[keyof typeof Platform_blacklistScalarFieldEnum]
 
 
 export const Ad_rejection_feedbackScalarFieldEnum = {
@@ -4189,6 +4357,7 @@ export const Ad_creativesScalarFieldEnum = {
   id: 'id',
   ad_group_id: 'ad_group_id',
   final_url: 'final_url',
+  final_url_locked: 'final_url_locked',
   display_path1: 'display_path1',
   display_path2: 'display_path2',
   headlines: 'headlines',
@@ -4974,11 +5143,35 @@ export const user_merchantsOrderByRelevanceFieldEnum = {
   policy_category_code: 'policy_category_code',
   link_status: 'link_status',
   link_check_reason: 'link_check_reason',
+  parent_network: 'parent_network',
+  tracking_status: 'tracking_status',
+  resolved_final_url: 'resolved_final_url',
+  parent_check_reason: 'parent_check_reason',
   kyads_referer_url: 'kyads_referer_url',
   atc_sync_status: 'atc_sync_status'
 } as const
 
 export type user_merchantsOrderByRelevanceFieldEnum = (typeof user_merchantsOrderByRelevanceFieldEnum)[keyof typeof user_merchantsOrderByRelevanceFieldEnum]
+
+
+export const parent_networksOrderByRelevanceFieldEnum = {
+  label: 'label',
+  display_name: 'display_name',
+  note: 'note',
+  status: 'status'
+} as const
+
+export type parent_networksOrderByRelevanceFieldEnum = (typeof parent_networksOrderByRelevanceFieldEnum)[keyof typeof parent_networksOrderByRelevanceFieldEnum]
+
+
+export const platform_blacklistOrderByRelevanceFieldEnum = {
+  platform: 'platform',
+  parent_label: 'parent_label',
+  note: 'note',
+  status: 'status'
+} as const
+
+export type platform_blacklistOrderByRelevanceFieldEnum = (typeof platform_blacklistOrderByRelevanceFieldEnum)[keyof typeof platform_blacklistOrderByRelevanceFieldEnum]
 
 
 export const ad_rejection_feedbackOrderByRelevanceFieldEnum = {
@@ -5613,6 +5806,8 @@ export type GlobalOmitConfig = {
   system_configs?: Prisma.system_configsOmit
   platform_connections?: Prisma.platform_connectionsOmit
   user_merchants?: Prisma.user_merchantsOmit
+  parent_networks?: Prisma.parent_networksOmit
+  platform_blacklist?: Prisma.platform_blacklistOmit
   ad_rejection_feedback?: Prisma.ad_rejection_feedbackOmit
   merchant_violations?: Prisma.merchant_violationsOmit
   merchant_recommendations?: Prisma.merchant_recommendationsOmit
