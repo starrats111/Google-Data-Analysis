@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
     }),
     prisma.user_merchants.findFirst({
       where: { id: campaign.user_merchant_id, is_deleted: 0 },
-      select: { merchant_name: true, merchant_url: true, platform: true, merchant_id: true, tracking_link: true },
+      select: { id: true, merchant_name: true, merchant_url: true, platform: true, merchant_id: true, tracking_link: true, campaign_link: true, target_country: true },
     }),
   ]);
 

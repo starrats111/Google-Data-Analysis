@@ -639,6 +639,101 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
         let merchantUrl = originalMerchantUrl;
         const merchantName = extractBrandRoot(merchant.merchant_name || "");
 
+        // ─── D-101：联盟链巡航前置 ───────────────────────────────────────────
+        //   爬虫不再直接从「落地页网址」爬，而是先按投放国走动态 IP（纯 HTTP，快速）
+        //   跟随联盟追踪链的整条跳转链，巡航到真实落地页：
+        //     · 把巡航到的真实落地页作为本次爬取/生成的起点（merchantUrl）
+        //     · 回填 ad_creatives.final_url（仅在用户未手动锁定落地页时）
+        //     · 回填 campaigns.final_url_suffix（仅在当前为空时 —— 不覆盖已填值）
+        //   命中黑名单不在此阻断（提交时 D-101 硬闸负责拦截）；巡航结果写回 user_merchants
+        //   供提交闸 7 天 TTL 复用。仅整条生成(core)触发，避免局部补生成重复巡航。
+        if (isFullGeneration && !finalUrlLocked) {
+          try {
+            // 联盟链取值优先级与 submit / 手动巡航一致：账号级 > campaign_link > tracking_link
+            let affiliateUrl = "";
+            const connLinks = (merchant.connection_campaign_links || null) as Record<string, string> | null;
+            if (connLinks && merchant.platform_connection_id) {
+              affiliateUrl = String(connLinks[String(merchant.platform_connection_id)] || "").trim();
+            }
+            if (!affiliateUrl) affiliateUrl = String(merchant.campaign_link || "").trim();
+            if (!affiliateUrl) affiliateUrl = String(merchant.tracking_link || "").trim();
+
+            if (affiliateUrl && /^https?:\/\//i.test(affiliateUrl)) {
+              let landing: string | null = null;
+              let trackingQuery: string | null = null;
+
+              // 7 天缓存复用：近期已巡航过且有结果 → 直接用 resolved_final_url 拆出落地页+后缀，省一次巡航
+              const TTL_MS = 7 * 24 * 60 * 60 * 1000;
+              const checkedAt = merchant.parent_checked_at ? new Date(merchant.parent_checked_at).getTime() : 0;
+              const cacheFresh = checkedAt > 0 && Date.now() - checkedAt < TTL_MS && !!merchant.resolved_final_url;
+              if (cacheFresh && merchant.resolved_final_url) {
+                try {
+                  const u = new URL(merchant.resolved_final_url);
+                  landing = u.origin + u.pathname;
+                  trackingQuery = u.search.replace(/^\?/, "") || null;
+                } catch { /* 缓存 URL 异常则走现场巡航 */ }
+              }
+
+              if (!landing) {
+                send("crawl_pending", { status: "resolving_affiliate" });
+                const { resolveAffiliateLink } = await import("@/lib/affiliate-link-resolver");
+                const cruise = await Promise.race([
+                  resolveAffiliateLink(affiliateUrl, country, merchant.platform || null, { useBrowser: false }),
+                  new Promise<null>((r) => setTimeout(() => r(null), 30000)),
+                ]);
+                if (cruise && cruise.landingUrl) {
+                  landing = cruise.landingUrl;
+                  trackingQuery = cruise.trackingLink;
+                  // 巡航结果写回商家，供提交时 D-101 硬闸复用缓存
+                  await prisma.user_merchants.update({
+                    where: { id: merchant.id },
+                    data: {
+                      parent_network: cruise.parentNetwork,
+                      parent_blacklisted: cruise.status === "forbidden_network" ? 1 : 0,
+                      tracking_status: cruise.status,
+                      resolved_final_url: cruise.finalUrl?.slice(0, 1024) || null,
+                      resolve_chain: cruise.chain.slice(0, 20) as unknown as object,
+                      parent_checked_at: new Date(),
+                      parent_check_reason: (cruise.error || (cruise.status === "ok" ? "巡航通过" : cruise.status)).slice(0, 255),
+                    },
+                  }).catch(() => {});
+                } else {
+                  console.warn(`[Extensions] D-101 巡航超时/无结果，沿用原落地页爬取 (campaign_id=${campaign_id})`);
+                }
+              }
+
+              if (landing) {
+                // 1) 真实落地页作为本次爬取/生成起点
+                merchantUrl = landing;
+                // 2) 回填 final_url（未锁定 → 用巡航真实落地页覆盖认领默认值；后续 D-096 仍可继续校正）
+                if (adCreativeId) {
+                  await prisma.ad_creatives.update({
+                    where: { id: adCreativeId },
+                    data: { final_url: landing },
+                  }).catch(() => {});
+                }
+                // 3) 回填追踪后缀（仅当前为空，不覆盖用户已填）
+                if (trackingQuery) {
+                  const camp = await prisma.campaigns.findUnique({
+                    where: { id: BigInt(campaign_id) },
+                    select: { final_url_suffix: true },
+                  }).catch(() => null);
+                  const existingSuffix = (camp?.final_url_suffix || "").trim();
+                  if (!existingSuffix) {
+                    await prisma.campaigns.update({
+                      where: { id: BigInt(campaign_id) },
+                      data: { final_url_suffix: trackingQuery.replace(/^[?&]+/, "").slice(0, 500) },
+                    }).catch(() => {});
+                  }
+                }
+                send("affiliate_resolved", { landingUrl: landing, trackingQuery });
+              }
+            }
+          } catch (e) {
+            console.warn("[Extensions] D-101 联盟链巡航前置失败（不阻断生成）:", e instanceof Error ? e.message : e);
+          }
+        }
+
         // ─── Step 2：读取 ad_default_settings ───
         const adSettings = await prisma.ad_default_settings.findFirst({
           where: { user_id: userId, is_deleted: 0 },
