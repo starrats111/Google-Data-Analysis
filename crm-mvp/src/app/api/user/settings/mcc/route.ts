@@ -2,6 +2,18 @@ import { NextRequest } from "next/server";
 import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
+import { detectSheetFormat, type DetectResult } from "@/lib/sheet-sync";
+
+/** 保存后自动识别表格结构（CRM 原生 / kyads 格式），失败不阻断保存 */
+async function safeDetect(sheetUrl: string | null | undefined): Promise<DetectResult | null> {
+  const url = sheetUrl?.trim();
+  if (!url) return null;
+  try {
+    return await detectSheetFormat(url);
+  } catch {
+    return null;
+  }
+}
 
 // 获取 MCC 账户列表
 export async function GET(req: NextRequest) {
@@ -34,7 +46,9 @@ export async function POST(req: NextRequest) {
       developer_token: developer_token?.trim() || null,
     },
   });
-  return apiSuccess(serializeData(account));
+
+  const sheet_format = await safeDetect(sheet_url);
+  return apiSuccess(serializeData({ ...account, sheet_format }));
 }
 
 // 更新 MCC 账户
@@ -54,7 +68,9 @@ export async function PUT(req: NextRequest) {
   if (is_active !== undefined) data.is_active = is_active;
 
   await prisma.google_mcc_accounts.update({ where: { id: BigInt(id) }, data });
-  return apiSuccess(null, "更新成功");
+
+  const sheet_format = sheet_url !== undefined ? await safeDetect(sheet_url) : null;
+  return apiSuccess(serializeData({ sheet_format }), "更新成功");
 }
 
 // 删除 MCC 账户
