@@ -15,7 +15,7 @@ export async function GET(req: NextRequest) {
 
   const u = await prisma.users.findFirst({
     where: { id: BigInt(user.userId), is_deleted: 0 },
-    select: { kylink_api_key: true, kylink_linked_at: true },
+    select: { kylink_api_key: true, kylink_linked_at: true, kylink_username: true },
   })
 
   const key = u?.kylink_api_key || null
@@ -27,6 +27,7 @@ export async function GET(req: NextRequest) {
       keyMasked: key ? maskKey(key) : null,
       linked: Boolean(u?.kylink_linked_at),
       linkedAt: u?.kylink_linked_at ?? null,
+      kylinkUsername: u?.kylink_username ?? null,
     },
   })
 }
@@ -38,7 +39,7 @@ export async function DELETE(req: NextRequest) {
 
   await prisma.users.update({
     where: { id: BigInt(user.userId) },
-    data: { kylink_api_key: null, kylink_linked_at: null },
+    data: { kylink_api_key: null, kylink_linked_at: null, kylink_username: null },
   })
 
   return NextResponse.json({ code: 0, data: { ok: true } })

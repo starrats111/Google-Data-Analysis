@@ -33,11 +33,12 @@ export async function POST(req: NextRequest) {
 
   try {
     const kyUser = await pingKylink(apiKey)
+    const kylinkUsername = (kyUser.email || kyUser.name || '').trim() || null
 
     const now = new Date()
     await prisma.users.update({
       where: { id: BigInt(user.userId) },
-      data: { kylink_api_key: apiKey, kylink_linked_at: now },
+      data: { kylink_api_key: apiKey, kylink_linked_at: now, kylink_username: kylinkUsername },
     })
 
     return NextResponse.json({
@@ -45,6 +46,7 @@ export async function POST(req: NextRequest) {
       data: {
         ok: true,
         linkedAt: now,
+        kylinkUsername,
         kylinkUser: { id: kyUser.id, name: kyUser.name, email: kyUser.email },
       },
     })

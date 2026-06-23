@@ -774,6 +774,7 @@ interface KylinkStatus {
   keyMasked: string | null;
   linked: boolean;
   linkedAt: string | null;
+  kylinkUsername: string | null;
 }
 
 function ScriptConfigTab() {
@@ -851,6 +852,7 @@ function ScriptConfigTab() {
             message="已关联至 kylink"
             description={
               <Space direction="vertical" size={2}>
+                <Text type="secondary">kylink 账号：{status.kylinkUsername || "（重新测试连接后显示）"}</Text>
                 <Text type="secondary">API Key：{status.keyMasked}</Text>
                 <Text type="secondary">
                   最近连接：{status.linkedAt ? new Date(status.linkedAt).toLocaleString("zh-CN") : "-"}
