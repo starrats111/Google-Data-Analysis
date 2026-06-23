@@ -58,6 +58,74 @@ function isTrackerHost(host: string): boolean {
   return TRACKER_HOST_PATTERNS.some((re) => re.test(host));
 }
 
+// App 深链 / 移动归因中转域名：这些不是网页落地页，真正的 web 落地 URL 被塞在它们的
+// 回退参数里（靠 App 端逻辑跳转，不是 HTTP 3xx），纯 HTTP 巡航会误停在这里。
+const DEEPLINK_HOST_PATTERNS: RegExp[] = [
+  /(^|\.)adj\.st$/i, /(^|\.)adjust\.com$/i, // Adjust
+  /(^|\.)onelink\.me$/i, /(^|\.)appsflyer\.com$/i, // AppsFlyer
+  /(^|\.)app\.link$/i, /(^|\.)bnc\.lt$/i, // Branch
+];
+
+function isDeeplinkHost(host: string): boolean {
+  return DEEPLINK_HOST_PATTERNS.some((re) => re.test(host));
+}
+
+function safeHost(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return "";
+  }
+}
+
+// 各深链平台「真实 web 落地」回退参数（按优先级），外加通用兜底
+const DEEPLINK_FALLBACK_PARAMS = [
+  "adjust_redirect", "redirect", "fallback", // Adjust
+  "af_web_dp", "af_r", // AppsFlyer
+  "$desktop_url", "$fallback_url", "$web_only_url", // Branch
+  "url", "destination", // 通用兜底
+];
+
+/**
+ * 从 App 深链 URL 的回退参数里解出真实 web 落地 URL。
+ * 参数值可能被多层 URL-encode，做有限次解码后取首个合法 http(s) 且非深链/跳板的域名。
+ * 解不出返回 null（交由调用方判 resolve_failed）。
+ */
+function unwrapDeeplink(deeplinkUrl: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(deeplinkUrl);
+  } catch {
+    return null;
+  }
+  for (const key of DEEPLINK_FALLBACK_PARAMS) {
+    const raw = parsed.searchParams.get(key);
+    if (!raw) continue;
+    let candidate = raw.trim();
+    // 多层解码：最多 3 次，直到出现 http(s):// 开头
+    for (let i = 0; i < 3 && !/^https?:\/\//i.test(candidate); i++) {
+      try {
+        const decoded = decodeURIComponent(candidate);
+        if (decoded === candidate) break;
+        candidate = decoded;
+      } catch {
+        break;
+      }
+    }
+    if (!/^https?:\/\//i.test(candidate)) continue;
+    let cand: URL;
+    try {
+      cand = new URL(candidate);
+    } catch {
+      continue;
+    }
+    // 真实落地不应仍是深链 / 跳板域名
+    if (isDeeplinkHost(cand.hostname) || isTrackerHost(cand.hostname)) continue;
+    return cand.toString();
+  }
+  return null;
+}
+
 // ───────── 上级联盟库 / 黑名单（Prisma，5 分钟内存缓存）─────────
 interface ParentNet {
   label: string;
@@ -427,6 +495,34 @@ export async function resolveAffiliateLink(
   base.chain = res.chain;
   base.finalUrl = res.finalUrl;
 
+  // App 深链解包：finalUrl 若停在 Adjust/AppsFlyer/Branch 等深链域名，真实 web 落地藏在
+  // 其回退参数里。解出真实 URL → 继续跟随其余跳转；解不出 → 后续按 deeplink 兜底判失败。
+  let stuckOnDeeplink = false;
+  if (res.finalUrl) {
+    try {
+      const fHost = new URL(res.finalUrl).hostname;
+      if (isDeeplinkHost(fHost)) {
+        const real = unwrapDeeplink(res.finalUrl);
+        if (real) {
+          const proxyUrl = await getProxyUrlForCountry(cc).catch(() => null);
+          if (proxyUrl) base.usedProxy = true;
+          const cont = await fetchChain(real, proxyUrl);
+          // 续跟成功（拿到非深链落地）则用续跟结果；续跟报错（真实落地常被墙/超时）
+          // 则信任已解出的真实 URL，清掉 error，不再误判 resolve_failed。
+          const contOk = cont.finalUrl && !isDeeplinkHost(safeHost(cont.finalUrl)) && !cont.error;
+          const merged = contOk ? cont.finalUrl : real;
+          res = { finalUrl: merged, chain: [...res.chain, ...cont.chain], error: undefined };
+          base.chain = res.chain;
+          base.finalUrl = res.finalUrl;
+        } else {
+          stuckOnDeeplink = true;
+        }
+      }
+    } catch {
+      /* finalUrl 解析失败走原有 resolve_failed 分支 */
+    }
+  }
+
   // 上级联盟识别 + 平台黑名单：先用整条跳转链判（即便没跟到最终落地页也能识别）
   const haystack = (res.chain.join(" ") + " " + (res.finalUrl || "")).toLowerCase();
   const parentNetwork = await detectParentNetwork(haystack);
@@ -452,6 +548,16 @@ export async function resolveAffiliateLink(
 
   base.landingUrl = `${finalParsed.origin}${finalParsed.pathname}`;
   base.trackingLink = finalParsed.search.replace(/^\?/, "").trim() || null;
+
+  // 停在 App 深链域名且解不出真实 web 落地 → 判失败，绝不当成正常落地页（否则会把
+  // bxfd.adj.st 这种空壳域名当落地页，加后缀后 404）
+  if (stuckOnDeeplink || isDeeplinkHost(finalParsed.hostname)) {
+    return {
+      ...base,
+      status: "resolve_failed",
+      error: `停在 App 深链域名 ${finalParsed.hostname}，未解出真实网页落地页`,
+    };
+  }
 
   // 停在跳板/中转域名 → 没跟到广告主落地页（多半国家出口不对，需配/换代理）
   if (isTrackerHost(finalParsed.hostname)) {
