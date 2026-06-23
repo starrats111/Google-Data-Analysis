@@ -70,12 +70,10 @@ function isDeeplinkHost(host: string): boolean {
   return DEEPLINK_HOST_PATTERNS.some((re) => re.test(host));
 }
 
-function safeHost(url: string): string {
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return "";
-  }
+// 解 JavaScript unicode 转义（\u003D→= \u0026→& 等）。Adjust 等深链页面把跳转 URL 藏在
+// JS/JSON 里，分隔符常是 \u003D / \u0026，不解码则 searchParams 无法切分出回退参数。
+function decodeJsUnicode(s: string): string {
+  return s.replace(/\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
 }
 
 // 各深链平台「真实 web 落地」回退参数（按优先级），外加通用兜底
@@ -94,7 +92,7 @@ const DEEPLINK_FALLBACK_PARAMS = [
 function unwrapDeeplink(deeplinkUrl: string): string | null {
   let parsed: URL;
   try {
-    parsed = new URL(deeplinkUrl);
+    parsed = new URL(decodeJsUnicode(deeplinkUrl));
   } catch {
     return null;
   }
@@ -182,7 +180,7 @@ export function clearAffiliateRulesCache() {
 export function extractClientRedirect(body: string, baseUrl: string): string | null {
   const sample = body.length > 100000 ? body.slice(0, 100000) : body;
   const abs = (u: string): string | null => {
-    const cleaned = u.replace(/&amp;/g, "&").trim();
+    const cleaned = decodeJsUnicode(u.replace(/&amp;/g, "&")).trim();
     if (!/^https?:\/\//i.test(cleaned)) return null;
     try {
       return new URL(cleaned, baseUrl).toString();
@@ -504,14 +502,9 @@ export async function resolveAffiliateLink(
       if (isDeeplinkHost(fHost)) {
         const real = unwrapDeeplink(res.finalUrl);
         if (real) {
-          const proxyUrl = await getProxyUrlForCountry(cc).catch(() => null);
-          if (proxyUrl) base.usedProxy = true;
-          const cont = await fetchChain(real, proxyUrl);
-          // 续跟成功（拿到非深链落地）则用续跟结果；续跟报错（真实落地常被墙/超时）
-          // 则信任已解出的真实 URL，清掉 error，不再误判 resolve_failed。
-          const contOk = cont.finalUrl && !isDeeplinkHost(safeHost(cont.finalUrl)) && !cont.error;
-          const merged = contOk ? cont.finalUrl : real;
-          res = { finalUrl: merged, chain: [...res.chain, ...cont.chain], error: undefined };
+          // 解出的真实 URL 已带联盟追踪后缀（clickref 等），不再续跟广告主自身跳转，
+          // 否则会丢掉这些必须保留的追踪参数。直接作为最终落地 URL。
+          res = { finalUrl: real, chain: [...res.chain, real], error: undefined };
           base.chain = res.chain;
           base.finalUrl = res.finalUrl;
         } else {
