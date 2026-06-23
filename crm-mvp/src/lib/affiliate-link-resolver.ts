@@ -528,7 +528,7 @@ export async function resolveAffiliateLink(
     return { ...base, status: "forbidden_network" };
   }
 
-  if (res.error || !res.finalUrl) {
+  if (!res.finalUrl) {
     return { ...base, status: "resolve_failed", error: res.error || "无最终链接" };
   }
 
@@ -560,6 +560,20 @@ export async function resolveAffiliateLink(
       error: `停在跳板域名 ${finalParsed.hostname}，未跟到广告主落地页（通常需配置对应国家代理）`,
     };
   }
+
+  // 此处 finalUrl 已是真实广告主域名（非跳板/深链）。即便最后一跳页面加载报错
+  // （超时/被墙，常见于从服务器直连广告主站），落地 URL 与追踪后缀也已解析出来，照常采用；
+  // 仅当根本没产生跳转（仍停在起始联盟链接）时才判失败。
+  let startHost = "";
+  try {
+    startHost = new URL(affiliateUrl).hostname;
+  } catch {
+    /* ignore */
+  }
+  if (res.error && finalParsed.hostname === startHost) {
+    return { ...base, status: "resolve_failed", error: res.error };
+  }
+
   if (!base.trackingLink) {
     return { ...base, status: "no_tracking" };
   }
