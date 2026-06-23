@@ -15,7 +15,7 @@ APP_URL="${APP_URL:-http://localhost:3000}"
 # 生成 crontab 条目
 MERCHANT_CRON="0 0 * * * curl -s -H 'Authorization: Bearer ${CRON_SECRET}' '${APP_URL}/api/cron/weekly-merchant-check' >> /var/log/cron-weekly-merchant.log 2>&1"
 DAILY_CRON="0 6 * * * curl -s -H 'Authorization: Bearer ${CRON_SECRET}' '${APP_URL}/api/cron/daily-sync' >> /var/log/cron-daily-sync.log 2>&1"
-KYLINK_SYNC_CRON="0 * * * * curl -s -H 'Authorization: Bearer ${CRON_SECRET}' '${APP_URL}/api/cron/kylink-sync' >> /var/log/cron-kylink-sync.log 2>&1"
+KYLINK_SYNC_CRON="*/30 * * * * curl -s -H 'Authorization: Bearer ${CRON_SECRET}' '${APP_URL}/api/cron/kylink-sync' >> /var/log/cron-kylink-sync.log 2>&1"
 
 echo "=== Will add the following cron jobs ==="
 echo ""
@@ -25,7 +25,7 @@ echo ""
 echo "Daily sync (06:00 every day):"
 echo "  $DAILY_CRON"
 echo ""
-echo "kylink sync (every hour):"
+echo "kylink sync (every 30 minutes):"
 echo "  $KYLINK_SYNC_CRON"
 echo ""
 
