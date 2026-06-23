@@ -642,6 +642,10 @@ async function callTxnApi(
         const payload: Record<string, unknown> = {
           token, [beginKey]: startDate, [endKey]: endDate,
           [pageKey]: page, [sizeKey]: maxSize,
+          // JSON 系联盟 API（PM/BSH/CF/CG/MUI/EV）必须带 dataScope=user，
+          // 否则返回的是近乎为空的默认范围（实测 PM 单月仅 2 条 vs 用户级 2798 条），
+          // 导致交易/佣金大面积缺失。与 kyads json-platform 同步实现保持一致。
+          dataScope: "user",
         };
         if (!omitStatusAll) payload.status = ["All"];
         if (source) payload.source = source;
