@@ -54,7 +54,27 @@ const FILLER_PATTERNS: [RegExp, string][] = [
   [/At the end of the day[,.]?\s*/gi, ""],
   [/It goes without saying (?:that )?\s*/gi, ""],
   [/(?:Let's|Let us) (?:dive|delve|explore|take a (?:look|deep dive))\s*/gi, ""],
+  // 收尾套话（句首/段首的总结性开头）
+  [/(?:^|\n)\s*(?:Overall|All in all|In summary|In short|To conclude|To wrap up)[,:]?\s*/gi, "\n"],
+  [/(?:^|\n)\s*(?:总之|综上)[，,：:]?\s*/g, "\n"],
 ];
+
+/**
+ * 破折号归一化：破折号（em dash）是 AI 写作最明显的指纹之一，确定性清除。
+ * - 中文双破折号 "——" → 中文逗号
+ * - 单 em dash（U+2014）夹在文字之间：CJK 上下文用中文逗号，英文用英文逗号
+ * - 其余残留的 em dash → 英文逗号
+ * 仅处理 em dash（U+2014），不动 en dash（U+2013，常用于数字区间如 4–6）。
+ */
+function normalizeDashes(text: string): string {
+  let r = text;
+  r = r.replace(/\s*\u2014\u2014\s*/g, "，");
+  r = r.replace(/(\S)\s*\u2014\s*(\S)/g, (_m, a: string, b: string) =>
+    /[\u3400-\u9fff]/.test(a) || /[\u3400-\u9fff]/.test(b) ? `${a}，${b}` : `${a}, ${b}`,
+  );
+  r = r.replace(/\u2014/g, ",");
+  return r;
+}
 
 function removeAiWords(text: string): string {
   let result = text;
@@ -114,6 +134,7 @@ function removeEmptyEmphasis(text: string): string {
 export function humanize(text: string): string {
   if (!text) return text;
   let result = text;
+  result = normalizeDashes(result);
   result = removeAiWords(result);
   result = removeFillerPatterns(result);
   result = reduceExclamation(result);
