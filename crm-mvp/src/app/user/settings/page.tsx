@@ -9,10 +9,9 @@ import {
   SettingOutlined, ApiOutlined, GoogleOutlined,
   PlusOutlined, DeleteOutlined, SaveOutlined, EditOutlined, BellOutlined,
   InboxOutlined, FileTextOutlined, CheckCircleOutlined, LockOutlined, CopyOutlined,
-  CodeOutlined, EyeOutlined, ExclamationCircleOutlined, CheckOutlined, SyncOutlined,
+  EyeOutlined, ExclamationCircleOutlined, CheckOutlined, SyncOutlined,
   SearchOutlined,
 } from "@ant-design/icons";
-import { generateLinkExchangeScript } from "@/lib/link-exchange-script-template";
 import {
   PLATFORMS,
 } from "@/lib/constants";
@@ -769,90 +768,123 @@ function ChangePasswordTab() {
   );
 }
 
-// ==================== 脚本配置 Tab ====================
+// ==================== 脚本配置 Tab（kylink 关联） ====================
+interface KylinkStatus {
+  hasKey: boolean;
+  keyMasked: string | null;
+  linked: boolean;
+  linkedAt: string | null;
+}
+
 function ScriptConfigTab() {
   const { message } = App.useApp();
-  const [apiKey, setApiKey] = useState<string | null>(null);
-  const [generating, setGenerating] = useState(false);
-  const [sheetUrl, setSheetUrl] = useState("");
+  const [status, setStatus] = useState<KylinkStatus | null>(null);
+  const [apiKey, setApiKey] = useState("");
+  const [testing, setTesting] = useState(false);
+  const [unlinking, setUnlinking] = useState(false);
 
-  useEffect(() => {
-    fetch("/api/user/settings/script-api-key")
-      .then((r) => r.json())
-      .then((res) => { if (res.code === 0) setApiKey(res.data.apiKey); });
-  }, []);
+  const loadStatus = async () => {
+    const res = await fetch("/api/user/settings/kylink").then((r) => r.json());
+    if (res.code === 0) setStatus(res.data);
+  };
 
-  const handleGenerate = async () => {
-    setGenerating(true);
+  useEffect(() => { loadStatus(); }, []);
+
+  const handleTest = async () => {
+    if (!apiKey.trim()) {
+      message.warning("请先填写 kylink API Key");
+      return;
+    }
+    setTesting(true);
     try {
-      const res = await fetch("/api/user/settings/script-api-key", { method: "POST" }).then((r) => r.json());
+      const res = await fetch("/api/user/settings/kylink/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey: apiKey.trim() }),
+      }).then((r) => r.json());
       if (res.code === 0) {
-        setApiKey(res.data.apiKey);
-        message.success(res.data.isNew ? "API Key 已生成" : "API Key 已重置");
+        message.success("连接成功，已关联至 kylink");
+        setApiKey("");
+        await loadStatus();
       } else {
-        message.error(res.message ?? "生成失败");
+        message.error(res.message ?? "连接失败");
       }
+    } catch {
+      message.error("连接失败，请稍后重试");
     } finally {
-      setGenerating(false);
+      setTesting(false);
     }
   };
 
-  const handleCopyScript = () => {
-    if (!apiKey) return;
-    if (!sheetUrl.trim()) {
-      message.warning("请先填写 Google Sheet 链接");
-      return;
+  const handleUnlink = async () => {
+    setUnlinking(true);
+    try {
+      const res = await fetch("/api/user/settings/kylink", { method: "DELETE" }).then((r) => r.json());
+      if (res.code === 0) {
+        message.success("已解除 kylink 关联");
+        await loadStatus();
+      } else {
+        message.error(res.message ?? "解除失败");
+      }
+    } finally {
+      setUnlinking(false);
     }
-    const script = generateLinkExchangeScript(
-      apiKey,
-      window?.location?.origin ?? "https://fengdu-ads.top",
-      sheetUrl.trim()
-    );
-    navigator.clipboard.writeText(script).then(() => message.success("脚本已复制，粘贴到 Google Ads Script 即可运行"));
   };
 
   return (
     <div style={{ maxWidth: 560 }}>
-      <Card
-        title={<><CodeOutlined /> 换链接脚本配置</>}
-        size="small"
-        extra={
-          <Button type="primary" size="small" loading={generating} onClick={handleGenerate}>
-            {apiKey ? "重置 Key" : "生成 Key"}
-          </Button>
-        }
-      >
-        {!apiKey ? (
-          <Text type="secondary">尚未生成 API Key，点击右上角「生成 Key」按钮创建。</Text>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <div>
-              <Text type="secondary" style={{ display: "block", marginBottom: 6 }}>API Key</Text>
-              <Input
-                value={apiKey}
-                readOnly
-                style={{ fontFamily: "monospace" }}
-              />
-            </div>
-            <div>
-              <Text type="secondary" style={{ display: "block", marginBottom: 6 }}>Google Sheet 链接</Text>
-              <Input
-                placeholder="https://docs.google.com/spreadsheets/d/..."
-                value={sheetUrl}
-                onChange={(e) => setSheetUrl(e.target.value)}
-                allowClear
-              />
-            </div>
-            <Button
-              type="primary"
-              icon={<CopyOutlined />}
-              onClick={handleCopyScript}
-              block
-            >
-              复制脚本
-            </Button>
-          </div>
+      <Card title={<><ApiOutlined /> kylink 换链接关联</>} size="small">
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="填入 kylink 个人 API Key 并测试连接"
+          description="连接成功后，系统每小时会自动把你商家库里的联盟链接，喂给 kylink 中「未配置」的广告系列；kylink 没有匹配到配置的广告系列保持原样，仍可手动填写。"
+        />
+
+        {status?.linked && (
+          <Alert
+            type="success"
+            showIcon
+            icon={<CheckCircleOutlined />}
+            style={{ marginBottom: 16 }}
+            message="已关联至 kylink"
+            description={
+              <Space direction="vertical" size={2}>
+                <Text type="secondary">API Key：{status.keyMasked}</Text>
+                <Text type="secondary">
+                  最近连接：{status.linkedAt ? new Date(status.linkedAt).toLocaleString("zh-CN") : "-"}
+                </Text>
+              </Space>
+            }
+            action={
+              <Popconfirm title="确定解除与 kylink 的关联？" onConfirm={handleUnlink}>
+                <Button size="small" danger loading={unlinking}>解除关联</Button>
+              </Popconfirm>
+            }
+          />
         )}
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div>
+            <Text type="secondary" style={{ display: "block", marginBottom: 6 }}>
+              kylink API Key
+            </Text>
+            <Input.Password
+              placeholder={status?.linked ? "如需更换，请输入新的 API Key" : "ky_live_xxxxxxxx"}
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              autoComplete="off"
+              style={{ fontFamily: "monospace" }}
+            />
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              在 kylink「设置」页生成；格式为 ky_live_ 开头的 40 位字符。
+            </Text>
+          </div>
+          <Button type="primary" loading={testing} onClick={handleTest} block>
+            {status?.linked ? "重新测试并保存" : "测试连接并保存"}
+          </Button>
+        </div>
       </Card>
     </div>
   );

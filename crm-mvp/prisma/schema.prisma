@@ -37,6 +37,8 @@ model users {
   team_id                   BigInt?  @db.UnsignedBigInt
   display_name              String?  @db.VarChar(50)
   script_api_key            String?  @unique(map: "uk_script_api_key") @db.VarChar(64) // Google Ads Script 鉴权 Key，格式 ky_live_xxx
+  kylink_api_key            String?  @db.VarChar(64) // kylink(换链接系统) 个人 API Key，格式 ky_live_xxx；用于把 CRM 商家库联盟链接自动喂给 kylink
+  kylink_linked_at          DateTime? @db.DateTime(0) // 最近一次成功连接 kylink 的时间（测试连接通过即更新）
   link_exchange_click_count Int      @default(10) @db.UnsignedInt // 换链接工作台：上次设置的每广告刷点击数，新同步广告默认沿用
   serpapi_key               String?  @db.VarChar(128) // 个人 SerpApi API Key（广告情报功能）
   atc_default_min_days      Int      @default(30) @db.UnsignedInt // 我的广告主-全局阈值，新增关注 / 统一设置时使用
