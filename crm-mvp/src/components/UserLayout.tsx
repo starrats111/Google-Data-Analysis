@@ -84,6 +84,7 @@ const leaderMenuItems: MenuItem[] = [
       { key: "/user/team-members", icon: <TeamOutlined />, label: "员工管理" },
       { key: "/user/team-merchants", icon: <ShopOutlined />, label: "组下商家" },
       { key: "/user/team-report", icon: <BarChartOutlined />, label: "收支报表" },
+      { key: "/user/team-settings", icon: <SettingOutlined />, label: "团队设置" },
     ],
   },
   {
@@ -235,6 +236,7 @@ export default function UserLayout({ children }: { children: React.ReactNode }) 
     if (pathname === "/user/team-members") return "/user/team-members";
     if (pathname === "/user/team-merchants") return "/user/team-merchants";
     if (pathname === "/user/team-report") return "/user/team-report";
+    if (pathname === "/user/team-settings") return "/user/team-settings";
     return pathname;
   }, [pathname]);
 
