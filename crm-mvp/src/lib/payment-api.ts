@@ -60,6 +60,9 @@ function normalizePaymentStatus(raw: string | null | undefined): string {
   if (!s) return "paid"; // payment_summary 早期版本无 status 字段，默认视为已付
   // 先判失败/处理中，避免「提现失败」被 success 误判
   if (/(失败|拒绝|驳回|取消|无效|reject|fail|declin|cancel|void|invalid|refus)/.test(s)) return "rejected";
+  // 「待打款/未付」必须在 paid 之前判：PM 实测 status="toBePaid"，小写后含子串 "paid"，
+  // 若先走 paid 分支会被误判为已付，把尚未到账的打款单计入「已支付/支付查询」。
+  if (/(to.?be.?paid|tobepaid|un.?paid|not.?paid|to.?pay|outstanding|scheduled|on.?hold|未[付支到打])/.test(s)) return "processing";
   if (/(处理中|审核|待|进行中|processing|pending|review|wait|progress|created|requested)/.test(s)) return "processing";
   if (/(成功|已支付|已打款|已提现|提现成功|paid|success|withdrawn|settled|complete|done)/.test(s)) return "paid";
   return "paid";
