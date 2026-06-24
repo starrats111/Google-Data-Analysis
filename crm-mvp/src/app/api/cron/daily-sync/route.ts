@@ -70,7 +70,7 @@ async function doDailySync() {
     log("Step 3.5: Syncing payment/withdrawal data for all users...");
     await syncAllUsersPayments();
 
-    log("Step 3.6: Carving RW/LH paid bucket from payment details...");
+    log("Step 3.6: Carving RW/LH/LB paid bucket from payment details...");
     await carvePaidForAllUsers();
 
     log("Step 4: Auto-repairing published articles...");
@@ -1165,7 +1165,7 @@ async function syncAllUsersPayments(): Promise<unknown> {
   return results;
 }
 
-// ── D-xxx RW/LH 已付剖分（口径A 配套，交易+支付同步后执行） ──
+// ── RW/LH/LB 已付剖分（口径A 配套，交易+支付同步后执行） ──
 
 async function carvePaidForAllUsers(): Promise<void> {
   const { markPaidFromPaymentDetails } = await import("@/lib/affiliate-paid-carve");

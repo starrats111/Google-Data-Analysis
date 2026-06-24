@@ -308,13 +308,13 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 6. RW/LH 已付剖分（口径A 配套）：交易同步会把 RW/LH 已打款订单重置为非 paid，
-    //    这里用支付细节API 把它们重新归入 paid 桶，使「已支付=交易表 paid 桶」对 RW/LH 也成立。
+    // 6. RW/LH/LB 已付剖分（口径A 配套）：交易同步会把它们的已打款订单重置为非 paid，
+    //    这里用支付细节API 把它们重新归入 paid 桶，使「已支付=交易表 paid 桶」对 RW/LH/LB 也成立。
     try {
       const { markPaidFromPaymentDetails } = await import("@/lib/affiliate-paid-carve");
       const carve = await markPaidFromPaymentDetails(userId);
       if (carve.rows_marked_paid > 0 || carve.errors.length > 0) {
-        console.log(`[sync-txn] RW/LH 已付剖分：标记 ${carve.rows_marked_paid} 笔为 paid（明细 ${carve.detail_signids} 行，打款单 ${carve.scanned_withdrawals}）${carve.errors.length ? `，错误 ${carve.errors.length}` : ""}`);
+        console.log(`[sync-txn] RW/LH/LB 已付剖分：标记 ${carve.rows_marked_paid} 笔为 paid（明细 ${carve.detail_signids} 行，打款单 ${carve.scanned_withdrawals}）${carve.errors.length ? `，错误 ${carve.errors.length}` : ""}`);
       }
     } catch (e) {
       console.log(`[sync-txn] 已付剖分异常: ${e instanceof Error ? e.message : String(e)}`);

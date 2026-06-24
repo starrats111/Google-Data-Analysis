@@ -1,10 +1,11 @@
 /**
  * RW/LH 已付剖分（口径A 配套）
  *
- * 背景：CG/PM/LB 的交易API 带 paid_date，同步时已把已打款订单落进 status='paid' 桶；
- * 但 RW/LH 的交易API 不返回打款状态，已打款订单仍停留在 approved/pending/rejected。
+ * 背景：CG/PM 的交易API 带 paid_date，同步时已把已打款订单落进 status='paid' 桶；
+ * 但 RW/LH/LB 的交易API 不返回打款状态，已打款订单仍停留在 approved/pending/rejected
+ * （实证：LB paid 桶长期为 0，与支付API 差额 100%）。
  * 因此每次交易同步后，需要用「支付细节API」把已打款订单逐笔标记回 paid 桶，
- * 使结算页「已支付 = 交易表 paid 桶」对 RW/LH 也精确成立（口径A）。
+ * 使结算页「已支付 = 交易表 paid 桶」对 RW/LH/LB 也精确成立（口径A）。
  *
  * 数据来源：affiliate_payments 里 status='paid' 的打款单号（withdrawal_id）→
  *           payment-detail-api 展开为行级 sign_id（= affiliate_transactions.transaction_id）。
@@ -20,7 +21,8 @@ import prisma from "@/lib/prisma";
 import { normalizePlatformCode } from "@/lib/constants";
 import { fetchPaymentDetail } from "@/lib/payment-detail-api";
 
-const CARVE_PLATFORMS = new Set(["RW", "LH"]);
+// RW/LH/LB 交易API 均不返回打款状态，需用支付细节API 剖分回 paid 桶。
+const CARVE_PLATFORMS = new Set(["RW", "LH", "LB"]);
 
 export interface CarveResult {
   scanned_withdrawals: number;
