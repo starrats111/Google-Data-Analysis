@@ -579,8 +579,12 @@ const PLATFORM_TXN_CONFIG: Record<string, PlatformTxnConfig> = {
   LH: {
     mode: "get",
     url: "https://www.linkhaitao.com/api.php?mod=medium&op=cashback2",
-    dateFormat: "snake", pageKey: "page", sizeKey: "per_page", maxSize: 40000,
+    // LH 实测每页封顶 2000 行（per_page=40000 被忽略），且响应不返回 total_page/total_trans，
+    // 必须按「满页则继续翻」的策略翻页，否则每段只取到前 2000 行、其余被静默丢弃。
+    dateFormat: "snake", pageKey: "page", sizeKey: "per_page", maxSize: 2000,
     rateLimitMs: 4000,
+    // LH 文档：查询跨度不能超过 31 天（错误码 1006），用 30 天保守切片。
+    maxDateSpanDays: 30,
   },
   LB: {
     mode: "get",
@@ -1006,7 +1010,15 @@ export async function fetchAllTransactions(
       const firstBatch = parseTransactions(platform, firstPage);
       for (const t of firstBatch) mergeTxn(t);
 
-      const totalPages = getTxnTotalPages(firstPage, config.maxSize);
+      let totalPages = getTxnTotalPages(firstPage, config.maxSize);
+      // 某些平台（如 LH）响应不返回 total_page/total_trans，getTxnTotalPages 会退化为 1，
+      // 导致仅取首页（LH 每页封顶 2000 行，其余被静默丢弃）。此时只要首页是满页
+      // （行数 >= 每页上限），就视为"未知总页数"，放开到翻页上限，靠"不满页/空页即停"收尾。
+      let unknownPagination = false;
+      if (totalPages <= 1 && firstBatch.length >= config.maxSize) {
+        totalPages = 50;
+        unknownPagination = true;
+      }
 
       let consecutiveEmptyTxn = 0;
       const MAX_EMPTY_TXN_RETRIES = 2;
@@ -1045,6 +1057,10 @@ export async function fetchAllTransactions(
         consecutiveEmptyTxn = 0;
 
         for (const t of batch) mergeTxn(t);
+
+        // 未知总页数模式下：不满页 = 已到最后一页，停止翻页。
+        // 已知总页数的平台仍按 totalPages 收尾，避免中途偶发短页导致漏拉。
+        if (unknownPagination && batch.length < config.maxSize) break;
       }
     }
 
