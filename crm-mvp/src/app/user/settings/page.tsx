@@ -10,7 +10,7 @@ import {
   PlusOutlined, DeleteOutlined, SaveOutlined, EditOutlined, BellOutlined,
   InboxOutlined, FileTextOutlined, CheckCircleOutlined, LockOutlined, CopyOutlined,
   EyeOutlined, ExclamationCircleOutlined, CheckOutlined, SyncOutlined,
-  SearchOutlined,
+  SearchOutlined, TeamOutlined,
 } from "@ant-design/icons";
 import {
   PLATFORMS,
@@ -1262,9 +1262,88 @@ function SemRushTab() {
   );
 }
 
+// ==================== 团队隐私 Tab（组长专属）====================
+function TeamPrivacyTab() {
+  const { message } = App.useApp();
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [teamName, setTeamName] = useState("");
+  const [visible, setVisible] = useState(false); // cross_team_visible === 1
+
+  useEffect(() => {
+    fetch("/api/user/settings/team-privacy")
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.code === 0) {
+          setTeamName(res.data.team_name || "");
+          setVisible(res.data.cross_team_visible === 1);
+        } else {
+          message.error(res.message || "加载失败");
+        }
+      })
+      .catch(() => message.error("加载失败"))
+      .finally(() => setLoading(false));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleToggle = async (checked: boolean) => {
+    setSaving(true);
+    const res = await fetch("/api/user/settings/team-privacy", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cross_team_visible: checked ? 1 : 0 }),
+    }).then((r) => r.json()).catch(() => null);
+    setSaving(false);
+    if (res?.code === 0) {
+      setVisible(checked);
+      message.success("已保存");
+    } else {
+      message.error(res?.message || "保存失败");
+    }
+  };
+
+  return (
+    <div style={{ maxWidth: 640 }}>
+      <Card title={<><TeamOutlined /> 团队投放隐私{teamName ? ` — ${teamName}` : ""}</>} size="small" loading={loading}>
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="控制本组成员能否查看其他组的投放情况"
+          description="关闭（默认）时，本组成员在商家「在投详情」里只能看到本组成员的投放，「在投人数」也只统计本组；开启后，本组成员可查看其他组的投放情况。该开关仅由组长控制。"
+        />
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 0" }}>
+          <div>
+            <div style={{ fontWeight: 500 }}>允许本组查看其他组的投放情况</div>
+            <Text type="secondary" style={{ fontSize: 13 }}>
+              {visible ? "已开启：本组成员可看到其他组的投放情况" : "已关闭：本组成员只能看到本组的投放情况"}
+            </Text>
+          </div>
+          <Switch
+            checked={visible}
+            loading={saving}
+            onChange={handleToggle}
+            checkedChildren="开"
+            unCheckedChildren="关"
+          />
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 // ==================== 主页面 ====================
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState("platforms");
+  const [isLeader, setIsLeader] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/auth/me?role=user")
+      .then((r) => r.json())
+      .then((res) => {
+        if (res.code === 0 && res.data?.role === "leader") setIsLeader(true);
+      })
+      .catch(() => {});
+  }, []);
 
   return (
     <div>
@@ -1281,6 +1360,7 @@ export default function SettingsPage() {
           { key: "script", label: <><FileTextOutlined /> 脚本配置</>, children: <ScriptConfigTab /> },
           { key: "serpapi", label: <><EyeOutlined /> 广告情报</>, children: <SerpApiTab /> },
           { key: "semrush", label: <><SearchOutlined /> SemRush 关键词</>, children: <SemRushTab /> },
+          ...(isLeader ? [{ key: "team-privacy", label: <><TeamOutlined /> 团队隐私</>, children: <TeamPrivacyTab /> }] : []),
         ]}
       />
     </div>

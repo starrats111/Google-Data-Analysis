@@ -19,6 +19,9 @@ model teams {
   team_code  String   @unique(map: "uk_team_code") @db.VarChar(20)
   team_name  String   @db.VarChar(50)
   leader_id  BigInt?  @db.UnsignedBigInt
+  // 组长控制的隐私开关：0=关闭（默认，本组成员看不到其他组的投放情况，「在投详情」只显示本组成员）
+  //                    1=开启（本组成员可查看其他组的投放情况）
+  cross_team_visible Int @default(0) @db.TinyInt
   is_deleted Int      @default(0) @db.TinyInt
   created_at DateTime @default(now()) @db.DateTime(0)
   updated_at DateTime @default(now()) @updatedAt @db.DateTime(0)

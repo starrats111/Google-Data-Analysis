@@ -5,6 +5,7 @@ import { withUser } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
 import { dateColumnStart, nowCST, txnStartOfMonthUTC, txnNextMonthStartUTC } from "@/lib/date-utils";
+import { getTeamVisibility, getVisibleUserIdSet } from "@/lib/team-visibility";
 
 /**
  * GET /api/user/merchants/active-advertisers?merchant_id=xxx&platform=YY
@@ -12,6 +13,10 @@ import { dateColumnStart, nowCST, txnStartOfMonthUTC, txnNextMonthStartUTC } fro
  * 返回某商家的在投人员明细：
  * - 组长：全员数据（花费、佣金、ROI、投放日期）
  * - 组员：仅自己的数据
+ *
+ * 团队隐私（teams.cross_team_visible）：
+ * - 默认关闭时，只返回「与查看者同组」的在投人员（看不到其他组）。
+ * - 组长开启后，返回全员（旧行为）。
  */
 export const GET = withUser(async (req: NextRequest, { user }) => {
   const { searchParams } = new URL(req.url);
@@ -31,10 +36,17 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
   if (platform) where.platform = platform;
   // 组长和组员都查全员在投情况；财务数据（花费/佣金/ROI）仅组长可见
 
-  const allUserMerchants = await prisma.user_merchants.findMany({
+  const rawUserMerchants = await prisma.user_merchants.findMany({
     where: where as never,
     select: { id: true, user_id: true },
   });
+
+  // 团队隐私过滤：关闭时仅保留与查看者同组的在投人员
+  const visibility = await getTeamVisibility(BigInt(user.userId));
+  const visibleUserIds = await getVisibleUserIdSet(visibility);
+  const allUserMerchants = visibleUserIds
+    ? rawUserMerchants.filter((um) => visibleUserIds.has(um.user_id.toString()))
+    : rawUserMerchants;
 
   if (allUserMerchants.length === 0) {
     return apiSuccess(serializeData([]));

@@ -7,6 +7,7 @@ import { buildDraftCampaignName } from "@/lib/campaign-naming";
 import { loadConnectionAccountMap, buildConnectionAccounts } from "@/lib/merchant-connection";
 import { extractDomain } from "@/lib/atc-service";
 import { parseTxnDateStart, parseTxnDateEndExclusive } from "@/lib/date-utils";
+import { getTeamVisibility, getVisibleUserIdSet } from "@/lib/team-visibility";
 
 // 国家 → Google Ads 语言代码（创建 campaign 时自动设置）
 const COUNTRY_TO_LANG_CODE: Record<string, string> = {
@@ -184,8 +185,14 @@ async function enrichWithLabels(merchants: any[]) {
  *  1. 改用 OR 精确配对 (merchant_id, platform)，避免笛卡尔积误统计
  *  2. 合并 user_id Set 去重，避免多条 user_merchants 导致虚增
  *  3. status 扩展为 ["claimed", "paused"]，与弹窗逻辑一致
+ *
+ * 团队隐私：visibleUserIds 非 null 时只统计集合内（同组）用户，
+ * 与「在投详情」弹窗的过滤口径保持一致；null 表示不限制（可见全员）。
  */
-async function batchActiveAdvertisers(merchants: { merchant_id: string; platform: string }[]) {
+async function batchActiveAdvertisers(
+  merchants: { merchant_id: string; platform: string }[],
+  visibleUserIds: Set<string> | null = null,
+) {
   if (merchants.length === 0) return new Map<string, number>();
 
   // 精确配对去重：每个 (merchant_id, platform) 只查一次
@@ -211,12 +218,14 @@ async function batchActiveAdvertisers(merchants: { merchant_id: string; platform
     select: { user_id: true, user_merchant_id: true },
   });
 
-  // user_merchant_id → Set<userId>
+  // user_merchant_id → Set<userId>（团队隐私关闭时只计入同组用户）
   const umUserMap = new Map<string, Set<string>>();
   for (const c of campaigns) {
+    const uid = c.user_id.toString();
+    if (visibleUserIds && !visibleUserIds.has(uid)) continue;
     const key = c.user_merchant_id.toString();
     if (!umUserMap.has(key)) umUserMap.set(key, new Set());
-    umUserMap.get(key)!.add(c.user_id.toString());
+    umUserMap.get(key)!.add(uid);
   }
 
   // merchant_id:platform → 合并所有 user_merchant 条目的 user_id Set，最后取 size
@@ -332,6 +341,9 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
     }
     return defaultOrder;
   }
+
+  // 团队隐私：解析查看者可见的 user_id 集合（关闭时只看本组），用于「在投人数」计数
+  const visibleUserIds = await getVisibleUserIdSet(await getTeamVisibility(userId));
 
   // C-090：用户当前活跃连接的平台集合，用于「选取商家」过滤孤儿
   const connectedPlatformRows = await prisma.platform_connections.findMany({
@@ -463,7 +475,7 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
     // 仅对当前页的商家做标签/在投人数等富化（避免全量查询开销）
     const pageMerchants = pageSlice.map(s => s._m);
     const withLabels = await enrichWithLabels(pageMerchants);
-    const advMap = await batchActiveAdvertisers(pageMerchants.map((m: any) => ({ merchant_id: m.merchant_id, platform: m.platform })));
+    const advMap = await batchActiveAdvertisers(pageMerchants.map((m: any) => ({ merchant_id: m.merchant_id, platform: m.platform })), visibleUserIds);
     // D-004 F-15：解析 connection_campaign_links → connection_accounts[]（只保留属于 current_user 的 conn_id）
     const connAccountMap = await loadConnectionAccountMap(pageMerchants, userId);
     // D-008 F-7=A：注入团队级 ATC 共享数据
@@ -597,7 +609,7 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
 
     // 附加推荐/违规标签 + 在投人数
     const withLabels = await enrichWithLabels(merchants);
-    const advMap = await batchActiveAdvertisers(merchants.map((m: any) => ({ merchant_id: m.merchant_id, platform: m.platform })));
+    const advMap = await batchActiveAdvertisers(merchants.map((m: any) => ({ merchant_id: m.merchant_id, platform: m.platform })), visibleUserIds);
     // D-004 F-15：解析 connection_campaign_links → connection_accounts[]
     const connAccountMapAvail = await loadConnectionAccountMap(merchants, userId);
     // D-008 F-7=A：注入团队级 ATC 共享数据
