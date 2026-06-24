@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import {
   Card, Input, Button, Row, Col, Statistic, Table, Segmented, Space, Typography,
-  Empty, Progress, Select, DatePicker, Tag, App,
+  Empty, Progress, Select, DatePicker, Tag, App, Tooltip,
 } from "antd";
 import {
   SearchOutlined, AccountBookOutlined,
@@ -21,9 +21,9 @@ const { RangePicker } = DatePicker;
 
 interface Summary {
   total_commission: number;
-  approved_commission: number;
-  rejected_commission: number;
-  paid_commission: number;
+  approved_commission: number; // 已确认 = 交易表 approved
+  rejected_commission: number; // 已拒付 = 交易表 rejected
+  paid_commission: number; // 已支付 = 交易表 paid 桶（与「支付查询」的账户级到账分开）
   pending_commission: number;
   total_orders: number;
   total_order_amount: number;
@@ -521,7 +521,7 @@ export default function SettlementPage() {
         />
       )}
       <Text type="secondary" style={{ fontSize: 11 }}>
-        注：RW/LH 等为提现级实付（账户级，按打款日），无法拆分到具体商家/交易月；上方「已支付 / 结算率」即以此实付总额为准。
+        注：本页为账户级实际到账（提现/打款，按打款日，来源支付API），用于对账参照；与「佣金查询」里订单级「已支付」桶口径不同，二者因手续费/汇率/时间归属会有差额。
       </Text>
     </Card>
   ) : (
@@ -624,12 +624,24 @@ export default function SettlementPage() {
             </Col>
             <Col xs={12} sm={8} md={4}>
               <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
-                <Statistic title="已确认" value={s.approved_commission} prefix="$" precision={2} styles={{ content: { fontSize: 18, color: COLORS.successGreen } }} />
+                <Statistic
+                  title={
+                    <Tooltip title="已确认 = 交易表 status=approved 的佣金（已支付订单已分到「已支付」桶，不重复计入）">
+                      <span style={{ borderBottom: "1px dashed #aaa", cursor: "help" }}>已确认</span>
+                    </Tooltip>
+                  }
+                  value={s.approved_commission} prefix="$" precision={2} styles={{ content: { fontSize: 18, color: COLORS.successGreen } }} />
               </Card>
             </Col>
             <Col xs={12} sm={8} md={4}>
               <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
-                <Statistic title="已支付" value={s.paid_commission} prefix="$" precision={2} styles={{ content: { fontSize: 18, color: "#1890ff" } }} />
+                <Statistic
+                  title={
+                    <Tooltip title="已支付 = 交易表已标记打款的订单佣金（CG/PM/LB 来自交易API paid_date，RW/LH 来自支付细节API）。账户级实际到账金额见「支付查询」页签。">
+                      <span style={{ borderBottom: "1px dashed #aaa", cursor: "help" }}>已支付</span>
+                    </Tooltip>
+                  }
+                  value={s.paid_commission} prefix="$" precision={2} styles={{ content: { fontSize: 18, color: "#1890ff" } }} />
               </Card>
             </Col>
             <Col xs={12} sm={8} md={4}>

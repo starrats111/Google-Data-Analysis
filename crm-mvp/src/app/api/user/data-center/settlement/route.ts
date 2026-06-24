@@ -117,35 +117,26 @@ export async function GET(req: NextRequest) {
     WHERE ${baseWhere}
   `, ...baseParams);
 
+  // 口径A（交易表四桶直白口径，等式算术恒等）：
+  //   总佣金 = 交易表全部佣金。
+  //   已确认 = status=approved；已拒付 = status=rejected；审核中 = status=pending；
+  //   已支付 = status=paid（交易表 paid 桶）。
+  // approved/rejected/pending/paid 把整张表无重叠分完，故
+  //   总 = 已确认 + 已支付 + 拒付 + 审核中 恒等闭合。
+  // paid 桶来源：CG/PM/LB 等交易API 带 paid_date 自动推导为 paid；RW/LH 交易API 无 paid_date，
+  // 由支付细节API（按 withdrawal_id 展开 sign_id）标记。
+  // 注：账户级到账金额（支付API / affiliate_payments）单独在「支付查询」页签展示，不参与本等式。
   const sum = summaryRows[0] || {};
   const totalCommission    = Number(sum.total_commission    || 0);
-  const approvedCommission = Number(sum.approved_commission || 0);
-  const rejectedCommission = Number(sum.rejected_commission || 0);
-  const pendingCommission  = Number(sum.pending_commission  || 0);
+  const approvedCommission = Number(sum.approved_commission || 0); // 已确认 = 交易表 approved
+  const rejectedCommission = Number(sum.rejected_commission || 0); // 已拒付 = 交易表 rejected
+  const paidCommission     = Number(sum.paid_commission     || 0); // 已支付 = 交易表 paid 桶
+  const pendingCommission  = Number(sum.pending_commission  || 0); // 审核中 = 交易表 pending
   const totalOrders        = Number(sum.total_orders        || 0);
   const totalOrderAmount   = Number(sum.total_order_amount  || 0);
 
-  // D-072：已支付（实付）口径来自 affiliate_payments —— 平台实际打款记录，
-  // 按 paid_date 落在筛选时间窗内统计（含 RW/LH 等提现级平台，这是 RW 实付最多的来源）。
-  // 注意：支付记录是平台/账户级，无商家维度，故不按 mid 过滤；platform 过滤生效。
-  const paidParams: unknown[] = [...userIds, start, end];
-  let paidPlatformClause = "";
-  if (platform) { paidPlatformClause = " AND platform = ?"; paidParams.push(platform); }
-  // 病灶根除：联盟支付接口按 api_key（账号级）返回，同一物理账号若有多条连接，
-  // 同一笔打款单(payment_no)会重复入库。先按 (platform, payment_no) 折叠为单笔
-  // （平台内 payment_no 全局唯一，重复行金额一致，取 MAX 即原值），再求和，避免重复计入。
-  const paidRows = await prisma.$queryRawUnsafe<{ paid_commission: number }[]>(`
-    SELECT SUM(amount) AS paid_commission FROM (
-      SELECT MAX(CAST(amount AS DECIMAL(14,4))) AS amount
-      FROM affiliate_payments
-      WHERE user_id IN (${uidPlaceholders}) AND is_deleted = 0 AND status = 'paid'
-        AND paid_date >= ? AND paid_date < ?${paidPlatformClause}
-      GROUP BY platform, payment_no
-    ) t
-  `, ...paidParams);
-  const paidCommission = Number(paidRows[0]?.paid_commission || 0);
-
   const fix2 = (n: number) => +n.toFixed(2);
+  // 确认率=已确认/总；拒付率=拒付/总；结算率=已支付/总。
   const approvalRate   = totalCommission > 0 ? fix2(approvedCommission / totalCommission * 100) : 0;
   const rejectionRate  = totalCommission > 0 ? fix2(rejectedCommission / totalCommission * 100) : 0;
   const settlementRate = totalCommission > 0 ? fix2(paidCommission     / totalCommission * 100) : 0;
@@ -274,10 +265,10 @@ export async function GET(req: NextRequest) {
   return apiSuccess(serializeData({
     summary: {
       total_commission: fix2(totalCommission),
-      approved_commission: fix2(approvedCommission),
-      rejected_commission: fix2(rejectedCommission),
-      paid_commission: fix2(paidCommission),
-      pending_commission: fix2(pendingCommission),
+      approved_commission: fix2(approvedCommission), // 已确认 = 交易表 approved
+      rejected_commission: fix2(rejectedCommission), // 已拒付 = 交易表 rejected
+      paid_commission: fix2(paidCommission), // 已支付 = 交易表 paid 桶
+      pending_commission: fix2(pendingCommission), // 审核中 = 交易表 pending
       total_orders: totalOrders,
       total_order_amount: fix2(totalOrderAmount),
       approval_rate: approvalRate,
