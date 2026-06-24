@@ -70,6 +70,9 @@ async function doDailySync() {
     log("Step 3.5: Syncing payment/withdrawal data for all users...");
     await syncAllUsersPayments();
 
+    log("Step 3.6: Carving RW/LH paid bucket from payment details...");
+    await carvePaidForAllUsers();
+
     log("Step 4: Auto-repairing published articles...");
     await autoRepairPublishedArticles({ limit: 50 });
 
@@ -1160,6 +1163,29 @@ async function syncAllUsersPayments(): Promise<unknown> {
     }
   }
   return results;
+}
+
+// ── D-xxx RW/LH 已付剖分（口径A 配套，交易+支付同步后执行） ──
+
+async function carvePaidForAllUsers(): Promise<void> {
+  const { markPaidFromPaymentDetails } = await import("@/lib/affiliate-paid-carve");
+  const users = await prisma.users.findMany({
+    where: { is_deleted: 0, status: "active", role: { in: ["user", "leader"] } },
+    select: { id: true, username: true },
+  });
+  let totalMarked = 0;
+  for (const user of users) {
+    try {
+      const carve = await markPaidFromPaymentDetails(user.id);
+      totalMarked += carve.rows_marked_paid;
+      if (carve.rows_marked_paid > 0 || carve.errors.length > 0) {
+        log(`  [carve] ${user.username}: 标记 ${carve.rows_marked_paid} 笔 paid（明细 ${carve.detail_signids} 行）${carve.errors.length ? `，错误 ${carve.errors.length}` : ""}`);
+      }
+    } catch (e) {
+      log(`  [carve] ${user.username} error: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  log(`  [carve] 全部完成：共标记 ${totalMarked} 笔 paid`);
 }
 
 // ── 复用的关联逻辑（简化版） ──
