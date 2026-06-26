@@ -13,7 +13,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { replenishLowStock } from '@/lib/suffix-engine/stock-producer'
+import { replenishLowStock, recycleSuffixes } from '@/lib/suffix-engine/stock-producer'
 import { cleanupExpiredExitIps } from '@/lib/suffix-engine/exit-ip'
 
 export const dynamic = 'force-dynamic'
@@ -40,13 +40,15 @@ export async function GET(req: NextRequest) {
 
   const startedAt = Date.now()
   try {
-    // 顺带清理过期出口 IP 去重记录（轻量 deleteMany，复用本 5min cron 心跳）
+    // 顺带：清理过期出口 IP 去重记录 + 回收过期/卡死后缀（轻量，复用本 5min cron 心跳）
     const cleanedIps = await cleanupExpiredExitIps()
+    const recycled = await recycleSuffixes()
     const result = await replenishLowStock()
     console.log(
-      `[cron/suffix-replenish] scanned=${result.scanned} lowStock=${result.lowStock} replenished=${result.replenished} cleanedExitIps=${cleanedIps} cost=${Date.now() - startedAt}ms`,
+      `[cron/suffix-replenish] scanned=${result.scanned} lowStock=${result.lowStock} replenished=${result.replenished}` +
+        ` cleanedExitIps=${cleanedIps} expired=${recycled.expiredAvailable} reclaimedLeased=${recycled.reclaimedLeased} cost=${Date.now() - startedAt}ms`,
     )
-    return NextResponse.json({ code: 0, data: { ...result, cleanedExitIps: cleanedIps } })
+    return NextResponse.json({ code: 0, data: { ...result, cleanedExitIps: cleanedIps, recycled } })
   } catch (error) {
     console.error('[cron/suffix-replenish] error:', error)
     return NextResponse.json(

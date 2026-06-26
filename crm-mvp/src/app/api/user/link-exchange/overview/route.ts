@@ -53,9 +53,29 @@ export async function GET(req: NextRequest) {
     tracking_link: true,
     link_status: true,
     link_check_reason: true,
+    tracking_status: true,
+    parent_check_reason: true,
     parent_network: true,
     parent_blacklisted: true,
   } as const
+
+  // 巡航结果(tracking_status) 是换链接系统实际维护的权威链接状态，统一映射到前端的 valid/invalid/unchecked；
+  // tracking_status 为空才回退到 daily-merchant-check 写的 link_status（基础可达性）。
+  const deriveLinkStatus = (m: {
+    tracking_status: string | null
+    link_status: string | null
+  }): string => {
+    switch (m.tracking_status) {
+      case 'ok':
+        return 'valid'
+      case 'forbidden_network':
+      case 'no_tracking':
+      case 'resolve_failed':
+        return 'invalid'
+      default:
+        return m.link_status ?? 'unchecked'
+    }
+  }
 
   const merchants =
     umIds.length > 0 || mids.length > 0
@@ -131,8 +151,8 @@ export async function GET(req: NextRequest) {
       merchantId: merchant?.id.toString() ?? null,
       merchantName: merchant?.merchant_name ?? null,
       trackingLink: merchant?.tracking_link ?? null,
-      linkStatus: merchant?.link_status ?? 'unchecked',
-      linkCheckReason: merchant?.link_check_reason ?? null,
+      linkStatus: merchant ? deriveLinkStatus(merchant) : 'unchecked',
+      linkCheckReason: merchant?.parent_check_reason ?? merchant?.link_check_reason ?? null,
       parentNetwork: merchant?.parent_network ?? null,
       parentBlacklisted: merchant?.parent_blacklisted === 1,
       suffixEnabled: c.suffix_exchange_enabled === 1,

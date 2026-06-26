@@ -93,16 +93,23 @@ export async function POST(req: NextRequest) {
       continue
     }
 
-    // 从库存池中原子取一条可用 suffix
+    // 可用库存条件：available 且未过期（expires_at 为空或晚于当前）
+    const now = new Date()
+    const availableWhere = {
+      campaign_id: campaign.id,
+      status: 'available',
+      is_deleted: 0,
+      OR: [{ expires_at: null }, { expires_at: { gt: now } }],
+    }
+
+    // 从库存池中原子取一条可用 suffix（优先取快过期的，先用先回收）
     const available = await prisma.suffix_pool.findFirst({
-      where: { campaign_id: campaign.id, status: 'available', is_deleted: 0 },
+      where: availableWhere,
       orderBy: { created_at: 'asc' },
     })
 
     // 统计剩余库存数
-    const stockCount = await prisma.suffix_pool.count({
-      where: { campaign_id: campaign.id, status: 'available', is_deleted: 0 },
-    })
+    const stockCount = await prisma.suffix_pool.count({ where: availableWhere })
 
     if (!available) {
       // 无库存：立即异步触发补货（强制补到目标水位），下个 lease 周期即可取到

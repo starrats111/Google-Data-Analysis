@@ -64,7 +64,8 @@ async function resolveOne(
   const country = (m.target_country || 'US').toUpperCase()
   try {
     const cruise = await Promise.race([
-      resolveAffiliateLink(affiliateUrl, country, m.platform || null, { userId }),
+      // 开启无头浏览器兜底：no_tracking/停跳板时自动重试，纠正 pepperjam/impact 等 JS 联盟误判
+      resolveAffiliateLink(affiliateUrl, country, m.platform || null, { userId, browserFallback: true }),
       new Promise<null>((r) => setTimeout(() => r(null), ITEM_TIMEOUT_MS)),
     ])
     if (!cruise) {
@@ -94,7 +95,8 @@ async function resolveOne(
 /**
  * 同步指定用户的换链接（解析+校验商家联盟链接/上级联盟）。
  * 选取该用户「active + ENABLED + 有 google_campaign_id」广告系列关联的、
- * 仍缺上级联盟（parent_network 为空）但已有链接的商家，后台并发巡航。
+ * 「仍缺上级联盟(parent_network 为空) 或 上次校验失败(no_tracking/resolve_failed)」且已有链接的商家，
+ * 后台并发巡航（手动同步即希望连失败项一并重试，配合无头浏览器兜底提升成功率）。
  * 立即返回排队数，巡航在后台进行（PM2 常驻进程，fire-and-forget 安全）。
  */
 export async function syncUserLinks(
@@ -115,8 +117,12 @@ export async function syncUserLinks(
       id: { in: merchantIds },
       user_id: userId,
       is_deleted: 0,
-      parent_network: null,
-      OR: [{ tracking_link: { not: null } }, { campaign_link: { not: null } }],
+      // 缺上级联盟 或 上次巡航失败/未校验（no_tracking/resolve_failed/unchecked）都重跑
+      OR: [
+        { parent_network: null },
+        { tracking_status: { in: ['no_tracking', 'resolve_failed', 'unchecked'] } },
+      ],
+      AND: [{ OR: [{ tracking_link: { not: null } }, { campaign_link: { not: null } }] }],
     },
     select: {
       id: true,

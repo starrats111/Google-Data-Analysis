@@ -350,6 +350,38 @@ export async function replenishLowStock(
   return { scanned: enabled.length, lowStock: low.length, replenished, results }
 }
 
+/**
+ * 后缀生命周期回收：
+ *   1) available 且已过 expires_at → expired（避免投放到失效 clickid/token）
+ *   2) leased 超 LEASE_STALE_HOURS 仍无回执（Script 没 report）→ expired，释放占坑
+ * 供 /api/cron/suffix-replenish 每轮顺带调用。返回各自回收条数。
+ */
+export async function recycleSuffixes(): Promise<{ expiredAvailable: number; reclaimedLeased: number }> {
+  const now = new Date()
+  let expiredAvailable = 0
+  let reclaimedLeased = 0
+  try {
+    const r1 = await prisma.suffix_pool.updateMany({
+      where: { status: 'available', is_deleted: 0, expires_at: { not: null, lt: now } },
+      data: { status: 'expired' },
+    })
+    expiredAvailable = r1.count
+  } catch (e) {
+    console.warn('[stock-producer] recycle available 失败:', e instanceof Error ? e.message : e)
+  }
+  try {
+    const staleBefore = new Date(now.getTime() - STOCK_CONFIG.LEASE_STALE_HOURS * 3600_000)
+    const r2 = await prisma.suffix_pool.updateMany({
+      where: { status: 'leased', is_deleted: 0, created_at: { lt: staleBefore } },
+      data: { status: 'expired', leased_assignment_id: null },
+    })
+    reclaimedLeased = r2.count
+  } catch (e) {
+    console.warn('[stock-producer] recycle leased 失败:', e instanceof Error ? e.message : e)
+  }
+  return { expiredAvailable, reclaimedLeased }
+}
+
 /** 触发某系列的异步补货（fire-and-forget），lease NO_STOCK / 低库存时调用 */
 export function triggerReplenishAsync(campaignId: bigint, opts: { force?: boolean } = {}): void {
   replenishCampaign(campaignId, opts).catch((err) => {

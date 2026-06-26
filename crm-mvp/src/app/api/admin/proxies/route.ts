@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getAdminFromRequest } from '@/lib/auth'
+import { encryptPassword } from '@/lib/crypto'
 
 function requireAdmin(req: NextRequest) {
   // 管理控制台用 admin cookie 鉴权（getUserFromRequest 读的是 user cookie 且拒绝 admin 角色）
@@ -76,7 +77,7 @@ export async function POST(req: NextRequest) {
       priority: body.priority ?? 5,
       status: body.status ?? 'active',
       username_template: body.usernameTemplate?.trim() || null,
-      password: body.password?.trim() || null,
+      password: body.password?.trim() ? encryptPassword(body.password.trim()) : null,
       country_code_map: body.countryCodeMap ?? undefined,
       session_mode: body.sessionMode?.trim() || null,
     },
@@ -112,8 +113,8 @@ export async function PUT(req: NextRequest) {
   if (body.priority !== undefined) updateData.priority = body.priority
   if (body.status !== undefined) updateData.status = body.status
   if (body.usernameTemplate !== undefined) updateData.username_template = body.usernameTemplate.trim() || null
-  // 密码：仅当显式传非空才更新（留空表示不修改）
-  if (body.password !== undefined && body.password.trim()) updateData.password = body.password.trim()
+  // 密码：仅当显式传非空才更新（留空表示不修改），落库前加密
+  if (body.password !== undefined && body.password.trim()) updateData.password = encryptPassword(body.password.trim())
   if (body.countryCodeMap !== undefined) updateData.country_code_map = body.countryCodeMap ?? undefined
   if (body.sessionMode !== undefined) updateData.session_mode = body.sessionMode.trim() || null
 

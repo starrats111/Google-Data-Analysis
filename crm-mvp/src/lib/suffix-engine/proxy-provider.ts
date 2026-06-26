@@ -10,6 +10,7 @@
  */
 import { prisma } from '@/lib/prisma'
 import { fetchViaProxy } from '@/lib/crawl-proxy'
+import { decryptPassword } from '@/lib/crypto'
 
 // ── 用户名模板占位替换 ──────────────────────────────────────────
 
@@ -115,7 +116,8 @@ export function buildProviderProxyUrl(provider: ProviderRow, country: string): s
   const proto = (provider.proxy_type || 'socks5').toLowerCase()
   const map = (provider.country_code_map || null) as CountryCodeMap
   const username = processUsernameTemplate(provider.username_template || '', country, map)
-  const password = provider.password || ''
+  // 密码落库为密文（旧明文原样返回）→ 组装代理 URL 前解密
+  const password = decryptPassword(provider.password || '')
   const auth = username || password ? `${encodeURIComponent(username)}:${encodeURIComponent(password)}@` : ''
   return `${proto}://${auth}${provider.host}:${provider.port}`
 }

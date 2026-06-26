@@ -135,7 +135,9 @@ export async function GET(req: NextRequest) {
       const country = (m.target_country || 'US').toUpperCase()
       try {
         const cruise = await Promise.race([
-          resolveAffiliateLink(affiliateUrl, country, m.platform || null),
+          // 开启无头浏览器兜底：纠正 pepperjam/impact 等 JS 联盟的 no_tracking 误判
+          // （受 limit 每轮条数 + puppeteer 信号量限并发，低配机安全）
+          resolveAffiliateLink(affiliateUrl, country, m.platform || null, { browserFallback: true }),
           new Promise<null>((r) => setTimeout(() => r(null), ITEM_TIMEOUT_MS)),
         ])
         if (!cruise) {

@@ -51,12 +51,20 @@ export async function POST(req: NextRequest) {
         },
       })
 
-      // 若 Script 写入失败，将 suffix 释放回 available 状态（可重用）
-      if (!writeSuccess && assignment.suffix_pool_id) {
-        await prisma.suffix_pool.update({
-          where: { id: assignment.suffix_pool_id },
-          data: { status: 'available', leased_assignment_id: null },
-        })
+      if (assignment.suffix_pool_id) {
+        if (writeSuccess) {
+          // Script 成功写入 Google Ads → 后缀已被真正消费，标记 consumed（库存生命周期闭环）
+          await prisma.suffix_pool.update({
+            where: { id: assignment.suffix_pool_id },
+            data: { status: 'consumed' },
+          })
+        } else {
+          // 写入失败 → 释放回 available 可重用
+          await prisma.suffix_pool.update({
+            where: { id: assignment.suffix_pool_id },
+            data: { status: 'available', leased_assignment_id: null },
+          })
+        }
       }
 
       processed++

@@ -158,6 +158,8 @@ interface TaskRuntime {
   campaignId: bigint
   campaignName: string | null
   affiliateUrl: string
+  /** 商家自定义来路（kyads_referer_url），为空则每次随机选 REFERERS */
+  refererUrl: string | null
   country: string
   platform: string | null
   sourceMerchantId: bigint | null
@@ -202,6 +204,7 @@ async function buildTaskRuntime(taskId: bigint): Promise<TaskRuntime | null> {
     campaignId: campaign.id,
     campaignName: campaign.campaign_name,
     affiliateUrl: task.affiliate_url,
+    refererUrl: task.referer_url?.trim() || null,
     country: campaign.target_country || 'US',
     platform: merchant?.platform ?? null,
     sourceMerchantId: merchant?.id ?? null,
@@ -220,7 +223,8 @@ async function executeItem(rt: TaskRuntime, itemId: bigint): Promise<{ ok: boole
     userId: rt.userId,
     campaignId: rt.campaignId,
     userAgent: randomPick(USER_AGENTS),
-    referer: randomPick(REFERERS) || null,
+    // 优先用商家自定义来路，未配置才回退随机 REFERERS（更贴近真实站点引流）
+    referer: rt.refererUrl || randomPick(REFERERS) || null,
   })
   const duration = Date.now() - startedAt
 
@@ -228,6 +232,8 @@ async function executeItem(rt: TaskRuntime, itemId: bigint): Promise<{ ok: boole
     // 入库存池（去重）
     if (!rt.existingSuffixes.has(r.suffix)) {
       rt.existingSuffixes.add(r.suffix)
+      const expiresAt =
+        STOCK_CONFIG.EXPIRE_HOURS > 0 ? new Date(Date.now() + STOCK_CONFIG.EXPIRE_HOURS * 3600_000) : null
       await prisma.suffix_pool
         .create({
           data: {
@@ -237,6 +243,7 @@ async function executeItem(rt: TaskRuntime, itemId: bigint): Promise<{ ok: boole
             status: 'available',
             source_merchant_id: rt.sourceMerchantId,
             exit_ip: r.exitIp,
+            expires_at: expiresAt,
           },
         })
         .catch(() => {})

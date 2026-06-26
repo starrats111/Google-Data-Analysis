@@ -20,8 +20,11 @@ export const STOCK_CONFIG = {
   GEN_TIMEOUT_MS: 75000,
   /** 连续失败多少条后熔断本次补货（probe 阶段失败直接熔断） */
   CIRCUIT_FAIL_THRESHOLD: 4,
-  /** suffix 默认有效期（小时），过期回收；0 表示不过期 */
-  EXPIRE_HOURS: 0,
+  /** suffix 默认有效期（小时），过期回收；0 表示不过期。
+   *  联盟 clickid/token 多有时效，36h 内未被 lease 即回收，避免投放到失效后缀（对齐 kylink STOCK_EXPIRY_HOURS=36） */
+  EXPIRE_HOURS: 36,
+  /** leased 后多久仍未回执（write_success）视为卡死，回收为 expired（小时） */
+  LEASE_STALE_HOURS: 6,
   /** cron 单次最多处理多少个广告系列 */
   CRON_MAX_CAMPAIGNS: 30,
   /** 只补货最近多少小时内有 lease 活动的广告系列 */
