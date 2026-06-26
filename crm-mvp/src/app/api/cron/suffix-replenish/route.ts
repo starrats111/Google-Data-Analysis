@@ -41,7 +41,7 @@ export async function GET(req: NextRequest) {
   try {
     const result = await replenishLowStock()
     console.log(
-      `[cron/suffix-replenish] scanned=${result.scanned} replenished=${result.replenished} cost=${Date.now() - startedAt}ms`,
+      `[cron/suffix-replenish] scanned=${result.scanned} lowStock=${result.lowStock} replenished=${result.replenished} cost=${Date.now() - startedAt}ms`,
     )
     return NextResponse.json({ code: 0, data: result })
   } catch (error) {

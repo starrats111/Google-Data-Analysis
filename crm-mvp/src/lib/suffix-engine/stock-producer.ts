@@ -285,38 +285,59 @@ async function emitGenFailureAlert(
 }
 
 /**
- * 批量补货：扫描最近有 lease 活动且库存偏低的广告系列，逐个补货。
- * 供 /api/cron/suffix-replenish 调用。
+ * 批量补货：扫描「全部已启用换链广告系列」，对可用库存低于低水位的自动补货。
+ * 供 /api/cron/suffix-replenish 调用（每 5 分钟）。
+ *
+ * 注意：不再以「最近有 lease 活动」为前提——否则新启用 / 低流量 / 库存早已耗尽
+ * （租不到→无新租用记录→掉出活跃窗口）的系列将永远得不到补货。
+ * 改为覆盖所有已启用系列，按库存升序（最紧急优先）取前 maxCampaigns 个补货，
+ * 其余低库存系列由下一轮 cron 接续，自然分摊低配生产机负载。
  */
 export async function replenishLowStock(
   opts: { maxCampaigns?: number } = {},
-): Promise<{ scanned: number; replenished: number; results: ReplenishResult[] }> {
+): Promise<{ scanned: number; lowStock: number; replenished: number; results: ReplenishResult[] }> {
   const maxCampaigns = opts.maxCampaigns ?? STOCK_CONFIG.CRON_MAX_CAMPAIGNS
-  const activeSince = new Date(Date.now() - STOCK_CONFIG.ACTIVE_WINDOW_HOURS * 3600_000)
 
-  // 最近有 lease 活动的广告系列
-  const recent = await prisma.suffix_assignments.groupBy({
-    by: ['campaign_id'],
-    where: { created_at: { gte: activeSince }, is_deleted: 0 },
-    _max: { created_at: true },
-    orderBy: { _max: { created_at: 'desc' } },
-    take: maxCampaigns,
+  // 1. 所有已启用换链系列：active + Google ENABLED + 已真正投放(有 gcid) + 换链开 + 已匹配商家
+  const enabled = await prisma.campaigns.findMany({
+    where: {
+      status: 'active',
+      google_status: 'ENABLED',
+      google_campaign_id: { not: null },
+      suffix_exchange_enabled: 1,
+      is_deleted: 0,
+      user_merchant_id: { not: BigInt(0) },
+    },
+    select: { id: true },
   })
+  if (enabled.length === 0) return { scanned: 0, lowStock: 0, replenished: 0, results: [] }
+  const ids = enabled.map((c) => c.id)
+
+  // 2. 一次 groupBy 取每系列当前可用库存（避免 N 次 count）
+  const stockRows = await prisma.suffix_pool.groupBy({
+    by: ['campaign_id'],
+    where: { campaign_id: { in: ids }, status: 'available', is_deleted: 0 },
+    _count: { _all: true },
+  })
+  const stockMap = new Map(stockRows.map((r) => [r.campaign_id.toString(), r._count._all]))
+
+  // 3. 低于低水位的（含 0 库存 / 无记录），按库存升序，最紧急优先，限额保护
+  const low = ids
+    .map((id) => ({ id, stock: stockMap.get(id.toString()) ?? 0 }))
+    .filter((x) => x.stock <= STOCK_CONFIG.LOW_WATERMARK)
+    .sort((a, b) => a.stock - b.stock)
+
+  const targets = low.slice(0, maxCampaigns)
 
   const results: ReplenishResult[] = []
   let replenished = 0
-
-  for (const row of recent) {
-    const available = await prisma.suffix_pool.count({
-      where: { campaign_id: row.campaign_id, status: 'available', is_deleted: 0 },
-    })
-    if (available > STOCK_CONFIG.LOW_WATERMARK) continue
-    const r = await replenishCampaign(row.campaign_id)
+  for (const c of targets) {
+    const r = await replenishCampaign(c.id)
     results.push(r)
     if ((r.generated ?? 0) > 0) replenished++
   }
 
-  return { scanned: recent.length, replenished, results }
+  return { scanned: enabled.length, lowStock: low.length, replenished, results }
 }
 
 /** 触发某系列的异步补货（fire-and-forget），lease NO_STOCK / 低库存时调用 */
