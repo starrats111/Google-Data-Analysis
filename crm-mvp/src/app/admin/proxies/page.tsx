@@ -73,7 +73,7 @@ export default function ProxiesPage() {
   useEffect(() => { fetchProxies(); }, [fetchProxies]);
 
   const fetchAllUsers = async () => {
-    const res = await fetch("/api/admin/users").then((r) => r.json());
+    const res = await fetch("/api/admin/users?light=1").then((r) => r.json());
     const list = res.data?.list ?? res.data ?? [];
     setAllUsers(list);
   };

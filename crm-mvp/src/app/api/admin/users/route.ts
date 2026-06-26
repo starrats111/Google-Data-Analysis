@@ -17,6 +17,17 @@ export const GET = withAdmin(async (req: NextRequest) => {
     where.username = { contains: search };
   }
 
+  // 轻量模式：仅返回基础字段，跳过昂贵的 user_merchants 商家计数 groupBy
+  // （用于代理绑定等只需用户下拉列表的场景，避免占满连接池）
+  if (searchParams.get("light") === "1") {
+    const list = await prisma.users.findMany({
+      where: where as never,
+      select: { id: true, username: true, display_name: true, role: true, status: true },
+      orderBy: { created_at: "desc" },
+    });
+    return apiSuccess(serializeData({ list, total: list.length, page: 1, pageSize: list.length }));
+  }
+
   const [total, users, merchantStats] = await Promise.all([
     prisma.users.count({ where: where as never }),
     prisma.users.findMany({
