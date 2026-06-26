@@ -55,6 +55,7 @@ interface Args {
   kyadsUrl?: string
   map?: string
   platformMap?: string
+  excludePlatforms: Set<string>
   commit: boolean
   onlyMissing: boolean
   triggerSync: boolean
@@ -67,11 +68,16 @@ function parseArgs(): Args {
     return p ? p.slice(k.length + 3) : undefined
   }
   const has = (k: string) => argv.includes(`--${k}`)
+  const exclude = (get('exclude-platforms') ?? '')
+    .split(',')
+    .map((s) => s.trim().toUpperCase())
+    .filter(Boolean)
   return {
     file: get('file'),
     kyadsUrl: get('kyads-url') ?? process.env.KYADS_DATABASE_URL,
     map: get('map'),
     platformMap: get('platform-map'),
+    excludePlatforms: new Set(exclude),
     commit: has('commit'),
     onlyMissing: !has('no-only-missing'),
     triggerSync: has('trigger-sync'),
@@ -163,9 +169,12 @@ async function main() {
     return null
   }
 
-  const resolvePlatform = (na: string): string => {
-    const up = (na || '').trim().toUpperCase()
-    return (platformMap[up] ?? platformMap[na] ?? up).slice(0, 8)
+  // 平台代码取 network_type（干净代码，如 BSH/PM/RW）；kyads 的 network_account 是「代码+账号序号」
+  // （如 BSH1/PM2），不能直接当平台代码。兜底：用 network_account 去掉尾部数字。
+  const resolvePlatform = (s: KyadsSource): string => {
+    const raw = (s.network_type || s.network_account || '').trim()
+    const up = raw.toUpperCase().replace(/\d+$/, '')
+    return (platformMap[up] ?? platformMap[raw.toUpperCase()] ?? up).slice(0, 8)
   }
 
   // 4. 规划导入
@@ -184,9 +193,13 @@ async function main() {
       skipped.push({ reason: 'user_unmatched', detail: `${s.kyads_user_name ?? ''}/${s.kyads_user_code ?? ''}/${s.network_account}` })
       continue
     }
-    const platform = resolvePlatform(s.network_account)
+    const platform = resolvePlatform(s)
     if (!platform) {
       skipped.push({ reason: 'platform_empty', detail: `${s.network_account}` })
+      continue
+    }
+    if (args.excludePlatforms.has(platform)) {
+      skipped.push({ reason: 'excluded_platform', detail: `${crmUser.username}/${platform}` })
       continue
     }
 
