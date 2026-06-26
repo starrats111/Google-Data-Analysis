@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getUserFromRequest } from '@/lib/auth'
+import { getAdminFromRequest } from '@/lib/auth'
 import { testProviderExitIp } from '@/lib/suffix-engine/proxy-provider'
 
 export const dynamic = 'force-dynamic'
@@ -7,8 +7,8 @@ export const maxDuration = 30
 
 // POST /api/admin/proxies/test  测试代理供应商出口 IP
 export async function POST(req: NextRequest) {
-  const user = await getUserFromRequest(req)
-  if (!user || user.role !== 'admin') {
+  const admin = getAdminFromRequest(req)
+  if (!admin) {
     return NextResponse.json({ code: -1, message: '无权限' }, { status: 403 })
   }
 

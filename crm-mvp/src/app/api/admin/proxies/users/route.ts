@@ -1,11 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { getUserFromRequest } from '@/lib/auth'
+import { getAdminFromRequest } from '@/lib/auth'
 
-async function requireAdmin(req: NextRequest) {
-  const user = await getUserFromRequest(req)
-  if (!user || user.role !== 'admin') return null
-  return user
+function requireAdmin(req: NextRequest) {
+  return getAdminFromRequest(req)
 }
 
 // GET /api/admin/proxies/users?proxyId=xxx  查某代理已绑定的用户

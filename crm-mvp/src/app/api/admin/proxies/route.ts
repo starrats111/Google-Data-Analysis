@@ -1,12 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { getUserFromRequest } from '@/lib/auth'
+import { getAdminFromRequest } from '@/lib/auth'
 
-async function requireAdmin(req: NextRequest) {
-  const user = await getUserFromRequest(req)
-  if (!user) return null
-  if (user.role !== 'admin') return null
-  return user
+function requireAdmin(req: NextRequest) {
+  // 管理控制台用 admin cookie 鉴权（getUserFromRequest 读的是 user cookie 且拒绝 admin 角色）
+  return getAdminFromRequest(req)
 }
 
 // ---------------------------------------------------------------
