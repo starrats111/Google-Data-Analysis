@@ -30,6 +30,7 @@ export async function GET(req: NextRequest) {
       google_campaign_id: true,
       campaign_name: true,
       target_country: true,
+      google_status: true,
       suffix_exchange_enabled: true,
       suffix_last_apply_at: true,
       suffix_last_content: true,
@@ -53,6 +54,8 @@ export async function GET(req: NextRequest) {
             tracking_link: true,
             link_status: true,
             link_check_reason: true,
+            parent_network: true,
+            parent_blacklisted: true,
           },
         })
       : []
@@ -78,14 +81,31 @@ export async function GET(req: NextRequest) {
     stockMap.set(key, cur)
   }
 
+  // 每个 campaign 最新刷点击任务（JS 去重取最新，展示进度）
+  const allClickTasks =
+    campaignIds.length > 0
+      ? await prisma.kyads_click_tasks.findMany({
+          where: { campaign_id: { in: campaignIds }, is_deleted: 0 },
+          orderBy: { created_at: 'desc' },
+          select: { campaign_id: true, status: true, target_count: true, done_count: true, finished_at: true },
+        })
+      : []
+  const clickTaskMap = new Map<string, (typeof allClickTasks)[0]>()
+  for (const t of allClickTasks) {
+    const key = t.campaign_id.toString()
+    if (!clickTaskMap.has(key)) clickTaskMap.set(key, t)
+  }
+
   const rows = parsed.map((c) => {
     const merchant = merchantMap.get(`${c.platform}:${c.mid}`) ?? null
     const stock = stockMap.get(c.id.toString()) ?? { available: 0, leased: 0, consumed: 0 }
+    const clickTask = clickTaskMap.get(c.id.toString()) ?? null
     return {
       campaignId: c.id.toString(),
       googleCampaignId: c.google_campaign_id,
       campaignName: c.campaign_name,
       country: c.target_country,
+      googleStatus: c.google_status,
       platform: c.platform,
       mid: c.mid,
       matched: !!merchant,
@@ -94,17 +114,27 @@ export async function GET(req: NextRequest) {
       trackingLink: merchant?.tracking_link ?? null,
       linkStatus: merchant?.link_status ?? 'unchecked',
       linkCheckReason: merchant?.link_check_reason ?? null,
+      parentNetwork: merchant?.parent_network ?? null,
+      parentBlacklisted: merchant?.parent_blacklisted === 1,
       suffixEnabled: c.suffix_exchange_enabled === 1,
       lastApplyAt: c.suffix_last_apply_at,
       lastSuffix: c.suffix_last_content,
       stock,
       lowStock: stock.available <= STOCK_CONFIG.LOW_WATERMARK,
+      clickTask: clickTask
+        ? {
+            status: clickTask.status,
+            target: clickTask.target_count,
+            done: clickTask.done_count,
+            finishedAt: clickTask.finished_at,
+          }
+        : null,
     }
   })
 
   const apiKeyRecord = await prisma.users.findUnique({
     where: { id: userId },
-    select: { script_api_key: true },
+    select: { script_api_key: true, link_exchange_click_count: true },
   })
 
   const { summary: alertSummary, totalOpen } = await getAlertSummary(userId)
@@ -117,6 +147,7 @@ export async function GET(req: NextRequest) {
     data: {
       rows,
       apiKey: apiKeyRecord?.script_api_key ?? null,
+      defaultClickCount: apiKeyRecord?.link_exchange_click_count ?? 10,
       summary: {
         total: rows.length,
         matched: rows.filter((r) => r.matched).length,

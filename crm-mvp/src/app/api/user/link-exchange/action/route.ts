@@ -2,12 +2,14 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getUserFromRequest } from '@/lib/auth'
 import { replenishCampaign, triggerReplenishAsync } from '@/lib/suffix-engine/stock-producer'
+import { startBrushTask } from '@/lib/suffix-engine/click-brush'
 import { STOCK_CONFIG } from '@/lib/suffix-engine/config'
 
 interface ActionBody {
-  action: 'replenish' | 'replenishAll' | 'toggle'
+  action: 'replenish' | 'replenishAll' | 'toggle' | 'brushClicks'
   campaignId?: string
   enabled?: boolean
+  count?: number
 }
 
 export async function POST(req: NextRequest) {
@@ -53,6 +55,18 @@ export async function POST(req: NextRequest) {
       }
     }
     return NextResponse.json({ code: 0, data: { queued } })
+  }
+
+  // 刷点击：后台为该系列生成 N 次点击（=N 条 suffix 入库存池），进度走 kyads_click_tasks
+  if (body.action === 'brushClicks') {
+    if (!body.campaignId) return NextResponse.json({ code: -1, message: '缺少 campaignId' }, { status: 400 })
+    const count = Number(body.count)
+    if (!Number.isFinite(count) || count < 1) {
+      return NextResponse.json({ code: -1, message: '点击数须为不小于 1 的整数' }, { status: 400 })
+    }
+    const result = await startBrushTask(BigInt(body.campaignId), userId, count)
+    if (!result.ok) return NextResponse.json({ code: -1, message: result.message }, { status: 400 })
+    return NextResponse.json({ code: 0, data: { taskId: result.taskId, target: result.target } })
   }
 
   // 开关单系列换链

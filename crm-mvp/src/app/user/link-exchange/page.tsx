@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
-  Table, Tag, Button, Input, Space, Typography, Card, Row, Col,
+  Table, Tag, Button, Input, InputNumber, Space, Typography, Card, Row, Col,
   Tooltip, App, Statistic, Switch, Tabs, Popconfirm, Badge,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
@@ -10,17 +10,20 @@ import {
   SwapOutlined, ReloadOutlined, ThunderboltOutlined, LinkOutlined,
   CheckCircleOutlined, CloseCircleOutlined, QuestionCircleOutlined,
   KeyOutlined, CopyOutlined, SyncOutlined, WarningOutlined, BellOutlined,
+  AimOutlined, LoadingOutlined,
 } from "@ant-design/icons";
 import AppPageHeader from "@/components/AppPageHeader";
 
 const { Text, Paragraph } = Typography;
 
 interface StockInfo { available: number; leased: number; consumed: number }
+interface ClickTaskInfo { status: string; target: number; done: number; finishedAt: string | null }
 interface CampaignRow {
   campaignId: string;
   googleCampaignId: string | null;
   campaignName: string | null;
   country: string;
+  googleStatus: string | null;
   platform: string;
   mid: string;
   matched: boolean;
@@ -29,11 +32,14 @@ interface CampaignRow {
   trackingLink: string | null;
   linkStatus: string;
   linkCheckReason: string | null;
+  parentNetwork: string | null;
+  parentBlacklisted: boolean;
   suffixEnabled: boolean;
   lastApplyAt: string | null;
   lastSuffix: string | null;
   stock: StockInfo;
   lowStock: boolean;
+  clickTask: ClickTaskInfo | null;
 }
 interface AlertRow {
   id: string;
@@ -49,6 +55,7 @@ interface AlertRow {
 interface OverviewData {
   rows: CampaignRow[];
   apiKey: string | null;
+  defaultClickCount: number;
   summary: { total: number; matched: number; totalAvailable: number; lowStockCount: number; alertOpen: number };
   alertSummary: Record<string, number>;
   stockConfig: { target: number; lowWatermark: number };
@@ -79,6 +86,8 @@ export default function LinkExchangePage() {
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
   const [alertsLoading, setAlertsLoading] = useState(false);
   const [activeTab, setActiveTab] = useState("links");
+  const [brushCounts, setBrushCounts] = useState<Record<string, number>>({});
+  const [brushing, setBrushing] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchData = useCallback(async () => {
@@ -103,16 +112,21 @@ export default function LinkExchangePage() {
 
   useEffect(() => { fetchData(); fetchAlerts(); }, [fetchData, fetchAlerts]);
 
-  // 库存/告警随补货变化，进入「库存管理」时每 10 秒轮询
+  const hasRunningBrush = (data?.rows ?? []).some(
+    (r) => r.clickTask && (r.clickTask.status === "running" || r.clickTask.status === "pending"),
+  );
+
+  // 进入「库存管理」或有刷点击任务进行中时，每 10 秒轮询刷新进度
   useEffect(() => {
-    if (activeTab === "stock") {
+    const needPoll = activeTab === "stock" || (activeTab === "links" && hasRunningBrush);
+    if (needPoll) {
       if (!pollRef.current) pollRef.current = setInterval(fetchData, 10000);
     } else if (pollRef.current) {
       clearInterval(pollRef.current);
       pollRef.current = null;
     }
     return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
-  }, [activeTab, fetchData]);
+  }, [activeTab, hasRunningBrush, fetchData]);
 
   const handleResetKey = async () => {
     setResetting(true);
@@ -163,6 +177,22 @@ export default function LinkExchangePage() {
     } else message.error(res.message ?? "操作失败");
   };
 
+  const handleBrush = async (campaignId: string, count: number) => {
+    setBrushing(campaignId);
+    try {
+      const res = await fetch("/api/user/link-exchange/action", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "brushClicks", campaignId, count }),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        message.success(`已开始刷点击：目标 ${res.data.target} 次，后台执行中`);
+        fetchData();
+      } else message.error(res.message ?? "刷点击启动失败");
+    } finally {
+      setBrushing(null);
+    }
+  };
+
   const handleToggle = async (campaignId: string, enabled: boolean) => {
     const res = await fetch("/api/user/link-exchange/action", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -185,6 +215,9 @@ export default function LinkExchangePage() {
   const rows = data?.rows ?? [];
   const summary = data?.summary;
   const lowWatermark = data?.stockConfig.lowWatermark ?? 6;
+  const defaultClickCount = data?.defaultClickCount ?? 10;
+  // 链接管理只展示已启用（Google Ads ENABLED / 默认）的广告系列
+  const enabledRows = rows.filter((r) => (r.googleStatus ?? "ENABLED") === "ENABLED");
 
   // ───────── 链接管理列 ─────────
   const linkColumns: ColumnsType<CampaignRow> = [
@@ -208,6 +241,16 @@ export default function LinkExchangePage() {
         </Space>
       ) : <Text type="secondary" style={{ fontSize: 12 }}>未解析</Text>,
     },
+    {
+      title: "上级联盟", width: 100,
+      render: (_: unknown, row) => {
+        if (!row.matched) return <Text type="secondary">—</Text>;
+        if (!row.parentNetwork) return <Text type="secondary" style={{ fontSize: 12 }}>未识别</Text>;
+        return row.parentBlacklisted
+          ? <Tooltip title="命中上级联盟黑名单"><Tag color="red" style={{ margin: 0 }}>{row.parentNetwork}</Tag></Tooltip>
+          : <Tag color="geekblue" style={{ margin: 0 }}>{row.parentNetwork}</Tag>;
+      },
+    },
     { title: "国家", dataIndex: "country", width: 70, render: (v: string) => v ? <Tag>{v}</Tag> : "—" },
     {
       title: "商家追踪链接", width: 180,
@@ -230,6 +273,42 @@ export default function LinkExchangePage() {
         <Switch size="small" checked={row.suffixEnabled} disabled={!row.matched}
           onChange={(checked) => handleToggle(row.campaignId, checked)} />
       ),
+    },
+    {
+      title: "刷点击", width: 160, align: "center",
+      render: (_: unknown, row) => {
+        const task = row.clickTask;
+        const running = task && (task.status === "running" || task.status === "pending");
+        if (running) {
+          return (
+            <Tooltip title="刷点击进行中，每 10 秒自动刷新进度">
+              <Space size={4}>
+                <LoadingOutlined style={{ color: "#1677ff" }} />
+                <Text style={{ fontSize: 12 }}>{task!.done}/{task!.target}</Text>
+              </Space>
+            </Tooltip>
+          );
+        }
+        if (!row.matched) return <Text type="secondary">—</Text>;
+        const count = brushCounts[row.campaignId] ?? defaultClickCount;
+        return (
+          <Space size={4}>
+            <InputNumber size="small" min={1} max={1000} value={count} controls={false}
+              style={{ width: 64 }}
+              onChange={(v) => setBrushCounts((p) => ({ ...p, [row.campaignId]: Number(v) || 1 }))} />
+            <Popconfirm
+              title={`为该广告系列刷 ${count} 次点击？`}
+              description="将通过代理访问联盟链接生成点击，产出的后缀进入换链库存。"
+              onConfirm={() => handleBrush(row.campaignId, count)} okText="开始" cancelText="取消"
+            >
+              <Button size="small" type="primary" ghost icon={<AimOutlined />}
+                loading={brushing === row.campaignId}>刷</Button>
+            </Popconfirm>
+            {task && task.status === "done" && <Tooltip title={`上次完成 ${task.done}/${task.target}`}><CheckCircleOutlined style={{ color: "#52c41a" }} /></Tooltip>}
+            {task && task.status === "failed" && <Tooltip title="上次刷点击失败，见告警中心"><CloseCircleOutlined style={{ color: "#ff4d4f" }} /></Tooltip>}
+          </Space>
+        );
+      },
     },
     {
       title: "最近换链", dataIndex: "lastApplyAt", width: 150,
@@ -339,10 +418,10 @@ export default function LinkExchangePage() {
               label: "链接管理",
               children: (
                 <Table<CampaignRow>
-                  columns={linkColumns} dataSource={rows} rowKey="campaignId" size="small" loading={loading}
+                  columns={linkColumns} dataSource={enabledRows} rowKey="campaignId" size="small" loading={loading}
                   pagination={{ defaultPageSize: 50, showTotal: (t) => `共 ${t} 条`, showSizeChanger: true }}
                   rowClassName={(row) => row.matched && row.linkStatus === "invalid" ? "row-invalid-link" : (!row.matched ? "row-unmatched" : "")}
-                  scroll={{ x: 1000 }}
+                  scroll={{ x: 1240 }}
                 />
               ),
             },
