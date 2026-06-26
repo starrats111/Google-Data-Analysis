@@ -108,6 +108,33 @@ export async function resolveAlerts(userId: bigint, ids: bigint[]): Promise<numb
   return res.count
 }
 
+/**
+ * 该用户「已启用」广告系列 id 集合（active + ENABLED + 有 google_campaign_id）。
+ * 告警中心只统计这些系列相关的告警，避免把草稿/未启用广告的告警也算进来。
+ */
+async function getEnabledCampaignIds(userId: bigint): Promise<bigint[]> {
+  const rows = await prisma.campaigns.findMany({
+    where: {
+      user_id: userId,
+      status: 'active',
+      google_status: 'ENABLED',
+      is_deleted: 0,
+      google_campaign_id: { not: null },
+    },
+    select: { id: true },
+  })
+  return rows.map((r) => r.id)
+}
+
+/**
+ * 告警可见性过滤：仅保留「已启用广告系列」相关 + 无 campaign 绑定（通用）的告警。
+ */
+function visibilityFilter(enabledIds: bigint[]) {
+  return {
+    OR: [{ campaign_id: null }, { campaign_id: { in: enabledIds } }],
+  }
+}
+
 export interface ListAlertsParams {
   status?: 'open' | 'resolved'
   type?: SuffixAlertType
@@ -117,11 +144,13 @@ export interface ListAlertsParams {
 
 export async function listAlerts(userId: bigint, params: ListAlertsParams = {}) {
   const { status, type, limit = 50, offset = 0 } = params
+  const enabledIds = await getEnabledCampaignIds(userId)
   const where = {
     user_id: userId,
     is_deleted: 0,
     ...(status ? { status } : {}),
     ...(type ? { type } : {}),
+    ...visibilityFilter(enabledIds),
   }
   const [rows, total] = await Promise.all([
     prisma.suffix_alerts.findMany({
@@ -135,11 +164,12 @@ export async function listAlerts(userId: bigint, params: ListAlertsParams = {}) 
   return { rows, total }
 }
 
-/** 告警中心概览计数（按 type 统计 open 数量） */
+/** 告警中心概览计数（按 type 统计 open 数量；仅含已启用广告系列相关告警） */
 export async function getAlertSummary(userId: bigint) {
+  const enabledIds = await getEnabledCampaignIds(userId)
   const rows = await prisma.suffix_alerts.groupBy({
     by: ['type'],
-    where: { user_id: userId, status: 'open', is_deleted: 0 },
+    where: { user_id: userId, status: 'open', is_deleted: 0, ...visibilityFilter(enabledIds) },
     _count: { _all: true },
   })
   const summary: Record<string, number> = {
