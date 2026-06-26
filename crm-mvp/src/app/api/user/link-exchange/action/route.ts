@@ -2,12 +2,12 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getUserFromRequest } from '@/lib/auth'
 import { replenishCampaign, triggerReplenishAsync } from '@/lib/suffix-engine/stock-producer'
-import { startBrushTask } from '@/lib/suffix-engine/click-brush'
+import { startBrushTask, startBrushAllTasks } from '@/lib/suffix-engine/click-brush'
 import { syncUserLinks } from '@/lib/suffix-engine/link-sync'
 import { STOCK_CONFIG } from '@/lib/suffix-engine/config'
 
 interface ActionBody {
-  action: 'replenish' | 'replenishAll' | 'toggle' | 'brushClicks' | 'syncLinks'
+  action: 'replenish' | 'replenishAll' | 'toggle' | 'brushClicks' | 'brushAll' | 'syncLinks'
   campaignId?: string
   enabled?: boolean
   count?: number
@@ -68,6 +68,16 @@ export async function POST(req: NextRequest) {
     const result = await startBrushTask(BigInt(body.campaignId), userId, count)
     if (!result.ok) return NextResponse.json({ code: -1, message: result.message }, { status: 400 })
     return NextResponse.json({ code: 0, data: { taskId: result.taskId, target: result.target } })
+  }
+
+  // 一次性刷点击：为所有已启用换链、已匹配商家的广告系列各刷 N 次
+  if (body.action === 'brushAll') {
+    const count = Number(body.count)
+    if (!Number.isFinite(count) || count < 1) {
+      return NextResponse.json({ code: -1, message: '点击数须为不小于 1 的整数' }, { status: 400 })
+    }
+    const result = await startBrushAllTasks(userId, count)
+    return NextResponse.json({ code: 0, data: result })
   }
 
   // 手动同步链接：为已启用广告系列关联、缺上级联盟/未校验的商家后台跑解析+校验

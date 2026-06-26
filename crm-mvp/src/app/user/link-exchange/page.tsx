@@ -88,6 +88,8 @@ export default function LinkExchangePage() {
   const [activeTab, setActiveTab] = useState("links");
   const [brushCounts, setBrushCounts] = useState<Record<string, number>>({});
   const [brushing, setBrushing] = useState<string | null>(null);
+  const [brushAllCount, setBrushAllCount] = useState<number>(10);
+  const [brushingAll, setBrushingAll] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -176,6 +178,24 @@ export default function LinkExchangePage() {
       message.success(`已为 ${res.data.queued} 个低库存广告系列触发后台补货，稍后刷新查看`);
       setTimeout(() => { fetchData(); fetchAlerts(); }, 3000);
     } else message.error(res.message ?? "操作失败");
+  };
+
+  const handleBrushAll = async (count: number) => {
+    setBrushingAll(true);
+    try {
+      const res = await fetch("/api/user/link-exchange/action", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "brushAll", count }),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        const d = res.data;
+        if (d.queued > 0) message.success(`已为 ${d.queued} 个广告系列各启动刷 ${count} 次点击（跳过 ${d.skipped} 个），后台执行中`);
+        else message.info(`没有可刷的广告系列（共 ${d.total} 个，均已在刷或未匹配）`);
+        fetchData();
+      } else message.error(res.message ?? "一次性刷点击启动失败");
+    } finally {
+      setBrushingAll(false);
+    }
   };
 
   const handleSyncLinks = async () => {
@@ -445,12 +465,29 @@ export default function LinkExchangePage() {
               key: "links",
               label: "链接管理",
               children: (
-                <Table<CampaignRow>
-                  columns={linkColumns} dataSource={enabledRows} rowKey="campaignId" size="small" loading={loading}
-                  pagination={{ defaultPageSize: 50, showTotal: (t) => `共 ${t} 条`, showSizeChanger: true }}
-                  rowClassName={(row) => row.matched && row.linkStatus === "invalid" ? "row-invalid-link" : (!row.matched ? "row-unmatched" : "")}
-                  scroll={{ x: 1240 }}
-                />
+                <>
+                  <Space style={{ marginBottom: 12 }} wrap>
+                    <Text type="secondary" style={{ fontSize: 12 }}>每个系列刷</Text>
+                    <InputNumber size="small" min={1} max={1000} value={brushAllCount} controls={false}
+                      style={{ width: 72 }}
+                      onChange={(v) => setBrushAllCount(Number(v) || 1)} />
+                    <Text type="secondary" style={{ fontSize: 12 }}>次</Text>
+                    <Popconfirm
+                      title={`为全部已启用换链的广告系列各刷 ${brushAllCount} 次点击？`}
+                      description="将为每个已匹配商家的系列后台生成点击（产出后缀进入换链库存），已在刷的自动跳过。"
+                      onConfirm={() => handleBrushAll(brushAllCount)} okText="开始" cancelText="取消"
+                    >
+                      <Button type="primary" icon={<AimOutlined />} loading={brushingAll}>一次性刷点击（全部）</Button>
+                    </Popconfirm>
+                    <Text type="secondary" style={{ fontSize: 12 }}>仅对已开换链开关、已匹配商家的系列生效</Text>
+                  </Space>
+                  <Table<CampaignRow>
+                    columns={linkColumns} dataSource={enabledRows} rowKey="campaignId" size="small" loading={loading}
+                    pagination={{ defaultPageSize: 50, showTotal: (t) => `共 ${t} 条`, showSizeChanger: true }}
+                    rowClassName={(row) => row.matched && row.linkStatus === "invalid" ? "row-invalid-link" : (!row.matched ? "row-unmatched" : "")}
+                    scroll={{ x: 1240 }}
+                  />
+                </>
               ),
             },
             {

@@ -98,6 +98,43 @@ export async function startBrushTask(
   return { ok: true, taskId: task.id.toString(), target: n }
 }
 
+export interface BrushAllResult {
+  queued: number
+  skipped: number
+  total: number
+}
+
+/**
+ * 一次性为「该用户所有已启用换链、已匹配带追踪链接商家」的广告系列批量创建刷点击任务。
+ * 每个系列各 count 次；已有进行中任务/无追踪链接的自动跳过。各任务 fire-and-forget 后台执行。
+ */
+export async function startBrushAllTasks(userId: bigint, count: number): Promise<BrushAllResult> {
+  const n = Math.min(Math.max(Math.floor(count) || 0, 1), MAX_BRUSH)
+
+  // 仅真正投放（有 gcid）、active+ENABLED、已开换链开关的系列
+  const campaigns = await prisma.campaigns.findMany({
+    where: {
+      user_id: userId,
+      status: 'active',
+      google_status: 'ENABLED',
+      is_deleted: 0,
+      google_campaign_id: { not: null },
+      suffix_exchange_enabled: 1,
+      user_merchant_id: { not: BigInt(0) },
+    },
+    select: { id: true },
+  })
+
+  let queued = 0
+  let skipped = 0
+  for (const c of campaigns) {
+    const r = await startBrushTask(c.id, userId, n)
+    if (r.ok) queued++
+    else skipped++
+  }
+  return { queued, skipped, total: campaigns.length }
+}
+
 /** 后台执行刷点击任务：循环生成 suffix 入库存池并更新进度 */
 export async function runBrushTask(taskId: bigint): Promise<void> {
   const task = await prisma.kyads_click_tasks.findUnique({ where: { id: taskId } })
