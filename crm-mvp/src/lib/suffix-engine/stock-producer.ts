@@ -329,9 +329,15 @@ export async function replenishLowStock(
 
   const targets = low.slice(0, maxCampaigns)
 
+  // 时间预算：单轮最多跑 ~4 分钟即收尾返回，剩余低库存系列交给下一轮 cron 接续，
+  // 避免单轮在低配机上无限拉长、长时间阻塞后续补货轮次（补货是逐条等代理的 I/O）。
+  const DEADLINE_MS = 240_000
+  const startedAt = Date.now()
+
   const results: ReplenishResult[] = []
   let replenished = 0
   for (const c of targets) {
+    if (Date.now() - startedAt > DEADLINE_MS) break
     const r = await replenishCampaign(c.id)
     results.push(r)
     if ((r.generated ?? 0) > 0) replenished++
