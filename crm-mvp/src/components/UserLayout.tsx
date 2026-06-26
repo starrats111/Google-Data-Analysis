@@ -20,6 +20,7 @@ import {
   BarChartOutlined,
   EyeOutlined,
   StarOutlined,
+  SwapOutlined,
 } from "@ant-design/icons";
 import { useRouter, usePathname } from "next/navigation";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
@@ -61,6 +62,14 @@ const userMenuItems: MenuItem[] = [
     children: [
       { key: "/user/articles/publish", icon: <FormOutlined />, label: "文章发布" },
       { key: "/user/articles", icon: <UnorderedListOutlined />, label: "文章管理" },
+    ],
+  },
+  {
+    key: "link-exchange-group",
+    label: "换链接",
+    type: "group" as const,
+    children: [
+      { key: "/user/link-exchange", icon: <SwapOutlined />, label: "换链接管理" },
     ],
   },
   {
@@ -232,6 +241,7 @@ export default function UserLayout({ children }: { children: React.ReactNode }) 
     if (pathname === "/user/data-center") return "/user/data-center";
     if (pathname === "/user/articles/publish") return "/user/articles/publish";
     if (pathname === "/user/articles") return "/user/articles";
+    if (pathname.startsWith("/user/link-exchange")) return "/user/link-exchange";
     if (pathname === "/user/team-overview") return "/user/team-overview";
     if (pathname === "/user/team-members") return "/user/team-members";
     if (pathname === "/user/team-merchants") return "/user/team-merchants";

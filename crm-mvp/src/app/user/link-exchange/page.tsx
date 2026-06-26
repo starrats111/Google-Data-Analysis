@@ -1,230 +1,195 @@
 ﻿"use client";
 
-import { notFound } from "next/navigation";
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Table, Tag, Button, Input, Space, Typography, Card, Row, Col,
-  Tooltip, App, Badge, Popconfirm, Statistic,
+  Tooltip, App, Statistic, Switch, Tabs, Popconfirm, Badge,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import {
+  SwapOutlined, ReloadOutlined, ThunderboltOutlined, LinkOutlined,
   CheckCircleOutlined, CloseCircleOutlined, QuestionCircleOutlined,
-  SyncOutlined, ThunderboltOutlined, LinkOutlined, EditOutlined,
-  CheckOutlined, CloseOutlined, ReloadOutlined, FileTextOutlined,
+  KeyOutlined, CopyOutlined, SyncOutlined, WarningOutlined, BellOutlined,
 } from "@ant-design/icons";
 import AppPageHeader from "@/components/AppPageHeader";
 
-const { Text } = Typography;
+const { Text, Paragraph } = Typography;
 
+interface StockInfo { available: number; leased: number; consumed: number }
 interface CampaignRow {
   campaignId: string;
   googleCampaignId: string | null;
   campaignName: string | null;
+  country: string;
   platform: string;
   mid: string;
   matched: boolean;
   merchantId: string | null;
   merchantName: string | null;
   trackingLink: string | null;
-  refererUrl: string | null;
-  refererSource: "manual" | "article" | "none";
-  linkStatus: "unchecked" | "valid" | "invalid";
-  linkCheckedAt: string | null;
+  linkStatus: string;
   linkCheckReason: string | null;
-  taskStatus: string | null;
-  taskTargetCount: number | null;
-  taskDoneCount: number | null;
-  taskCreatedAt: string | null;
-  taskFinishedAt: string | null;
   suffixEnabled: boolean;
   lastApplyAt: string | null;
+  lastSuffix: string | null;
+  stock: StockInfo;
+  lowStock: boolean;
+}
+interface AlertRow {
+  id: string;
+  campaignId: string | null;
+  type: string;
+  level: string;
+  message: string;
+  context: Record<string, unknown> | null;
+  status: string;
+  occurCount: number;
+  lastSeenAt: string | null;
+}
+interface OverviewData {
+  rows: CampaignRow[];
+  apiKey: string | null;
+  summary: { total: number; matched: number; totalAvailable: number; lowStockCount: number; alertOpen: number };
+  alertSummary: Record<string, number>;
+  stockConfig: { target: number; lowWatermark: number };
 }
 
-interface PageData {
-  rows: CampaignRow[];
-  defaultClickCount: number;
-  taskSummary: { pending: number; running: number };
-  total: number;
-  matched: number;
-}
+const ALERT_TYPE_LABEL: Record<string, string> = {
+  invalid_link: "链接无效",
+  merchant_not_found: "商家库找不到",
+  low_stock: "库存偏低",
+  replenish_failed: "补货失败",
+};
 
 function LinkStatusTag({ status, reason }: { status: string; reason?: string | null }) {
   if (status === "valid") return <Tag icon={<CheckCircleOutlined />} color="success">有效</Tag>;
   if (status === "invalid") return (
-    <Tooltip title={reason ?? "链接无效"}>
-      <Tag icon={<CloseCircleOutlined />} color="error">无效</Tag>
-    </Tooltip>
+    <Tooltip title={reason ?? "链接无效"}><Tag icon={<CloseCircleOutlined />} color="error">无效</Tag></Tooltip>
   );
   return <Tag icon={<QuestionCircleOutlined />} color="default">未验证</Tag>;
 }
 
-function TaskStatusBadge({ status, done, target }: { status: string | null; done: number | null; target: number | null }) {
-  if (!status) return <Text type="secondary" style={{ fontSize: 12 }}>—</Text>;
-  if (status === "done") return <Badge status="success" text={<Text style={{ fontSize: 12 }}>完成 {done}/{target}</Text>} />;
-  if (status === "running") return <Badge status="processing" text={<Text style={{ fontSize: 12 }}>进行中 {done}/{target}</Text>} />;
-  if (status === "pending") return <Badge status="warning" text={<Text style={{ fontSize: 12 }}>等待中 0/{target}</Text>} />;
-  if (status === "failed") return <Badge status="error" text={<Text style={{ fontSize: 12 }}>失败</Text>} />;
-  return <Text style={{ fontSize: 12 }}>{status}</Text>;
-}
-
 export default function LinkExchangePage() {
-  // 仅限本地开发使用，生产环境不可访问
-  if (process.env.NODE_ENV === "production") {
-    notFound();
-  }
-
   const { message } = App.useApp();
-  const [data, setData] = useState<PageData | null>(null);
+  const [data, setData] = useState<OverviewData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [starting, setStarting] = useState(false);
-  const [clickCount, setClickCount] = useState<number>(10);
-  const [editingReferer, setEditingReferer] = useState<string | null>(null);
-  const [refererDraft, setRefererDraft] = useState("");
-  const [savingReferer, setSavingReferer] = useState(false);
-  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const autoValidatedRef = useRef(false); // 防止重复自动验证
+  const [keyVisible, setKeyVisible] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [replenishing, setReplenishing] = useState<string | null>(null);
+  const [alerts, setAlerts] = useState<AlertRow[]>([]);
+  const [alertsLoading, setAlertsLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState("links");
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // 自动验证：对所有有 tracking_link 的商家进行 HTTP 检测
-  const autoValidate = useCallback(async (rows: CampaignRow[]) => {
-    const merchantIds = rows
-      .filter((r) => r.matched && r.merchantId && r.trackingLink)
-      .map((r) => r.merchantId as string);
-
-    if (merchantIds.length === 0) return;
-
-    const msgKey = "auto-validate";
-    message.loading({ content: `正在验证 ${merchantIds.length} 个商家链接…`, key: msgKey, duration: 0 });
-
+  const fetchData = useCallback(async () => {
     try {
-      const res = await fetch("/api/user/link-exchange/validate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ merchantIds }),
-      }).then((r) => r.json());
-
-      if (res.code === 0) {
-        const { valid, invalid } = res.data.stats;
-        if (invalid > 0) {
-          message.warning({ content: `链接验证完成：${valid} 个正常，${invalid} 个失效（已标红）`, key: msgKey, duration: 5 });
-        } else {
-          message.success({ content: `${valid} 个商家链接全部正常`, key: msgKey, duration: 4 });
-        }
-      } else {
-        message.destroy(msgKey);
-      }
-    } catch {
-      message.destroy(msgKey);
-    }
-  }, [message]);
-
-  const fetchData = useCallback(async (triggerAutoValidate = false) => {
-    try {
-      const res = await fetch("/api/user/link-exchange").then((r) => r.json());
-      if (res.code === 0) {
-        setData(res.data);
-        setClickCount(res.data.defaultClickCount ?? 10);
-
-        // 首次加载 or 外部请求时自动验证
-        if (triggerAutoValidate || !autoValidatedRef.current) {
-          autoValidatedRef.current = true;
-          // 异步触发，不阻塞页面渲染
-          setTimeout(() => autoValidate(res.data.rows), 800);
-        }
-      }
+      const res = await fetch("/api/user/link-exchange/overview").then((r) => r.json());
+      if (res.code === 0) setData(res.data);
+      else message.error(res.message ?? "加载失败");
     } finally {
       setLoading(false);
     }
-  }, [autoValidate]);
+  }, [message]);
 
-  useEffect(() => {
-    fetchData(false);
-  }, [fetchData]);
-
-  // 有任务进行中时每 5 秒轮询（不触发重复验证）
-  useEffect(() => {
-    const hasActive =
-      data && (data.taskSummary.pending > 0 || data.taskSummary.running > 0);
-    if (hasActive) {
-      if (!pollTimerRef.current) {
-        pollTimerRef.current = setInterval(() => fetchData(false), 5000);
-      }
-    } else {
-      if (pollTimerRef.current) {
-        clearInterval(pollTimerRef.current);
-        pollTimerRef.current = null;
-      }
-    }
-    return () => {
-      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
-    };
-  }, [data, fetchData]);
-
-  // 手动刷新（重新验证）
-  const handleRefresh = () => {
-    autoValidatedRef.current = false;
-    setLoading(true);
-    fetchData(true);
-  };
-
-  // 开始刷点击
-  const handleStart = async () => {
-    if (!Number.isInteger(clickCount) || clickCount < 1) {
-      message.warning("请输入有效的点击次数（≥1）");
-      return;
-    }
-    setStarting(true);
+  const fetchAlerts = useCallback(async () => {
+    setAlertsLoading(true);
     try {
-      const res = await fetch("/api/user/link-exchange/start", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clickCount }),
-      }).then((r) => r.json());
-      if (res.code === 0) {
-        message.success(res.data.message);
-        fetchData(false);
-      } else {
-        message.error(res.message ?? "启动失败");
-      }
+      const res = await fetch("/api/user/link-exchange/alerts?status=open&limit=200").then((r) => r.json());
+      if (res.code === 0) setAlerts(res.data.rows);
     } finally {
-      setStarting(false);
+      setAlertsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { fetchData(); fetchAlerts(); }, [fetchData, fetchAlerts]);
+
+  // 库存/告警随补货变化，进入「库存管理」时每 10 秒轮询
+  useEffect(() => {
+    if (activeTab === "stock") {
+      if (!pollRef.current) pollRef.current = setInterval(fetchData, 10000);
+    } else if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
+  }, [activeTab, fetchData]);
+
+  const handleResetKey = async () => {
+    setResetting(true);
+    try {
+      const res = await fetch("/api/user/settings/script-api-key", { method: "POST" }).then((r) => r.json());
+      if (res.code === 0) {
+        message.success("API Key 已重置，请更新已部署的脚本");
+        setKeyVisible(true);
+        fetchData();
+      } else message.error(res.message ?? "重置失败");
+    } finally {
+      setResetting(false);
     }
   };
 
-  // 保存来路 URL
-  const handleSaveReferer = async (merchantId: string) => {
-    setSavingReferer(true);
+  const handleGenerateKey = async () => {
+    const res = await fetch("/api/user/settings/script-api-key", { method: "POST" }).then((r) => r.json());
+    if (res.code === 0) { message.success("API Key 已生成"); setKeyVisible(true); fetchData(); }
+    else message.error(res.message ?? "生成失败");
+  };
+
+  const handleReplenish = async (campaignId: string) => {
+    setReplenishing(campaignId);
     try {
-      const res = await fetch("/api/user/settings/merchant-referer", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ merchantId, refererUrl: refererDraft.trim() || null }),
+      const res = await fetch("/api/user/link-exchange/action", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "replenish", campaignId }),
       }).then((r) => r.json());
       if (res.code === 0) {
-        message.success("来路已保存");
-        setEditingReferer(null);
-        fetchData(false);
-      } else {
-        message.error(res.message ?? "保存失败");
-      }
+        const d = res.data;
+        if (d.skipped) message.info(`已跳过：${d.reason}`);
+        else message.success(`补货完成：新增 ${d.generated} 条（失败 ${d.failed}），当前可用 ${d.after}`);
+        fetchData(); fetchAlerts();
+      } else message.error(res.message ?? "补货失败");
     } finally {
-      setSavingReferer(false);
+      setReplenishing(null);
     }
+  };
+
+  const handleReplenishAll = async () => {
+    const res = await fetch("/api/user/link-exchange/action", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "replenishAll" }),
+    }).then((r) => r.json());
+    if (res.code === 0) {
+      message.success(`已为 ${res.data.queued} 个低库存广告系列触发后台补货，稍后刷新查看`);
+      setTimeout(() => { fetchData(); fetchAlerts(); }, 3000);
+    } else message.error(res.message ?? "操作失败");
+  };
+
+  const handleToggle = async (campaignId: string, enabled: boolean) => {
+    const res = await fetch("/api/user/link-exchange/action", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "toggle", campaignId, enabled }),
+    }).then((r) => r.json());
+    if (res.code === 0) {
+      setData((prev) => prev ? { ...prev, rows: prev.rows.map((r) => r.campaignId === campaignId ? { ...r, suffixEnabled: enabled } : r) } : prev);
+    } else message.error(res.message ?? "操作失败");
+  };
+
+  const handleResolveAlert = async (ids: string[]) => {
+    const res = await fetch("/api/user/link-exchange/alerts", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    }).then((r) => r.json());
+    if (res.code === 0) { message.success(`已处理 ${res.data.resolved} 条告警`); fetchAlerts(); fetchData(); }
+    else message.error(res.message ?? "操作失败");
   };
 
   const rows = data?.rows ?? [];
-  const taskSummary = data?.taskSummary;
-  const hasActiveTasks = (taskSummary?.pending ?? 0) > 0 || (taskSummary?.running ?? 0) > 0;
-  const matchedCount = data?.matched ?? 0;
-  const totalCount = data?.total ?? 0;
-  const unmatchedCount = totalCount - matchedCount;
+  const summary = data?.summary;
+  const lowWatermark = data?.stockConfig.lowWatermark ?? 6;
 
-  const columns: ColumnsType<CampaignRow> = [
+  // ───────── 链接管理列 ─────────
+  const linkColumns: ColumnsType<CampaignRow> = [
     {
-      title: "广告系列",
-      dataIndex: "campaignName",
-      key: "campaignName",
-      width: 220,
-      ellipsis: true,
+      title: "广告系列", dataIndex: "campaignName", width: 230, ellipsis: true,
       render: (name: string | null, row) => (
         <Tooltip title={name}>
           <Space size={4}>
@@ -235,193 +200,190 @@ export default function LinkExchangePage() {
       ),
     },
     {
-      title: "平台 / MID",
-      key: "platform",
-      width: 110,
-      render: (_: unknown, row) =>
-        row.platform ? (
-          <Space size={2} direction="vertical" style={{ gap: 0 }}>
-            <Tag color="blue" style={{ margin: 0 }}>{row.platform}</Tag>
-            <Text type="secondary" style={{ fontSize: 11 }}>{row.mid}</Text>
-          </Space>
-        ) : (
-          <Text type="secondary" style={{ fontSize: 12 }}>未解析</Text>
-        ),
+      title: "平台 / MID", width: 110,
+      render: (_: unknown, row) => row.platform ? (
+        <Space size={2} direction="vertical" style={{ gap: 0 }}>
+          <Tag color="blue" style={{ margin: 0 }}>{row.platform}</Tag>
+          <Text type="secondary" style={{ fontSize: 11 }}>{row.mid}</Text>
+        </Space>
+      ) : <Text type="secondary" style={{ fontSize: 12 }}>未解析</Text>,
+    },
+    { title: "国家", dataIndex: "country", width: 70, render: (v: string) => v ? <Tag>{v}</Tag> : "—" },
+    {
+      title: "商家追踪链接", width: 180,
+      render: (_: unknown, row) => row.trackingLink ? (
+        <Tooltip title={row.trackingLink}>
+          <Button size="small" type="link" icon={<LinkOutlined />} style={{ padding: 0, fontSize: 12 }}
+            onClick={() => { navigator.clipboard.writeText(row.trackingLink!); message.success("已复制"); }}>
+            {row.merchantName ?? "复制链接"}
+          </Button>
+        </Tooltip>
+      ) : <Text type="secondary" style={{ fontSize: 12 }}>—</Text>,
     },
     {
-      title: "来路 URL",
-      key: "referer",
-      width: 230,
-      render: (_: unknown, row) => {
-        if (!row.matched) return <Text type="secondary" style={{ fontSize: 12 }}>—</Text>;
-        const isEditing = editingReferer === row.merchantId;
-
-        if (isEditing) {
-          return (
-            <Space size={4}>
-              <Input
-                size="small"
-                value={refererDraft}
-                onChange={(e) => setRefererDraft(e.target.value)}
-                placeholder="https://..."
-                style={{ width: 155, fontSize: 12 }}
-              />
-              <Button size="small" type="primary" icon={<CheckOutlined />} loading={savingReferer}
-                onClick={() => handleSaveReferer(row.merchantId!)} />
-              <Button size="small" icon={<CloseOutlined />} onClick={() => setEditingReferer(null)} />
-            </Space>
-          );
-        }
-
-        return (
-          <Space size={4}>
-            {row.refererUrl ? (
-              <Tooltip title={row.refererUrl}>
-                <Space size={3}>
-                  {row.refererSource === "article" && (
-                    <Tooltip title="来自文章链接（自动检测）">
-                      <FileTextOutlined style={{ color: "#52c41a", fontSize: 12 }} />
-                    </Tooltip>
-                  )}
-                  <Text style={{ fontSize: 12, maxWidth: 170 }} ellipsis>{row.refererUrl}</Text>
-                </Space>
-              </Tooltip>
-            ) : (
-              <Text type="secondary" style={{ fontSize: 12 }}>未配置</Text>
-            )}
-            <Button size="small" type="link" icon={<EditOutlined />} style={{ padding: 0 }}
-              onClick={() => { setEditingReferer(row.merchantId); setRefererDraft(row.refererUrl ?? ""); }} />
-          </Space>
-        );
-      },
+      title: "链接状态", width: 90, align: "center",
+      render: (_: unknown, row) => row.matched ? <LinkStatusTag status={row.linkStatus} reason={row.linkCheckReason} /> : <Text type="secondary">—</Text>,
     },
     {
-      title: "商家追踪链接",
-      key: "trackingLink",
-      width: 190,
-      render: (_: unknown, row) => {
-        if (!row.trackingLink) return <Text type="secondary" style={{ fontSize: 12 }}>—</Text>;
-        return (
-          <Tooltip title={row.trackingLink}>
-            <Button size="small" type="link" icon={<LinkOutlined />} style={{ padding: 0, fontSize: 12 }}
-              onClick={() => { navigator.clipboard.writeText(row.trackingLink!); message.success("已复制"); }}>
-              {row.merchantName ?? "复制链接"}
-            </Button>
-          </Tooltip>
-        );
-      },
-    },
-    {
-      title: "链接状态",
-      key: "linkStatus",
-      width: 90,
-      align: "center",
-      render: (_: unknown, row) =>
-        row.matched ? <LinkStatusTag status={row.linkStatus} reason={row.linkCheckReason} />
-          : <Text type="secondary" style={{ fontSize: 12 }}>—</Text>,
-    },
-    {
-      title: "点击任务",
-      key: "taskStatus",
-      width: 130,
-      align: "center",
+      title: "换链开关", width: 90, align: "center",
       render: (_: unknown, row) => (
-        <TaskStatusBadge status={row.taskStatus} done={row.taskDoneCount} target={row.taskTargetCount} />
+        <Switch size="small" checked={row.suffixEnabled} disabled={!row.matched}
+          onChange={(checked) => handleToggle(row.campaignId, checked)} />
+      ),
+    },
+    {
+      title: "最近换链", dataIndex: "lastApplyAt", width: 150,
+      render: (v: string | null) => v ? <Text style={{ fontSize: 12 }}>{new Date(v).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}</Text> : <Text type="secondary">—</Text>,
+    },
+  ];
+
+  // ───────── 库存管理列 ─────────
+  const stockColumns: ColumnsType<CampaignRow> = [
+    {
+      title: "广告系列", dataIndex: "campaignName", width: 230, ellipsis: true,
+      render: (name: string | null, row) => <Tooltip title={name}><Text style={{ fontSize: 13 }}>{name ?? row.googleCampaignId ?? "—"}</Text></Tooltip>,
+    },
+    { title: "平台/MID", width: 100, render: (_: unknown, row) => row.platform ? <Text style={{ fontSize: 12 }}>{row.platform}/{row.mid}</Text> : "—" },
+    {
+      title: "可用库存", width: 110, align: "center", sorter: (a, b) => a.stock.available - b.stock.available,
+      render: (_: unknown, row) => (
+        <Text style={{ fontSize: 14, fontWeight: 600, color: row.stock.available <= lowWatermark ? "#ff4d4f" : "#52c41a" }}>
+          {row.stock.available}
+          {row.matched && row.suffixEnabled && row.stock.available <= lowWatermark && <WarningOutlined style={{ marginLeft: 4 }} />}
+        </Text>
+      ),
+    },
+    { title: "占用中", dataIndex: ["stock", "leased"], width: 80, align: "center", render: (v: number) => <Text type="secondary">{v}</Text> },
+    {
+      title: "最近后缀", dataIndex: "lastSuffix", ellipsis: true,
+      render: (v: string | null) => v ? <Tooltip title={v}><Text style={{ fontSize: 12 }} code>{v.length > 40 ? v.slice(0, 40) + "…" : v}</Text></Tooltip> : <Text type="secondary">—</Text>,
+    },
+    {
+      title: "操作", width: 100, align: "center",
+      render: (_: unknown, row) => (
+        <Button size="small" type="primary" ghost icon={<ThunderboltOutlined />}
+          loading={replenishing === row.campaignId} disabled={!row.matched || !row.suffixEnabled}
+          onClick={() => handleReplenish(row.campaignId)}>补货</Button>
       ),
     },
   ];
 
+  // ───────── 告警中心列 ─────────
+  const alertColumns: ColumnsType<AlertRow> = [
+    { title: "类型", dataIndex: "type", width: 120, render: (t: string) => <Tag color={t === "merchant_not_found" || t === "invalid_link" ? "red" : t === "replenish_failed" ? "volcano" : "orange"}>{ALERT_TYPE_LABEL[t] ?? t}</Tag> },
+    { title: "级别", dataIndex: "level", width: 80, render: (l: string) => <Tag color={l === "error" ? "error" : l === "warning" ? "warning" : "default"}>{l}</Tag> },
+    { title: "告警内容", dataIndex: "message", ellipsis: true, render: (m: string) => <Tooltip title={m}><Text style={{ fontSize: 13 }}>{m}</Text></Tooltip> },
+    { title: "次数", dataIndex: "occurCount", width: 70, align: "center", render: (c: number) => <Badge count={c} overflowCount={999} style={{ backgroundColor: "#faad14" }} /> },
+    { title: "最近", dataIndex: "lastSeenAt", width: 150, render: (v: string | null) => v ? <Text style={{ fontSize: 12 }}>{new Date(v).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}</Text> : "—" },
+    {
+      title: "操作", width: 90, align: "center",
+      render: (_: unknown, row) => (
+        <Popconfirm title="标记为已解决？" onConfirm={() => handleResolveAlert([row.id])} okText="确认" cancelText="取消">
+          <Button size="small" type="link">处理</Button>
+        </Popconfirm>
+      ),
+    },
+  ];
+
+  const apiKey = data?.apiKey ?? null;
+  const maskedKey = apiKey ? apiKey.slice(0, 12) + "•".repeat(16) + apiKey.slice(-4) : "";
+
   return (
     <div>
       <AppPageHeader
-        icon={<ThunderboltOutlined />}
-        title="换链接工作台"
-        extra={<Button icon={<ReloadOutlined />} onClick={handleRefresh} loading={loading}>刷新并重新验证</Button>}
+        icon={<SwapOutlined />}
+        title="换链接管理"
+        extra={<Button icon={<ReloadOutlined />} onClick={() => { fetchData(); fetchAlerts(); }} loading={loading}>刷新</Button>}
       />
 
-      {/* 统计卡 */}
+      {/* 概览统计 */}
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-        <Col xs={12} sm={6}>
-          <Card size="small"><Statistic title="广告系列" value={totalCount} /></Card>
-        </Col>
-        <Col xs={12} sm={6}>
-          <Card size="small">
-            <Statistic title="已匹配商家"
-              value={matchedCount}
-              styles={{ content: { color: matchedCount === totalCount && totalCount > 0 ? "#52c41a" : "#faad14" } }} />
-          </Card>
-        </Col>
+        <Col xs={12} sm={6}><Card size="small"><Statistic title="广告系列" value={summary?.total ?? 0} /></Card></Col>
+        <Col xs={12} sm={6}><Card size="small"><Statistic title="已匹配商家" value={summary?.matched ?? 0} styles={{ content: { color: "#52c41a" } }} /></Card></Col>
+        <Col xs={12} sm={6}><Card size="small"><Statistic title="可用库存总量" value={summary?.totalAvailable ?? 0} /></Card></Col>
         <Col xs={12} sm={6}>
           <Card size="small">
-            <Statistic title="未匹配"
-              value={unmatchedCount}
-              styles={{ content: { color: unmatchedCount > 0 ? "#ff4d4f" : "#52c41a" } }} />
-          </Card>
-        </Col>
-        <Col xs={12} sm={6}>
-          <Card size="small">
-            <Statistic title="进行中任务"
-              value={(taskSummary?.pending ?? 0) + (taskSummary?.running ?? 0)}
-              suffix={hasActiveTasks ? <SyncOutlined spin style={{ fontSize: 14, color: "#1677ff" }} /> : undefined}
-              styles={{ content: { color: hasActiveTasks ? "#1677ff" : undefined } }} />
+            <Statistic title="待处理告警" value={summary?.alertOpen ?? 0}
+              prefix={<BellOutlined style={{ color: (summary?.alertOpen ?? 0) > 0 ? "#ff4d4f" : undefined }} />}
+              styles={{ content: { color: (summary?.alertOpen ?? 0) > 0 ? "#ff4d4f" : undefined } }} />
           </Card>
         </Col>
       </Row>
 
-      {/* 启动控制条 */}
-      <Card size="small" style={{ marginBottom: 16 }}>
-        <Space size={12} wrap>
-          <Text>每个广告系列刷</Text>
-          <Space.Compact>
-            <Input
-              type="number" min={1} max={10000}
-              value={clickCount}
-              onChange={(e) => setClickCount(Number(e.target.value))}
-              style={{ width: 80 }}
-            />
-            <Input defaultValue="次点击" disabled style={{ width: 58, color: "#595959", background: "#fafafa", cursor: "default" }} />
-          </Space.Compact>
-          <Popconfirm
-            title={`将为 ${matchedCount} 个已匹配广告系列各创建 ${clickCount} 次点击任务，确认开始？`}
-            onConfirm={handleStart} okText="确认" cancelText="取消">
-            <Button type="primary" icon={<ThunderboltOutlined />} loading={starting}>开始</Button>
-          </Popconfirm>
-          {hasActiveTasks && (
-            <Text type="secondary" style={{ fontSize: 13 }}>
-              <SyncOutlined spin style={{ marginRight: 4 }} />
-              等待中 {taskSummary?.pending}，执行中 {taskSummary?.running}（每 5 秒自动刷新）
-            </Text>
-          )}
-        </Space>
+      {/* API Key 卡片 */}
+      <Card size="small" style={{ marginBottom: 16 }} title={<Space><KeyOutlined /> 脚本 API Key</Space>}>
+        <Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 8 }}>
+          统一 Google Ads 脚本（数据采集 + 换链接）通过此 Key 鉴权。脚本在「个人设置 → Google Ads MCC → 复制脚本」处生成，已自动填入此 Key，无需手动配置。
+        </Paragraph>
+        {apiKey ? (
+          <Space wrap>
+            <Input readOnly value={keyVisible ? apiKey : maskedKey} style={{ width: 380, fontFamily: "monospace" }} />
+            <Button onClick={() => setKeyVisible((v) => !v)}>{keyVisible ? "隐藏" : "显示"}</Button>
+            <Button icon={<CopyOutlined />} onClick={() => { navigator.clipboard.writeText(apiKey); message.success("API Key 已复制"); }}>复制</Button>
+            <Popconfirm title="重置后旧 Key 立即失效，需更新所有已部署脚本，确认重置？" onConfirm={handleResetKey} okText="确认重置" cancelText="取消">
+              <Button danger loading={resetting} icon={<SyncOutlined />}>重置</Button>
+            </Popconfirm>
+          </Space>
+        ) : (
+          <Button type="primary" icon={<KeyOutlined />} onClick={handleGenerateKey}>生成 API Key</Button>
+        )}
       </Card>
 
-      {/* 广告系列表格 */}
-      <Card size="small"
-        title={`广告系列（共 ${totalCount} 个，已匹配 ${matchedCount} 个）`}
-        extra={<Text type="secondary" style={{ fontSize: 12 }}>
-          <FileTextOutlined style={{ marginRight: 4 }} />来路 URL 优先使用文章链接自动填入
-        </Text>}
-      >
-        <Table
-          columns={columns}
-          dataSource={rows}
-          rowKey="campaignId"
-          size="small"
-          loading={loading}
-          pagination={{ defaultPageSize: 50, showTotal: (t) => `共 ${t} 条`, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"] }}
-          rowClassName={(row) => {
-            if (row.matched && row.linkStatus === "invalid") return "row-invalid-link";
-            if (!row.matched) return "row-unmatched";
-            return "";
-          }}
-          scroll={{ x: 980 }}
+      <Card size="small">
+        <Tabs
+          activeKey={activeTab}
+          onChange={setActiveTab}
+          items={[
+            {
+              key: "links",
+              label: "链接管理",
+              children: (
+                <Table<CampaignRow>
+                  columns={linkColumns} dataSource={rows} rowKey="campaignId" size="small" loading={loading}
+                  pagination={{ defaultPageSize: 50, showTotal: (t) => `共 ${t} 条`, showSizeChanger: true }}
+                  rowClassName={(row) => row.matched && row.linkStatus === "invalid" ? "row-invalid-link" : (!row.matched ? "row-unmatched" : "")}
+                  scroll={{ x: 1000 }}
+                />
+              ),
+            },
+            {
+              key: "stock",
+              label: <Space size={4}>库存管理 {(summary?.lowStockCount ?? 0) > 0 && <Badge count={summary?.lowStockCount} size="small" />}</Space>,
+              children: (
+                <>
+                  <Space style={{ marginBottom: 12 }}>
+                    <Popconfirm title="将为所有低库存且已启用换链的广告系列触发后台补货，确认？" onConfirm={handleReplenishAll} okText="确认" cancelText="取消">
+                      <Button type="primary" icon={<ThunderboltOutlined />}>一键补货（低库存）</Button>
+                    </Popconfirm>
+                    <Text type="secondary" style={{ fontSize: 12 }}>低水位 ≤ {lowWatermark}，目标 {data?.stockConfig.target ?? 20}；进入此页每 10 秒自动刷新</Text>
+                  </Space>
+                  <Table<CampaignRow>
+                    columns={stockColumns} dataSource={rows.filter((r) => r.matched)} rowKey="campaignId" size="small" loading={loading}
+                    pagination={{ defaultPageSize: 50, showTotal: (t) => `共 ${t} 条`, showSizeChanger: true }}
+                    rowClassName={(row) => row.suffixEnabled && row.stock.available <= lowWatermark ? "row-invalid-link" : ""}
+                    scroll={{ x: 900 }}
+                  />
+                </>
+              ),
+            },
+            {
+              key: "alerts",
+              label: <Space size={4}>告警中心 {alerts.length > 0 && <Badge count={alerts.length} size="small" />}</Space>,
+              children: (
+                <Table<AlertRow>
+                  columns={alertColumns} dataSource={alerts} rowKey="id" size="small" loading={alertsLoading}
+                  pagination={{ defaultPageSize: 20, showTotal: (t) => `共 ${t} 条` }}
+                  locale={{ emptyText: "暂无待处理告警" }}
+                />
+              ),
+            },
+          ]}
         />
       </Card>
 
       <style>{`
         .row-unmatched td { background: #fff7f7 !important; }
         .row-invalid-link td { background: #fff1f0 !important; }
-        .row-invalid-link td:first-child { border-left: 3px solid #ff4d4f !important; }
       `}</style>
     </div>
   );

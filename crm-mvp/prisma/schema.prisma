@@ -899,16 +899,21 @@ model monthly_settlement_status {
 // 28. 换链接 — 代理池（管理员维护，用于模拟点击生成 Suffix）
 // -----------------------------------------------------------
 model kyads_proxies {
-  id         BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
-  name       String   @db.VarChar(64) // 代理名称，如 cliproxy
-  priority   Int      @default(5) @db.TinyInt // 优先级，数字越小越优先
-  host       String   @db.VarChar(255) // 代理服务器地址
-  port       Int      @db.UnsignedInt // 端口
-  proxy_type String   @default("http") @db.VarChar(8) // http / socks5
-  status     String   @default("active") @db.VarChar(16) // active / disabled / testing
-  is_deleted Int      @default(0) @db.TinyInt
-  created_at DateTime @default(now()) @db.DateTime(0)
-  updated_at DateTime @default(now()) @updatedAt @db.DateTime(0)
+  id                BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  name              String   @db.VarChar(64) // 代理名称，如 cliproxy
+  priority          Int      @default(5) @db.TinyInt // 优先级，数字越小越优先
+  host              String   @db.VarChar(255) // 代理服务器地址
+  port              Int      @db.UnsignedInt // 端口
+  proxy_type        String   @default("http") @db.VarChar(8) // http / socks5
+  // 移植 kylink ProxyProvider 凭据模型：补货引擎按国家/会话生成 SOCKS5 用户名
+  username_template String?  @db.VarChar(255) // 代理用户名模板，支持 {COUNTRY} {session:N} 占位
+  password          String?  @db.VarChar(255) // 代理密码（加密存储，读取时解密）
+  country_code_map  Json? // 国家代码映射（如 {"GB":"uk"}），用户名模板替换用
+  session_mode      String?  @db.VarChar(16) // sticky / rotating，会话粘性策略
+  status            String   @default("active") @db.VarChar(16) // active / disabled / testing
+  is_deleted        Int      @default(0) @db.TinyInt
+  created_at        DateTime @default(now()) @db.DateTime(0)
+  updated_at        DateTime @default(now()) @updatedAt @db.DateTime(0)
 
   @@index([status], map: "idx_proxy_status")
 }
@@ -934,8 +939,10 @@ model suffix_pool {
   user_id              BigInt    @db.UnsignedBigInt
   campaign_id          BigInt    @db.UnsignedBigInt // 关联 campaigns.id
   suffix_content       String    @db.Text // finalUrlSuffix 字符串
-  status               String    @default("available") @db.VarChar(16) // available / leased / expired
+  status               String    @default("available") @db.VarChar(16) // available / leased / consumed / expired
   leased_assignment_id String?   @db.VarChar(64) // 当前占用的 assignment_id（leased 状态时非空）
+  exit_ip              String?   @db.VarChar(64) // 生成该后缀时代理的出口 IP（移植 kylink）
+  source_merchant_id   BigInt?   @db.UnsignedBigInt // 来源商家 user_merchants.id（联盟链接来源）
   expires_at           DateTime? @db.DateTime(0) // 过期时间（部分平台 Token 有效期限）
   is_deleted           Int       @default(0) @db.TinyInt
   created_at           DateTime  @default(now()) @db.DateTime(0)
@@ -993,6 +1000,44 @@ model kyads_click_tasks {
   @@index([user_id, status], map: "idx_user_status")
   @@index([status, created_at], map: "idx_status_created")
   @@index([campaign_id], map: "idx_campaign")
+}
+
+// -----------------------------------------------------------
+// 32b. 换链接 — 代理出口 IP 使用记录（24h 去重，移植 kylink ProxyExitIpUsage）
+// -----------------------------------------------------------
+model proxy_exit_ip_usage {
+  id          BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id     BigInt   @db.UnsignedBigInt
+  campaign_id BigInt   @db.UnsignedBigInt
+  exit_ip     String   @db.VarChar(64)
+  used_at     DateTime @default(now()) @db.DateTime(0)
+  expires_at  DateTime @db.DateTime(0) // 过期时间（默认 used_at + 24h）
+
+  @@index([user_id, campaign_id, exit_ip], map: "idx_user_campaign_ip")
+  @@index([expires_at], map: "idx_expires")
+}
+
+// -----------------------------------------------------------
+// 32c. 换链接 — 告警中心（链接无效/商家库找不到/低库存/补货失败）
+// -----------------------------------------------------------
+model suffix_alerts {
+  id           BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id      BigInt    @db.UnsignedBigInt
+  campaign_id  BigInt?   @db.UnsignedBigInt // 关联 campaigns.id（可空，部分告警无 campaign）
+  type         String    @db.VarChar(32) // invalid_link / merchant_not_found / low_stock / replenish_failed
+  level        String    @default("warning") @db.VarChar(16) // info / warning / error
+  message      String    @db.VarChar(500)
+  context      Json? // 快照：campaignName / platform / mid / affiliateUrl / reason 等
+  status       String    @default("open") @db.VarChar(16) // open / resolved
+  occur_count  Int       @default(1) @db.UnsignedInt // 同类告警收敛计数
+  last_seen_at DateTime  @default(now()) @db.DateTime(0)
+  resolved_at  DateTime? @db.DateTime(0)
+  is_deleted   Int       @default(0) @db.TinyInt
+  created_at   DateTime  @default(now()) @db.DateTime(0)
+  updated_at   DateTime  @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([user_id, status, type], map: "idx_user_status_type")
+  @@index([campaign_id, type, status], map: "idx_campaign_type_status")
 }
 
 // -----------------------------------------------------------

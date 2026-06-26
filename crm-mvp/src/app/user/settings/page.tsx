@@ -17,6 +17,7 @@ import {
 } from "@/lib/constants";
 import PublishSiteSelect, { type PublishSite } from "@/components/PublishSiteSelect";
 import AppPageHeader from "@/components/AppPageHeader";
+import { generateUnifiedAdsScript } from "@/lib/link-exchange-script-template";
 
 const { Text } = Typography;
 
@@ -389,108 +390,6 @@ function PlatformConnectionsTab() {
   );
 }
 
-// ==================== 生成 Google Ads MCC 脚本 ====================
-function generateMccScript(sheetUrl: string, mccId?: string, mccName?: string): string {
-  const ts = new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" });
-  return `// Google Ads MCC 脚本 - 自动导出到 Google Sheets
-// MCC: ${mccName || "未命名"} (${mccId || "未设置"})
-// 生成时间: ${ts}
-//
-// 功能：
-//   1. 将近 90 天（含今日）的广告数据写入 DailyData 工作表
-//   2. 将所有子账号 CID 列表写入 CID_List 工作表
-//   3. 将所有广告系列（含 CST 创建日期）写入 CampaignInfo 工作表，供「今日投放商家」统计使用
-// 注意：先采集全部数据再清空写入，避免清空后写入失败导致表格丢失数据
-
-function main() {
-  var spreadsheet = SpreadsheetApp.openByUrl('${sheetUrl}');
-  var headers = ['Date', 'Account', 'AccountName', 'CampaignId', 'CampaignName', 'Status', 'Budget', 'Impressions', 'Clicks', 'Cost', 'Conversions', 'ConversionValue', 'Currency'];
-  var allRows = [];
-  var cidRows = [];
-  var campaignInfoRows = [];
-
-  // 第一步：采集所有账号数据（先采集，后写入，避免清空后失败）
-  var accountIterator = AdsManagerApp.accounts().get();
-  while (accountIterator.hasNext()) {
-    var account = accountIterator.next();
-    cidRows.push([account.getCustomerId(), account.getName() || '']);
-    AdsManagerApp.select(account);
-    var tz = AdsApp.currentAccount().getTimeZone();
-    var today = new Date();
-    var startD = new Date();
-    startD.setDate(startD.getDate() - 90);
-    var endDate = Utilities.formatDate(today, tz, 'yyyy-MM-dd');
-    var startDate = Utilities.formatDate(startD, tz, 'yyyy-MM-dd');
-    try {
-      var report = AdsApp.report(
-        "SELECT segments.date, customer.id, customer.descriptive_name, campaign.id, campaign.name, campaign.status, campaign_budget.amount_micros, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions, metrics.conversions_value, customer.currency_code FROM campaign WHERE segments.date BETWEEN '" + startDate + "' AND '" + endDate + "'"
-      );
-      var rows = report.rows();
-      while (rows.hasNext()) {
-        var row = rows.next();
-        allRows.push([row['segments.date'], row['customer.id'], row['customer.descriptive_name'], row['campaign.id'], row['campaign.name'], row['campaign.status'], row['campaign_budget.amount_micros'], row['metrics.impressions'], row['metrics.clicks'], row['metrics.cost_micros'], row['metrics.conversions'], row['metrics.conversions_value'], row['customer.currency_code']]);
-      }
-    } catch (e) { Logger.log('Account ' + account.getName() + ' error: ' + e.message); }
-
-    // 采集广告系列信息（用于「今日投放商家」，start_date_time 在账户时区）
-    try {
-      // v23+ 已移除 campaign.creation_time / campaign.start_date，统一用
-      // campaign.start_date_time（账户时区 "yyyy-MM-dd HH:mm:ss"），再转成北京时间日期。
-      var infoReport = AdsApp.report(
-        "SELECT campaign.id, campaign.name, campaign.status, campaign.start_date_time FROM campaign WHERE campaign.status != 'REMOVED'"
-      );
-      var infoRows = infoReport.rows();
-      while (infoRows.hasNext()) {
-        var infoRow = infoRows.next();
-        var startDt = infoRow['campaign.start_date_time'] || '';
-        var creationDateCST = '';
-        if (startDt) {
-          try {
-            var parsedDt = Utilities.parseDate(startDt, tz, 'yyyy-MM-dd HH:mm:ss');
-            creationDateCST = Utilities.formatDate(parsedDt, 'Asia/Shanghai', 'yyyy-MM-dd');
-          } catch (pe) {
-            creationDateCST = startDt.slice(0, 10);
-          }
-        }
-        campaignInfoRows.push([infoRow['campaign.id'], infoRow['campaign.name'], infoRow['campaign.status'], creationDateCST, account.getCustomerId()]);
-      }
-    } catch (e) { Logger.log('CampaignInfo error for ' + account.getName() + ': ' + e.message); }
-  }
-
-  // 第二步：数据采集完成后再清空并写入（原子操作，避免清空后写入失败）
-  var sheet = spreadsheet.getSheetByName('DailyData') || spreadsheet.insertSheet('DailyData');
-  sheet.clearContents();
-  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
-  if (allRows.length > 0) {
-    sheet.getRange(2, 1, allRows.length, headers.length).setValues(allRows);
-  }
-  sheet.setFrozenRows(1);
-  Logger.log('DailyData: ' + allRows.length + ' rows');
-
-  var cidSheet = spreadsheet.getSheetByName('CID_List') || spreadsheet.insertSheet('CID_List');
-  cidSheet.clearContents();
-  cidSheet.getRange(1, 1, 1, 2).setValues([['CustomerID', 'AccountName']]);
-  cidRows.sort(function(a, b) { return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0; });
-  if (cidRows.length > 0) {
-    cidSheet.getRange(2, 1, cidRows.length, 2).setValues(cidRows);
-  }
-  cidSheet.setFrozenRows(1);
-  Logger.log('CID_List: ' + cidRows.length + ' accounts');
-
-  // 写入 CampaignInfo tab（今日投放商家统计数据源）
-  var infoSheet = spreadsheet.getSheetByName('CampaignInfo') || spreadsheet.insertSheet('CampaignInfo');
-  var infoHeaders = ['CampaignId', 'CampaignName', 'Status', 'CreationDateCST', 'CustomerId'];
-  infoSheet.clearContents();
-  infoSheet.getRange(1, 1, 1, infoHeaders.length).setValues([infoHeaders]);
-  if (campaignInfoRows.length > 0) {
-    infoSheet.getRange(2, 1, campaignInfoRows.length, infoHeaders.length).setValues(campaignInfoRows);
-  }
-  infoSheet.setFrozenRows(1);
-  Logger.log('CampaignInfo: ' + campaignInfoRows.length + ' campaigns');
-}
-`;
-}
-
 // ==================== MCC 账户 Tab ====================
 function MccAccountsTab() {
   const { message } = App.useApp();
@@ -615,10 +514,10 @@ function MccAccountsTab() {
             <Input
               placeholder="https://docs.google.com/spreadsheets/d/..."
               addonAfter={
-                <Tooltip title="根据 Sheet 链接生成 Google Ads MCC 脚本并复制到剪贴板">
+                <Tooltip title="生成统一脚本（数据中心采集 + 换链接）并复制；API Key 由系统自动生成">
                   <span
                     style={{ cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 }}
-                    onClick={() => {
+                    onClick={async () => {
                       const sheetUrl = form.getFieldValue("sheet_url");
                       if (!sheetUrl || !sheetUrl.includes("docs.google.com/spreadsheets")) {
                         message.warning("请先输入有效的 Google Sheet 共享链接");
@@ -626,10 +525,25 @@ function MccAccountsTab() {
                       }
                       const mccId = form.getFieldValue("mcc_id") || editItem?.mcc_id;
                       const mccName = form.getFieldValue("mcc_name") || editItem?.mcc_name;
-                      const script = generateMccScript(sheetUrl, mccId as string, mccName as string);
-                      navigator.clipboard.writeText(script).then(() => {
-                        message.success("脚本已复制到剪贴板，请粘贴到 Google Ads MCC 脚本中运行");
-                      });
+                      try {
+                        // 获取个人 Script API Key，没有则自动生成
+                        let apiKey: string | null = null;
+                        const getRes = await fetch("/api/user/settings/script-api-key").then((r) => r.json());
+                        apiKey = getRes?.data?.apiKey ?? null;
+                        if (!apiKey) {
+                          const genRes = await fetch("/api/user/settings/script-api-key", { method: "POST" }).then((r) => r.json());
+                          apiKey = genRes?.data?.apiKey ?? null;
+                        }
+                        if (!apiKey) {
+                          message.error("获取 API Key 失败，请到「换链接管理」页面生成后重试");
+                          return;
+                        }
+                        const script = generateUnifiedAdsScript(apiKey, undefined, sheetUrl, mccId as string, mccName as string);
+                        await navigator.clipboard.writeText(script);
+                        message.success("统一脚本已复制（含数据采集 + 换链接），粘贴到 Google Ads MCC 脚本中运行");
+                      } catch (e) {
+                        message.error("生成脚本失败：" + (e instanceof Error ? e.message : String(e)));
+                      }
                     }}
                   >
                     <CopyOutlined /> 复制脚本
@@ -765,130 +679,6 @@ function ChangePasswordTab() {
         </Form.Item>
       </Form>
     </Card>
-  );
-}
-
-// ==================== 脚本配置 Tab（kylink 关联） ====================
-interface KylinkStatus {
-  hasKey: boolean;
-  keyMasked: string | null;
-  linked: boolean;
-  linkedAt: string | null;
-  kylinkUsername: string | null;
-}
-
-function ScriptConfigTab() {
-  const { message } = App.useApp();
-  const [status, setStatus] = useState<KylinkStatus | null>(null);
-  const [apiKey, setApiKey] = useState("");
-  const [testing, setTesting] = useState(false);
-  const [unlinking, setUnlinking] = useState(false);
-
-  const loadStatus = async () => {
-    const res = await fetch("/api/user/settings/kylink").then((r) => r.json());
-    if (res.code === 0) setStatus(res.data);
-  };
-
-  useEffect(() => { loadStatus(); }, []);
-
-  const handleTest = async () => {
-    if (!apiKey.trim()) {
-      message.warning("请先填写 kylink API Key");
-      return;
-    }
-    setTesting(true);
-    try {
-      const res = await fetch("/api/user/settings/kylink/test", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey: apiKey.trim() }),
-      }).then((r) => r.json());
-      if (res.code === 0) {
-        message.success("连接成功，已关联至 kylink");
-        setApiKey("");
-        await loadStatus();
-      } else {
-        message.error(res.message ?? "连接失败");
-      }
-    } catch {
-      message.error("连接失败，请稍后重试");
-    } finally {
-      setTesting(false);
-    }
-  };
-
-  const handleUnlink = async () => {
-    setUnlinking(true);
-    try {
-      const res = await fetch("/api/user/settings/kylink", { method: "DELETE" }).then((r) => r.json());
-      if (res.code === 0) {
-        message.success("已解除 kylink 关联");
-        await loadStatus();
-      } else {
-        message.error(res.message ?? "解除失败");
-      }
-    } finally {
-      setUnlinking(false);
-    }
-  };
-
-  return (
-    <div style={{ maxWidth: 560 }}>
-      <Card title={<><ApiOutlined /> kylink 换链接关联</>} size="small">
-        <Alert
-          type="info"
-          showIcon
-          style={{ marginBottom: 16 }}
-          message="填入 kylink 个人 API Key 并测试连接"
-          description="连接成功后，系统每小时会自动把你商家库里的联盟链接，喂给 kylink 中「未配置」的广告系列；kylink 没有匹配到配置的广告系列保持原样，仍可手动填写。"
-        />
-
-        {status?.linked && (
-          <Alert
-            type="success"
-            showIcon
-            icon={<CheckCircleOutlined />}
-            style={{ marginBottom: 16 }}
-            message="已关联至 kylink"
-            description={
-              <Space direction="vertical" size={2}>
-                <Text type="secondary">kylink 账号：{status.kylinkUsername || "（重新测试连接后显示）"}</Text>
-                <Text type="secondary">API Key：{status.keyMasked}</Text>
-                <Text type="secondary">
-                  最近连接：{status.linkedAt ? new Date(status.linkedAt).toLocaleString("zh-CN") : "-"}
-                </Text>
-              </Space>
-            }
-            action={
-              <Popconfirm title="确定解除与 kylink 的关联？" onConfirm={handleUnlink}>
-                <Button size="small" danger loading={unlinking}>解除关联</Button>
-              </Popconfirm>
-            }
-          />
-        )}
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <div>
-            <Text type="secondary" style={{ display: "block", marginBottom: 6 }}>
-              kylink API Key
-            </Text>
-            <Input.Password
-              placeholder={status?.linked ? "如需更换，请输入新的 API Key" : "ky_live_xxxxxxxx"}
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              autoComplete="off"
-              style={{ fontFamily: "monospace" }}
-            />
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              在 kylink「设置」页生成；格式为 ky_live_ 开头的 40 位字符。
-            </Text>
-          </div>
-          <Button type="primary" loading={testing} onClick={handleTest} block>
-            {status?.linked ? "重新测试并保存" : "测试连接并保存"}
-          </Button>
-        </div>
-      </Card>
-    </div>
   );
 }
 
@@ -1278,7 +1068,6 @@ export default function SettingsPage() {
           { key: "mcc", label: <><GoogleOutlined /> Google Ads MCC</>, children: <MccAccountsTab /> },
           { key: "notifications", label: <><BellOutlined /> 通知设置</>, children: <NotificationPreferencesTab /> },
           { key: "password", label: <><LockOutlined /> 修改密码</>, children: <ChangePasswordTab /> },
-          { key: "script", label: <><FileTextOutlined /> 脚本配置</>, children: <ScriptConfigTab /> },
           { key: "serpapi", label: <><EyeOutlined /> 广告情报</>, children: <SerpApiTab /> },
           { key: "semrush", label: <><SearchOutlined /> SemRush 关键词</>, children: <SemRushTab /> },
         ]}

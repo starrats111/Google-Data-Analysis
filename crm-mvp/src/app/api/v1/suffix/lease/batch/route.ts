@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getScriptUserFromRequest } from '@/lib/script-auth'
 import { v4 as uuidv4 } from 'uuid'
+import { triggerReplenishAsync } from '@/lib/suffix-engine/stock-producer'
+import { STOCK_CONFIG } from '@/lib/suffix-engine/config'
 
 interface LeaseCampaign {
   campaignId: string
@@ -69,14 +71,21 @@ export async function POST(req: NextRequest) {
     // 幂等检查：同一 idempotencyKey 已存在分配记录则直接返回
     const existing = await prisma.suffix_assignments.findFirst({
       where: { idempotency_key: idempotencyKey, is_deleted: 0 },
-      include: { suffix_pool: true },
     })
 
     if (existing) {
+      let existingSuffix = ''
+      if (existing.suffix_pool_id) {
+        const sp = await prisma.suffix_pool.findUnique({
+          where: { id: existing.suffix_pool_id },
+          select: { suffix_content: true },
+        })
+        existingSuffix = sp?.suffix_content ?? ''
+      }
       results.push({
         campaignId,
         action: 'APPLY',
-        finalUrlSuffix: existing.suffix_pool?.suffix_content ?? '',
+        finalUrlSuffix: existingSuffix,
         assignmentId: existing.assignment_id,
         availableStock: 0,
         isIdempotent: true,
@@ -96,7 +105,9 @@ export async function POST(req: NextRequest) {
     })
 
     if (!available) {
-      results.push({ campaignId, code: 'NO_STOCK', message: '库存不足，请补货', availableStock: 0 })
+      // 无库存：立即异步触发补货（强制补到目标水位），下个 lease 周期即可取到
+      triggerReplenishAsync(campaign.id, { force: true })
+      results.push({ campaignId, code: 'NO_STOCK', message: '库存不足，已触发补货', availableStock: 0 })
       continue
     }
 
@@ -130,12 +141,19 @@ export async function POST(req: NextRequest) {
       }),
     ])
 
+    const remainingStock = Math.max(0, stockCount - 1)
+
+    // 取后库存跌破低水位 → 异步补货，提前蓄水避免下次 NO_STOCK
+    if (remainingStock <= STOCK_CONFIG.LOW_WATERMARK) {
+      triggerReplenishAsync(campaign.id)
+    }
+
     results.push({
       campaignId,
       action: 'APPLY',
       finalUrlSuffix: available.suffix_content,
       assignmentId,
-      availableStock: Math.max(0, stockCount - 1),
+      availableStock: remainingStock,
       isIdempotent: false,
     })
   }

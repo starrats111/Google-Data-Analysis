@@ -1,25 +1,38 @@
 /**
- * 生成完整的 Google Ads 换链接脚本
- * 包含 click-baseline 跨实例状态同步（启动时读取、退出前写入）
+ * 生成统一 Google Ads 脚本（数据中心采集 + 换链接，一个脚本同时完成）
+ *
+ * 阶段0：采集近 90 天广告数据 / 子账号 CID / 广告系列信息，写入数据中心三张表
+ *        （DailyData / CID_List / CampaignInfo），供 CRM 数据中心 sheet-sync 实时读取
+ * 阶段1-5：扫描广告系列 → 查联盟链接 → 写监控表 → 点击监控 → lease/换链
+ * 含 click-baseline 跨实例状态同步（启动时读取、退出前写入）
  *
  * @param apiKey       用户的 Script API Key（ky_live_xxx）
  * @param apiBaseUrl   CRM 后端地址，默认生产域名
- * @param sheetUrl     Google Sheet 链接，由员工填写
+ * @param sheetUrl     Google Sheet 链接（在个人 MCC 设置里统一配置）
+ * @param mccId        MCC 客户ID（仅用于脚本头注释）
+ * @param mccName      MCC 名称（仅用于脚本头注释）
  */
-export function generateLinkExchangeScript(
+export function generateUnifiedAdsScript(
   apiKey: string,
-  apiBaseUrl = 'https://fengdu-ads.top',
-  sheetUrl = 'https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit'
+  apiBaseUrl = 'https://google-data-analysis.top',
+  sheetUrl = 'https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID/edit',
+  mccId?: string,
+  mccName?: string
 ): string {
   const base = apiBaseUrl.replace(/\/$/, '')
   const ts = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
 
-  return `// Google Ads Script: Campaign 扫描 + 联盟链接 + 点击监控换链
+  return `// Google Ads 统一脚本: 数据中心采集 + 联盟链接 + 点击监控换链
+// MCC: ${mccName || '未命名'} (${mccId || '未设置'})
 // 生成时间: ${ts}
+//
+// 一个脚本同时完成：
+//   A. 数据中心：写 DailyData / CID_List / CampaignInfo 三张表（供 CRM 实时读取分析）
+//   B. 换链接：扫描广告系列 → 查联盟链接 → 点击监控 → 自动换 finalUrlSuffix
 
 // ===== 配置区域 =====
 var CONFIG = {
-  // Google 表格配置
+  // Google 表格配置（数据中心三张表 + 换链监控表共用一个表格）
   SPREADSHEET_URL: '${sheetUrl}',
   SHEET_NAME: '工作表1',
   CLEAR_BEFORE_WRITE: true,
@@ -38,6 +51,10 @@ var CONFIG = {
 
   // 批量大小
   BATCH_SIZE: 100,
+
+  // 数据中心采集（阶段0）
+  ENABLE_DATA_CENTER_EXPORT: true,
+  DATA_CENTER_DAYS: 90,
 
   // 功能开关
   ENABLE_AFFILIATE_LOOKUP: true,
@@ -134,6 +151,17 @@ function main() {
   console.log('开始: ' + formatDateTime(STATE.startTime, timeZone) +
     ' | MCC ' + mccId + ' | ' + STATE.scriptInstanceId +
     ' | 上限' + CONFIG.MAX_RUNTIME_SECONDS + 's');
+
+  // ===== 阶段 0: 数据中心采集（DailyData / CID_List / CampaignInfo）=====
+  if (CONFIG.ENABLE_DATA_CENTER_EXPORT && !shouldStop('阶段0开始')) {
+    console.log('===== 阶段0: 数据中心采集 =====');
+    try {
+      collectDataCenterSheets();
+    } catch (e) {
+      console.log('数据中心采集失败: ' + e.message);
+    }
+  }
+  if (shouldStop('阶段0结束')) { logFinalReport(timeZone, []); return; }
 
   // ===== 阶段 1: 扫描广告系列 =====
   console.log('===== 阶段1: 扫描广告系列 =====');
@@ -565,6 +593,86 @@ function writeToSheet(campaigns) {
   } catch (e) {
     console.log('表格写入失败: ' + e.message);
   }
+}
+
+// =====================================================================
+// 阶段0: 数据中心采集（DailyData / CID_List / CampaignInfo）
+// 先采集全部数据再清空写入，避免清空后写入失败导致表格丢数据
+// =====================================================================
+function collectDataCenterSheets() {
+  var spreadsheet = SpreadsheetApp.openByUrl(CONFIG.SPREADSHEET_URL);
+  var headers = ['Date', 'Account', 'AccountName', 'CampaignId', 'CampaignName', 'Status', 'Budget', 'Impressions', 'Clicks', 'Cost', 'Conversions', 'ConversionValue', 'Currency'];
+  var allRows = [];
+  var cidRows = [];
+  var campaignInfoRows = [];
+
+  var accountIterator = AdsManagerApp.accounts().get();
+  while (accountIterator.hasNext()) {
+    if (shouldStop('数据中心采集')) break;
+    var account = accountIterator.next();
+    cidRows.push([account.getCustomerId(), account.getName() || '']);
+    AdsManagerApp.select(account);
+    var tz = AdsApp.currentAccount().getTimeZone();
+    var today = new Date();
+    var startD = new Date();
+    startD.setDate(startD.getDate() - (CONFIG.DATA_CENTER_DAYS || 90));
+    var endDate = Utilities.formatDate(today, tz, 'yyyy-MM-dd');
+    var startDate = Utilities.formatDate(startD, tz, 'yyyy-MM-dd');
+    try {
+      var report = AdsApp.report(
+        "SELECT segments.date, customer.id, customer.descriptive_name, campaign.id, campaign.name, campaign.status, campaign_budget.amount_micros, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions, metrics.conversions_value, customer.currency_code FROM campaign WHERE segments.date BETWEEN '" + startDate + "' AND '" + endDate + "'"
+      );
+      var rows = report.rows();
+      while (rows.hasNext()) {
+        var row = rows.next();
+        allRows.push([row['segments.date'], row['customer.id'], row['customer.descriptive_name'], row['campaign.id'], row['campaign.name'], row['campaign.status'], row['campaign_budget.amount_micros'], row['metrics.impressions'], row['metrics.clicks'], row['metrics.cost_micros'], row['metrics.conversions'], row['metrics.conversions_value'], row['customer.currency_code']]);
+      }
+    } catch (e) { console.log('   数据采集错误 ' + account.getName() + ': ' + e.message); }
+
+    try {
+      var infoReport = AdsApp.report(
+        "SELECT campaign.id, campaign.name, campaign.status, campaign.start_date_time FROM campaign WHERE campaign.status != 'REMOVED'"
+      );
+      var infoRows = infoReport.rows();
+      while (infoRows.hasNext()) {
+        var infoRow = infoRows.next();
+        var startDt = infoRow['campaign.start_date_time'] || '';
+        var creationDateCST = '';
+        if (startDt) {
+          try {
+            var parsedDt = Utilities.parseDate(startDt, tz, 'yyyy-MM-dd HH:mm:ss');
+            creationDateCST = Utilities.formatDate(parsedDt, 'Asia/Shanghai', 'yyyy-MM-dd');
+          } catch (pe) {
+            creationDateCST = startDt.slice(0, 10);
+          }
+        }
+        campaignInfoRows.push([infoRow['campaign.id'], infoRow['campaign.name'], infoRow['campaign.status'], creationDateCST, account.getCustomerId()]);
+      }
+    } catch (e) { console.log('   CampaignInfo 采集错误 ' + account.getName() + ': ' + e.message); }
+  }
+
+  var sheet = spreadsheet.getSheetByName('DailyData') || spreadsheet.insertSheet('DailyData');
+  sheet.clearContents();
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  if (allRows.length > 0) sheet.getRange(2, 1, allRows.length, headers.length).setValues(allRows);
+  sheet.setFrozenRows(1);
+  console.log('   DailyData: ' + allRows.length + ' 行');
+
+  var cidSheet = spreadsheet.getSheetByName('CID_List') || spreadsheet.insertSheet('CID_List');
+  cidSheet.clearContents();
+  cidSheet.getRange(1, 1, 1, 2).setValues([['CustomerID', 'AccountName']]);
+  cidRows.sort(function(a, b) { return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0; });
+  if (cidRows.length > 0) cidSheet.getRange(2, 1, cidRows.length, 2).setValues(cidRows);
+  cidSheet.setFrozenRows(1);
+  console.log('   CID_List: ' + cidRows.length + ' 账号');
+
+  var infoSheet = spreadsheet.getSheetByName('CampaignInfo') || spreadsheet.insertSheet('CampaignInfo');
+  var infoHeaders = ['CampaignId', 'CampaignName', 'Status', 'CreationDateCST', 'CustomerId'];
+  infoSheet.clearContents();
+  infoSheet.getRange(1, 1, 1, infoHeaders.length).setValues([infoHeaders]);
+  if (campaignInfoRows.length > 0) infoSheet.getRange(2, 1, campaignInfoRows.length, infoHeaders.length).setValues(campaignInfoRows);
+  infoSheet.setFrozenRows(1);
+  console.log('   CampaignInfo: ' + campaignInfoRows.length + ' 广告系列');
 }
 
 // =====================================================================
@@ -1028,3 +1136,6 @@ function formatDuration(seconds) {
 }
 `
 }
+
+/** @deprecated 使用 generateUnifiedAdsScript；保留别名向后兼容 */
+export const generateLinkExchangeScript = generateUnifiedAdsScript
