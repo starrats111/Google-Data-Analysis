@@ -36,6 +36,9 @@ interface CampaignForReplenish {
   suffix_exchange_enabled: number
   is_deleted: number
   campaign_name: string | null
+  status: string | null
+  google_status: string | null
+  google_campaign_id: string | null
 }
 
 /** 简单并发限制器 */
@@ -94,11 +97,23 @@ async function doReplenish(
       suffix_exchange_enabled: true,
       is_deleted: true,
       campaign_name: true,
+      status: true,
+      google_status: true,
+      google_campaign_id: true,
     },
   })) as CampaignForReplenish | null
 
   if (!campaign) {
     return { campaignId: cid, skipped: true, reason: 'campaign_not_found', before: 0, generated: 0, after: 0, failed: 0 }
+  }
+  // 仅对「已启用」广告系列补货/告警：active + Google ENABLED + 已真正投放(有 gcid)。
+  // 否则暂停/草稿广告会被脚本租用触发补货并刷出告警（用户反馈：告警成未启用广告）。
+  const isEnabled =
+    campaign.status === 'active' &&
+    campaign.google_status === 'ENABLED' &&
+    !!campaign.google_campaign_id
+  if (!isEnabled) {
+    return { campaignId: cid, skipped: true, reason: 'campaign_not_enabled', before: 0, generated: 0, after: 0, failed: 0 }
   }
   if (!campaign.suffix_exchange_enabled) {
     return { campaignId: cid, skipped: true, reason: 'exchange_disabled', before: 0, generated: 0, after: 0, failed: 0 }
