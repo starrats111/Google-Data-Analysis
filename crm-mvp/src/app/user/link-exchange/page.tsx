@@ -502,7 +502,7 @@ export default function LinkExchangePage() {
                     <Text type="secondary" style={{ fontSize: 12 }}>低水位 ≤ {lowWatermark}，目标 {data?.stockConfig.target ?? 20}；进入此页每 10 秒自动刷新</Text>
                   </Space>
                   <Table<CampaignRow>
-                    columns={stockColumns} dataSource={rows.filter((r) => r.matched)} rowKey="campaignId" size="small" loading={loading}
+                    columns={stockColumns} dataSource={enabledRows.filter((r) => r.matched)} rowKey="campaignId" size="small" loading={loading}
                     pagination={{ defaultPageSize: 50, showTotal: (t) => `共 ${t} 条`, showSizeChanger: true }}
                     rowClassName={(row) => row.suffixEnabled && row.stock.available <= lowWatermark ? "row-invalid-link" : ""}
                     scroll={{ x: 900 }}
