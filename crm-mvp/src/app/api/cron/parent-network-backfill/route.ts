@@ -79,7 +79,7 @@ export async function GET(req: NextRequest) {
     // 仅处理「启用中（active + ENABLED）广告系列关联的商家」——即换链接管理里实际展示、
     // 会出现「上级联盟 未识别」的那批；全表 user_merchants 高达百万级，不应也无法全量巡航。
     const enabledCampaigns = await prisma.campaigns.findMany({
-      where: { status: 'active', google_status: 'ENABLED', is_deleted: 0 },
+      where: { status: 'active', google_status: 'ENABLED', is_deleted: 0, google_campaign_id: { not: null } },
       select: { user_merchant_id: true },
     })
     const merchantIds = [...new Set(enabledCampaigns.map((c) => c.user_merchant_id))]

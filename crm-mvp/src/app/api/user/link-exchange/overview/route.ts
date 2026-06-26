@@ -13,7 +13,8 @@ export async function GET(req: NextRequest) {
   const userId = BigInt(user.userId)
 
   const campaigns = await prisma.campaigns.findMany({
-    where: { user_id: userId, status: 'active', is_deleted: 0 },
+    // 仅真正投放到 Google 的广告系列（有 google_campaign_id）；排除未发布的草稿（DRAFT-...）
+    where: { user_id: userId, status: 'active', is_deleted: 0, google_campaign_id: { not: null } },
     select: {
       id: true,
       google_campaign_id: true,
