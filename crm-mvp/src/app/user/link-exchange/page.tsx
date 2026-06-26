@@ -7,7 +7,7 @@ import {
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import {
-  SwapOutlined, ReloadOutlined, ThunderboltOutlined, LinkOutlined,
+  SwapOutlined, ThunderboltOutlined, LinkOutlined,
   CheckCircleOutlined, CloseCircleOutlined, QuestionCircleOutlined,
   KeyOutlined, CopyOutlined, SyncOutlined, WarningOutlined, BellOutlined,
   AimOutlined, LoadingOutlined,
@@ -88,6 +88,7 @@ export default function LinkExchangePage() {
   const [activeTab, setActiveTab] = useState("links");
   const [brushCounts, setBrushCounts] = useState<Record<string, number>>({});
   const [brushing, setBrushing] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchData = useCallback(async () => {
@@ -175,6 +176,27 @@ export default function LinkExchangePage() {
       message.success(`已为 ${res.data.queued} 个低库存广告系列触发后台补货，稍后刷新查看`);
       setTimeout(() => { fetchData(); fetchAlerts(); }, 3000);
     } else message.error(res.message ?? "操作失败");
+  };
+
+  const handleSyncLinks = async () => {
+    setSyncing(true);
+    try {
+      const res = await fetch("/api/user/link-exchange/action", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "syncLinks" }),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        if (res.data.queued > 0) {
+          message.success(`已为 ${res.data.queued} 个商家触发后台同步（解析链接 + 校验上级联盟），稍后自动刷新`);
+          setTimeout(() => { fetchData(); fetchAlerts(); }, 5000);
+        } else {
+          message.info("当前已启用广告系列的链接均已同步，无需处理");
+          fetchData(); fetchAlerts();
+        }
+      } else message.error(res.message ?? "同步失败");
+    } finally {
+      setSyncing(false);
+    }
   };
 
   const handleBrush = async (campaignId: string, count: number) => {
@@ -372,7 +394,13 @@ export default function LinkExchangePage() {
       <AppPageHeader
         icon={<SwapOutlined />}
         title="换链接管理"
-        extra={<Button icon={<ReloadOutlined />} onClick={() => { fetchData(); fetchAlerts(); }} loading={loading}>刷新</Button>}
+        extra={
+          <Tooltip title="扫描已启用广告系列，为缺少链接/上级联盟的商家自动解析并验证联盟追踪链接">
+            <Button type="primary" icon={<SyncOutlined />} onClick={handleSyncLinks} loading={syncing}>
+              手动同步链接
+            </Button>
+          </Tooltip>
+        }
       />
 
       {/* 概览统计 */}
