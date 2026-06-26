@@ -16,8 +16,8 @@ export const STOCK_CONFIG = {
   MAX_PER_REPLENISH: 24,
   /** 批量生成并发度（低配机串行偏保守） */
   CONCURRENCY: 3,
-  /** 单条 suffix 生成总超时（毫秒），跟链 + 代理 */
-  GEN_TIMEOUT_MS: 45000,
+  /** 单条 suffix 生成总超时（毫秒）：含轻量跟链 + 代理 + 可能的无头浏览器兜底重试 */
+  GEN_TIMEOUT_MS: 75000,
   /** 连续失败多少条后熔断本次补货（probe 阶段失败直接熔断） */
   CIRCUIT_FAIL_THRESHOLD: 4,
   /** suffix 默认有效期（小时），过期回收；0 表示不过期 */

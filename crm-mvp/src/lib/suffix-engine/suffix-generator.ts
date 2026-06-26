@@ -65,6 +65,9 @@ export async function generateOneSuffix(
     const r = await withTimeout(
       resolveAffiliateLink(affiliateUrl, country || 'US', platform, {
         useBrowser: false,
+        // 轻量抓取拿不到追踪参数 / 停跳板时，自动用无头浏览器重试一次
+        // （pepperjam/impact/ultrainfluence 等需真实浏览器执行 JS 才会附加 clickId/utm）
+        browserFallback: true,
         userId: opts.userId,
         userAgent: opts.userAgent,
         referer: opts.referer,

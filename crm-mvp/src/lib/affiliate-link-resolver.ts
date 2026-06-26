@@ -453,12 +453,20 @@ async function resolveViaBrowser(startUrl: string, country: string): Promise<Bro
  * @param country 投放国（切换代理出口国）
  * @param platform 联盟平台代号（查该平台禁跑上级联盟）
  * @param opts.useBrowser 是否启用无头 Chrome（默认 false；guard 走纯 HTTP，测试巡航开 true）
+ * @param opts.browserFallback 轻量抓取拿不到追踪参数(no_tracking)/停在跳板域名时，自动用无头浏览器重试一次
+ *        （pepperjam/impact/ultrainfluence 等联盟需真实浏览器执行 JS 才注册点击并附加 clickId/utm 参数）
  */
 export async function resolveAffiliateLink(
   affiliateUrl: string,
   country: string,
   platform: string | null,
-  opts: { useBrowser?: boolean; userId?: bigint | null; userAgent?: string | null; referer?: string | null } = {}
+  opts: {
+    useBrowser?: boolean
+    browserFallback?: boolean
+    userId?: bigint | null
+    userAgent?: string | null
+    referer?: string | null
+  } = {}
 ): Promise<ResolveResult> {
   const base: ResolveResult = {
     status: "resolve_failed",
@@ -477,110 +485,145 @@ export async function resolveAffiliateLink(
   }
 
   const cc = (country || "US").toUpperCase();
-  let res: { finalUrl: string; chain: string[]; error?: string };
 
+  // 把「一次抓取结果」评估成 ResolveResult（深链解包/上级联盟+黑名单/落地页/跳板/追踪后缀判定）
+  const evaluate = async (
+    res: { finalUrl: string; chain: string[]; error?: string },
+    usedProxy: boolean,
+    usedBrowser: boolean,
+  ): Promise<ResolveResult> => {
+    const r: ResolveResult = {
+      status: "resolve_failed",
+      landingUrl: null,
+      trackingLink: null,
+      finalUrl: res.finalUrl,
+      parentNetwork: null,
+      forbiddenKeyword: null,
+      chain: res.chain,
+      usedProxy,
+      usedBrowser,
+    };
+
+    // App 深链解包：finalUrl 若停在 Adjust/AppsFlyer/Branch 等深链域名，真实 web 落地藏在其回退参数里。
+    let stuckOnDeeplink = false;
+    let finalUrl = res.finalUrl;
+    let chain = res.chain;
+    if (finalUrl) {
+      try {
+        const fHost = new URL(finalUrl).hostname;
+        if (isDeeplinkHost(fHost)) {
+          const real = unwrapDeeplink(finalUrl);
+          if (real) {
+            finalUrl = real;
+            chain = [...chain, real];
+          } else {
+            stuckOnDeeplink = true;
+          }
+        }
+      } catch {
+        /* finalUrl 解析失败走原有 resolve_failed 分支 */
+      }
+    }
+    r.finalUrl = finalUrl;
+    r.chain = chain;
+
+    // 上级联盟识别 + 平台黑名单：用整条跳转链判（即便没跟到最终落地页也能识别）
+    const haystack = (chain.join(" ") + " " + (finalUrl || "")).toLowerCase();
+    const parentNetwork = await detectParentNetwork(haystack);
+    const blacklisted = !!parentNetwork && (await getPlatformBlacklist(platform)).has(parentNetwork);
+    r.parentNetwork = parentNetwork;
+    r.forbiddenKeyword = blacklisted ? parentNetwork : null;
+    if (blacklisted) {
+      r.status = "forbidden_network";
+      return r;
+    }
+
+    if (!finalUrl) {
+      r.status = "resolve_failed";
+      r.error = res.error || "无最终链接";
+      return r;
+    }
+
+    let finalParsed: URL;
+    try {
+      finalParsed = new URL(finalUrl);
+    } catch {
+      r.status = "resolve_failed";
+      r.error = "最终链接解析失败";
+      return r;
+    }
+
+    r.landingUrl = `${finalParsed.origin}${finalParsed.pathname}`;
+    r.trackingLink = finalParsed.search.replace(/^\?/, "").trim() || null;
+
+    // 停在 App 深链域名且解不出真实 web 落地 → 判失败
+    if (stuckOnDeeplink || isDeeplinkHost(finalParsed.hostname)) {
+      r.status = "resolve_failed";
+      r.error = `停在 App 深链域名 ${finalParsed.hostname}，未解出真实网页落地页`;
+      return r;
+    }
+    // 停在跳板/中转域名 → 没跟到广告主落地页
+    if (isTrackerHost(finalParsed.hostname)) {
+      r.status = "resolve_failed";
+      r.error = `停在跳板域名 ${finalParsed.hostname}，未跟到广告主落地页（通常需配置对应国家代理）`;
+      return r;
+    }
+
+    let startHost = "";
+    try {
+      startHost = new URL(affiliateUrl).hostname;
+    } catch {
+      /* ignore */
+    }
+    if (res.error && finalParsed.hostname === startHost) {
+      r.status = "resolve_failed";
+      r.error = res.error;
+      return r;
+    }
+
+    if (!r.trackingLink) {
+      r.status = "no_tracking";
+      return r;
+    }
+    r.status = "ok";
+    return r;
+  };
+
+  // ── 第一遍抓取 ──
+  let result: ResolveResult;
   if (opts.useBrowser) {
-    base.usedBrowser = true;
     const br = await resolveViaBrowser(affiliateUrl, cc);
     if (br.finalUrl) {
-      res = br;
+      result = await evaluate(br, false, true);
     } else {
       const proxyUrl = await getProxyUrlForCountry(cc, { userId: opts.userId }).catch(() => null);
-      base.usedProxy = !!proxyUrl;
-      res = await fetchChain(affiliateUrl, proxyUrl, 10, 18000, { userAgent: opts.userAgent, referer: opts.referer });
+      const r0 = await fetchChain(affiliateUrl, proxyUrl, 10, 18000, { userAgent: opts.userAgent, referer: opts.referer });
+      result = await evaluate(r0, !!proxyUrl, false);
     }
   } else {
     const proxyUrl = await getProxyUrlForCountry(cc, { userId: opts.userId }).catch(() => null);
-    base.usedProxy = !!proxyUrl;
-    res = await fetchChain(affiliateUrl, proxyUrl, 10, 18000, { userAgent: opts.userAgent, referer: opts.referer });
+    const r0 = await fetchChain(affiliateUrl, proxyUrl, 10, 18000, { userAgent: opts.userAgent, referer: opts.referer });
+    result = await evaluate(r0, !!proxyUrl, false);
   }
 
-  base.chain = res.chain;
-  base.finalUrl = res.finalUrl;
-
-  // App 深链解包：finalUrl 若停在 Adjust/AppsFlyer/Branch 等深链域名，真实 web 落地藏在
-  // 其回退参数里。解出真实 URL → 继续跟随其余跳转；解不出 → 后续按 deeplink 兜底判失败。
-  let stuckOnDeeplink = false;
-  if (res.finalUrl) {
-    try {
-      const fHost = new URL(res.finalUrl).hostname;
-      if (isDeeplinkHost(fHost)) {
-        const real = unwrapDeeplink(res.finalUrl);
-        if (real) {
-          // 解出的真实 URL 已带联盟追踪后缀（clickref 等），不再续跟广告主自身跳转，
-          // 否则会丢掉这些必须保留的追踪参数。直接作为最终落地 URL。
-          res = { finalUrl: real, chain: [...res.chain, real], error: undefined };
-          base.chain = res.chain;
-          base.finalUrl = res.finalUrl;
-        } else {
-          stuckOnDeeplink = true;
-        }
+  // ── 无头浏览器兜底 ──
+  // 轻量抓取拿不到追踪参数(no_tracking)或停在跳板域名时，这类联盟（pepperjam/impact/ultrainfluence 等）
+  // 多半要真实浏览器执行 JS 才会注册点击并附加 clickId/utm。用 puppeteer+stealth 重试一次（受信号量限并发）。
+  if (
+    opts.browserFallback &&
+    !result.usedBrowser &&
+    (result.status === "no_tracking" ||
+      (result.status === "resolve_failed" && !!result.error && result.error.startsWith("停在跳板域名")))
+  ) {
+    const br = await resolveViaBrowser(affiliateUrl, cc).catch(() => ({ finalUrl: "", chain: [] as string[] }));
+    if (br.finalUrl) {
+      const r2 = await evaluate(br, false, true);
+      // 仅当浏览器结果更优（拿到 ok / 命中黑名单）才采用，否则保留首次结果
+      if (r2.status === "ok" || r2.status === "forbidden_network") {
+        result = r2;
       }
-    } catch {
-      /* finalUrl 解析失败走原有 resolve_failed 分支 */
     }
   }
 
-  // 上级联盟识别 + 平台黑名单：先用整条跳转链判（即便没跟到最终落地页也能识别）
-  const haystack = (res.chain.join(" ") + " " + (res.finalUrl || "")).toLowerCase();
-  const parentNetwork = await detectParentNetwork(haystack);
-  const blacklisted = !!parentNetwork && (await getPlatformBlacklist(platform)).has(parentNetwork);
-  base.parentNetwork = parentNetwork;
-  base.forbiddenKeyword = blacklisted ? parentNetwork : null;
-
-  // 命中黑名单 → 拦截（最高优先级）
-  if (blacklisted) {
-    return { ...base, status: "forbidden_network" };
-  }
-
-  if (!res.finalUrl) {
-    return { ...base, status: "resolve_failed", error: res.error || "无最终链接" };
-  }
-
-  let finalParsed: URL;
-  try {
-    finalParsed = new URL(res.finalUrl);
-  } catch {
-    return { ...base, status: "resolve_failed", error: "最终链接解析失败" };
-  }
-
-  base.landingUrl = `${finalParsed.origin}${finalParsed.pathname}`;
-  base.trackingLink = finalParsed.search.replace(/^\?/, "").trim() || null;
-
-  // 停在 App 深链域名且解不出真实 web 落地 → 判失败，绝不当成正常落地页（否则会把
-  // bxfd.adj.st 这种空壳域名当落地页，加后缀后 404）
-  if (stuckOnDeeplink || isDeeplinkHost(finalParsed.hostname)) {
-    return {
-      ...base,
-      status: "resolve_failed",
-      error: `停在 App 深链域名 ${finalParsed.hostname}，未解出真实网页落地页`,
-    };
-  }
-
-  // 停在跳板/中转域名 → 没跟到广告主落地页（多半国家出口不对，需配/换代理）
-  if (isTrackerHost(finalParsed.hostname)) {
-    return {
-      ...base,
-      status: "resolve_failed",
-      error: `停在跳板域名 ${finalParsed.hostname}，未跟到广告主落地页（通常需配置对应国家代理）`,
-    };
-  }
-
-  // 此处 finalUrl 已是真实广告主域名（非跳板/深链）。即便最后一跳页面加载报错
-  // （超时/被墙，常见于从服务器直连广告主站），落地 URL 与追踪后缀也已解析出来，照常采用；
-  // 仅当根本没产生跳转（仍停在起始联盟链接）时才判失败。
-  let startHost = "";
-  try {
-    startHost = new URL(affiliateUrl).hostname;
-  } catch {
-    /* ignore */
-  }
-  if (res.error && finalParsed.hostname === startHost) {
-    return { ...base, status: "resolve_failed", error: res.error };
-  }
-
-  if (!base.trackingLink) {
-    return { ...base, status: "no_tracking" };
-  }
-  return { ...base, status: "ok" };
+  return result;
 }
