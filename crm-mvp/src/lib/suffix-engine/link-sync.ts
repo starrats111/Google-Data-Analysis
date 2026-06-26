@@ -39,15 +39,18 @@ async function runWithConcurrency<T>(items: T[], limit: number, worker: (item: T
   await Promise.all(runners)
 }
 
-async function resolveOne(m: {
-  id: bigint
-  platform: string | null
-  target_country: string | null
-  tracking_link: string | null
-  campaign_link: string | null
-  connection_campaign_links: unknown
-  platform_connection_id: bigint | null
-}): Promise<void> {
+async function resolveOne(
+  m: {
+    id: bigint
+    platform: string | null
+    target_country: string | null
+    tracking_link: string | null
+    campaign_link: string | null
+    connection_campaign_links: unknown
+    platform_connection_id: bigint | null
+  },
+  userId?: bigint | null,
+): Promise<void> {
   const affiliateUrl = pickAffiliateUrl(m)
   if (!affiliateUrl || !/^https?:\/\//i.test(affiliateUrl)) {
     await prisma.user_merchants
@@ -61,7 +64,7 @@ async function resolveOne(m: {
   const country = (m.target_country || 'US').toUpperCase()
   try {
     const cruise = await Promise.race([
-      resolveAffiliateLink(affiliateUrl, country, m.platform || null),
+      resolveAffiliateLink(affiliateUrl, country, m.platform || null, { userId }),
       new Promise<null>((r) => setTimeout(() => r(null), ITEM_TIMEOUT_MS)),
     ])
     if (!cruise) {
@@ -128,7 +131,7 @@ export async function syncUserLinks(
   if (candidates.length === 0) return { queued: 0 }
 
   // fire-and-forget：后台巡航，不阻塞请求
-  void runWithConcurrency(candidates, concurrency, resolveOne).catch((e) =>
+  void runWithConcurrency(candidates, concurrency, (m) => resolveOne(m, userId)).catch((e) =>
     console.error('[link-sync] batch error:', e instanceof Error ? e.message : e),
   )
 

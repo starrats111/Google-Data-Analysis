@@ -178,7 +178,7 @@ async function doReplenish(
   }
 
   // ── probe：先探一条 ──
-  const probe = await generateOneSuffix(affiliateUrl, country, platform)
+  const probe = await generateOneSuffix(affiliateUrl, country, platform, { userId: campaign.user_id })
   if (!probe.ok) {
     failed++
     await emitGenFailureAlert(campaign, merchant.merchant_name, affiliateUrl, probe)
@@ -193,7 +193,7 @@ async function doReplenish(
     let circuitOpen = false
     await runWithConcurrency(remaining, STOCK_CONFIG.CONCURRENCY, async () => {
       if (circuitOpen) return
-      const r = await generateOneSuffix(affiliateUrl, country, platform)
+      const r = await generateOneSuffix(affiliateUrl, country, platform, { userId: campaign.user_id })
       if (r.ok) {
         consecutiveFail = 0
         if (await persist(r.suffix)) generated++

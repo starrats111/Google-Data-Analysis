@@ -36,6 +36,10 @@ export async function GET(req: NextRequest) {
     proxyType: p.proxy_type,
     priority: p.priority,
     status: p.status,
+    usernameTemplate: p.username_template ?? '',
+    hasPassword: !!p.password,
+    countryCodeMap: p.country_code_map ?? null,
+    sessionMode: p.session_mode ?? '',
     userCount: countMap.get(p.id.toString()) ?? 0,
     createdAt: p.created_at,
     updatedAt: p.updated_at,
@@ -54,6 +58,8 @@ export async function POST(req: NextRequest) {
   let body: {
     name?: string; host?: string; port?: number
     proxyType?: string; priority?: number; status?: string
+    usernameTemplate?: string; password?: string
+    countryCodeMap?: Record<string, string> | null; sessionMode?: string
   }
   try { body = await req.json() } catch {
     return NextResponse.json({ code: -1, message: '请求体解析失败' }, { status: 400 })
@@ -68,9 +74,13 @@ export async function POST(req: NextRequest) {
       name: body.name,
       host: body.host,
       port: Number(body.port),
-      proxy_type: body.proxyType ?? 'http',
+      proxy_type: body.proxyType ?? 'socks5',
       priority: body.priority ?? 5,
       status: body.status ?? 'active',
+      username_template: body.usernameTemplate?.trim() || null,
+      password: body.password?.trim() || null,
+      country_code_map: body.countryCodeMap ?? undefined,
+      session_mode: body.sessionMode?.trim() || null,
     },
   })
 
@@ -87,6 +97,8 @@ export async function PUT(req: NextRequest) {
   let body: {
     id?: string; name?: string; host?: string; port?: number
     proxyType?: string; priority?: number; status?: string
+    usernameTemplate?: string; password?: string
+    countryCodeMap?: Record<string, string> | null; sessionMode?: string
   }
   try { body = await req.json() } catch {
     return NextResponse.json({ code: -1, message: '请求体解析失败' }, { status: 400 })
@@ -101,6 +113,11 @@ export async function PUT(req: NextRequest) {
   if (body.proxyType !== undefined) updateData.proxy_type = body.proxyType
   if (body.priority !== undefined) updateData.priority = body.priority
   if (body.status !== undefined) updateData.status = body.status
+  if (body.usernameTemplate !== undefined) updateData.username_template = body.usernameTemplate.trim() || null
+  // 密码：仅当显式传非空才更新（留空表示不修改）
+  if (body.password !== undefined && body.password.trim()) updateData.password = body.password.trim()
+  if (body.countryCodeMap !== undefined) updateData.country_code_map = body.countryCodeMap ?? undefined
+  if (body.sessionMode !== undefined) updateData.session_mode = body.sessionMode.trim() || null
 
   await prisma.kyads_proxies.update({
     where: { id: BigInt(body.id) },

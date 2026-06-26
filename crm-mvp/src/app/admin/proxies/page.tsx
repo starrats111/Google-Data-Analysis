@@ -7,7 +7,7 @@ import {
 import type { ColumnsType } from "antd/es/table";
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, TeamOutlined,
-  GlobalOutlined, CheckCircleOutlined,
+  GlobalOutlined, CheckCircleOutlined, ExperimentOutlined,
 } from "@ant-design/icons";
 import { useState, useEffect, useCallback } from "react";
 import AppPageHeader from "@/components/AppPageHeader";
@@ -22,6 +22,10 @@ interface Proxy {
   proxyType: string;
   priority: number;
   status: string;
+  usernameTemplate: string;
+  hasPassword: boolean;
+  countryCodeMap: Record<string, string> | null;
+  sessionMode: string;
   userCount: number;
   createdAt: string;
 }
@@ -89,9 +93,27 @@ export default function ProxiesPage() {
   const handleSave = async () => {
     const values = await form.validateFields();
     const isEdit = !!editProxy;
-    const body = isEdit
-      ? { id: editProxy!.id, ...values, port: Number(values.port), priority: Number(values.priority) }
-      : { ...values, port: Number(values.port), priority: Number(values.priority) };
+
+    let countryCodeMap: Record<string, string> | null = null;
+    const mapStr = (values.countryCodeMap ?? "").trim();
+    if (mapStr) {
+      try { countryCodeMap = JSON.parse(mapStr); }
+      catch { message.error("国家代码映射格式错误，请输入有效 JSON"); return; }
+    }
+
+    const body = {
+      ...(isEdit ? { id: editProxy!.id } : {}),
+      name: values.name,
+      host: values.host,
+      port: Number(values.port),
+      proxyType: values.proxyType,
+      priority: Number(values.priority),
+      status: values.status,
+      usernameTemplate: values.usernameTemplate ?? "",
+      password: values.password ?? "",
+      countryCodeMap,
+      sessionMode: values.sessionMode ?? "",
+    };
 
     const res = await fetch("/api/admin/proxies", {
       method: isEdit ? "PUT" : "POST",
@@ -105,6 +127,44 @@ export default function ProxiesPage() {
       fetchProxies();
     } else {
       message.error(res.message ?? "操作失败");
+    }
+  };
+
+  const [testing, setTesting] = useState<string | null>(null);
+  const handleTest = async (proxy: Proxy) => {
+    setTesting(proxy.id);
+    try {
+      const res = await fetch("/api/admin/proxies/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: proxy.id, country: "US" }),
+      }).then((r) => r.json());
+      const d = res.data;
+      if (res.code === 0 && d?.ok) {
+        Modal.success({
+          title: "代理测试成功",
+          content: (
+            <Space direction="vertical" size={4} style={{ marginTop: 8 }}>
+              <Text>{d.message}</Text>
+              <Text type="secondary">出口 IP：{d.exitIp}（{d.exitCountry}）</Text>
+              <Text type="secondary">延迟：{d.latencyMs}ms</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>{d.proxyUrl}</Text>
+            </Space>
+          ),
+        });
+      } else {
+        Modal.warning({
+          title: "代理测试失败",
+          content: (
+            <Space direction="vertical" size={4} style={{ marginTop: 8 }}>
+              <Text type="danger">{d?.message ?? res.message ?? "测试失败"}</Text>
+              {d?.proxyUrl && <Text type="secondary" style={{ fontSize: 12 }}>{d.proxyUrl}</Text>}
+            </Space>
+          ),
+        });
+      }
+    } finally {
+      setTesting(null);
     }
   };
 
@@ -211,7 +271,15 @@ export default function ProxiesPage() {
       title: "操作",
       key: "actions",
       render: (_: unknown, row) => (
-        <Space>
+        <Space wrap>
+          <Button
+            size="small"
+            icon={<ExperimentOutlined />}
+            loading={testing === row.id}
+            onClick={() => handleTest(row)}
+          >
+            测试
+          </Button>
           <Button
             size="small"
             icon={<TeamOutlined />}
@@ -227,6 +295,9 @@ export default function ProxiesPage() {
               form.setFieldsValue({
                 name: row.name, host: row.host, port: row.port,
                 proxyType: row.proxyType, priority: row.priority, status: row.status,
+                usernameTemplate: row.usernameTemplate, password: "",
+                countryCodeMap: row.countryCodeMap ? JSON.stringify(row.countryCodeMap) : "",
+                sessionMode: row.sessionMode,
               });
               setModalOpen(true);
             }}
@@ -257,7 +328,7 @@ export default function ProxiesPage() {
             onClick={() => {
               setEditProxy(null);
               form.resetFields();
-              form.setFieldsValue({ proxyType: "http", priority: 5, status: "active" });
+              form.setFieldsValue({ proxyType: "socks5", priority: 5, status: "active" });
               setModalOpen(true);
             }}
           >
@@ -293,8 +364,36 @@ export default function ProxiesPage() {
           <Form.Item name="port" label="端口" rules={[{ required: true }]}>
             <InputNumber min={1} max={65535} style={{ width: "100%" }} placeholder="如 8080" />
           </Form.Item>
-          <Form.Item name="proxyType" label="协议类型" initialValue="http">
-            <Select options={[{ value: "http", label: "HTTP" }, { value: "https", label: "HTTPS" }, { value: "socks5", label: "SOCKS5" }]} />
+          <Form.Item name="proxyType" label="协议类型" initialValue="socks5">
+            <Select options={[{ value: "socks5", label: "SOCKS5" }, { value: "http", label: "HTTP" }, { value: "https", label: "HTTPS" }]} />
+          </Form.Item>
+          <Form.Item
+            name="usernameTemplate"
+            label="用户名模板"
+            tooltip="占位符：{COUNTRY}/{country} 国家代码、{COUNTRY_ISO} 原始ISO、{session:N} N位会话数字、{random:N} N位随机串；** 兼容旧模板=国家代码"
+          >
+            <Input placeholder="如 user-region-{country}-session-{session:8}" />
+          </Form.Item>
+          <Form.Item
+            name="password"
+            label="认证密码"
+            tooltip={editProxy ? "留空则不修改" : undefined}
+          >
+            <Input.Password placeholder={editProxy ? "留空则不修改" : "代理认证密码"} />
+          </Form.Item>
+          <Form.Item
+            name="countryCodeMap"
+            label="国家代码映射（JSON，可选）"
+            tooltip='供应商专属国家代码映射，如 {"HK":"CN_HK","TW":"CN_TW"}；留空用默认映射(GB→UK)'
+            rules={[{
+              validator: (_, value) => {
+                if (!value?.trim()) return Promise.resolve();
+                try { JSON.parse(value); return Promise.resolve(); }
+                catch { return Promise.reject(new Error("请输入有效 JSON")); }
+              },
+            }]}
+          >
+            <Input placeholder='如 {"HK":"CN_HK"}' />
           </Form.Item>
           <Form.Item name="priority" label="优先级（数字越小越优先）" initialValue={5}>
             <InputNumber min={1} max={10} style={{ width: "100%" }} />

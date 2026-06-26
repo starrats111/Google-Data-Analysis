@@ -197,7 +197,7 @@ export async function runBrushTask(taskId: bigint): Promise<void> {
   }
 
   // ── probe：先探一条，失败立即熔断并告警 ──
-  const probe = await generateOneSuffix(affiliateUrl, country, platform)
+  const probe = await generateOneSuffix(affiliateUrl, country, platform, { userId: campaign.user_id })
   if (!probe.ok) {
     await raiseAlert(campaign.user_id, {
       type: 'invalid_link',
@@ -221,7 +221,7 @@ export async function runBrushTask(taskId: bigint): Promise<void> {
   if (remaining > 0) {
     await runWithConcurrency(remaining, STOCK_CONFIG.CONCURRENCY, async () => {
       if (aborted) return
-      const r = await generateOneSuffix(affiliateUrl, country, platform)
+      const r = await generateOneSuffix(affiliateUrl, country, platform, { userId: campaign.user_id })
       if (r.ok) {
         consecutiveFail = 0
         await persist(r.suffix)

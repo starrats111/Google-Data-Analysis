@@ -12,12 +12,27 @@
 import * as https from "https";
 import * as http from "http";
 
-/** 从 DB 系统配置读取模板，替换国家代码，返回 SOCKS5 URL；未配置返回 null */
-export async function getProxyUrlForCountry(country: string): Promise<string | null> {
+/**
+ * 取国家级代理 URL。优先级：换链接代理供应商(kyads_proxies) → system_config 模板 → env。
+ * @param opts.userId 传入时优先取分配给该用户的代理供应商（换链接 suffix 路径）
+ */
+export async function getProxyUrlForCountry(
+  country: string,
+  opts: { userId?: bigint | null } = {},
+): Promise<string | null> {
   if (!country) return null;
 
+  // 1) 换链接代理供应商（动态导入避免与 proxy-provider 循环依赖）
   try {
-    // 优先从 DB 读取（管理台可配置），兜底读 env var
+    const { getProviderProxyUrl } = await import("@/lib/suffix-engine/proxy-provider");
+    const providerUrl = await getProviderProxyUrl(country, { userId: opts.userId });
+    if (providerUrl) return providerUrl;
+  } catch {
+    // 供应商不可用时继续兜底
+  }
+
+  try {
+    // 2) 从 DB 读取模板（管理台可配置），兜底读 env var
     const { getCrawlProxyTemplate } = await import("@/lib/system-config");
     const template = await getCrawlProxyTemplate();
 
@@ -28,7 +43,7 @@ export async function getProxyUrlForCountry(country: string): Promise<string | n
     // DB 不可用时走 env 兜底
   }
 
-  // env 兜底：CRAWL_PROXY_US / CRAWL_PROXY_URL
+  // 3) env 兜底：CRAWL_PROXY_US / CRAWL_PROXY_URL
   const envKey = `CRAWL_PROXY_${country.trim().toUpperCase()}`;
   const envVal = process.env[envKey] || process.env.CRAWL_PROXY_URL || null;
   return envVal;

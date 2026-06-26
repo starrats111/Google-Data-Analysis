@@ -55,6 +55,7 @@ export async function generateOneSuffix(
   affiliateUrl: string,
   country: string,
   platform: string | null,
+  opts: { userId?: bigint | null } = {},
 ): Promise<GenResult> {
   if (!affiliateUrl || !/^https?:\/\//i.test(affiliateUrl)) {
     return { ok: false, reason: 'bad_input', error: '联盟链接为空或格式不合法' }
@@ -62,7 +63,7 @@ export async function generateOneSuffix(
 
   try {
     const r = await withTimeout(
-      resolveAffiliateLink(affiliateUrl, country || 'US', platform, { useBrowser: false }),
+      resolveAffiliateLink(affiliateUrl, country || 'US', platform, { useBrowser: false, userId: opts.userId }),
       STOCK_CONFIG.GEN_TIMEOUT_MS,
     )
 

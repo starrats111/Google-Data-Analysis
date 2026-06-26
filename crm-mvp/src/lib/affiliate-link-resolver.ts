@@ -453,7 +453,7 @@ export async function resolveAffiliateLink(
   affiliateUrl: string,
   country: string,
   platform: string | null,
-  opts: { useBrowser?: boolean } = {}
+  opts: { useBrowser?: boolean; userId?: bigint | null } = {}
 ): Promise<ResolveResult> {
   const base: ResolveResult = {
     status: "resolve_failed",
@@ -480,12 +480,12 @@ export async function resolveAffiliateLink(
     if (br.finalUrl) {
       res = br;
     } else {
-      const proxyUrl = await getProxyUrlForCountry(cc).catch(() => null);
+      const proxyUrl = await getProxyUrlForCountry(cc, { userId: opts.userId }).catch(() => null);
       base.usedProxy = !!proxyUrl;
       res = await fetchChain(affiliateUrl, proxyUrl);
     }
   } else {
-    const proxyUrl = await getProxyUrlForCountry(cc).catch(() => null);
+    const proxyUrl = await getProxyUrlForCountry(cc, { userId: opts.userId }).catch(() => null);
     base.usedProxy = !!proxyUrl;
     res = await fetchChain(affiliateUrl, proxyUrl);
   }
