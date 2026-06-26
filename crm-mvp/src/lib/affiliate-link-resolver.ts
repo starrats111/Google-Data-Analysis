@@ -466,6 +466,8 @@ export async function resolveAffiliateLink(
     userId?: bigint | null
     userAgent?: string | null
     referer?: string | null
+    /** 预先取好的粘性代理 URL（出口 IP 去重场景：探 IP 与生成复用同一会话）。传入时跳过内部取代理 */
+    proxyUrl?: string | null
   } = {}
 ): Promise<ResolveResult> {
   const base: ResolveResult = {
@@ -589,6 +591,10 @@ export async function resolveAffiliateLink(
     return r;
   };
 
+  // 取代理：调用方预取了粘性会话（出口 IP 去重）则直接复用，否则内部按国取。
+  const acquireProxy = async (): Promise<string | null> =>
+    opts.proxyUrl != null ? opts.proxyUrl : await getProxyUrlForCountry(cc, { userId: opts.userId }).catch(() => null);
+
   // ── 第一遍抓取 ──
   let result: ResolveResult;
   if (opts.useBrowser) {
@@ -596,12 +602,12 @@ export async function resolveAffiliateLink(
     if (br.finalUrl) {
       result = await evaluate(br, false, true);
     } else {
-      const proxyUrl = await getProxyUrlForCountry(cc, { userId: opts.userId }).catch(() => null);
+      const proxyUrl = await acquireProxy();
       const r0 = await fetchChain(affiliateUrl, proxyUrl, 10, 18000, { userAgent: opts.userAgent, referer: opts.referer });
       result = await evaluate(r0, !!proxyUrl, false);
     }
   } else {
-    const proxyUrl = await getProxyUrlForCountry(cc, { userId: opts.userId }).catch(() => null);
+    const proxyUrl = await acquireProxy();
     const r0 = await fetchChain(affiliateUrl, proxyUrl, 10, 18000, { userAgent: opts.userAgent, referer: opts.referer });
     result = await evaluate(r0, !!proxyUrl, false);
   }

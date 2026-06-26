@@ -11,6 +11,7 @@
 
 import { resolveAffiliateLink } from '@/lib/affiliate-link-resolver'
 import { STOCK_CONFIG } from './config'
+import { getUsedExitIps, acquireDedupedProxy } from './exit-ip'
 
 export type GenFailReason = 'no_tracking' | 'forbidden_network' | 'resolve_failed' | 'timeout' | 'bad_input'
 
@@ -18,6 +19,8 @@ export interface GenSuccess {
   ok: true
   suffix: string
   finalUrl: string | null
+  /** 生成该后缀时代理出口 IP（去重场景写入 suffix_pool.exit_ip / proxy_exit_ip_usage） */
+  exitIp: string | null
 }
 
 export interface GenFailure {
@@ -55,10 +58,35 @@ export async function generateOneSuffix(
   affiliateUrl: string,
   country: string,
   platform: string | null,
-  opts: { userId?: bigint | null; userAgent?: string | null; referer?: string | null } = {},
+  opts: {
+    userId?: bigint | null
+    /** 传入时启用「按系列 24h 出口 IP 去重」并把出口 IP 记到结果，供调用方落库 */
+    campaignId?: bigint | null
+    userAgent?: string | null
+    referer?: string | null
+  } = {},
 ): Promise<GenResult> {
   if (!affiliateUrl || !/^https?:\/\//i.test(affiliateUrl)) {
     return { ok: false, reason: 'bad_input', error: '联盟链接为空或格式不合法' }
+  }
+
+  // 出口 IP 去重：仅在带 campaignId+userId 时启用（补货/刷点击路径）。
+  // 取一个「24h 内该系列未用过」的粘性会话代理，探到的出口 IP 与后续生成复用同一会话。
+  let proxyUrl: string | null | undefined = undefined
+  let exitIp: string | null = null
+  if (opts.campaignId && opts.userId) {
+    try {
+      const usedIps = await getUsedExitIps(opts.userId, opts.campaignId)
+      const picked = await acquireDedupedProxy(country || 'US', {
+        userId: opts.userId,
+        campaignId: opts.campaignId,
+        usedIps,
+      })
+      proxyUrl = picked.proxyUrl ?? undefined
+      exitIp = picked.exitIp
+    } catch {
+      // 去重链路异常不阻断换链，降级走 resolver 内部取代理
+    }
   }
 
   try {
@@ -71,12 +99,13 @@ export async function generateOneSuffix(
         userId: opts.userId,
         userAgent: opts.userAgent,
         referer: opts.referer,
+        proxyUrl,
       }),
       STOCK_CONFIG.GEN_TIMEOUT_MS,
     )
 
     if (r.status === 'ok' && r.trackingLink) {
-      return { ok: true, suffix: r.trackingLink, finalUrl: r.finalUrl }
+      return { ok: true, suffix: r.trackingLink, finalUrl: r.finalUrl, exitIp }
     }
     if (r.status === 'no_tracking') {
       return {

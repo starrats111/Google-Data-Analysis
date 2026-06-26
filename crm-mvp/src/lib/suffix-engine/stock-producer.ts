@@ -15,6 +15,7 @@ import { prisma } from '@/lib/prisma'
 import { STOCK_CONFIG } from './config'
 import { generateOneSuffix, type GenFailure } from './suffix-generator'
 import { raiseAlert, resolveAlertsByType } from './alerts'
+import { recordExitIp } from './exit-ip'
 
 const inflight = new Map<string, Promise<ReplenishResult>>()
 
@@ -176,7 +177,7 @@ async function doReplenish(
   let failed = 0
   const failures: GenFailure[] = []
 
-  const persist = async (suffix: string): Promise<boolean> => {
+  const persist = async (suffix: string, exitIp: string | null): Promise<boolean> => {
     if (existingSuffixes.has(suffix)) return false
     existingSuffixes.add(suffix)
     await prisma.suffix_pool.create({
@@ -186,20 +187,23 @@ async function doReplenish(
         suffix_content: suffix,
         status: 'available',
         source_merchant_id: merchant.id,
+        exit_ip: exitIp,
         expires_at: expiresAt,
       },
     })
+    // 记录出口 IP（24h 去重）：成功入库才记，下条生成即可避开
+    if (exitIp) await recordExitIp(campaign.user_id, campaignId, exitIp)
     return true
   }
 
   // ── probe：先探一条 ──
-  const probe = await generateOneSuffix(affiliateUrl, country, platform, { userId: campaign.user_id })
+  const probe = await generateOneSuffix(affiliateUrl, country, platform, { userId: campaign.user_id, campaignId })
   if (!probe.ok) {
     failed++
     await emitGenFailureAlert(campaign, merchant.merchant_name, affiliateUrl, probe)
     return { campaignId: cid, skipped: false, reason: 'probe_failed', before, generated: 0, after: before, failed }
   }
-  if (await persist(probe.suffix)) generated++
+  if (await persist(probe.suffix, probe.exitIp)) generated++
 
   // ── batch：成功后批量生成剩余 ──
   const remaining = need - 1
@@ -208,10 +212,10 @@ async function doReplenish(
     let circuitOpen = false
     await runWithConcurrency(remaining, STOCK_CONFIG.CONCURRENCY, async () => {
       if (circuitOpen) return
-      const r = await generateOneSuffix(affiliateUrl, country, platform, { userId: campaign.user_id })
+      const r = await generateOneSuffix(affiliateUrl, country, platform, { userId: campaign.user_id, campaignId })
       if (r.ok) {
         consecutiveFail = 0
-        if (await persist(r.suffix)) generated++
+        if (await persist(r.suffix, r.exitIp)) generated++
       } else {
         failed++
         consecutiveFail++

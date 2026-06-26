@@ -15,6 +15,7 @@
 
 import { prisma } from '@/lib/prisma'
 import { generateOneSuffix } from './suffix-generator'
+import { recordExitIp } from './exit-ip'
 import { raiseAlert, resolveAlertsByType } from './alerts'
 import { STOCK_CONFIG } from './config'
 import { generateClickSchedule, randomPick, randomInt, USER_AGENTS, REFERERS } from './click-scheduler'
@@ -217,6 +218,7 @@ async function executeItem(rt: TaskRuntime, itemId: bigint): Promise<{ ok: boole
 
   const r = await generateOneSuffix(rt.affiliateUrl, rt.country, rt.platform, {
     userId: rt.userId,
+    campaignId: rt.campaignId,
     userAgent: randomPick(USER_AGENTS),
     referer: randomPick(REFERERS) || null,
   })
@@ -234,12 +236,15 @@ async function executeItem(rt: TaskRuntime, itemId: bigint): Promise<{ ok: boole
             suffix_content: r.suffix,
             status: 'available',
             source_merchant_id: rt.sourceMerchantId,
+            exit_ip: r.exitIp,
           },
         })
         .catch(() => {})
     }
+    // 记录本次点击出口 IP（24h 去重 + 子项留痕）
+    if (r.exitIp) await recordExitIp(rt.userId, rt.campaignId, r.exitIp)
     await prisma.kyads_click_task_items
-      .update({ where: { id: itemId }, data: { status: 'success', duration_ms: duration } })
+      .update({ where: { id: itemId }, data: { status: 'success', exit_ip: r.exitIp, duration_ms: duration } })
       .catch(() => {})
     await prisma.kyads_click_tasks.update({ where: { id: rt.taskId }, data: { done_count: { increment: 1 } } }).catch(() => {})
     return { ok: true }
