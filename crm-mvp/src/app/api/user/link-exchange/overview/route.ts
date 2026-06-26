@@ -3,19 +3,8 @@ import { prisma } from '@/lib/prisma'
 import { getUserFromRequest } from '@/lib/auth'
 import { getAlertSummary } from '@/lib/suffix-engine/alerts'
 import { STOCK_CONFIG } from '@/lib/suffix-engine/config'
-
-// Campaign 名称解析：格式 XXX-PLATFORM-品牌-国家-日期-MID
-const VALID_NETWORKS = ['RW', 'LH', 'PM', 'LB', 'CG', 'CF', 'BSH', 'TJ', 'AW']
-
-function parseCampaignName(name: string): { platform: string; mid: string; parsed: boolean } {
-  if (!name) return { platform: '', mid: '', parsed: false }
-  const parts = name.split('-')
-  if (parts.length < 3) return { platform: '', mid: '', parsed: false }
-  const platform = parts[1].trim().toUpperCase().replace(/[0-9]+$/, '')
-  const mid = parts[parts.length - 1].trim()
-  const valid = VALID_NETWORKS.includes(platform) && mid.length > 0
-  return { platform: valid ? platform : '', mid: valid ? mid : '', parsed: valid }
-}
+import { parseCampaignNameFull } from '@/lib/campaign-merchant-link'
+import { normalizePlatformCode } from '@/lib/constants'
 
 export async function GET(req: NextRequest) {
   const user = await getUserFromRequest(req)
@@ -31,6 +20,7 @@ export async function GET(req: NextRequest) {
       campaign_name: true,
       target_country: true,
       google_status: true,
+      user_merchant_id: true,
       suffix_exchange_enabled: true,
       suffix_last_apply_at: true,
       suffix_last_content: true,
@@ -38,28 +28,50 @@ export async function GET(req: NextRequest) {
     orderBy: { campaign_name: 'asc' },
   })
 
-  const parsed = campaigns.map((c) => ({ ...c, ...parseCampaignName(c.campaign_name ?? '') }))
-  const mids = [...new Set(parsed.filter((p) => p.parsed).map((p) => p.mid))]
-  const platforms = [...new Set(parsed.filter((p) => p.parsed).map((p) => p.platform))]
+  // 解析广告系列名 → 平台/MID（权威解析器：规范化平台代码、无白名单、MID 必须为数字）
+  const parsed = campaigns.map((c) => {
+    const p = parseCampaignNameFull(c.campaign_name ?? '')
+    return {
+      ...c,
+      platform: p?.platform ?? '',
+      mid: p?.mid ?? '',
+      country: c.target_country || p?.country || '',
+    }
+  })
+
+  // 商家精准提取：优先权威关联 campaigns.user_merchant_id，回退按 (平台, MID) 名称匹配
+  const umIds = [...new Set(parsed.map((p) => p.user_merchant_id).filter((id) => id && id > BigInt(0)))]
+  const mids = [...new Set(parsed.filter((p) => p.mid).map((p) => p.mid))]
+  const platforms = [...new Set(parsed.filter((p) => p.platform).map((p) => p.platform))]
+
+  const merchantSelect = {
+    id: true,
+    merchant_id: true,
+    platform: true,
+    merchant_name: true,
+    tracking_link: true,
+    link_status: true,
+    link_check_reason: true,
+    parent_network: true,
+    parent_blacklisted: true,
+  } as const
 
   const merchants =
-    mids.length > 0
+    umIds.length > 0 || mids.length > 0
       ? await prisma.user_merchants.findMany({
-          where: { user_id: userId, merchant_id: { in: mids }, platform: { in: platforms }, is_deleted: 0 },
-          select: {
-            id: true,
-            merchant_id: true,
-            platform: true,
-            merchant_name: true,
-            tracking_link: true,
-            link_status: true,
-            link_check_reason: true,
-            parent_network: true,
-            parent_blacklisted: true,
+          where: {
+            user_id: userId,
+            is_deleted: 0,
+            OR: [
+              ...(umIds.length > 0 ? [{ id: { in: umIds } }] : []),
+              ...(mids.length > 0 ? [{ merchant_id: { in: mids }, platform: { in: platforms } }] : []),
+            ],
           },
+          select: merchantSelect,
         })
       : []
-  const merchantMap = new Map(merchants.map((m) => [`${m.platform}:${m.merchant_id}`, m]))
+  const merchantById = new Map(merchants.map((m) => [m.id.toString(), m]))
+  const merchantByKey = new Map(merchants.map((m) => [`${normalizePlatformCode(m.platform)}:${m.merchant_id}`, m]))
 
   // 按 campaign_id + status 统计库存
   const campaignIds = campaigns.map((c) => c.id)
@@ -97,17 +109,23 @@ export async function GET(req: NextRequest) {
   }
 
   const rows = parsed.map((c) => {
-    const merchant = merchantMap.get(`${c.platform}:${c.mid}`) ?? null
+    // 先用权威关联取商家，未关联再按名称解析的 (平台, MID) 回退匹配
+    const merchant =
+      (c.user_merchant_id && c.user_merchant_id > BigInt(0)
+        ? merchantById.get(c.user_merchant_id.toString())
+        : null) ??
+      (c.platform && c.mid ? merchantByKey.get(`${c.platform}:${c.mid}`) : null) ??
+      null
     const stock = stockMap.get(c.id.toString()) ?? { available: 0, leased: 0, consumed: 0 }
     const clickTask = clickTaskMap.get(c.id.toString()) ?? null
     return {
       campaignId: c.id.toString(),
       googleCampaignId: c.google_campaign_id,
       campaignName: c.campaign_name,
-      country: c.target_country,
+      country: c.country,
       googleStatus: c.google_status,
-      platform: c.platform,
-      mid: c.mid,
+      platform: c.platform || (merchant ? normalizePlatformCode(merchant.platform) : ''),
+      mid: c.mid || merchant?.merchant_id || '',
       matched: !!merchant,
       merchantId: merchant?.id.toString() ?? null,
       merchantName: merchant?.merchant_name ?? null,
