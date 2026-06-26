@@ -88,11 +88,15 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ code: 0, data: { processed: 0, resolved: 0, blacklisted: 0, failed: 0, noUrl: 0, remaining: 0 } })
     }
 
+    // 跳过最近 24h 内已巡航过的（含失败）——失败项不应每轮被反复重选阻塞队列；
+    // 24h 后允许重试（应对临时坏链接/代理抖动）。一次性回填会在单轮跑内自然收敛。
+    const retryCutoff = new Date(Date.now() - 24 * 3600_000)
     const whereHasLinkNoParent = {
       id: { in: merchantIds },
       is_deleted: 0,
       parent_network: null,
       OR: [{ tracking_link: { not: null } }, { campaign_link: { not: null } }],
+      AND: [{ OR: [{ parent_checked_at: null }, { parent_checked_at: { lt: retryCutoff } }] }],
     }
 
     const candidates = await prisma.user_merchants.findMany({
@@ -106,7 +110,7 @@ export async function GET(req: NextRequest) {
         connection_campaign_links: true,
         platform_connection_id: true,
       },
-      orderBy: { updated_at: 'desc' },
+      orderBy: { parent_checked_at: 'asc' },
       take: limit,
     })
 
