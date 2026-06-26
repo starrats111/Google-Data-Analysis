@@ -42,10 +42,13 @@ export async function POST(req: NextRequest) {
       ? []
       : await prisma.platform_connections.findMany({
           where: { user_id: { in: ownerIds }, is_deleted: 0, status: "connected" },
-          select: { id: true, user_id: true, platform: true, account_name: true, api_key: true, channel_id: true },
+          select: { id: true, user_id: true, platform: true, account_name: true, api_key: true, channel_id: true, created_at: true },
         });
 
     const { fetchPlatformPayments, platformSupportsPayments } = await import("@/lib/payment-api");
+    const { resolveMainConnectionMap } = await import("@/lib/payment-main-connection");
+    // 同主账号(同 user+平台+账号名)多连接 → 打款统一写主连接，避免账户级打款单按 api_key 重复入库
+    const mainConnMap = await resolveMainConnectionMap(connections);
 
     const validConnsRaw = connections
       .filter((c) => c.api_key && c.api_key.length > 5 && platformSupportsPayments(normalizePlatformCode(c.platform)))
@@ -101,6 +104,7 @@ export async function POST(req: NextRequest) {
       }
       await markConnectionSuccess(conn.id);
 
+      const mainConnId = mainConnMap.get(String(conn.id)) ?? conn.id;
       let synced = 0;
       let paidAmount = 0;
       for (let i = 0; i < payments.length; i += 50) {
@@ -112,14 +116,14 @@ export async function POST(req: NextRequest) {
               where: {
                 platform_platform_connection_id_payment_no: {
                   platform,
-                  platform_connection_id: conn.id,
+                  platform_connection_id: mainConnId,
                   payment_no: p.payment_no,
                 },
               },
               create: {
                 user_id: conn.user_id,
                 platform,
-                platform_connection_id: conn.id,
+                platform_connection_id: mainConnId,
                 payment_no: p.payment_no,
                 source_kind: p.source_kind,
                 paid_date: p.paid_date ? new Date(p.paid_date) : null,

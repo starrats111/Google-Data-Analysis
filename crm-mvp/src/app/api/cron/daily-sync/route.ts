@@ -8,6 +8,7 @@ import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
 import { aggregateRawTransactions } from "@/lib/affiliate-txn-aggregate";
 import { markConnectionSuccess, markConnectionAttempted, markConnectionFailure } from "@/lib/connection-health";
+import { resolveMainConnectionMap } from "@/lib/payment-main-connection";
 
 function verifyCron(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
@@ -1098,8 +1099,10 @@ async function syncAllUsersPayments(): Promise<unknown> {
     try {
       const conns = await prisma.platform_connections.findMany({
         where: { user_id: user.id, is_deleted: 0, status: "connected" },
-        select: { id: true, platform: true, account_name: true, api_key: true },
+        select: { id: true, user_id: true, platform: true, account_name: true, api_key: true, created_at: true },
       });
+      // 同主账号(同 user+平台+账号名)多连接 → 打款统一写主连接，避免账户级打款单按 api_key 重复入库
+      const mainConnMap = await resolveMainConnectionMap(conns);
       const validConns = conns.filter(
         (c) => c.api_key && c.api_key.length > 5 && platformSupportsPayments(normalizePlatformCode(c.platform)),
       ).filter((c) => {
@@ -1120,18 +1123,19 @@ async function syncAllUsersPayments(): Promise<unknown> {
             log(`    [pay] ${user.username} ${platform} ERROR: ${error}`);
             continue;
           }
+          const mainConnId = mainConnMap.get(String(conn.id)) ?? conn.id;
           for (const p of payments) {
             if (p.status === "paid") paidAmount += p.amount;
             await prisma.affiliate_payments.upsert({
               where: {
                 platform_platform_connection_id_payment_no: {
                   platform,
-                  platform_connection_id: conn.id,
+                  platform_connection_id: mainConnId,
                   payment_no: p.payment_no,
                 },
               },
               create: {
-                user_id: user.id, platform, platform_connection_id: conn.id, payment_no: p.payment_no,
+                user_id: user.id, platform, platform_connection_id: mainConnId, payment_no: p.payment_no,
                 source_kind: p.source_kind,
                 paid_date: p.paid_date ? new Date(p.paid_date) : null,
                 request_date: p.request_date ? new Date(p.request_date) : null,
