@@ -227,10 +227,12 @@ export async function fetchChain(
   startUrl: string,
   proxyUrl: string | null,
   maxRedirects = 10,
-  perHopTimeoutMs = 18000
+  perHopTimeoutMs = 18000,
+  fp: { userAgent?: string | null; referer?: string | null } = {}
 ): Promise<ChainResult> {
   const agent = proxyUrl ? await makeAgent(proxyUrl) : undefined;
   const chain: string[] = [];
+  const ua = fp.userAgent || BROWSER_UA;
 
   const doRequest = (targetUrl: string, hop: number): Promise<ChainResult> => {
     return new Promise((resolve) => {
@@ -243,16 +245,19 @@ export async function fetchChain(
       }
       const isHttps = parsed.protocol === "https:";
       const mod = isHttps ? https : http;
+      const headers: Record<string, string> = {
+        "User-Agent": ua,
+        Accept: "text/html,application/xhtml+xml,*/*;q=0.9",
+        "Accept-Encoding": "identity",
+      };
+      // 仅首跳带 Referer，模拟从搜索引擎/社媒进入
+      if (hop === 0 && fp.referer) headers["Referer"] = fp.referer;
       const reqOptions = {
         hostname: parsed.hostname,
         port: parsed.port ? parseInt(parsed.port) : isHttps ? 443 : 80,
         path: (parsed.pathname || "/") + parsed.search,
         method: "GET",
-        headers: {
-          "User-Agent": BROWSER_UA,
-          Accept: "text/html,application/xhtml+xml,*/*;q=0.9",
-          "Accept-Encoding": "identity",
-        },
+        headers,
         agent,
         timeout: perHopTimeoutMs,
       };
@@ -453,7 +458,7 @@ export async function resolveAffiliateLink(
   affiliateUrl: string,
   country: string,
   platform: string | null,
-  opts: { useBrowser?: boolean; userId?: bigint | null } = {}
+  opts: { useBrowser?: boolean; userId?: bigint | null; userAgent?: string | null; referer?: string | null } = {}
 ): Promise<ResolveResult> {
   const base: ResolveResult = {
     status: "resolve_failed",
@@ -482,12 +487,12 @@ export async function resolveAffiliateLink(
     } else {
       const proxyUrl = await getProxyUrlForCountry(cc, { userId: opts.userId }).catch(() => null);
       base.usedProxy = !!proxyUrl;
-      res = await fetchChain(affiliateUrl, proxyUrl);
+      res = await fetchChain(affiliateUrl, proxyUrl, 10, 18000, { userAgent: opts.userAgent, referer: opts.referer });
     }
   } else {
     const proxyUrl = await getProxyUrlForCountry(cc, { userId: opts.userId }).catch(() => null);
     base.usedProxy = !!proxyUrl;
-    res = await fetchChain(affiliateUrl, proxyUrl);
+    res = await fetchChain(affiliateUrl, proxyUrl, 10, 18000, { userAgent: opts.userAgent, referer: opts.referer });
   }
 
   base.chain = res.chain;

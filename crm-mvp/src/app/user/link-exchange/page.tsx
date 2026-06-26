@@ -189,7 +189,7 @@ export default function LinkExchangePage() {
       }).then((r) => r.json());
       if (res.code === 0) {
         const d = res.data;
-        if (d.queued > 0) message.success(`已为 ${d.queued} 个广告系列各启动刷 ${count} 次点击（跳过 ${d.skipped} 个），后台执行中`);
+        if (d.queued > 0) message.success(`已为 ${d.queued} 个广告系列各排程刷 ${count} 次点击（跳过 ${d.skipped} 个），将按真人作息分散在今天自然执行`);
         else message.info(`没有可刷的广告系列（共 ${d.total} 个，均已在刷或未匹配）`);
         fetchData();
       } else message.error(res.message ?? "一次性刷点击启动失败");
@@ -227,7 +227,7 @@ export default function LinkExchangePage() {
         body: JSON.stringify({ action: "brushClicks", campaignId, count }),
       }).then((r) => r.json());
       if (res.code === 0) {
-        message.success(`已开始刷点击：目标 ${res.data.target} 次，后台执行中`);
+        message.success(`已排程刷点击：目标 ${res.data.target} 次，将按真人作息分散在今天自然执行`);
         fetchData();
       } else message.error(res.message ?? "刷点击启动失败");
     } finally {
