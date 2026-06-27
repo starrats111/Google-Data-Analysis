@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getUserFromRequest } from '@/lib/auth'
 
-const VALID_NETWORKS = ['RW', 'LH', 'PM', 'LB', 'CG', 'CF', 'BSH', 'TJ', 'AW']
+const VALID_NETWORKS = ['RW', 'LH', 'PM', 'LB', 'CG', 'CF', 'BSH', 'TJ', 'AW', 'MUI', 'EV']
 
 function parseMid(name: string): { platform: string; mid: string; parsed: boolean } {
   if (!name) return { platform: '', mid: '', parsed: false }

@@ -3,7 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { getUserFromRequest } from '@/lib/auth'
 
 // Campaign 名称解析：格式 XXX-PLATFORM-品牌-国家-日期-MID
-const VALID_NETWORKS = ['RW', 'LH', 'PM', 'LB', 'CG', 'CF', 'BSH', 'TJ', 'AW']
+const VALID_NETWORKS = ['RW', 'LH', 'PM', 'LB', 'CG', 'CF', 'BSH', 'TJ', 'AW', 'MUI', 'EV']
 
 function parseCampaignName(name: string): { platform: string; mid: string; parsed: boolean } {
   if (!name) return { platform: '', mid: '', parsed: false }
