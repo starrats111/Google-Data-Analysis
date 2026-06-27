@@ -101,6 +101,35 @@ async function resolveOne(
 }
 
 /**
+ * 即时校验单个商家的联盟链接（用户手动填写/编辑链接后调用）。
+ * 同步执行一次巡航并写回 tracking_status / parent_network，返回结果供前端即时展示。
+ */
+export async function resolveMerchantNow(
+  merchantId: bigint,
+  userId: bigint,
+): Promise<{ trackingStatus: string; parentNetwork: string | null } | null> {
+  const m = await prisma.user_merchants.findFirst({
+    where: { id: merchantId, user_id: userId, is_deleted: 0 },
+    select: {
+      id: true,
+      platform: true,
+      target_country: true,
+      tracking_link: true,
+      campaign_link: true,
+      connection_campaign_links: true,
+      platform_connection_id: true,
+    },
+  })
+  if (!m) return null
+  await resolveOne(m, userId)
+  const updated = await prisma.user_merchants.findUnique({
+    where: { id: merchantId },
+    select: { tracking_status: true, parent_network: true },
+  })
+  return updated ? { trackingStatus: updated.tracking_status, parentNetwork: updated.parent_network } : null
+}
+
+/**
  * 同步指定用户的换链接（解析+校验商家联盟链接/上级联盟）。
  * 选取该用户「active + ENABLED + 有 google_campaign_id」广告系列关联的、
  * 「仍缺上级联盟(parent_network 为空) 或 上次校验失败(no_tracking/resolve_failed)」且已有链接的商家，

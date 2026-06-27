@@ -10,7 +10,7 @@ import {
   SwapOutlined, ThunderboltOutlined, LinkOutlined,
   CheckCircleOutlined, CloseCircleOutlined, QuestionCircleOutlined,
   KeyOutlined, CopyOutlined, SyncOutlined, WarningOutlined, BellOutlined,
-  AimOutlined, LoadingOutlined,
+  AimOutlined, LoadingOutlined, EditOutlined,
 } from "@ant-design/icons";
 import AppPageHeader from "@/components/AppPageHeader";
 
@@ -91,6 +91,9 @@ export default function LinkExchangePage() {
   const [brushAllCount, setBrushAllCount] = useState<number>(10);
   const [brushingAll, setBrushingAll] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [editingLinkId, setEditingLinkId] = useState<string | null>(null);
+  const [linkDraft, setLinkDraft] = useState("");
+  const [savingLink, setSavingLink] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchData = useCallback(async () => {
@@ -219,6 +222,31 @@ export default function LinkExchangePage() {
     }
   };
 
+  const handleSaveLink = async (campaignId: string) => {
+    const link = linkDraft.trim();
+    if (!/^https?:\/\//i.test(link)) { message.error("请填写有效的 http(s) 链接"); return; }
+    setSavingLink(true);
+    try {
+      const res = await fetch("/api/user/link-exchange/action", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "updateLink", campaignId, trackingLink: link }),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        if (res.data.validating) {
+          message.success("链接已保存，正在后台验证，稍后刷新查看状态");
+        } else {
+          const ts = res.data.trackingStatus;
+          const label = ts === "ok" ? "有效" : ts === "forbidden_network" ? "命中黑名单" : ts === "no_tracking" ? "未取到追踪参数" : ts === "resolve_failed" ? "解析失败" : (ts ?? "已保存");
+          message.success(`链接已保存并验证：${label}`);
+        }
+        setEditingLinkId(null);
+        fetchData(); fetchAlerts();
+      } else message.error(res.message ?? "保存失败");
+    } finally {
+      setSavingLink(false);
+    }
+  };
+
   const handleBrush = async (campaignId: string, count: number) => {
     setBrushing(campaignId);
     try {
@@ -295,15 +323,39 @@ export default function LinkExchangePage() {
     },
     { title: "国家", dataIndex: "country", width: 70, render: (v: string) => v ? <Tag>{v}</Tag> : "—" },
     {
-      title: "商家追踪链接", width: 180,
-      render: (_: unknown, row) => row.trackingLink ? (
-        <Tooltip title={row.trackingLink}>
-          <Button size="small" type="link" icon={<LinkOutlined />} style={{ padding: 0, fontSize: 12 }}
-            onClick={() => { navigator.clipboard.writeText(row.trackingLink!); message.success("已复制"); }}>
-            {row.merchantName ?? "复制链接"}
-          </Button>
-        </Tooltip>
-      ) : <Text type="secondary" style={{ fontSize: 12 }}>—</Text>,
+      title: "商家追踪链接", width: 260,
+      render: (_: unknown, row) => {
+        if (!row.matched) return <Text type="secondary" style={{ fontSize: 12 }}>未匹配商家</Text>;
+        if (editingLinkId === row.campaignId) {
+          return (
+            <Space.Compact style={{ width: "100%" }}>
+              <Input size="small" value={linkDraft} placeholder="https://联盟追踪链接"
+                autoFocus disabled={savingLink}
+                onChange={(e) => setLinkDraft(e.target.value)}
+                onPressEnter={() => handleSaveLink(row.campaignId)} />
+              <Button size="small" type="primary" loading={savingLink}
+                onClick={() => handleSaveLink(row.campaignId)}>保存</Button>
+              <Button size="small" disabled={savingLink} onClick={() => setEditingLinkId(null)}>取消</Button>
+            </Space.Compact>
+          );
+        }
+        return (
+          <Space size={2}>
+            {row.trackingLink ? (
+              <Tooltip title={row.trackingLink}>
+                <Button size="small" type="link" icon={<LinkOutlined />} style={{ padding: 0, fontSize: 12 }}
+                  onClick={() => { navigator.clipboard.writeText(row.trackingLink!); message.success("已复制"); }}>
+                  {row.merchantName ?? "复制链接"}
+                </Button>
+              </Tooltip>
+            ) : <Text type="secondary" style={{ fontSize: 12 }}>未填写</Text>}
+            <Tooltip title="手动填写/编辑链接并立即验证">
+              <Button size="small" type="text" icon={<EditOutlined />}
+                onClick={() => { setEditingLinkId(row.campaignId); setLinkDraft(row.trackingLink ?? ""); }} />
+            </Tooltip>
+          </Space>
+        );
+      },
     },
     {
       title: "链接状态", width: 90, align: "center",
@@ -485,7 +537,7 @@ export default function LinkExchangePage() {
                     columns={linkColumns} dataSource={enabledRows} rowKey="campaignId" size="small" loading={loading}
                     pagination={{ defaultPageSize: 50, showTotal: (t) => `共 ${t} 条`, showSizeChanger: true }}
                     rowClassName={(row) => row.matched && row.linkStatus === "invalid" ? "row-invalid-link" : (!row.matched ? "row-unmatched" : "")}
-                    scroll={{ x: 1240 }}
+                    scroll={{ x: 1320 }}
                   />
                 </>
               ),

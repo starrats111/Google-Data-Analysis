@@ -3,14 +3,15 @@ import { prisma } from '@/lib/prisma'
 import { getUserFromRequest } from '@/lib/auth'
 import { replenishCampaign, triggerReplenishAsync } from '@/lib/suffix-engine/stock-producer'
 import { startBrushTask, startBrushAllTasks } from '@/lib/suffix-engine/click-brush'
-import { syncUserLinks } from '@/lib/suffix-engine/link-sync'
+import { syncUserLinks, resolveMerchantNow } from '@/lib/suffix-engine/link-sync'
 import { STOCK_CONFIG } from '@/lib/suffix-engine/config'
 
 interface ActionBody {
-  action: 'replenish' | 'replenishAll' | 'toggle' | 'brushClicks' | 'brushAll' | 'syncLinks'
+  action: 'replenish' | 'replenishAll' | 'toggle' | 'brushClicks' | 'brushAll' | 'syncLinks' | 'updateLink'
   campaignId?: string
   enabled?: boolean
   count?: number
+  trackingLink?: string
 }
 
 export async function POST(req: NextRequest) {
@@ -84,6 +85,60 @@ export async function POST(req: NextRequest) {
   if (body.action === 'syncLinks') {
     const { queued } = await syncUserLinks(userId)
     return NextResponse.json({ code: 0, data: { queued } })
+  }
+
+  // 手动填写/编辑商家追踪链接 → 重置校验状态并即时巡航验证（超时则后台继续）
+  if (body.action === 'updateLink') {
+    if (!body.campaignId) return NextResponse.json({ code: -1, message: '缺少 campaignId' }, { status: 400 })
+    const link = (body.trackingLink || '').trim()
+    if (!/^https?:\/\//i.test(link)) {
+      return NextResponse.json({ code: -1, message: '请填写有效的 http(s) 链接' }, { status: 400 })
+    }
+    const campaign = await prisma.campaigns.findFirst({
+      where: { id: BigInt(body.campaignId), user_id: userId, is_deleted: 0 },
+      select: { user_merchant_id: true },
+    })
+    if (!campaign) return NextResponse.json({ code: -1, message: '广告系列不存在或无权限' }, { status: 404 })
+    if (!campaign.user_merchant_id || campaign.user_merchant_id <= BigInt(0)) {
+      return NextResponse.json({ code: -1, message: '该广告系列未匹配商家，无法直接填写链接' }, { status: 400 })
+    }
+    const merchantId = campaign.user_merchant_id
+    // 校验商家归属当前用户
+    const merchant = await prisma.user_merchants.findFirst({
+      where: { id: merchantId, user_id: userId, is_deleted: 0 },
+      select: { id: true },
+    })
+    if (!merchant) return NextResponse.json({ code: -1, message: '商家不存在或无权限' }, { status: 404 })
+
+    // 写入新链接并重置校验/上级联盟状态，等待重新巡航
+    await prisma.user_merchants.update({
+      where: { id: merchantId },
+      data: {
+        tracking_link: link,
+        tracking_status: 'unchecked',
+        link_status: 'unchecked',
+        parent_network: null,
+        parent_blacklisted: 0,
+        parent_checked_at: null,
+        parent_check_reason: null,
+      },
+    })
+
+    // 即时巡航验证（最多 ~35s）：成功即返回状态；超时则后台继续，前端稍后刷新
+    const result = await Promise.race([
+      resolveMerchantNow(merchantId, userId),
+      new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), 35000)),
+    ])
+    // 验证后顺带触发该系列补货（链接可用即开始蓄库存）
+    triggerReplenishAsync(BigInt(body.campaignId), { force: true })
+
+    if (result === 'timeout') {
+      return NextResponse.json({ code: 0, data: { saved: true, validating: true } })
+    }
+    return NextResponse.json({
+      code: 0,
+      data: { saved: true, trackingStatus: result?.trackingStatus ?? null, parentNetwork: result?.parentNetwork ?? null },
+    })
   }
 
   // 开关单系列换链
