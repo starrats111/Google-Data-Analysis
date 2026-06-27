@@ -33,6 +33,9 @@ export interface ResolveResult {
   usedProxy: boolean;
   usedBrowser: boolean;
   error?: string;
+  // 内部提示：本结果来自 EV/MUI 中转域名的静态参数解包（只拿回广告主域名、缺网络追踪参数），
+  // 外层应再用真实浏览器跟随一次以补全完整落地页（带追踪 query）。
+  requiresBrowserEnrich?: boolean;
 }
 
 const BROWSER_UA =
@@ -56,6 +59,21 @@ const TRACKER_HOST_PATTERNS: RegExp[] = [
 
 function isTrackerHost(host: string): boolean {
   return TRACKER_HOST_PATTERNS.some((re) => re.test(host));
+}
+
+// EngageVantage / UltraInfluence「发布者点击中转」域名（pub.* 等）。
+// 这些域名靠 JS/服务端跳转把用户最终带到广告主落地页（典型再经 Rakuten 等网络挂上追踪参数）：
+//   完整广告主落地页 = 广告主域名 + 追踪 query，例：
+//   https://www.legalwills.ca/?ranMID=...&utm_source=rakuten&utm_campaign=EngageVantage
+// 纯 HTTP 巡航跟不动其 JS 跳转、会停在中转域名上 → 必须靠真实浏览器跟随才能拿到「完整」落地页；
+// 浏览器不可用时退而解其 url=/destination= 参数里的静态广告主 URL（至少拿回正确的广告主域名）。
+// ⚠️ 仅匹配「主机名」：绝不误伤把 engagevantage/ultrainfluence 写进 utm_campaign 等参数值的正常落地页。
+const NETWORK_CLICK_HOST_PATTERNS: RegExp[] = [
+  /(^|\.)engagevantage\.com$/i, /(^|\.)ultrainfluence\.com$/i,
+];
+
+function isNetworkClickHost(host: string): boolean {
+  return NETWORK_CLICK_HOST_PATTERNS.some((re) => re.test(host));
 }
 
 // App 深链 / 移动归因中转域名：这些不是网页落地页，真正的 web 落地 URL 被塞在它们的
@@ -526,6 +544,29 @@ export async function resolveAffiliateLink(
         /* finalUrl 解析失败走原有 resolve_failed 分支 */
       }
     }
+
+    // EngageVantage/UltraInfluence 发布者点击中转域名：停在此说明纯 HTTP 没跟动其 JS 跳转、还没到广告主。
+    // 退而解其 url=/destination= 参数里的「静态广告主 URL」，至少拿回正确的广告主域名（避免把中转链接当落地页）。
+    // 这种静态解包缺网络追踪参数（如 Rakuten 的 ranMID/utm）；若本轮没用浏览器 → 标记 needBrowserEnrich，
+    // 交外层再用真实浏览器跟随一次，拿到「广告主域名 + 完整追踪 query」的完整落地页。
+    let unwrappedNetworkClick = false;
+    let needBrowserEnrich = false;
+    if (finalUrl) {
+      try {
+        if (isNetworkClickHost(new URL(finalUrl).hostname)) {
+          const real = unwrapDeeplink(finalUrl);
+          if (real) {
+            finalUrl = real;
+            chain = [...chain, real];
+            unwrappedNetworkClick = true;
+            needBrowserEnrich = !usedBrowser;
+          }
+          // 解不出 → 保留在中转域名上，下方按「未跟到广告主」判 resolve_failed（触发浏览器兜底）
+        }
+      } catch {
+        /* 解析失败交由后续 resolve_failed 判定 */
+      }
+    }
     r.finalUrl = finalUrl;
     r.chain = chain;
 
@@ -570,6 +611,12 @@ export async function resolveAffiliateLink(
       r.error = `停在跳板域名 ${finalParsed.hostname}，未跟到广告主落地页（通常需配置对应国家代理）`;
       return r;
     }
+    // 停在联盟发布者点击中转域名，且 url= 参数也解不出广告主 URL → 没跟到广告主，需真实浏览器跟随其 JS 跳转
+    if (isNetworkClickHost(finalParsed.hostname)) {
+      r.status = "resolve_failed";
+      r.error = `停在联盟点击中转域名 ${finalParsed.hostname}，未跟到广告主落地页（该网络靠 JS 跳转，需真实浏览器跟随）`;
+      return r;
+    }
 
     let startHost = "";
     try {
@@ -583,8 +630,13 @@ export async function resolveAffiliateLink(
       return r;
     }
 
+    // 静态解包只拿到广告主域名、缺网络追踪参数 → 标记交外层用浏览器补全完整落地页。
+    if (needBrowserEnrich) r.requiresBrowserEnrich = true;
+
     if (!r.trackingLink) {
-      r.status = "no_tracking";
+      // 从 EV/MUI 中转链接静态解出的广告主落地页本身不带 query 参数属正常（追踪发生在中转跳转那一步，
+      // CRM 实际追踪走 final_url_suffix 后缀交换系统）→ 视为解析成功，不误判 no_tracking（避免前端显示无效）。
+      r.status = unwrappedNetworkClick ? "ok" : "no_tracking";
       return r;
     }
     r.status = "ok";
@@ -613,13 +665,17 @@ export async function resolveAffiliateLink(
   }
 
   // ── 无头浏览器兜底 ──
-  // 轻量抓取拿不到追踪参数(no_tracking)或停在跳板域名时，这类联盟（pepperjam/impact/ultrainfluence 等）
-  // 多半要真实浏览器执行 JS 才会注册点击并附加 clickId/utm。用 puppeteer+stealth 重试一次（受信号量限并发）。
+  // 轻量抓取拿不到追踪参数(no_tracking)、停在跳板/联盟点击中转域名，或只从 EV/MUI 中转链接静态解出广告主
+  // 域名（requiresBrowserEnrich，缺网络追踪参数）时——这类联盟（pepperjam/impact/EngageVantage/UltraInfluence 等）
+  // 多半要真实浏览器执行 JS 才会跟到广告主落地页并附加 clickId/utm。用 puppeteer+stealth 重试一次（受信号量限并发）。
   if (
     opts.browserFallback &&
     !result.usedBrowser &&
     (result.status === "no_tracking" ||
-      (result.status === "resolve_failed" && !!result.error && result.error.startsWith("停在跳板域名")))
+      result.requiresBrowserEnrich === true ||
+      (result.status === "resolve_failed" &&
+        !!result.error &&
+        (result.error.startsWith("停在跳板域名") || result.error.startsWith("停在联盟点击中转域名"))))
   ) {
     const br = await resolveViaBrowser(affiliateUrl, cc).catch(() => ({ finalUrl: "", chain: [] as string[] }));
     if (br.finalUrl) {
