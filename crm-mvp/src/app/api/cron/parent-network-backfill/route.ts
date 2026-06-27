@@ -98,6 +98,39 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ code: 0, data: { processed: 0, resolved: 0, blacklisted: 0, failed: 0, noUrl: 0, remaining: 0 } })
     }
 
+    // ═══════════════════════════════════════════════════════════════════
+    // 阶段 0（前置离线全量回填）：用从 Google 反向回填的 final_url_suffix 离线识别上级联盟。
+    // 零网络成本，故**不受 24h 巡航 cutoff 限制**——直接覆盖所有在投、parent_network 为空
+    // 且有后缀特征的商家（pzevent/irclickid/ranMID…），秒级批量回填，解决 rewardoo 等
+    // JS 跳转巡航跟不动、但落地后缀已含网络铁证的系列。命中后这些商家不再进入下方巡航队列。
+    // ═══════════════════════════════════════════════════════════════════
+    let offlineResolved = 0
+    let offlineBlacklisted = 0
+    const offlineTargets = await prisma.user_merchants.findMany({
+      where: { id: { in: merchantIds }, is_deleted: 0, parent_network: null },
+      select: { id: true, platform: true },
+    })
+    for (const m of offlineTargets) {
+      const text = suffixByMerchant.get(m.id.toString())
+      if (!text) continue
+      const off = await detectParentNetworkFromText(text, m.platform || null).catch(() => null)
+      if (!off || !off.parentNetwork) continue
+      if (off.blacklisted) offlineBlacklisted++
+      await prisma.user_merchants
+        .update({
+          where: { id: m.id },
+          data: {
+            parent_network: off.parentNetwork,
+            parent_blacklisted: off.blacklisted ? 1 : 0,
+            tracking_status: off.blacklisted ? 'forbidden_network' : 'ok',
+            parent_checked_at: new Date(),
+            parent_check_reason: '后缀离线识别',
+          },
+        })
+        .catch(() => {})
+      offlineResolved++
+    }
+
     // 跳过最近 24h 内已巡航过的（含失败）——失败项不应每轮被反复重选阻塞队列；
     // 24h 后允许重试（应对临时坏链接/代理抖动）。一次性回填会在单轮跑内自然收敛。
     const retryCutoff = new Date(Date.now() - 24 * 3600_000)
@@ -128,34 +161,8 @@ export async function GET(req: NextRequest) {
     let blacklisted = 0
     let failed = 0
     let noUrl = 0
-    let offlineResolved = 0
 
     await runWithConcurrency(candidates, concurrency, async (m) => {
-      // ── 快路径：先用已回填的 final_url_suffix 离线识别上级联盟（零网络成本，无需巡航）──
-      // 解决 rewardoo 等 JS 跳转跟不动、但 Google 落地后缀里已含网络铁证的系列。
-      const offlineText = suffixByMerchant.get(m.id.toString())
-      if (offlineText) {
-        const off = await detectParentNetworkFromText(offlineText, m.platform || null).catch(() => null)
-        if (off && off.parentNetwork) {
-          resolved++
-          offlineResolved++
-          if (off.blacklisted) blacklisted++
-          await prisma.user_merchants
-            .update({
-              where: { id: m.id },
-              data: {
-                parent_network: off.parentNetwork,
-                parent_blacklisted: off.blacklisted ? 1 : 0,
-                tracking_status: off.blacklisted ? 'forbidden_network' : 'ok',
-                parent_checked_at: new Date(),
-                parent_check_reason: '后缀离线识别',
-              },
-            })
-            .catch(() => {})
-          return
-        }
-      }
-
       const affiliateUrl = pickAffiliateUrl(m)
       if (!affiliateUrl || !/^https?:\/\//i.test(affiliateUrl)) {
         noUrl++
@@ -217,11 +224,21 @@ export async function GET(req: NextRequest) {
     const remaining = await prisma.user_merchants.count({ where: whereHasLinkNoParent })
 
     console.log(
-      `[cron/parent-network-backfill] processed=${candidates.length} resolved=${resolved} (offline=${offlineResolved}) blacklisted=${blacklisted} failed=${failed} noUrl=${noUrl} remaining=${remaining} cost=${Date.now() - startedAt}ms`,
+      `[cron/parent-network-backfill] offlineResolved=${offlineResolved} (black=${offlineBlacklisted}) | cruise: processed=${candidates.length} resolved=${resolved} blacklisted=${blacklisted} failed=${failed} noUrl=${noUrl} | remaining=${remaining} cost=${Date.now() - startedAt}ms`,
     )
     return NextResponse.json({
       code: 0,
-      data: { processed: candidates.length, resolved, offlineResolved, blacklisted, failed, noUrl, remaining },
+      data: {
+        offlineResolved,
+        offlineBlacklisted,
+        processed: candidates.length,
+        resolved,
+        blacklisted,
+        failed,
+        noUrl,
+        remaining,
+        totalResolved: offlineResolved + resolved,
+      },
     })
   } catch (error) {
     console.error('[cron/parent-network-backfill] error:', error)
