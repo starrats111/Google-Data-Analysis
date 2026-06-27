@@ -88,7 +88,15 @@ async function resolveOne(
       },
     })
   } catch (e) {
-    console.warn('[link-sync] resolve error:', m.id.toString(), e instanceof Error ? e.message : e)
+    const msg = e instanceof Error ? e.message : String(e)
+    console.warn('[link-sync] resolve error:', m.id.toString(), msg)
+    // 抛错也落 parent_checked_at，避免该商家永远停在未校验、每次同步重复卡住
+    await prisma.user_merchants
+      .update({
+        where: { id: m.id },
+        data: { tracking_status: 'resolve_failed', parent_check_reason: `巡航异常：${msg}`.slice(0, 255), parent_checked_at: new Date() },
+      })
+      .catch(() => {})
   }
 }
 

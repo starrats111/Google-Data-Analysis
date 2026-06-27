@@ -165,7 +165,16 @@ export async function GET(req: NextRequest) {
         })
       } catch (e) {
         failed++
-        console.warn('[cron/parent-network-backfill] resolve error:', m.id.toString(), e instanceof Error ? e.message : e)
+        const msg = e instanceof Error ? e.message : String(e)
+        console.warn('[cron/parent-network-backfill] resolve error:', m.id.toString(), msg)
+        // 关键：抛错也要落 parent_checked_at，否则该商家永远停在 NULL，
+        // 每轮按 NULL 优先被反复重选、阻塞队列、其它商家永远轮不到（低配机 puppeteer OOM 时尤甚）
+        await prisma.user_merchants
+          .update({
+            where: { id: m.id },
+            data: { tracking_status: 'resolve_failed', parent_check_reason: `巡航异常：${msg}`.slice(0, 255), parent_checked_at: new Date() },
+          })
+          .catch(() => {})
       }
     })
 

@@ -19,7 +19,8 @@ KYLINK_SYNC_CRON="*/30 * * * * curl -s -H 'Authorization: Bearer ${CRON_SECRET}'
 # 换链接库存自适应补货（每 5 分钟）：扫描近期有 lease 活动且库存低于低水位的广告系列并补货
 SUFFIX_REPLENISH_CRON="*/5 * * * * curl -s -H 'Authorization: Bearer ${CRON_SECRET}' '${APP_URL}/api/cron/suffix-replenish' >> /var/log/cron-suffix-replenish.log 2>&1"
 # 上级联盟巡航验证回填（每 30 分钟）：扫描有链接但 parent_network 为空的商家并巡航识别上级联盟
-PARENT_BACKFILL_CRON="*/30 * * * * curl -s -H 'Authorization: Bearer ${CRON_SECRET}' '${APP_URL}/api/cron/parent-network-backfill?limit=25' >> /var/log/cron-parent-backfill.log 2>&1"
+# 注意：日志须写到 ubuntu 可写目录 /var/log/crm-cron/，否则 cron 重定向失败、整条命令不执行
+PARENT_BACKFILL_CRON="*/30 * * * * curl -s -H 'Authorization: Bearer ${CRON_SECRET}' '${APP_URL}/api/cron/parent-network-backfill?limit=40' >> /var/log/crm-cron/parent-network-backfill.log 2>&1"
 
 echo "=== Will add the following cron jobs ==="
 echo ""
