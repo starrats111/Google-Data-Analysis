@@ -194,6 +194,24 @@ export function clearAffiliateRulesCache() {
   rulesCache = null;
 }
 
+/**
+ * 离线识别上级联盟：仅用一段已知文本（如从 Google 反向回填的 final_url_suffix /
+ * 落地后缀）匹配识别库 + 平台黑名单，**不发起任何网络巡航**。
+ * 用于批量回填的「零成本快路径」：final_url_suffix 里常已含 pzevent/irclickid/ranMID
+ * 等上级联盟铁证，命中即可直接回填，省去巡航（尤其对 rewardoo 等 JS 跳转跟不动的链接）。
+ * 命中返回 parentNetwork（识别库 label）；未命中返回 null，由调用方决定是否再走巡航。
+ */
+export async function detectParentNetworkFromText(
+  text: string | null | undefined,
+  platform: string | null,
+): Promise<{ parentNetwork: string | null; blacklisted: boolean }> {
+  const haystack = (text || "").toLowerCase();
+  if (!haystack.trim()) return { parentNetwork: null, blacklisted: false };
+  const parentNetwork = await detectParentNetwork(haystack);
+  const blacklisted = !!parentNetwork && (await getPlatformBlacklist(platform)).has(parentNetwork);
+  return { parentNetwork, blacklisted };
+}
+
 // ───────── 客户端跳转提取（meta refresh / location= 等）─────────
 export function extractClientRedirect(body: string, baseUrl: string): string | null {
   const sample = body.length > 100000 ? body.slice(0, 100000) : body;

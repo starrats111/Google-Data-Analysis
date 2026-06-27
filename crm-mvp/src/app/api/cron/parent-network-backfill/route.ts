@@ -17,7 +17,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { resolveAffiliateLink } from '@/lib/affiliate-link-resolver'
+import { resolveAffiliateLink, detectParentNetworkFromText } from '@/lib/affiliate-link-resolver'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
@@ -80,9 +80,19 @@ export async function GET(req: NextRequest) {
     // 会出现「上级联盟 未识别」的那批；全表 user_merchants 高达百万级，不应也无法全量巡航。
     const enabledCampaigns = await prisma.campaigns.findMany({
       where: { status: 'active', google_status: 'ENABLED', is_deleted: 0, google_campaign_id: { not: null } },
-      select: { user_merchant_id: true },
+      select: { user_merchant_id: true, final_url_suffix: true },
     })
     const merchantIds = [...new Set(enabledCampaigns.map((c) => c.user_merchant_id))]
+
+    // 商家 → 关联在投系列的 final_url_suffix 合并串（离线识别快路径用）。
+    // final_url_suffix 由换链脚本从 Google 反向回填，含上级联盟铁证（pzevent/irclickid/ranMID…）。
+    const suffixByMerchant = new Map<string, string>()
+    for (const c of enabledCampaigns) {
+      if (!c.user_merchant_id || !c.final_url_suffix) continue
+      const key = c.user_merchant_id.toString()
+      const prev = suffixByMerchant.get(key)
+      suffixByMerchant.set(key, prev ? `${prev} ${c.final_url_suffix}` : c.final_url_suffix)
+    }
 
     if (merchantIds.length === 0) {
       return NextResponse.json({ code: 0, data: { processed: 0, resolved: 0, blacklisted: 0, failed: 0, noUrl: 0, remaining: 0 } })
@@ -118,8 +128,34 @@ export async function GET(req: NextRequest) {
     let blacklisted = 0
     let failed = 0
     let noUrl = 0
+    let offlineResolved = 0
 
     await runWithConcurrency(candidates, concurrency, async (m) => {
+      // ── 快路径：先用已回填的 final_url_suffix 离线识别上级联盟（零网络成本，无需巡航）──
+      // 解决 rewardoo 等 JS 跳转跟不动、但 Google 落地后缀里已含网络铁证的系列。
+      const offlineText = suffixByMerchant.get(m.id.toString())
+      if (offlineText) {
+        const off = await detectParentNetworkFromText(offlineText, m.platform || null).catch(() => null)
+        if (off && off.parentNetwork) {
+          resolved++
+          offlineResolved++
+          if (off.blacklisted) blacklisted++
+          await prisma.user_merchants
+            .update({
+              where: { id: m.id },
+              data: {
+                parent_network: off.parentNetwork,
+                parent_blacklisted: off.blacklisted ? 1 : 0,
+                tracking_status: off.blacklisted ? 'forbidden_network' : 'ok',
+                parent_checked_at: new Date(),
+                parent_check_reason: '后缀离线识别',
+              },
+            })
+            .catch(() => {})
+          return
+        }
+      }
+
       const affiliateUrl = pickAffiliateUrl(m)
       if (!affiliateUrl || !/^https?:\/\//i.test(affiliateUrl)) {
         noUrl++
@@ -181,11 +217,11 @@ export async function GET(req: NextRequest) {
     const remaining = await prisma.user_merchants.count({ where: whereHasLinkNoParent })
 
     console.log(
-      `[cron/parent-network-backfill] processed=${candidates.length} resolved=${resolved} blacklisted=${blacklisted} failed=${failed} noUrl=${noUrl} remaining=${remaining} cost=${Date.now() - startedAt}ms`,
+      `[cron/parent-network-backfill] processed=${candidates.length} resolved=${resolved} (offline=${offlineResolved}) blacklisted=${blacklisted} failed=${failed} noUrl=${noUrl} remaining=${remaining} cost=${Date.now() - startedAt}ms`,
     )
     return NextResponse.json({
       code: 0,
-      data: { processed: candidates.length, resolved, blacklisted, failed, noUrl, remaining },
+      data: { processed: candidates.length, resolved, offlineResolved, blacklisted, failed, noUrl, remaining },
     })
   } catch (error) {
     console.error('[cron/parent-network-backfill] error:', error)
