@@ -670,21 +670,26 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
               // 7 天缓存复用：近期已巡航过且有结果 → 直接用 resolved_final_url 拆出落地页+后缀，省一次巡航
               const TTL_MS = 7 * 24 * 60 * 60 * 1000;
               const checkedAt = merchant.parent_checked_at ? new Date(merchant.parent_checked_at).getTime() : 0;
+              const { resolveAffiliateLink, isNonLandingHost } = await import("@/lib/affiliate-link-resolver");
               const cacheFresh = checkedAt > 0 && Date.now() - checkedAt < TTL_MS && !!merchant.resolved_final_url;
               if (cacheFresh && merchant.resolved_final_url) {
                 try {
                   const u = new URL(merchant.resolved_final_url);
-                  landing = u.origin + u.pathname;
-                  trackingQuery = u.search.replace(/^\?/, "") || null;
+                  // 缓存若落在联盟跳板/点击中转/App 深链域名上即为脏数据（曾把追踪链接当落地页）→ 丢弃缓存，走现场重巡
+                  if (!isNonLandingHost(u.hostname)) {
+                    landing = u.origin + u.pathname;
+                    trackingQuery = u.search.replace(/^\?/, "") || null;
+                  }
                 } catch { /* 缓存 URL 异常则走现场巡航 */ }
               }
 
               if (!landing) {
                 send("crawl_pending", { status: "resolving_affiliate" });
-                const { resolveAffiliateLink } = await import("@/lib/affiliate-link-resolver");
+                // browserFallback：EV/MUI 等靠 JS 跳转的联盟，HTTP 只拿到中转域名/裸落地页时，用真实浏览器
+                // 跟随到「广告主域名 + 完整追踪 query」。浏览器跟随较慢，给到 60s 预算（受 puppeteer 信号量限并发）。
                 const cruise = await Promise.race([
-                  resolveAffiliateLink(affiliateUrl, country, merchant.platform || null, { useBrowser: false }),
-                  new Promise<null>((r) => setTimeout(() => r(null), 30000)),
+                  resolveAffiliateLink(affiliateUrl, country, merchant.platform || null, { browserFallback: true }),
+                  new Promise<null>((r) => setTimeout(() => r(null), 60000)),
                 ]);
                 if (cruise && cruise.landingUrl) {
                   landing = cruise.landingUrl;

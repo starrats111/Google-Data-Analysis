@@ -1,7 +1,7 @@
 /**
  * 一次性回填：重新巡航所有「resolved_final_url 停在 EngageVantage/UltraInfluence 点击中转域名」的商家。
  *
- * 背景：旧巡航逻辑没识别 EV/MUI 的发布者点击中转域名（pub.engagevantage.com / pub.ultrainfluence.com），
+ * 背景：旧巡航逻辑没识别 EV/MUI 的发布者点击中转域名（pub.engagevantage.com / go.ultrainfluence.com），
  * 纯 HTTP 跟不动其 JS 跳转就停在中转域名上，把「联盟追踪/中转链接」误当成广告主落地页存进
  * resolved_final_url（加后缀后指向中转域名而非广告主）。新逻辑已能：① 用真实浏览器跟随拿到完整广告主
  * 落地页（广告主域名 + 追踪 query）；② 浏览器不可用时退而解 url= 参数里的静态广告主 URL。
@@ -15,8 +15,7 @@
  *   npx tsx scripts/d-backfill-evmui-cruise.ts            # 干跑，仅打印将如何变化
  *   npx tsx scripts/d-backfill-evmui-cruise.ts --apply    # 实际写回 DB
  */
-import prisma from "../src/lib/prisma";
-import { resolveAffiliateLink } from "../src/lib/affiliate-link-resolver";
+import { loadEnvFromProjectRoot } from "./load-env-from-dotenv-file";
 
 const APPLY = process.argv.includes("--apply");
 
@@ -37,6 +36,11 @@ function stuckOnNetworkClick(resolvedFinalUrl: string | null): boolean {
 }
 
 async function main() {
+  // 先注入 .env（prisma client 在 import 时即按 DB_* 构造连接，必须早于 prisma 的动态导入）
+  loadEnvFromProjectRoot();
+  const { default: prisma } = await import("../src/lib/prisma");
+  const { resolveAffiliateLink } = await import("../src/lib/affiliate-link-resolver");
+
   // 粗筛：resolved_final_url 含网络域名（带 .com，避免命中 utm_campaign=EngageVantage 这类纯品牌名值）
   const candidates = await prisma.user_merchants.findMany({
     where: {

@@ -76,6 +76,15 @@ function isNetworkClickHost(host: string): boolean {
   return NETWORK_CLICK_HOST_PATTERNS.some((re) => re.test(host));
 }
 
+/**
+ * host 是否为「不应作为广告主落地页」的中转域名（联盟跳板 / 发布者点击中转 / App 深链）。
+ * 供调用方（如建广告缓存复用）校验：缓存的 resolved_final_url 若落在这些域名上，即视为脏数据，
+ * 应丢弃缓存重新现场巡航，避免把联盟追踪/中转链接当成商家落地页。
+ */
+export function isNonLandingHost(host: string): boolean {
+  return isTrackerHost(host) || isNetworkClickHost(host) || isDeeplinkHost(host);
+}
+
 // App 深链 / 移动归因中转域名：这些不是网页落地页，真正的 web 落地 URL 被塞在它们的
 // 回退参数里（靠 App 端逻辑跳转，不是 HTTP 3xx），纯 HTTP 巡航会误停在这里。
 const DEEPLINK_HOST_PATTERNS: RegExp[] = [
