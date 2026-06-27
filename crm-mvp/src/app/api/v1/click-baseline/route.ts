@@ -40,11 +40,14 @@ export async function GET(req: NextRequest) {
       google_campaign_id: true,
       suffix_click_baseline: true,
       suffix_click_checkpoint_at: true,
+      // appliedBefore：换链系统是否「下发过」轮换后缀。脚本据此判断「首次主动换链」，
+      // 不能用 Google 端 final_url_suffix 是否为空判断——发布时已写入原始联盟后缀，永远非空。
+      suffix_last_apply_at: true,
     },
   })
 
-  // 构建 { campaignId → {clicks, checkpointAt} } 映射
-  const baselines: Record<string, { clicks: number; checkpointAt: string | null }> = {}
+  // 构建 { campaignId → {clicks, checkpointAt, appliedBefore} } 映射
+  const baselines: Record<string, { clicks: number; checkpointAt: string | null; appliedBefore: boolean }> = {}
   for (const row of rows) {
     if (!row.google_campaign_id) continue
     baselines[row.google_campaign_id] = {
@@ -52,6 +55,7 @@ export async function GET(req: NextRequest) {
       checkpointAt: row.suffix_click_checkpoint_at
         ? row.suffix_click_checkpoint_at.toISOString()
         : null,
+      appliedBefore: row.suffix_last_apply_at != null,
     }
   }
 

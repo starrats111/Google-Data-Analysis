@@ -313,7 +313,12 @@ function loadClickBaselines(campaigns) {
   for (var j = 0; j < campaigns.length; j++) {
     var c = campaigns[j];
     var baseline = baselineMap[c.campaignId];
-    if (!baseline || typeof baseline.clicks !== 'number') continue;
+    if (!baseline) continue;
+
+    // 换链系统是否下发过轮换后缀（用于「首次主动换链」判断，独立于点击基线新鲜度）
+    if (typeof baseline.appliedBefore === 'boolean') c.crmApplied = baseline.appliedBefore;
+
+    if (typeof baseline.clicks !== 'number') continue;
 
     // 基线新鲜度检查
     if (baseline.checkpointAt) {
@@ -427,6 +432,7 @@ function getCampaignData(cid, mccId) {
       networkShortName: parsed.networkShortName, mid: parsed.mid,
       trackingUrl: '', hasAffiliate: false,
       currentSuffix: row['campaign.final_url_suffix'] || '',
+      crmApplied: false, // 换链系统是否下发过轮换后缀（来自 CRM，由 loadClickBaselines 回填）
       lastClicks: 0, currentClicks: 0, lastSuffix: '', lastApplyTime: '',
       status: parsed.parsed ? 'ready' : 'no_affiliate_info', updatedAt: now
     };
@@ -705,10 +711,15 @@ function initClicksState(campaigns) {
 }
 
 // =====================================================================
-// 首次主动换链：把「有联盟链接 + 当前无 finalUrlSuffix(从未换过)」的系列
+// 首次主动换链：把「有联盟链接 + 换链系统从未下发过轮换后缀」的系列
 // 的 lastClicks 置为 -1，使其在第一轮监控即被判定为「增长」从而换上一次链接。
 // 换上后 updateLastClicks 会把 lastClicks 归位到当前点击数，之后仅按真实点击增长轮换，
-// 不会重复换。已有后缀的系列不动（避免无点击时反复轮换、浪费库存）。
+// 不会重复换。
+//
+// 重要：判断「是否换过」必须用 CRM 的 crmApplied(=suffix_last_apply_at)，
+// 不能用 Google 端 currentSuffix(final_url_suffix) 是否为空 —— 系列发布时已写入
+// 原始联盟追踪后缀(utm/irclickid 等)，currentSuffix 永远非空，否则 seed 永远跳过，
+// 导致「发布后还没点击」的系列一直换不上。
 // =====================================================================
 function seedProactiveFirstApply(campaigns) {
   if (!CONFIG.ENABLE_PROACTIVE_FIRST_APPLY) return;
@@ -719,14 +730,13 @@ function seedProactiveFirstApply(campaigns) {
   var seeded = 0;
   for (var i = 0; i < campaigns.length; i++) {
     var c = campaigns[i];
-    var noSuffix = !c.currentSuffix || String(c.currentSuffix).trim() === '';
-    if (c.hasAffiliate && noSuffix) {
+    if (c.hasAffiliate && !c.crmApplied) {
       c.lastClicks = -1; // 制造一次「增长」，首轮即换链
       seeded++;
     }
   }
   if (seeded > 0) {
-    console.log('首次主动换链: ' + seeded + ' 个有链接但无后缀的系列将在首轮换上');
+    console.log('首次主动换链: ' + seeded + ' 个有链接但换链系统未下发过后缀的系列将在首轮换上');
   }
 }
 
