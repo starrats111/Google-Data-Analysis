@@ -102,7 +102,10 @@ export function buildSocks5Url(template: string, country: string): string {
   const username = parts.slice(2, parts.length - 1).join(":")
     .replace(/\*\*/g, country.toUpperCase().trim());
 
-  return `${proto}://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${port}`;
+  // socks5 统一用 socks5h（远程 DNS）：让代理出口解析目标域名，避免本地 DNS 泄漏/解析到错区，
+  // 也规避部分 EPROTO/解析失败。http/https 代理保持原协议。
+  const outProto = proto === "socks5" ? "socks5h" : proto;
+  return `${outProto}://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${port}`;
 }
 
 interface ProxyFetchResponse {

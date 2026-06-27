@@ -60,10 +60,13 @@ export async function GET(req: NextRequest) {
     parent_blacklisted: true,
   } as const
 
-  // 巡航结果(tracking_status) 是换链接系统实际维护的权威链接状态，统一映射到前端状态；
-  // - ok → valid（有效）
-  // - forbidden_network/no_tracking/resolve_failed → invalid（无效，巡航失败）
-  // - 否则（未巡航）：无任何链接 → no_link（缺链接，需手动/同步补链接）；有链接 → 回退 link_status
+  // 巡航结果(tracking_status) 映射到前端状态。关键：resolve_failed/no_tracking 多为
+  // 代理/TLS/超时等巡航基础设施失败（实测 99 个 resolve_failed 中 91 个 link_status=valid、
+  // 链接直连可达），不能等同于「链接无效」，否则会把大量可用链接误标红。
+  // - ok                        → valid（有效）
+  // - forbidden_network         → invalid（命中上级联盟黑名单，真无效/硬拦截）
+  // - resolve_failed/no_tracking→ 基础检测已判坏(link_status=invalid)才算 invalid；否则 recheck（待验证，巡航未通过，会重试）
+  // - 未巡航(unchecked)         → 无任何链接 → no_link（缺链接）；有链接 → 回退 link_status
   const deriveLinkStatus = (m: {
     tracking_status: string | null
     link_status: string | null
@@ -74,9 +77,10 @@ export async function GET(req: NextRequest) {
       case 'ok':
         return 'valid'
       case 'forbidden_network':
+        return 'invalid'
       case 'no_tracking':
       case 'resolve_failed':
-        return 'invalid'
+        return m.link_status === 'invalid' ? 'invalid' : 'recheck'
       default:
         if (!m.tracking_link && !m.campaign_link) return 'no_link'
         return m.link_status ?? 'unchecked'

@@ -224,13 +224,24 @@ export function extractClientRedirect(body: string, baseUrl: string): string | n
   return null;
 }
 
+// 创建代理 Agent（移植自 kylink：SOCKS/HTTPS 全部禁用 TLS 证书校验）。
+// 住宅代理出口节点常给自签/过时 TLS，或网关在隧道里回明文，导致
+// `EPROTO wrong version number` / `UNABLE_TO_VERIFY_LEAF_SIGNATURE`，
+// 这类是握手层问题、与链接好坏无关，禁用校验即可正常巡航。
 async function makeAgent(proxyUrl: string): Promise<unknown> {
   if (proxyUrl.startsWith("socks")) {
     const { SocksProxyAgent } = await import("socks-proxy-agent");
-    return new SocksProxyAgent(proxyUrl);
+    const agent = new SocksProxyAgent(proxyUrl, { timeout: 18000 });
+    // SocksProxyAgent 不支持 rejectUnauthorized 构造参数，monkey-patch connect 在 TLS 握手前注入
+    const origConnect = agent.connect.bind(agent);
+    (agent as unknown as { connect: unknown }).connect = ((req: never, opts: never) => {
+      (opts as Record<string, unknown>).rejectUnauthorized = false;
+      return (origConnect as (a: never, b: never) => unknown)(req, opts);
+    }) as never;
+    return agent;
   }
   const { HttpsProxyAgent } = await import("https-proxy-agent");
-  return new HttpsProxyAgent(proxyUrl);
+  return new HttpsProxyAgent(proxyUrl, { rejectUnauthorized: false });
 }
 
 interface ChainResult {
@@ -240,26 +251,89 @@ interface ChainResult {
   error?: string;
 }
 
-/** 通过代理（或直连）手动跟随重定向，记录整条跳转链 */
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+// 可重试的瞬态网络/TLS 错误（移植自 kylink）：换一次出口（重拨）多半就好
+const RETRYABLE_NET_ERRORS = [
+  "ECONNRESET", "ETIMEDOUT", "ECONNREFUSED", "EAI_AGAIN", "EPROTO",
+  "wrong version number", "socket hang up", "Client network socket disconnected",
+  "timeout", "SSL", "decryption failed", "tlsv1",
+];
+function isRetryableNetErr(msg?: string): boolean {
+  if (!msg) return false;
+  const m = msg.toLowerCase();
+  return RETRYABLE_NET_ERRORS.some((p) => m.includes(p.toLowerCase()));
+}
+
+// 联盟跳板/广告追踪域名常把真实目标塞在 url=/dest=/new= 等参数里（移植自 kylink）。
+// 仅在该跳「失败/4xx」后作为兜底：从参数解出目标继续跟，避免停在跳板域名误判。
+const EMBED_URL_PARAMS = ["url", "dest", "redirect", "landing", "goto", "target", "redir", "new", "u"];
+function extractEmbeddedTarget(rawUrl: string): string | null {
+  let o: URL;
+  try {
+    o = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  for (const p of EMBED_URL_PARAMS) {
+    const v = o.searchParams.get(p);
+    if (!v) continue;
+    const candidates = [v];
+    try {
+      candidates.push(decodeURIComponent(v));
+    } catch {
+      /* ignore */
+    }
+    for (const c of candidates) {
+      if (/^https?:\/\//i.test(c)) {
+        try {
+          new URL(c);
+          return c;
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * 通过代理（或直连）手动跟随重定向，记录整条跳转链。
+ * 移植 kylink 健壮性：单跳失败按可重试错误「重拨换出口」重试，禁用 TLS 校验，
+ * 失败/4xx 时尝试从 URL 参数提取嵌入目标继续跟（联盟跳板封 IP 兜底）。
+ */
 export async function fetchChain(
   startUrl: string,
   proxyUrl: string | null,
   maxRedirects = 10,
   perHopTimeoutMs = 18000,
-  fp: { userAgent?: string | null; referer?: string | null } = {}
+  fp: { userAgent?: string | null; referer?: string | null } = {},
+  retryCount = 2,
 ): Promise<ChainResult> {
-  const agent = proxyUrl ? await makeAgent(proxyUrl) : undefined;
+  let agent = proxyUrl ? await makeAgent(proxyUrl) : undefined;
+  // 重拨：轮换住宅网关每次连接换出口 IP，重建 agent 即换节点
+  const redial = async () => {
+    if (proxyUrl) agent = await makeAgent(proxyUrl);
+  };
   const chain: string[] = [];
   const ua = fp.userAgent || BROWSER_UA;
 
-  const doRequest = (targetUrl: string, hop: number): Promise<ChainResult> => {
-    return new Promise((resolve) => {
-      chain.push(targetUrl);
+  type HopResult =
+    | { type: "redirect"; location: string; status: number }
+    | { type: "body"; body: string; status: number }
+    | { type: "final"; status: number };
+
+  // 单跳一次网络请求（成功 resolve，网络层失败 reject）
+  const requestOnce = (targetUrl: string, hop: number): Promise<HopResult> => {
+    return new Promise((resolve, reject) => {
       let parsed: URL;
       try {
         parsed = new URL(targetUrl);
       } catch {
-        return resolve({ finalUrl: targetUrl, chain, status: 0, error: "invalid_url" });
+        return reject(new Error("invalid_url"));
       }
       const isHttps = parsed.protocol === "https:";
       const mod = isHttps ? https : http;
@@ -268,7 +342,6 @@ export async function fetchChain(
         Accept: "text/html,application/xhtml+xml,*/*;q=0.9",
         "Accept-Encoding": "identity",
       };
-      // 仅首跳带 Referer，模拟从搜索引擎/社媒进入
       if (hop === 0 && fp.referer) headers["Referer"] = fp.referer;
       const reqOptions = {
         hostname: parsed.hostname,
@@ -278,24 +351,14 @@ export async function fetchChain(
         headers,
         agent,
         timeout: perHopTimeoutMs,
+        rejectUnauthorized: false,
       };
       const req = (mod as typeof https).request(reqOptions as https.RequestOptions, (res) => {
         const status = res.statusCode || 0;
         const location = res.headers["location"];
         if ([301, 302, 303, 307, 308].includes(status) && location) {
-          if (hop >= maxRedirects) {
-            res.resume();
-            return resolve({ finalUrl: targetUrl, chain, status, error: "too_many_redirects" });
-          }
           res.resume();
-          let nextUrl: string;
-          try {
-            nextUrl = new URL(String(location), targetUrl).toString();
-          } catch {
-            return resolve({ finalUrl: targetUrl, chain, status, error: "bad_location" });
-          }
-          doRequest(nextUrl, hop + 1).then(resolve);
-          return;
+          return resolve({ type: "redirect", location: String(location), status });
         }
         const ctype = String(res.headers["content-type"] || "").toLowerCase();
         if (status >= 200 && status < 300 && (ctype.includes("html") || ctype === "")) {
@@ -307,32 +370,86 @@ export async function fetchChain(
               total += c.length;
             }
           });
-          res.on("end", () => {
-            const body = Buffer.concat(chunks).toString("utf8");
-            const next = extractClientRedirect(body, targetUrl);
-            if (next && next !== targetUrl && hop < maxRedirects && !chain.includes(next)) {
-              doRequest(next, hop + 1).then(resolve);
-              return;
-            }
-            resolve({ finalUrl: targetUrl, chain, status });
-          });
-          res.on("error", () => resolve({ finalUrl: targetUrl, chain, status }));
+          res.on("end", () => resolve({ type: "body", body: Buffer.concat(chunks).toString("utf8"), status }));
+          res.on("error", () => resolve({ type: "final", status }));
         } else {
           res.resume();
-          res.on("end", () => resolve({ finalUrl: targetUrl, chain, status }));
-          res.on("error", () => resolve({ finalUrl: targetUrl, chain, status }));
+          res.on("end", () => resolve({ type: "final", status }));
+          res.on("error", () => resolve({ type: "final", status }));
         }
       });
-      req.on("error", (e) => resolve({ finalUrl: targetUrl, chain, status: 0, error: e.message.slice(0, 120) }));
+      req.on("error", (e) => reject(e));
       req.on("timeout", () => {
         req.destroy();
-        resolve({ finalUrl: targetUrl, chain, status: 0, error: "timeout" });
+        reject(new Error("timeout"));
       });
       req.end();
     });
   };
 
-  return doRequest(startUrl, 0);
+  let targetUrl = startUrl;
+  for (let hop = 0; hop <= maxRedirects; hop++) {
+    chain.push(targetUrl);
+
+    // 单跳带重试+重拨
+    let res: HopResult | null = null;
+    let lastErr: string | undefined;
+    for (let attempt = 0; attempt <= retryCount; attempt++) {
+      try {
+        res = await requestOnce(targetUrl, hop);
+        lastErr = undefined;
+        break;
+      } catch (e) {
+        lastErr = (e instanceof Error ? e.message : String(e)).slice(0, 120);
+        if (!isRetryableNetErr(lastErr) || attempt === retryCount) break;
+        await redial();
+        await sleep(150 * (attempt + 1));
+      }
+    }
+
+    // 网络层彻底失败：尝试联盟跳板兜底（从参数提取目标继续），否则结束
+    if (!res) {
+      const embed = extractEmbeddedTarget(targetUrl);
+      if (embed && !chain.includes(embed) && hop < maxRedirects) {
+        targetUrl = embed;
+        continue;
+      }
+      return { finalUrl: targetUrl, chain, status: 0, error: lastErr || "request_failed" };
+    }
+
+    if (res.type === "redirect") {
+      if (hop >= maxRedirects) return { finalUrl: targetUrl, chain, status: res.status, error: "too_many_redirects" };
+      let nextUrl: string;
+      try {
+        nextUrl = new URL(res.location, targetUrl).toString();
+      } catch {
+        return { finalUrl: targetUrl, chain, status: res.status, error: "bad_location" };
+      }
+      targetUrl = nextUrl;
+      continue;
+    }
+
+    if (res.type === "body") {
+      const next = extractClientRedirect(res.body, targetUrl);
+      if (next && next !== targetUrl && hop < maxRedirects && !chain.includes(next)) {
+        targetUrl = next;
+        continue;
+      }
+      return { finalUrl: targetUrl, chain, status: res.status };
+    }
+
+    // type === final：4xx/5xx 时尝试联盟跳板兜底
+    if (res.status >= 400) {
+      const embed = extractEmbeddedTarget(targetUrl);
+      if (embed && !chain.includes(embed) && hop < maxRedirects) {
+        targetUrl = embed;
+        continue;
+      }
+    }
+    return { finalUrl: targetUrl, chain, status: res.status };
+  }
+
+  return { finalUrl: targetUrl, chain, status: 0, error: "max_redirects" };
 }
 
 // ───────── 无头 Chrome 巡航（过 FlexOffers/Impact 等指纹门）─────────

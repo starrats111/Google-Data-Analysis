@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
@@ -75,6 +75,11 @@ function LinkStatusTag({ status, reason }: { status: string; reason?: string | n
   );
   if (status === "no_link") return (
     <Tooltip title="该商家未配置联盟链接，点商家追踪链接列的编辑图标手动填写后会自动验证"><Tag icon={<WarningOutlined />} color="warning">缺链接</Tag></Tooltip>
+  );
+  if (status === "recheck") return (
+    <Tooltip title={`链接可达，但巡航未跟到底（多为代理/网络波动），不代表链接无效，系统会自动重试。原因：${reason ?? "巡航未完成"}`}>
+      <Tag icon={<SyncOutlined />} color="processing">待验证</Tag>
+    </Tooltip>
   );
   return <Tag icon={<QuestionCircleOutlined />} color="default">未验证</Tag>;
 }
