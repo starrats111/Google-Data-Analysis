@@ -188,8 +188,11 @@ export async function GET(req: NextRequest) {
 
   const { summary: alertSummary, totalOpen } = await getAlertSummary(userId)
 
-  const totalAvailable = rows.reduce((s, r) => s + r.stock.available, 0)
-  const lowStockCount = rows.filter((r) => r.matched && r.suffixEnabled && r.lowStock).length
+  // 顶部统计与「链接管理 / 库存管理」列表口径保持一致：只统计已启用
+  // (Google Ads ENABLED / 默认) 的广告系列，排除 PAUSED/REMOVED 等未在投系列。
+  const enabledRows = rows.filter((r) => (r.googleStatus ?? 'ENABLED') === 'ENABLED')
+  const totalAvailable = enabledRows.reduce((s, r) => s + r.stock.available, 0)
+  const lowStockCount = enabledRows.filter((r) => r.matched && r.suffixEnabled && r.lowStock).length
 
   return NextResponse.json({
     code: 0,
@@ -198,8 +201,8 @@ export async function GET(req: NextRequest) {
       apiKey: apiKeyRecord?.script_api_key ?? null,
       defaultClickCount: apiKeyRecord?.link_exchange_click_count ?? 10,
       summary: {
-        total: rows.length,
-        matched: rows.filter((r) => r.matched).length,
+        total: enabledRows.length,
+        matched: enabledRows.filter((r) => r.matched).length,
         totalAvailable,
         lowStockCount,
         alertOpen: totalOpen,
