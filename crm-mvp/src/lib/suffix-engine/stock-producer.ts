@@ -16,6 +16,7 @@ import { STOCK_CONFIG } from './config'
 import { generateOneSuffix, type GenFailure } from './suffix-generator'
 import { raiseAlert, resolveAlertsByType } from './alerts'
 import { recordExitIp } from './exit-ip'
+import { resolveMerchantReferer } from './referer-resolver'
 
 const inflight = new Map<string, Promise<ReplenishResult>>()
 
@@ -211,8 +212,12 @@ async function doReplenish(
     return true
   }
 
+  // 来路（Referer）：手动来路 → 最新文章 → 联盟账号网站 → （空则不带 Referer）。
+  // 与刷点击同源，让补货追链也带上真实来路，提升联盟点击归因。整条补货解析一次复用。
+  const refererUrl = (await resolveMerchantReferer(merchant.id)).url
+
   // ── probe：先探一条 ──
-  const probe = await generateOneSuffix(affiliateUrl, country, platform, { userId: campaign.user_id, campaignId })
+  const probe = await generateOneSuffix(affiliateUrl, country, platform, { userId: campaign.user_id, campaignId, referer: refererUrl })
   if (!probe.ok) {
     failed++
     await emitGenFailureAlert(campaign, merchant.merchant_name, affiliateUrl, probe)
@@ -227,7 +232,7 @@ async function doReplenish(
     let circuitOpen = false
     await runWithConcurrency(remaining, STOCK_CONFIG.CONCURRENCY, async () => {
       if (circuitOpen) return
-      const r = await generateOneSuffix(affiliateUrl, country, platform, { userId: campaign.user_id, campaignId })
+      const r = await generateOneSuffix(affiliateUrl, country, platform, { userId: campaign.user_id, campaignId, referer: refererUrl })
       if (r.ok) {
         consecutiveFail = 0
         if (await persist(r.suffix, r.exitIp)) generated++

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getUserFromRequest } from '@/lib/auth'
+import { resolveMerchantReferer } from '@/lib/suffix-engine/referer-resolver'
 
 const VALID_NETWORKS = ['RW', 'LH', 'PM', 'LB', 'CG', 'CF', 'BSH', 'TJ', 'AW', 'MUI', 'EV']
 
@@ -62,7 +63,7 @@ export async function POST(req: NextRequest) {
     mids.length > 0
       ? await prisma.user_merchants.findMany({
           where: { user_id: userId, merchant_id: { in: mids }, platform: { in: platforms }, is_deleted: 0 },
-          select: { merchant_id: true, platform: true, tracking_link: true, kyads_referer_url: true },
+          select: { id: true, merchant_id: true, platform: true, tracking_link: true },
         })
       : []
 
@@ -90,12 +91,14 @@ export async function POST(req: NextRequest) {
         data: { target_count: clickCount, updated_at: now },
       })
     } else {
+      // 来路优先级：手动来路 → 最新文章 → 联盟账号网站 → （空则执行时回退随机来路池）
+      const referer = await resolveMerchantReferer(merchant.id)
       await prisma.kyads_click_tasks.create({
         data: {
           user_id: userId,
           campaign_id: c.id,
           affiliate_url: merchant.tracking_link,
-          referer_url: merchant.kyads_referer_url ?? '',
+          referer_url: referer.url ?? '',
           target_count: clickCount,
           done_count: 0,
           status: 'pending',

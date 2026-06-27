@@ -19,6 +19,7 @@ import { recordExitIp } from './exit-ip'
 import { raiseAlert, resolveAlertsByType } from './alerts'
 import { STOCK_CONFIG } from './config'
 import { generateClickSchedule, randomPick, randomInt, USER_AGENTS, REFERERS } from './click-scheduler'
+import { resolveMerchantReferer } from './referer-resolver'
 
 /** 单次刷点击允许的最大次数（低配生产机保护） */
 export const MAX_BRUSH = 1000
@@ -67,9 +68,12 @@ export async function startBrushTask(
 
   const merchant = await prisma.user_merchants.findFirst({
     where: { id: campaign.user_merchant_id, is_deleted: 0 },
-    select: { tracking_link: true, kyads_referer_url: true },
+    select: { tracking_link: true },
   })
   if (!merchant?.tracking_link) return { ok: false, message: '该广告系列未匹配到带追踪链接的商家' }
+
+  // 来路优先级：手动来路 → 最新文章 → 联盟账号网站 → （空则执行时回退随机来路池）
+  const referer = await resolveMerchantReferer(campaign.user_merchant_id)
 
   // 已有进行中的刷点击任务则不重复创建
   const existing = await prisma.kyads_click_tasks.findFirst({
@@ -89,7 +93,7 @@ export async function startBrushTask(
       user_id: userId,
       campaign_id: campaignId,
       affiliate_url: merchant.tracking_link,
-      referer_url: merchant.kyads_referer_url ?? '',
+      referer_url: referer.url ?? '',
       target_count: n,
       done_count: 0,
       status: 'running',
