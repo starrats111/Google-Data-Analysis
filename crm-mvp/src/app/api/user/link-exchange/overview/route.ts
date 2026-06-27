@@ -51,6 +51,7 @@ export async function GET(req: NextRequest) {
     platform: true,
     merchant_name: true,
     tracking_link: true,
+    campaign_link: true,
     link_status: true,
     link_check_reason: true,
     tracking_status: true,
@@ -59,11 +60,15 @@ export async function GET(req: NextRequest) {
     parent_blacklisted: true,
   } as const
 
-  // 巡航结果(tracking_status) 是换链接系统实际维护的权威链接状态，统一映射到前端的 valid/invalid/unchecked；
-  // tracking_status 为空才回退到 daily-merchant-check 写的 link_status（基础可达性）。
+  // 巡航结果(tracking_status) 是换链接系统实际维护的权威链接状态，统一映射到前端状态；
+  // - ok → valid（有效）
+  // - forbidden_network/no_tracking/resolve_failed → invalid（无效，巡航失败）
+  // - 否则（未巡航）：无任何链接 → no_link（缺链接，需手动/同步补链接）；有链接 → 回退 link_status
   const deriveLinkStatus = (m: {
     tracking_status: string | null
     link_status: string | null
+    tracking_link: string | null
+    campaign_link: string | null
   }): string => {
     switch (m.tracking_status) {
       case 'ok':
@@ -73,6 +78,7 @@ export async function GET(req: NextRequest) {
       case 'resolve_failed':
         return 'invalid'
       default:
+        if (!m.tracking_link && !m.campaign_link) return 'no_link'
         return m.link_status ?? 'unchecked'
     }
   }

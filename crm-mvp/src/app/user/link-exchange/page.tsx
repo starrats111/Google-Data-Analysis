@@ -73,6 +73,9 @@ function LinkStatusTag({ status, reason }: { status: string; reason?: string | n
   if (status === "invalid") return (
     <Tooltip title={reason ?? "链接无效"}><Tag icon={<CloseCircleOutlined />} color="error">无效</Tag></Tooltip>
   );
+  if (status === "no_link") return (
+    <Tooltip title="该商家未配置联盟链接，点商家追踪链接列的编辑图标手动填写后会自动验证"><Tag icon={<WarningOutlined />} color="warning">缺链接</Tag></Tooltip>
+  );
   return <Tag icon={<QuestionCircleOutlined />} color="default">未验证</Tag>;
 }
 
