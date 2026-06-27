@@ -61,6 +61,9 @@ var CONFIG = {
   ENABLE_SHEET_WRITE: true,
   ENABLE_SUFFIX_APPLY: true,
   ONLY_APPLY_WHEN_AFFILIATE_FOUND: true,
+  // 首次主动换链：对「有联盟链接但当前无 finalUrlSuffix（从未换过）」的系列，
+  // 在第一轮强制换上一次，之后回归点击增长轮换。解决新系列发布后还没点击时一直「未换」。
+  ENABLE_PROACTIVE_FIRST_APPLY: true,
   DRY_RUN: false,
 
   // 调试开关
@@ -195,6 +198,10 @@ function main() {
 
   // ===== 新增: 从 CRM 读取点击基线，继承上次脚本的状态 =====
   loadClickBaselines(campaigns);
+
+  // ===== 新增: 首次主动换链 — 对有联盟链接但当前无后缀(从未换过)的系列，
+  //        强制在第一轮触发一次换链；之后回归点击增长轮换 =====
+  seedProactiveFirstApply(campaigns);
 
   // ===== 阶段 5: 循环监控并换链 =====
   console.log('===== 阶段5: 循环监控 | 剩余' + Math.floor(getRemainingSeconds()) + '秒 =====');
@@ -407,7 +414,7 @@ function getCampaignData(cid, mccId) {
   var campaignMap = {};
 
   var campaignRows = AdsApp.report(
-    'SELECT campaign.id, campaign.name FROM campaign WHERE campaign.status = \\'ENABLED\\''
+    'SELECT campaign.id, campaign.name, campaign.final_url_suffix FROM campaign WHERE campaign.status = \\'ENABLED\\''
   ).rows();
   while (campaignRows.hasNext()) {
     var row = campaignRows.next();
@@ -419,6 +426,7 @@ function getCampaignData(cid, mccId) {
       finalUrl: '', todayClicks: 0, cid: cid, mccId: mccId,
       networkShortName: parsed.networkShortName, mid: parsed.mid,
       trackingUrl: '', hasAffiliate: false,
+      currentSuffix: row['campaign.final_url_suffix'] || '',
       lastClicks: 0, currentClicks: 0, lastSuffix: '', lastApplyTime: '',
       status: parsed.parsed ? 'ready' : 'no_affiliate_info', updatedAt: now
     };
@@ -694,6 +702,32 @@ function initClicksState(campaigns) {
   }
   console.log('初始化: ' + campaigns.length + '系列(有链接' + withAffiliate +
     ' 无链接' + withoutAffiliate + ') 今日点击' + totalClicks);
+}
+
+// =====================================================================
+// 首次主动换链：把「有联盟链接 + 当前无 finalUrlSuffix(从未换过)」的系列
+// 的 lastClicks 置为 -1，使其在第一轮监控即被判定为「增长」从而换上一次链接。
+// 换上后 updateLastClicks 会把 lastClicks 归位到当前点击数，之后仅按真实点击增长轮换，
+// 不会重复换。已有后缀的系列不动（避免无点击时反复轮换、浪费库存）。
+// =====================================================================
+function seedProactiveFirstApply(campaigns) {
+  if (!CONFIG.ENABLE_PROACTIVE_FIRST_APPLY) return;
+  if (CONFIG.ONLY_APPLY_WHEN_AFFILIATE_FOUND === false) {
+    // 未开启「仅有联盟链接才换」时，无法可靠判断该不该主动换，保守跳过
+    return;
+  }
+  var seeded = 0;
+  for (var i = 0; i < campaigns.length; i++) {
+    var c = campaigns[i];
+    var noSuffix = !c.currentSuffix || String(c.currentSuffix).trim() === '';
+    if (c.hasAffiliate && noSuffix) {
+      c.lastClicks = -1; // 制造一次「增长」，首轮即换链
+      seeded++;
+    }
+  }
+  if (seeded > 0) {
+    console.log('首次主动换链: ' + seeded + ' 个有链接但无后缀的系列将在首轮换上');
+  }
 }
 
 function runMonitoringLoop(campaigns, mccId) {
