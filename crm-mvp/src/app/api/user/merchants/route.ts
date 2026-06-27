@@ -9,18 +9,12 @@ import { extractDomain } from "@/lib/atc-service";
 import { parseTxnDateStart, parseTxnDateEndExclusive } from "@/lib/date-utils";
 import { getTeamVisibility, getVisibleUserIdSet } from "@/lib/team-visibility";
 
-// 国家 → Google Ads 语言代码（创建 campaign 时自动设置）
-const COUNTRY_TO_LANG_CODE: Record<string, string> = {
-  US: "en", UK: "en", GB: "en", CA: "en", AU: "en", IE: "en", SG: "en", NZ: "en", PH: "en", IN: "en",
-  DE: "de", AT: "de", CH: "de",
-  FR: "fr", BE: "fr",
-  ES: "es", MX: "es", AR: "es", CL: "es", CO: "es",
-  IT: "it", PT: "pt", BR: "pt", NL: "nl",
-  JP: "ja", KR: "ko", CN: "zh_CN", TW: "zh_TW", HK: "zh_TW",
-  RU: "ru", PL: "pl", SE: "sv", NO: "no", DK: "da", FI: "fi", CZ: "cs",
-  TR: "tr", TH: "th", VN: "vi", ID: "id", MY: "ms",
-  SA: "ar", AE: "ar", IL: "iw", GR: "el", RO: "ro", HU: "hu", BG: "bg",
-};
+// 领取弹窗可显式选择的广告语言代码白名单（与前端 AD_LANGUAGES 对齐）
+const KNOWN_LANG_CODES = new Set<string>([
+  "en", "fr", "de", "es", "it", "pt", "nl", "ja", "ko", "zh_CN", "zh_TW",
+  "ru", "pl", "sv", "no", "da", "fi", "cs", "tr", "th", "vi", "id", "ms",
+  "ar", "iw", "el", "ro", "hu", "bg", "hi", "uk",
+]);
 
 // 政策类别代码 → 中文
 const POLICY_CATEGORY_CN: Record<string, string> = {
@@ -664,10 +658,14 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
 
 // 领取商家
 export const POST = withUser(async (req: NextRequest, { user }) => {
-  const { merchant_id, target_country, holiday_name, platform_connection_id, mcc_account_id } = await req.json();
+  const { merchant_id, target_country, holiday_name, platform_connection_id, mcc_account_id, language } = await req.json();
   if (!merchant_id) return apiError("缺少商家 ID");
   if (!target_country) return apiError("请选择目标国家");
   if (target_country.length > 8) return apiError("国家代码格式无效");
+
+  // 广告语言：用户在领取弹窗显式选择则采用；未选则置 null（生成时默认用爬取到的页面语言）
+  const chosenLanguage = typeof language === "string" && language.trim() ? language.trim() : null;
+  if (chosenLanguage && !KNOWN_LANG_CODES.has(chosenLanguage)) return apiError("广告语言代码无效");
 
   const merchant = await prisma.user_merchants.findFirst({
     where: { id: BigInt(merchant_id), user_id: BigInt(user.userId), is_deleted: 0 },
@@ -744,8 +742,9 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
     claimMccId = recentMcc?.mcc_id ?? null;
   }
 
-  // 根据目标国家自动确定广告语言
-  const langCode = COUNTRY_TO_LANG_CODE[target_country.toUpperCase()] || "en";
+  // 广告语言：显式选择优先；未选则置 null —— 生成阶段(generate-extensions)默认采用
+  // 爬取到的页面语言(detectedLanguageCode)，爬取无结果时再回退投放国家市场语言。
+  const langCode = chosenLanguage; // null = 自动（按爬取语言）
 
   // 草稿不占三位序号；正式 NNN- 在首次提交 Google 时分配（见 ad-creation/submit）
   const userIdBn = BigInt(user.userId);

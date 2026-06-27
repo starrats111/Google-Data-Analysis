@@ -19,6 +19,21 @@ import { recordExitIp } from './exit-ip'
 
 const inflight = new Map<string, Promise<ReplenishResult>>()
 
+/**
+ * 失败冷却表（进程内，PM2 单进程常驻，跨 cron 轮次保留）。
+ * campaignId → 在此 epoch(ms) 之前不再被 cron 选中补货。
+ *
+ * 解决「队列饿死」：replenishLowStock 按库存升序取前 N 个，库存恒为 0 的
+ * 常败系列（坏链/难解析/商家缺失）每轮都排在队首，且失败探针最长 75s，
+ * 4 分钟预算被它们烧光，导致 900+ 健康系列永远轮不到补货。
+ * 失败后置入冷却，到期前跳过，把预算让给健康系列；到期自动重试。
+ */
+const failCooldown = new Map<string, number>()
+/** probe/批量失败的冷却时长（坏链多为代理波动，30min 后重试一次） */
+const FAIL_COOLDOWN_MS = 30 * 60_000
+/** 商家缺失/缺链接的冷却时长（属数据问题，2h 重试一次即可） */
+const MERCHANT_COOLDOWN_MS = 2 * 60 * 60_000
+
 export interface ReplenishResult {
   campaignId: string
   skipped?: boolean
@@ -325,11 +340,17 @@ export async function replenishLowStock(
   })
   const stockMap = new Map(stockRows.map((r) => [r.campaign_id.toString(), r._count._all]))
 
-  // 3. 低于低水位的（含 0 库存 / 无记录），按库存升序，最紧急优先，限额保护
-  const low = ids
+  // 3. 低于低水位的（含 0 库存 / 无记录），按库存升序，最紧急优先，限额保护。
+  //    跳过仍在失败冷却期内的系列（常败系列不再每轮霸占预算，让位给健康系列）。
+  const now = Date.now()
+  const lowAll = ids
     .map((id) => ({ id, stock: stockMap.get(id.toString()) ?? 0 }))
     .filter((x) => x.stock <= STOCK_CONFIG.LOW_WATERMARK)
     .sort((a, b) => a.stock - b.stock)
+
+  const low = lowAll.filter((x) => (failCooldown.get(x.id.toString()) ?? 0) <= now)
+  // 清理已过期的冷却项，避免 Map 无限增长
+  for (const [k, until] of failCooldown) if (until <= now) failCooldown.delete(k)
 
   const targets = low.slice(0, maxCampaigns)
 
@@ -344,10 +365,19 @@ export async function replenishLowStock(
     if (Date.now() - startedAt > DEADLINE_MS) break
     const r = await replenishCampaign(c.id)
     results.push(r)
-    if ((r.generated ?? 0) > 0) replenished++
+    const key = c.id.toString()
+    if ((r.generated ?? 0) > 0) {
+      replenished++
+      failCooldown.delete(key) // 成功产出：清除冷却
+    } else if (r.reason === 'merchant_not_found') {
+      failCooldown.set(key, Date.now() + MERCHANT_COOLDOWN_MS)
+    } else if (r.skipped !== true || r.reason === 'probe_failed') {
+      // probe_failed / 批量全失败（skipped=false, generated=0）→ 失败冷却
+      failCooldown.set(key, Date.now() + FAIL_COOLDOWN_MS)
+    }
   }
 
-  return { scanned: enabled.length, lowStock: low.length, replenished, results }
+  return { scanned: enabled.length, lowStock: lowAll.length, replenished, results }
 }
 
 /**

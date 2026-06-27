@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 import { useState, useCallback, useMemo, useEffect } from "react";
 import { Card, Row, Col, Table, Input, Select, Button, Space, Tag, Modal, Form, Typography, Popconfirm, Popover, Switch, InputNumber, Tabs, App, Tooltip, Radio, DatePicker, Slider, Progress, Alert } from "antd";
 import { ShopOutlined, SearchOutlined, CheckOutlined, DollarOutlined, CalendarOutlined, SaveOutlined, SyncOutlined, WarningOutlined, StarOutlined, ReloadOutlined, RobotOutlined, DeleteOutlined, CloseCircleOutlined, ThunderboltOutlined } from "@ant-design/icons";
@@ -48,6 +48,26 @@ const CATEGORY_CN: Record<string, string> = {
   "Cosmetics": "化妆品", "Fragrance": "香水", "Hair Care": "护发",
 };
 const catCn = (v: string | null) => { if (!v) return "-"; return CATEGORY_CN[v] || v; };
+// 领取广告时可选的广告语言（与 ad-preview GOOGLE_ADS_LANGUAGES 对齐）。
+// 不选 = 自动按爬取到的页面语言（detectedLanguageCode），爬取失败再兜底投放国家市场语言。
+const AD_LANGUAGES = [
+  { code: "en", name: "English 英语" }, { code: "fr", name: "Français 法语" },
+  { code: "de", name: "Deutsch 德语" }, { code: "es", name: "Español 西班牙语" },
+  { code: "it", name: "Italiano 意大利语" }, { code: "pt", name: "Português 葡萄牙语" },
+  { code: "nl", name: "Nederlands 荷兰语" }, { code: "ja", name: "日本語 日语" },
+  { code: "ko", name: "한국어 韩语" }, { code: "zh_CN", name: "中文(简体)" },
+  { code: "zh_TW", name: "中文(繁體)" }, { code: "ru", name: "Русский 俄语" },
+  { code: "pl", name: "Polski 波兰语" }, { code: "sv", name: "Svenska 瑞典语" },
+  { code: "no", name: "Norsk 挪威语" }, { code: "da", name: "Dansk 丹麦语" },
+  { code: "fi", name: "Suomi 芬兰语" }, { code: "cs", name: "Čeština 捷克语" },
+  { code: "tr", name: "Türkçe 土耳其语" }, { code: "th", name: "ไทย 泰语" },
+  { code: "vi", name: "Tiếng Việt 越南语" }, { code: "id", name: "Bahasa Indonesia 印尼语" },
+  { code: "ms", name: "Bahasa Melayu 马来语" }, { code: "ar", name: "العربية 阿拉伯语" },
+  { code: "iw", name: "עברית 希伯来语" }, { code: "el", name: "Ελληνικά 希腊语" },
+  { code: "ro", name: "Română 罗马尼亚语" }, { code: "hu", name: "Magyar 匈牙利语" },
+  { code: "bg", name: "Български 保加利亚语" }, { code: "hi", name: "हिन्दी 印地语" },
+  { code: "uk", name: "Українська 乌克兰语" },
+];
 // D-004：ALL_COUNTRIES 已抽到 @/lib/constants，下方代码统一 import 复用
 const CommissionCell = ({ v }: { v: string | null }) => {
   if (!v) return <span style={{ color: "#bfbfbf" }}>-</span>;
@@ -1294,6 +1314,15 @@ export default function MerchantsPage() {
           />
         </Form.Item>
         {claimM?.supported_regions && (<div style={{ marginBottom: 16 }}><Text type="secondary">支持地区（点击快速选择）：</Text><Space wrap style={{ marginTop: 4 }}>{(claimM.supported_regions as any[]).map((r) => { const c = typeof r === "string" ? r : r.code; return <Tag key={c} color="blue" style={{ cursor: "pointer" }} onClick={() => claimForm.setFieldValue("target_country", c)}>{c}</Tag>; })}</Space></div>)}
+        <Form.Item name="language" label="广告语言（可选）" extra="不选则默认使用爬取到的页面语言（爬取失败时回退投放国家市场语言）">
+          <Select
+            showSearch
+            allowClear
+            placeholder="自动（按爬取页面语言）"
+            optionFilterProp="label"
+            options={AD_LANGUAGES.map((l) => ({ value: l.code, label: l.name }))}
+          />
+        </Form.Item>
         {platformConns.length > 1 && (
           <Form.Item name="platform_connection_id" label="使用账号" rules={[{ required: true, message: "请选择使用的平台账号" }]}>
             <Select placeholder="选择平台账号" options={platformConns.map((c) => ({ value: c.id, label: `${c.account_name || c.platform} (${c.platform})` }))} />

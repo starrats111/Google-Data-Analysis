@@ -476,12 +476,12 @@ export default function AdPreviewPage() {
     setNetworkDisplay(c?.network_display === 1 || s?.network_display === 1);
     // 初始化最终到达网址后缀
     setSuffixInput((c as any)?.final_url_suffix ?? "");
-    // 广告语言以「投放国家市场语言」为准（与文案生成逻辑一致：FR→法语、DE→德语…），
-    // 这样保证「投法语给法国人」——文案语言与广告语言、投放国家三者一致。
-    // 爬虫检测到的页面 HTML lang 仅作参考：很多站点（如 brevo.fr 法语站点 html lang=en）
-    // 会用统一英文模板，直接采信会导致广告语言与文案/国家不符，故冲突时一律按市场语言。
+    // 广告语言优先级（LANG-02）：领取时显式选择的 campaign.language_id 最高；
+    // 未选则默认采用爬取检测到的页面语言 detectedLanguageCode；都没有再回退投放国家市场语言。
+    // 注：少数站点 html lang 不准（如 brevo.fr 法语站 html lang=en），员工可在下方语言框手动改。
     const detectedLang = (preview.adCreative as any)?.detectedLanguageCode || "";
-    setAdLanguage(marketCfg.languageCode || detectedLang || "");
+    const chosenLang = (c as any)?.language_id || "";
+    setAdLanguage(chosenLang || detectedLang || marketCfg.languageCode || "");
     setPromotion((prev) => ({
       ...prev,
       currency_code: marketCfg.currencyCode,
@@ -1110,18 +1110,14 @@ export default function AdPreviewPage() {
         return;
       }
 
-      // 爬虫从 HTML lang 属性或 locale URL 检测到实际页面语言
-      // 广告语言以投放国家市场语言为准：仅当检测语言与市场语言一致时确认采用；
-      // 不一致时（如法语站点 html lang=en）保持市场语言，避免与文案/国家错配。
+      // 爬虫从 HTML lang 属性或 locale URL 检测到实际页面语言（LANG-02）
+      // 领取时显式选择了广告语言(campaign.language_id) → 尊重用户选择，不覆盖；
+      // 未选（自动模式）→ 默认采用爬取检测到的页面语言。员工仍可在下方语言框手动改。
       if (type === "detected_language") {
         const d = data as { code: string };
-        const marketLang = getAdMarketConfig(targetCountry).languageCode;
-        if (d?.code && d.code === marketLang) {
+        const chosenLang = (preview?.campaign as any)?.language_id || "";
+        if (d?.code && !chosenLang) {
           setAdLanguage(d.code);
-        } else if (d?.code && d.code !== marketLang) {
-          console.warn(
-            `[AdLang] 检测页面语言 ${d.code} 与投放国家 ${targetCountry} 市场语言 ${marketLang} 不一致，按市场语言投放`,
-          );
         }
         return;
       }

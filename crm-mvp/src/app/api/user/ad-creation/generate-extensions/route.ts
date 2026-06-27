@@ -501,9 +501,10 @@ export async function loadGenContext(
   if (!campaign) return { error: "广告系列不存在", status: 404 };
 
   // LANG-01-R1：目标广告语言后端权威化。前端 ad_language 优先（员工可能手改），其次回退到
-  // campaign.language_id（创建时"确认的广告语言"），最后由下游按 country/market 兜底。
-  // 防止前端漏传/异常时丢失"已确认语言"这一权威来源。
-  const ad_language = payload.ad_language ?? (campaign.language_id || undefined);
+  // campaign.language_id（领取时显式选择的广告语言）。
+  // LANG-02：若两者都为空（领取时未选语言，按"自动"处理），默认采用爬取检测到的页面语言
+  //   detectedLanguageCode（见下方 initialCache 后赋值），最终都没有再由下游按 country/market 兜底。
+  const explicitLang = payload.ad_language ?? (campaign.language_id || undefined);
 
   const merchant = await prisma.user_merchants.findFirst({
     where: { id: campaign.user_merchant_id, is_deleted: 0 },
@@ -543,6 +544,10 @@ export async function loadGenContext(
   const optionalNeedsPromo = needsOptional && (body.optionalTypes || []).some((t: string) => ["promotion", "price"].includes(t));
   const adCreativeId = adCreative?.id || null;
   const initialCache = adCreative?.crawl_cache as CrawlCache | null;
+
+  // LANG-02：未显式指定广告语言时，默认采用爬取到的页面语言；都没有则交由下游按 country/market 兜底。
+  const detectedLang = initialCache?.detectedLanguageCode || undefined;
+  const ad_language = explicitLang ?? detectedLang;
 
   return {
     ctx: {
