@@ -42,7 +42,7 @@ var CONFIG = {
   API_KEY: '${apiKey}',
 
   // 循环监控配置
-  LOOP_INTERVAL_SECONDS: 30,
+  LOOP_INTERVAL_SECONDS: 15,
   CYCLE_MINUTES: 30,
 
   // 时间限制配置（Google Ads Script 最长运行 30 分钟）
@@ -154,6 +154,9 @@ function main() {
   console.log('开始: ' + formatDateTime(STATE.startTime, timeZone) +
     ' | MCC ' + mccId + ' | ' + STATE.scriptInstanceId +
     ' | 上限' + CONFIG.MAX_RUNTIME_SECONDS + 's');
+
+  // ===== 运行时配置：从 CRM 拉取可调参数（如轮询间隔），无需重新下发脚本即可调速 =====
+  loadRuntimeConfig();
 
   // ===== 阶段 0: 数据中心采集（DailyData / CID_List / CampaignInfo）=====
   if (CONFIG.ENABLE_DATA_CENTER_EXPORT && !shouldStop('阶段0开始')) {
@@ -1015,6 +1018,29 @@ function flushNoGrowthLog(ngState) {
     console.log('循环 #' + ngState.firstLoop + '~#' + lastLoop + ' 无增长 ×' + ngState.count);
   }
   ngState.count = 0;
+}
+
+// =====================================================================
+// 运行时配置（服务端可调，避免为调参反复重发脚本）
+// =====================================================================
+function loadRuntimeConfig() {
+  try {
+    var url = CONFIG.API_BASE_URL.replace(/\\/$/, '') + '/api/v1/suffix/script-config';
+    var data = callApiWithRetry(url, {
+      method: 'get',
+      headers: { 'Authorization': 'Bearer ' + CONFIG.API_KEY, 'X-Api-Key': CONFIG.API_KEY },
+      muteHttpExceptions: true
+    }, 2, 'Script Config API');
+    if (data && data.success && data.config) {
+      var li = parseInt(data.config.loopIntervalSeconds, 10);
+      if (!isNaN(li) && li >= 5 && li <= 300) CONFIG.LOOP_INTERVAL_SECONDS = li;
+      var cm = parseInt(data.config.cycleMinutes, 10);
+      if (!isNaN(cm) && cm >= 5 && cm <= 60) CONFIG.CYCLE_MINUTES = cm;
+      console.log('运行时配置: 轮询' + CONFIG.LOOP_INTERVAL_SECONDS + 's | 周期' + CONFIG.CYCLE_MINUTES + 'min');
+    }
+  } catch (e) {
+    console.log('运行时配置拉取失败, 使用脚本内默认: 轮询' + CONFIG.LOOP_INTERVAL_SECONDS + 's (' + e.message + ')');
+  }
 }
 
 // =====================================================================
