@@ -6,9 +6,11 @@
  * 逻辑（每个「已启用换链、已匹配带追踪链接商家」的广告系列）：
  *   O = 当天该商家联盟订单数（affiliate_transactions，UTC+8 切日）
  *   C = 当天该商家真实联盟点击（affiliate_click_daily）+ 我们已排程/已执行但可能尚未回流到聚合表的点击
- *   B = 过去 7 天该商家联盟点击日均（affiliate_click_daily，排除今天）；每小时补点击上限 = ⌊B/4⌋
- *   若 C ≥ O×10 → 不刷；否则 目标 T = O×rand(10,20)，本小时实补 = min(T−C, ⌊B/4⌋ − 本小时已排程)，
- *   余量留待下一小时续补。补刷复用 click-brush，1 小时窗口内随机分散、真人化。
+ *   目标 T = O×rand(cpoMin,cpoMax)：订单倒推「应有点击数」，使转化率落在用户区间内。
+ *   缺口 deficit = T − C；deficit ≤ 0 不刷。
+ *   B = 过去 7 天该商家联盟点击日均（排除今天）：仅作「有历史」时的限速封顶——当天累计 ≤ ⌊B/4⌋×剩余小时。
+ *   ★ 基线为 0 不再跳过：有订单就按 T 补刷，把缺口「铺到当天剩余全部时段」随机分散执行，避免一小时内突增。
+ *   补刷复用 click-brush（startBrushTaskWindowed）；C 已含我方今日 pending，重复触发不会重复下单。
  *
  * 触发：订单同步后（ontxn，见 txn-quick-sync 钩子）；仅对开启 click_control_enabled 的用户生效。
  */
@@ -107,10 +109,6 @@ export async function runAutoClickForUser(
     baselineDates.push(d)
   }
   const now = new Date()
-  const hourStart = new Date(now)
-  hourStart.setMinutes(0, 0, 0)
-  const hourEnd = new Date(hourStart.getTime() + 3600_000)
-  const windowMinutes = Math.max(1, Math.ceil((hourEnd.getTime() - now.getTime()) / 60_000))
 
   for (const c of campaigns) {
     const merchant = c.user_merchant_id ? merchantById.get(c.user_merchant_id.toString()) : undefined
@@ -155,12 +153,10 @@ export async function runAutoClickForUser(
     const todayTaskIds = todayTasks.map((t) => t.id)
     let ourSuccessToday = 0
     let ourPendingToday = 0
-    let scheduledThisHour = 0
     if (todayTaskIds.length > 0) {
-      ;[ourSuccessToday, ourPendingToday, scheduledThisHour] = await Promise.all([
+      ;[ourSuccessToday, ourPendingToday] = await Promise.all([
         prisma.kyads_click_task_items.count({ where: { task_id: { in: todayTaskIds }, status: 'success', is_deleted: 0 } }),
         prisma.kyads_click_task_items.count({ where: { task_id: { in: todayTaskIds }, status: { in: ['pending', 'executing'] }, is_deleted: 0 } }),
-        prisma.kyads_click_task_items.count({ where: { task_id: { in: todayTaskIds }, is_deleted: 0, scheduled_at: { gte: hourStart, lt: hourEnd } } }),
       ])
     }
 
@@ -175,40 +171,44 @@ export async function runAutoClickForUser(
       continue
     }
 
-    // 基线 B：过去 7 天日均（排除今天）；无历史时用今日真实点击兜底，仍为 0 则无法安全定量 → 跳过
-    const baseAgg = await prisma.affiliate_click_daily.aggregate({
-      where: { user_id: userId, platform, merchant_id: mid, is_deleted: 0, click_date: { in: baselineDates } },
-      _sum: { clicks: true },
-    })
-    const baselineSum = baseAgg._sum.clicks ?? 0
-    const avg7 = baselineSum / BASELINE_DAYS
-    const baseline = Math.max(avg7, realClicksToday)
-    const hourlyCap = Math.floor(baseline / HOURLY_DIVISOR)
-    if (hourlyCap <= 0) {
-      res.skippedNoBaseline++
-      res.details.push(`${platform}:${mid} O=${O} C=${effectiveC} 无基线(B=${baseline.toFixed(1)})→跳过`)
-      continue
-    }
-
-    // 目标 T = O×rand(cpoMin,cpoMax)；本小时实补 = min(T−C, 小时上限剩余)
+    // 目标 T = O×rand(cpoMin,cpoMax)：订单倒推「应有点击数」，使转化率(订单/点击)落在区间内。
+    // 例：区间 5%~10% → 每订单 10~20 点击；O=2 → T=20~40。
     const T = O * randomInt(cpoMin, cpoMax)
-    const deficit = T - effectiveC
+    let deficit = T - effectiveC
     if (deficit <= 0) {
       res.skippedRatioOk++
       continue
     }
-    const hourlyRemaining = Math.max(0, hourlyCap - scheduledThisHour)
-    const thisHour = Math.min(deficit, hourlyRemaining)
-    if (thisHour <= 0) {
-      res.details.push(`${platform}:${mid} O=${O} C=${effectiveC} 缺${deficit} 但本小时已达上限(${hourlyCap})→下小时续补`)
+
+    // 基线 B：过去 7 天日均（排除今天）。仅用于「有历史」时的限速封顶（平均每小时 ≤ ⌊B/4⌋）。
+    // 关键改动：基线为 0 不再跳过——有订单就按 T 补刷，只是把缺口「铺到当天剩余时段」分散执行，避免突增。
+    const baseAgg = await prisma.affiliate_click_daily.aggregate({
+      where: { user_id: userId, platform, merchant_id: mid, is_deleted: 0, click_date: { in: baselineDates } },
+      _sum: { clicks: true },
+    })
+    const avg7 = (baseAgg._sum.clicks ?? 0) / BASELINE_DAYS
+    const baseline = Math.max(avg7, realClicksToday)
+    const hourlyCap = Math.floor(baseline / HOURLY_DIVISOR) // 0=无基线
+
+    // 当天剩余小时数（北京时间到 24:00），把缺口铺到剩余时段随机分散
+    const hoursLeft = Math.max(1, Math.ceil((todayEndUTC.getTime() - now.getTime()) / 3_600_000))
+
+    // 有基线：当天累计不超过 ⌊B/4⌋×剩余小时（平均速率≈日均1/4每小时）。
+    // 无基线：仅受订单倒推目标 T 约束（T 本身很小，铺到当天剩余时段即足够温和、真人化）。
+    if (hourlyCap > 0) deficit = Math.min(deficit, hourlyCap * hoursLeft)
+    if (deficit <= 0) {
+      res.details.push(`${platform}:${mid} O=${O} C=${effectiveC} 受基线限速(${hourlyCap}/h)本轮不补`)
       continue
     }
 
-    const r = await startBrushTaskWindowed(c.id, userId, thisHour, windowMinutes)
+    // 窗口=当天剩余全部时段；scheduler 在窗口内随机分散（真人化）。
+    // effectiveC 已含我方今日 pending，订单再次同步触发也不会重复下单。
+    const windowMinutes = hoursLeft * 60
+    const r = await startBrushTaskWindowed(c.id, userId, deficit, windowMinutes)
     if (r.ok) {
       res.scheduled++
       res.clicksScheduled += r.target
-      res.details.push(`${platform}:${mid} O=${O} C=${effectiveC} T=${T} 本小时补${r.target}(上限${hourlyCap})`)
+      res.details.push(`${platform}:${mid} O=${O} C=${effectiveC} T=${T} 铺${r.target}点击/${hoursLeft}h(基线${hourlyCap}/h)`)
     } else {
       res.details.push(`${platform}:${mid} 补刷失败: ${r.message}`)
     }
