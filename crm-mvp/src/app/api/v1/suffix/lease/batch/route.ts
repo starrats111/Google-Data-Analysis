@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
     // 查找 CRM 中对应的 campaign 记录
     const campaign = await prisma.campaigns.findFirst({
       where: { google_campaign_id: campaignId, user_id: scriptUser.userId, is_deleted: 0 },
-      select: { id: true, suffix_exchange_enabled: true },
+      select: { id: true, suffix_exchange_enabled: true, user_merchant_id: true },
     })
 
     if (!campaign) {
@@ -65,6 +65,14 @@ export async function POST(req: NextRequest) {
 
     if (!campaign.suffix_exchange_enabled) {
       results.push({ campaignId, code: 'EXCHANGE_DISABLED', message: '该广告系列已关闭换链接' })
+      continue
+    }
+
+    // 「从 Google 侧回填」的系列入库时 user_merchant_id=0，待关联到 CRM 商家库才有值。
+    // 商家未进库时一直为 0：此类系列无追踪链接可换，直接当作未启用返回，避免触发 force 补货、
+    // 进而刷出 merchant_not_found 告警（治本闸门，与单系列补货 replenishCampaign 一致）。
+    if (!campaign.user_merchant_id || campaign.user_merchant_id <= BigInt(0)) {
+      results.push({ campaignId, code: 'EXCHANGE_DISABLED', message: '该广告系列未匹配商家，暂不可换链接' })
       continue
     }
 

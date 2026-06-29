@@ -44,6 +44,7 @@ model users {
   kylink_linked_at          DateTime? @db.DateTime(0) // 最近一次成功连接 kylink 的时间（测试连接通过即更新）
   kylink_username           String?  @db.VarChar(255) // 该 API Key 对应的 kylink 账号标识（邮箱/姓名），测试连接成功时记录，便于辨认绑定的是谁
   link_exchange_click_count Int      @default(10) @db.UnsignedInt // 换链接工作台：上次设置的每广告刷点击数，新同步广告默认沿用
+  link_exchange_disabled    Int      @default(0) @db.TinyInt // 1=该用户只同步数据、不参与换链接（如 jy 交垟队）；从 Google 回填的新广告不自动开换链，UI 也禁止开启
   serpapi_key               String?  @db.VarChar(128) // 个人 SerpApi API Key（广告情报功能）
   atc_default_min_days      Int      @default(30) @db.UnsignedInt // 我的广告主-全局阈值，新增关注 / 统一设置时使用
   is_deleted                Int      @default(0) @db.TinyInt

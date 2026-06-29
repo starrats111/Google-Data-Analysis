@@ -150,6 +150,13 @@ export async function POST(req: NextRequest) {
       select: { id: true },
     })
     if (!owns) return NextResponse.json({ code: -1, message: '广告系列不存在或无权限' }, { status: 404 })
+    // 「只同步数据、不参与换链接」的用户（如 jy 交垟队）不允许开启换链
+    if (body.enabled) {
+      const u = await prisma.users.findUnique({ where: { id: userId }, select: { link_exchange_disabled: true } })
+      if (u?.link_exchange_disabled === 1) {
+        return NextResponse.json({ code: -1, message: '该账号仅同步数据，未开放换链接功能' }, { status: 403 })
+      }
+    }
     await prisma.campaigns.update({
       where: { id: campaignId },
       data: { suffix_exchange_enabled: body.enabled ? 1 : 0 },

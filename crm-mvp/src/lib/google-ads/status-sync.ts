@@ -32,6 +32,13 @@ export async function syncUserCampaignStatuses(userId: bigint): Promise<SyncResu
     where: { user_id: userId, is_deleted: 0, is_active: 1 },
   });
 
+  // 「只同步数据、不参与换链接」的用户（如 jy 交垟队）：从 Google 回填的新广告不自动开换链。
+  const userRow = await prisma.users.findUnique({
+    where: { id: userId },
+    select: { link_exchange_disabled: true },
+  });
+  const dataOnly = userRow?.link_exchange_disabled === 1;
+
   const results: SyncResult[] = [];
   let anyChange = false;
 
@@ -155,6 +162,8 @@ export async function syncUserCampaignStatuses(userId: bigint): Promise<SyncResu
             status: internalStatus,
             google_status: s.status,
             last_google_sync_at: new Date(),
+            // 只同步数据的用户（jy）：回填广告不自动开换链；其余用户用 schema 默认值 1
+            ...(dataOnly ? { suffix_exchange_enabled: 0 } : {}),
           }, { userId, mccId: mcc.id, gcid: s.campaign_id, softDeletedGcids });
           if (!created) continue; // 被清洗过的 gcid，跳过回灌
           newCampaigns++;

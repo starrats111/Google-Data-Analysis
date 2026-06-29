@@ -135,6 +135,13 @@ async function doReplenish(
   if (!campaign.suffix_exchange_enabled) {
     return { campaignId: cid, skipped: true, reason: 'exchange_disabled', before: 0, generated: 0, after: 0, failed: 0 }
   }
+  // 「从 Google 侧回填」的广告系列入库时 user_merchant_id 先置 0，待 syncMerchantStatusForUser
+  // 按 (平台,MID) 关联商家。若该商家尚未进 CRM 商家库，则一直为 0。此类系列不应被当作可换链：
+  // 静默跳过、不触发生成、更不报 merchant_not_found 告警（否则脚本每轮 lease→force 补货都刷一条，
+  // 把告警中心淹没——批量补货 replenishLowStock / 刷点击 startBrushAllTasks 早有此闸，单系列路径此前漏了）。
+  if (!campaign.user_merchant_id || campaign.user_merchant_id <= BigInt(0)) {
+    return { campaignId: cid, skipped: true, reason: 'merchant_not_linked', before: 0, generated: 0, after: 0, failed: 0 }
+  }
 
   const before = await prisma.suffix_pool.count({
     where: { campaign_id: campaignId, status: 'available', is_deleted: 0 },

@@ -182,8 +182,14 @@ export async function doSyncInBackground(
       deduped.push(keep);
       const toDelete = arr.filter(m => m.id !== keep.id);
       if (toDelete.length > 0) {
-        await prisma.user_merchants.deleteMany({ where: { id: { in: toDelete.map(m => m.id) } } });
-        console.log(`[MerchantSync] 清理重复商家: ${toDelete.length} 条 (key=${arr[0].platform}:${arr[0].merchant_id})`);
+        const delIds = toDelete.map(m => m.id);
+        // 先把引用了「被去重行」的广告系列改指到保留行，避免去重制造孤儿引用（换链接读不到商家）
+        await prisma.campaigns.updateMany({
+          where: { user_id: userId, user_merchant_id: { in: delIds } },
+          data: { user_merchant_id: keep.id },
+        });
+        await prisma.user_merchants.deleteMany({ where: { id: { in: delIds } } });
+        console.log(`[MerchantSync] 清理重复商家: ${toDelete.length} 条 (key=${arr[0].platform}:${arr[0].merchant_id})，已改指 ${delIds.length} 组引用`);
       }
     }
 
@@ -325,15 +331,28 @@ export async function doSyncInBackground(
     // 避免某个平台 API 失败/返回空数据时误删已有商家
     const syncedKeys = new Set(rows.map(r => `${r.platform_code}:${r.merchant_id}`));
     const syncedPlatforms = new Set(rows.map(r => r.platform_code));
-    let removedCount = 0;
-    const toRemoveIds: bigint[] = [];
+    const candidateRemove: bigint[] = [];
     for (const [key, ex] of map.entries()) {
       const [exPlatform] = key.split(":");
       if (!syncedKeys.has(key) && ex.status !== "claimed" && ex.status !== "paused" && ex.status !== "excluded" && ex.is_deleted === 0 && syncedPlatforms.has(exPlatform)) {
-        toRemoveIds.push(ex.id);
-        removedCount++;
+        candidateRemove.push(ex.id);
       }
     }
+    // 关键修复：绝不删除「仍被未删除广告系列引用」的商家。
+    // 换平台账号后，旧账号加入的商家不在新账号「已加入」清单里 → 本来会被当作"已退出"删除，
+    // 但其追踪链接仍被在投广告用于换链接；一旦物理删除即成孤儿且链接无法找回（无备份/binlog）。
+    let toRemoveIds = candidateRemove;
+    if (candidateRemove.length > 0) {
+      const referenced = await prisma.campaigns.findMany({
+        where: { user_id: userId, is_deleted: 0, user_merchant_id: { in: candidateRemove } },
+        select: { user_merchant_id: true },
+      });
+      const protectedIds = new Set(referenced.map(c => c.user_merchant_id.toString()));
+      toRemoveIds = candidateRemove.filter(id => !protectedIds.has(id.toString()));
+      const protectedCount = candidateRemove.length - toRemoveIds.length;
+      if (protectedCount > 0) dbg(`Protected ${protectedCount} merchants from removal (still referenced by active campaigns)`);
+    }
+    const removedCount = toRemoveIds.length;
     if (toRemoveIds.length > 0) {
       await prisma.user_merchants.deleteMany({ where: { id: { in: toRemoveIds } } });
     }

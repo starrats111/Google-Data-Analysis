@@ -72,16 +72,39 @@ export async function syncMerchantStatusForUser(userId: bigint): Promise<{
 // ── Step 1: 自动关联未绑定的广告系列 ──
 
 async function autoLinkCampaigns(userId: bigint): Promise<number> {
-  const unlinked = await prisma.campaigns.findMany({
+  // 候选：所有真正投放(有 gcid)的在投广告系列。需要关联的有两类：
+  //   1. user_merchant_id=0（从未关联）
+  //   2. user_merchant_id>0 但指向的商家行已不存在/已软删（孤儿）——商家被同步误删后留下的，
+  //      旧逻辑只处理第 1 类，导致孤儿广告永远接不回商家（换链接读不到追踪链接）。
+  const candidates = await prisma.campaigns.findMany({
     where: {
       user_id: userId,
-      user_merchant_id: BigInt(0),
       is_deleted: 0,
       google_campaign_id: { not: null },
     },
-    select: { id: true, campaign_name: true },
-    take: 500,
+    select: { id: true, campaign_name: true, user_merchant_id: true },
+    take: 2000,
   });
+
+  const refIds = candidates
+    .map((c) => c.user_merchant_id)
+    .filter((id): id is bigint => !!id && id > BigInt(0));
+  const aliveRef = new Set(
+    (refIds.length > 0
+      ? await prisma.user_merchants.findMany({
+          where: { id: { in: refIds }, user_id: userId, is_deleted: 0 },
+          select: { id: true },
+        })
+      : []
+    ).map((m) => m.id.toString()),
+  );
+
+  const unlinked = candidates.filter(
+    (c) =>
+      !c.user_merchant_id ||
+      c.user_merchant_id <= BigInt(0) ||
+      !aliveRef.has(c.user_merchant_id.toString()),
+  );
 
   if (unlinked.length === 0) return 0;
 
