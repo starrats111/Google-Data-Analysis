@@ -14,6 +14,8 @@ interface ActionBody {
   enabled?: boolean
   count?: number
   trackingLink?: string
+  ratioMinPct?: number
+  ratioMaxPct?: number
 }
 
 export async function POST(req: NextRequest) {
@@ -30,11 +32,21 @@ export async function POST(req: NextRequest) {
 
   // 需求2：用户级开关「订单/点击比自动补刷点击」
   if (body.action === 'setClickControl') {
-    await prisma.users.update({
-      where: { id: userId },
-      data: { click_control_enabled: body.enabled ? 1 : 0 },
-    })
-    return NextResponse.json({ code: 0, data: { clickControlEnabled: !!body.enabled } })
+    const data: { click_control_enabled?: number; click_control_ratio_min_pct?: number; click_control_ratio_max_pct?: number } = {}
+    if (typeof body.enabled === 'boolean') data.click_control_enabled = body.enabled ? 1 : 0
+    // 转化率(订单/点击)区间，单位 %。校验：1~100 整数且 min<max
+    if (body.ratioMinPct != null || body.ratioMaxPct != null) {
+      const minPct = Math.round(Number(body.ratioMinPct))
+      const maxPct = Math.round(Number(body.ratioMaxPct))
+      if (!Number.isFinite(minPct) || !Number.isFinite(maxPct) || minPct < 1 || maxPct > 100 || minPct >= maxPct) {
+        return NextResponse.json({ code: -1, message: '转化率区间不合法（需 1~100 且下限<上限）' }, { status: 400 })
+      }
+      data.click_control_ratio_min_pct = minPct
+      data.click_control_ratio_max_pct = maxPct
+    }
+    if (Object.keys(data).length === 0) return NextResponse.json({ code: -1, message: '无更新内容' }, { status: 400 })
+    await prisma.users.update({ where: { id: userId }, data })
+    return NextResponse.json({ code: 0, data: { clickControlEnabled: data.click_control_enabled === 1 } })
   }
 
   // 单系列补货（同步等待，给用户即时结果）

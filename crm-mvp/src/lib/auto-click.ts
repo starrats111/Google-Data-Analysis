@@ -20,9 +20,7 @@ import { PLATFORM_CLICK_CONFIG } from '@/lib/platform-api'
 import { randomInt } from '@/lib/suffix-engine/click-scheduler'
 import { startBrushTaskWindowed } from '@/lib/suffix-engine/click-brush'
 
-/** 转化率目标：每订单 10~20 次点击（订单/点击 5%~10%） */
-const RATIO_MIN = 10
-const RATIO_MAX = 20
+/** 转化率目标改为按用户配置（click_control_ratio_min/max_pct）运行时计算，默认 5%~10%（每订单 10~20 点击） */
 /** 基线回看天数 */
 const BASELINE_DAYS = 7
 /** 每小时补点击上限 = 基线日均 / HOURLY_DIVISOR */
@@ -61,12 +59,19 @@ export async function runAutoClickForUser(
     details: [],
   }
 
-  // 用户级开关
+  // 用户级开关 + 转化率(订单/点击)区间配置
   const user = await prisma.users.findFirst({
     where: { id: userId, is_deleted: 0, status: 'active', click_control_enabled: 1 },
-    select: { id: true },
+    select: { id: true, click_control_ratio_min_pct: true, click_control_ratio_max_pct: true },
   })
   if (!user) return res
+
+  // 转化率区间(%) → 每订单点击数区间：cpoMin=100/maxPct, cpoMax=100/minPct
+  // 例：5%~10% → 每订单 10~20 次点击。无效配置回退默认（RATIO_MIN/MAX）。
+  const minPct = user.click_control_ratio_min_pct > 0 ? user.click_control_ratio_min_pct : 5
+  const maxPct = user.click_control_ratio_max_pct > minPct ? user.click_control_ratio_max_pct : Math.max(minPct + 1, 10)
+  const cpoMin = Math.max(1, Math.round(100 / maxPct)) // 达标所需最少点击/订单（C≥O×cpoMin ⇒ 转化率≤maxPct）
+  const cpoMax = Math.max(cpoMin + 1, Math.round(100 / minPct)) // 补刷目标上限点击/订单
 
   // 候选系列：已启用换链、已匹配商家
   const campaigns = await prisma.campaigns.findMany({
@@ -164,8 +169,8 @@ export async function runAutoClickForUser(
     //   + 我们今日待执行(pending/executing) —— 即将成为点击，计入避免重复补
     const effectiveC = Math.max(realClicksToday, ourSuccessToday) + ourPendingToday
 
-    // 比值已达标（C ≥ O×10）→ 不刷
-    if (effectiveC >= O * RATIO_MIN) {
+    // 比值已达标（C ≥ O×cpoMin ⇒ 转化率 ≤ maxPct）→ 不刷
+    if (effectiveC >= O * cpoMin) {
       res.skippedRatioOk++
       continue
     }
@@ -185,8 +190,8 @@ export async function runAutoClickForUser(
       continue
     }
 
-    // 目标 T = O×rand(10,20)；本小时实补 = min(T−C, 小时上限剩余)
-    const T = O * randomInt(RATIO_MIN, RATIO_MAX)
+    // 目标 T = O×rand(cpoMin,cpoMax)；本小时实补 = min(T−C, 小时上限剩余)
+    const T = O * randomInt(cpoMin, cpoMax)
     const deficit = T - effectiveC
     if (deficit <= 0) {
       res.skippedRatioOk++

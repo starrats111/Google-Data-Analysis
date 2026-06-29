@@ -5,6 +5,7 @@ import { getAlertSummary } from '@/lib/suffix-engine/alerts'
 import { STOCK_CONFIG } from '@/lib/suffix-engine/config'
 import { parseCampaignNameFull } from '@/lib/campaign-merchant-link'
 import { normalizePlatformCode } from '@/lib/constants'
+import { todayCST, parseCSTDateStart, parseCSTDateEndExclusive } from '@/lib/date-utils'
 
 export async function GET(req: NextRequest) {
   const user = await getUserFromRequest(req)
@@ -106,6 +107,31 @@ export async function GET(req: NextRequest) {
   const merchantById = new Map(merchants.map((m) => [m.id.toString(), m]))
   const merchantByKey = new Map(merchants.map((m) => [`${normalizePlatformCode(m.platform)}:${m.merchant_id}`, m]))
 
+  // ── 今日(北京时间) 联盟点击 / 订单（按 平台:商家ID）——「点击数/订单数/转化率」列，与控比引擎同口径 ──
+  // 转化率 = 订单/点击；点击取自 affiliate_click_daily（联盟平台真实点击），订单取自 affiliate_transactions。
+  const todayStr = todayCST()
+  const todayClickDate = new Date(`${todayStr}T00:00:00Z`)
+  const todayStartUTC = parseCSTDateStart(todayStr)
+  const todayEndUTC = parseCSTDateEndExclusive(todayStr)
+  const clicksByKey = new Map<string, number>()
+  const ordersByKey = new Map<string, number>()
+  if (merchants.length > 0) {
+    const [clickRows, orderRows] = await Promise.all([
+      prisma.affiliate_click_daily.groupBy({
+        by: ['platform', 'merchant_id'],
+        where: { user_id: userId, is_deleted: 0, click_date: todayClickDate },
+        _sum: { clicks: true },
+      }),
+      prisma.affiliate_transactions.groupBy({
+        by: ['platform', 'merchant_id'],
+        where: { user_id: userId, is_deleted: 0, transaction_time: { gte: todayStartUTC, lt: todayEndUTC } },
+        _count: { _all: true },
+      }),
+    ])
+    for (const r of clickRows) clicksByKey.set(`${normalizePlatformCode(r.platform)}:${r.merchant_id}`, r._sum.clicks ?? 0)
+    for (const r of orderRows) ordersByKey.set(`${normalizePlatformCode(r.platform)}:${r.merchant_id}`, r._count._all)
+  }
+
   // ── 来路来源批量预取（与 referer-resolver 同口径）：文章 published_url / 联盟账号绑定网站 domain ──
   const allMerchantIds = merchants.map((m) => m.id)
   const latestArticleByMerchant = new Map<string, string>()
@@ -206,6 +232,13 @@ export async function GET(req: NextRequest) {
     const stock = stockMap.get(c.id.toString()) ?? { available: 0, leased: 0, consumed: 0 }
     const clickTask = clickTaskMap.get(c.id.toString()) ?? null
     const referer = resolveReferer(merchant)
+    // 今日点击/订单/转化率（按商家口径；同一商家的多个系列展示相同值）
+    const mkey = merchant
+      ? `${normalizePlatformCode(merchant.platform)}:${merchant.merchant_id}`
+      : (c.platform && c.mid ? `${c.platform}:${c.mid}` : '')
+    const todayClicks = mkey ? (clicksByKey.get(mkey) ?? 0) : 0
+    const todayOrders = mkey ? (ordersByKey.get(mkey) ?? 0) : 0
+    const conversion = todayClicks > 0 ? todayOrders / todayClicks : null // 订单/点击；无点击为 null（前端显示 —）
     return {
       campaignId: c.id.toString(),
       googleCampaignId: c.google_campaign_id,
@@ -223,6 +256,9 @@ export async function GET(req: NextRequest) {
       parentNetwork: merchant?.parent_network ?? null,
       parentBlacklisted: merchant?.parent_blacklisted === 1,
       suffixEnabled: c.suffix_exchange_enabled === 1,
+      todayClicks,
+      todayOrders,
+      conversion,
       refererUrl: referer.url,
       refererSource: referer.source,
       lastApplyAt: c.suffix_last_apply_at,
@@ -242,7 +278,13 @@ export async function GET(req: NextRequest) {
 
   const apiKeyRecord = await prisma.users.findUnique({
     where: { id: userId },
-    select: { script_api_key: true, link_exchange_click_count: true, click_control_enabled: true },
+    select: {
+      script_api_key: true,
+      link_exchange_click_count: true,
+      click_control_enabled: true,
+      click_control_ratio_min_pct: true,
+      click_control_ratio_max_pct: true,
+    },
   })
 
   const { summary: alertSummary, totalOpen } = await getAlertSummary(userId)
@@ -260,6 +302,10 @@ export async function GET(req: NextRequest) {
       apiKey: apiKeyRecord?.script_api_key ?? null,
       defaultClickCount: apiKeyRecord?.link_exchange_click_count ?? 10,
       clickControlEnabled: apiKeyRecord?.click_control_enabled === 1,
+      clickControlRatio: {
+        minPct: apiKeyRecord?.click_control_ratio_min_pct ?? 5,
+        maxPct: apiKeyRecord?.click_control_ratio_max_pct ?? 10,
+      },
       summary: {
         total: enabledRows.length,
         matched: enabledRows.filter((r) => r.matched).length,

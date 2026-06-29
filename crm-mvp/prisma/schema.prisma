@@ -46,6 +46,8 @@ model users {
   link_exchange_click_count Int      @default(10) @db.UnsignedInt // 换链接工作台：上次设置的每广告刷点击数，新同步广告默认沿用
   link_exchange_disabled    Int      @default(0) @db.TinyInt // 1=该用户只同步数据、不参与换链接（如 jy 交垟队）；从 Google 回填的新广告不自动开换链，UI 也禁止开启
   click_control_enabled     Int      @default(1) @db.TinyInt // 需求2：订单/点击比控制刷点击的用户级开关，默认开。1=开启「有订单→按 10-20:1 自动补刷联盟点击」，0=该用户关闭
+  click_control_ratio_min_pct Int    @default(5) @db.TinyInt  // 需求2：转化率(订单/点击)控制区间下限(%)，默认5。员工可在换链接页配置
+  click_control_ratio_max_pct Int    @default(10) @db.TinyInt // 需求2：转化率(订单/点击)控制区间上限(%)，默认10
   serpapi_key               String?  @db.VarChar(128) // 个人 SerpApi API Key（广告情报功能）
   atc_default_min_days      Int      @default(30) @db.UnsignedInt // 我的广告主-全局阈值，新增关注 / 统一设置时使用
   is_deleted                Int      @default(0) @db.TinyInt

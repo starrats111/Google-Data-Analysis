@@ -35,6 +35,9 @@ interface CampaignRow {
   parentNetwork: string | null;
   parentBlacklisted: boolean;
   suffixEnabled: boolean;
+  todayClicks: number;
+  todayOrders: number;
+  conversion: number | null;
   refererUrl: string | null;
   refererSource: "manual" | "article" | "website" | "none";
   lastApplyAt: string | null;
@@ -59,6 +62,7 @@ interface OverviewData {
   apiKey: string | null;
   defaultClickCount: number;
   clickControlEnabled: boolean;
+  clickControlRatio: { minPct: number; maxPct: number };
   summary: { total: number; matched: number; totalAvailable: number; lowStockCount: number; alertOpen: number };
   alertSummary: Record<string, number>;
   stockConfig: { target: number; lowWatermark: number };
@@ -301,6 +305,28 @@ export default function LinkExchangePage() {
     }
   };
 
+  // 转化率(订单/点击)控制区间
+  const [ratioMin, setRatioMin] = useState<number>(5);
+  const [ratioMax, setRatioMax] = useState<number>(10);
+  const [ratioSaving, setRatioSaving] = useState(false);
+  useEffect(() => {
+    if (data?.clickControlRatio) { setRatioMin(data.clickControlRatio.minPct); setRatioMax(data.clickControlRatio.maxPct); }
+  }, [data?.clickControlRatio?.minPct, data?.clickControlRatio?.maxPct]);
+  const handleSaveRatio = async () => {
+    if (!(ratioMin >= 1 && ratioMax <= 100 && ratioMin < ratioMax)) { message.error("转化率区间需 1~100 且下限<上限"); return; }
+    setRatioSaving(true);
+    try {
+      const res = await fetch("/api/user/link-exchange/action", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "setClickControl", ratioMinPct: ratioMin, ratioMaxPct: ratioMax }),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        message.success("转化率区间已保存");
+        setData((prev) => prev ? { ...prev, clickControlRatio: { minPct: ratioMin, maxPct: ratioMax } } : prev);
+      } else message.error(res.message ?? "保存失败");
+    } finally { setRatioSaving(false); }
+  };
+
   const handleResolveAlert = async (ids: string[]) => {
     const res = await fetch("/api/user/link-exchange/alerts", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -418,6 +444,25 @@ export default function LinkExchangePage() {
             </Tooltip>
           </Space>
         );
+      },
+    },
+    {
+      title: <Tooltip title="今日(北京时间)该商家的联盟平台点击数">点击数</Tooltip>, width: 80, align: "center",
+      render: (_: unknown, row) => <Text style={{ fontSize: 12 }}>{row.todayClicks}</Text>,
+    },
+    {
+      title: <Tooltip title="今日(北京时间)该商家的联盟订单数">订单数</Tooltip>, width: 80, align: "center",
+      render: (_: unknown, row) => <Text style={{ fontSize: 12 }}>{row.todayOrders}</Text>,
+    },
+    {
+      title: <Tooltip title="转化率 = 订单 / 点击。目标区间内为绿色，高于上限(点击偏少)为红色，会自动补刷">转化率</Tooltip>, width: 90, align: "center",
+      render: (_: unknown, row) => {
+        if (row.conversion == null) return <Text type="secondary">—</Text>;
+        const pct = row.conversion * 100;
+        const min = data?.clickControlRatio?.minPct ?? 5;
+        const max = data?.clickControlRatio?.maxPct ?? 10;
+        const color = pct > max ? "#ff4d4f" : pct < min ? "#faad14" : "#52c41a";
+        return <Text style={{ fontSize: 12, color, fontWeight: 500 }}>{pct.toFixed(1)}%</Text>;
       },
     },
     {
@@ -550,6 +595,17 @@ export default function LinkExchangePage() {
                   loading={clickControlSaving}
                   onChange={handleToggleClickControl}
                 />
+              </Space>
+            </Tooltip>
+            <Tooltip title="目标转化率(订单/点击)区间。系统会把转化率高于上限(点击偏少)的商家自动补刷到此区间内。例：5%~10% = 每订单 10~20 次点击">
+              <Space size={4}>
+                <Text type="secondary" style={{ fontSize: 13 }}>转化率区间</Text>
+                <InputNumber size="small" min={1} max={99} value={ratioMin} controls={false}
+                  style={{ width: 52 }} onChange={(v) => setRatioMin(Number(v) || 0)} addonAfter="%" />
+                <Text type="secondary">~</Text>
+                <InputNumber size="small" min={2} max={100} value={ratioMax} controls={false}
+                  style={{ width: 52 }} onChange={(v) => setRatioMax(Number(v) || 0)} addonAfter="%" />
+                <Button size="small" type="primary" ghost loading={ratioSaving} onClick={handleSaveRatio}>保存</Button>
               </Space>
             </Tooltip>
             <Tooltip title="扫描已启用广告系列，为缺少链接/上级联盟的商家自动解析并验证联盟追踪链接">
