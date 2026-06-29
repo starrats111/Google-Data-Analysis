@@ -471,15 +471,16 @@ async function syncAdsData(
               if (!campaign) {
                 const parsed = parseCampaignNameFull(cd.campaign_name);
                 const merchantId = parsed ? (apiMerchantIndex.get(`${parsed.platform}_${parsed.mid}`) || BigInt(0)) : BigInt(0);
-                campaign = await prisma.campaigns.create({
-                  data: {
-                    user_id: userId, user_merchant_id: merchantId,
-                    google_campaign_id: cd.campaign_id, mcc_id: mcc.id,
-                    customer_id: cd.customer_id, campaign_name: cd.campaign_name,
-                    daily_budget: cd.budget_dollars, target_country: "US",
-                    status: "paused", google_status: "REMOVED", last_google_sync_at: new Date(),
-                  },
-                });
+                // 统一走防重创建（按 user+gcid 查重），避免客户迁 MCC 后 REMOVED 路径再造重复行
+                const created = await createCampaignDedup({
+                  user_id: userId, user_merchant_id: merchantId,
+                  google_campaign_id: cd.campaign_id, mcc_id: mcc.id,
+                  customer_id: cd.customer_id, campaign_name: cd.campaign_name,
+                  daily_budget: cd.budget_dollars, target_country: "US",
+                  status: "paused", google_status: "REMOVED", last_google_sync_at: new Date(),
+                }, { userId, mccId: mcc.id, gcid: cd.campaign_id });
+                if (!created) continue; // 被清洗过的 gcid 跳过
+                campaign = created;
                 campaignMap.set(cd.campaign_id, campaign);
               }
               const dateObj = new Date(cd.date);
