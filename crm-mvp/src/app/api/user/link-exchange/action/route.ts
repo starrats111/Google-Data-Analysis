@@ -4,6 +4,8 @@ import { getUserFromRequest } from '@/lib/auth'
 import { replenishCampaign, triggerReplenishAsync } from '@/lib/suffix-engine/stock-producer'
 import { startBrushTask, startBrushAllTasks } from '@/lib/suffix-engine/click-brush'
 import { syncUserLinks, resolveMerchantNow } from '@/lib/suffix-engine/link-sync'
+import { resolveAlertsByType } from '@/lib/suffix-engine/alerts'
+import { ensureCampaignMerchant } from '@/lib/campaign-merchant-link'
 import { STOCK_CONFIG } from '@/lib/suffix-engine/config'
 
 interface ActionBody {
@@ -96,19 +98,20 @@ export async function POST(req: NextRequest) {
     }
     const campaign = await prisma.campaigns.findFirst({
       where: { id: BigInt(body.campaignId), user_id: userId, is_deleted: 0 },
-      select: { user_merchant_id: true },
+      select: { id: true, user_merchant_id: true, campaign_name: true, target_country: true },
     })
     if (!campaign) return NextResponse.json({ code: -1, message: '广告系列不存在或无权限' }, { status: 404 })
-    if (!campaign.user_merchant_id || campaign.user_merchant_id <= BigInt(0)) {
-      return NextResponse.json({ code: -1, message: '该广告系列未匹配商家，无法直接填写链接' }, { status: 400 })
+
+    // 解析当前关联商家。孤儿（user_merchant_id>0 但商家行已删）/ 未匹配（=0）走自愈分支：
+    // 按系列名解析「平台-MID」自动接回或新建商家，再写链接——对应「手动填入即完成自愈」，
+    // 不再用「未匹配商家，无法直接填写链接」把人挡在门外。
+    const merchantId = await ensureCampaignMerchant(userId, campaign)
+    if (!merchantId) {
+      return NextResponse.json(
+        { code: -1, message: '该广告系列名无法解析出商家（平台-MID），无法自动关联，请检查系列命名后重试' },
+        { status: 400 },
+      )
     }
-    const merchantId = campaign.user_merchant_id
-    // 校验商家归属当前用户
-    const merchant = await prisma.user_merchants.findFirst({
-      where: { id: merchantId, user_id: userId, is_deleted: 0 },
-      select: { id: true },
-    })
-    if (!merchant) return NextResponse.json({ code: -1, message: '商家不存在或无权限' }, { status: 404 })
 
     // 写入新链接并重置校验/上级联盟状态，等待重新巡航
     await prisma.user_merchants.update({
@@ -123,6 +126,9 @@ export async function POST(req: NextRequest) {
         parent_check_reason: null,
       },
     })
+
+    // 手动补链接即视为该系列「断链问题」已处理：清掉遗留的 merchant_not_found 告警
+    await resolveAlertsByType(userId, campaign.id, ['merchant_not_found'])
 
     // 即时巡航验证（最多 ~35s）：成功即返回状态；超时则后台继续，前端稍后刷新
     const result = await Promise.race([

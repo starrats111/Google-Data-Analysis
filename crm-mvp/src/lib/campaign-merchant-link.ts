@@ -50,6 +50,62 @@ export function parseCampaignNameFull(name: string): ParsedCampaignName | null {
   };
 }
 
+// ── 自愈：确保广告系列关联到一个存活商家（孤儿/未匹配自动接回或新建）──
+
+/**
+ * 确保广告系列关联到一个存活的商家行，返回 merchantId（无法解析系列名时返回 null）。
+ *
+ * 用于「手动填链接」「Google 回拉链接」等自愈路径：
+ *   - 已关联且商家存活 → 直接返回该 id
+ *   - 未匹配(user_merchant_id<=0) 或 孤儿(指向已删商家) → 按系列名解析「平台-MID」，
+ *     find-or-create user_merchants，并把系列 user_merchant_id 回填接回。
+ */
+export async function ensureCampaignMerchant(
+  userId: bigint,
+  campaign: { id: bigint; user_merchant_id: bigint | null; campaign_name: string | null; target_country: string | null },
+): Promise<bigint | null> {
+  if (campaign.user_merchant_id && campaign.user_merchant_id > BigInt(0)) {
+    const m = await prisma.user_merchants.findFirst({
+      where: { id: campaign.user_merchant_id, user_id: userId, is_deleted: 0 },
+      select: { id: true },
+    });
+    if (m) return m.id;
+  }
+
+  const parsed = parseCampaignNameFull(campaign.campaign_name || "");
+  if (!parsed) return null;
+
+  const existing = await prisma.user_merchants.findFirst({
+    where: { user_id: userId, platform: parsed.platform, merchant_id: parsed.mid, is_deleted: 0 },
+    select: { id: true },
+  });
+
+  let merchantId: bigint;
+  if (existing) {
+    merchantId = existing.id;
+  } else {
+    const created = await prisma.user_merchants.create({
+      data: {
+        user_id: userId,
+        platform: parsed.platform,
+        merchant_id: parsed.mid,
+        merchant_name: parsed.merchantName || parsed.mid,
+        target_country: campaign.target_country || parsed.country || null,
+        status: "claimed",
+        claimed_at: new Date(),
+        source: "platform",
+      },
+      select: { id: true },
+    });
+    merchantId = created.id;
+  }
+
+  if (campaign.user_merchant_id !== merchantId) {
+    await prisma.campaigns.update({ where: { id: campaign.id }, data: { user_merchant_id: merchantId } });
+  }
+  return merchantId;
+}
+
 // ── 唯一入口：同步用户的商家状态 ──
 
 /**

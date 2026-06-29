@@ -169,18 +169,10 @@ async function doReplenish(
     return { campaignId: cid, skipped: true, reason: 'merchant_missing', before, generated: 0, after: before, failed: 0 }
   }
   if (!merchant.tracking_link) {
-    // 商家在库但缺联盟追踪链接：这是真正可操作的问题（需补链接），保留告警。
-    await raiseAlert(campaign.user_id, {
-      type: 'merchant_not_found',
-      campaignId,
-      level: 'error',
-      message: `商家「${merchant.merchant_name}」缺少联盟追踪链接（tracking_link），无法生成换链接库存`,
-      context: {
-        campaignName: campaign.campaign_name,
-        userMerchantId: campaign.user_merchant_id.toString(),
-        platform: merchant.platform ?? null,
-      },
-    })
+    // 商家在库但缺联盟追踪链接：补货路径一律静默跳过、不再报警。
+    // 「断链是否要人工处理」的判定统一交给 /api/cron/merchant-link-health：
+    // 只有「该商家近 30 天有真实交易(affiliate_transactions)却仍断链」才升级为高优先告警，
+    // 其余视为「仍在自愈流程中」（商家同步 / Google 回拉 / 手动填链接会修复），静默不刷屏。
     return { campaignId: cid, skipped: true, reason: 'merchant_no_tracking_link', before, generated: 0, after: before, failed: 0 }
   }
 
@@ -386,7 +378,9 @@ export async function replenishLowStock(
     if ((r.generated ?? 0) > 0) {
       replenished++
       failCooldown.delete(key) // 成功产出：清除冷却
-    } else if (r.reason === 'merchant_not_found') {
+    } else if (r.reason === 'merchant_missing' || r.reason === 'merchant_no_tracking_link' || r.reason === 'merchant_not_linked') {
+      // 商家断链（孤儿 / 缺链接 / 未关联）：长冷却，避免每轮重复扫描；
+      // 是否需人工处理由 /api/cron/merchant-link-health 按「有无交易」分流判定。
       failCooldown.set(key, Date.now() + MERCHANT_COOLDOWN_MS)
     } else if (r.skipped !== true || r.reason === 'probe_failed') {
       // probe_failed / 批量全失败（skipped=false, generated=0）→ 失败冷却

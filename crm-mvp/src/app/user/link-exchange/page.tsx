@@ -35,6 +35,8 @@ interface CampaignRow {
   parentNetwork: string | null;
   parentBlacklisted: boolean;
   suffixEnabled: boolean;
+  refererUrl: string | null;
+  refererSource: "manual" | "article" | "website" | "none";
   lastApplyAt: string | null;
   lastSuffix: string | null;
   stock: StockInfo;
@@ -331,9 +333,32 @@ export default function LinkExchangePage() {
     },
     { title: "国家", dataIndex: "country", width: 70, render: (v: string) => v ? <Tag>{v}</Tag> : "—" },
     {
+      title: "来路", width: 90, align: "center",
+      render: (_: unknown, row) => {
+        if (!row.matched) return <Text type="secondary">—</Text>;
+        const meta: Record<CampaignRow["refererSource"], { t: string; c: string; tip: string }> = {
+          manual: { t: "手动", c: "blue", tip: "商家手动配置的来路" },
+          article: { t: "文章", c: "green", tip: "该商家最新已发布文章链接" },
+          website: { t: "网站", c: "geekblue", tip: "联盟账号绑定的网站首页" },
+          none: { t: "随机", c: "default", tip: "未配置来路，刷点击/补货时从随机来路池选取" },
+        };
+        const m = meta[row.refererSource] ?? meta.none;
+        if (row.refererSource === "none" || !row.refererUrl) {
+          return <Tooltip title={m.tip}><Tag style={{ margin: 0 }}>{m.t}</Tag></Tooltip>;
+        }
+        return (
+          <Tooltip title={`${m.tip}：${row.refererUrl}（点击复制）`}>
+            <Tag color={m.c} style={{ margin: 0, cursor: "pointer" }}
+              onClick={() => { navigator.clipboard.writeText(row.refererUrl!); message.success("已复制来路"); }}>
+              {m.t}
+            </Tag>
+          </Tooltip>
+        );
+      },
+    },
+    {
       title: "商家追踪链接", width: 260,
       render: (_: unknown, row) => {
-        if (!row.matched) return <Text type="secondary" style={{ fontSize: 12 }}>未匹配商家</Text>;
         if (editingLinkId === row.campaignId) {
           return (
             <Space.Compact style={{ width: "100%" }}>
@@ -345,6 +370,18 @@ export default function LinkExchangePage() {
                 onClick={() => handleSaveLink(row.campaignId)}>保存</Button>
               <Button size="small" disabled={savingLink} onClick={() => setEditingLinkId(null)}>取消</Button>
             </Space.Compact>
+          );
+        }
+        if (!row.matched) {
+          // 未匹配/孤儿：放开手动填链接入口，保存时后端按系列名自动关联或新建商家（自愈）
+          return (
+            <Space size={2}>
+              <Text type="secondary" style={{ fontSize: 12 }}>未匹配商家</Text>
+              <Tooltip title="手动填写联盟链接，系统将按系列名自动关联商家">
+                <Button size="small" type="text" icon={<EditOutlined />}
+                  onClick={() => { setEditingLinkId(row.campaignId); setLinkDraft(""); }} />
+              </Tooltip>
+            </Space>
           );
         }
         return (
@@ -459,7 +496,17 @@ export default function LinkExchangePage() {
     {
       title: "操作", width: 90, align: "center",
       render: (_: unknown, row) => (
-        <Popconfirm title="标记为已解决？" onConfirm={() => handleResolveAlert([row.id])} okText="确认" cancelText="取消">
+        <Popconfirm
+          title={row.type === "merchant_not_found" ? "确认点掉这条告警？" : "标记为已解决？"}
+          description={
+            row.type === "merchant_not_found"
+              ? "若该商家确实没有佣金回流，可点掉；点掉后只要不再有新交易就不会重复提醒，一旦又有新订单才会再次告警。"
+              : undefined
+          }
+          onConfirm={() => handleResolveAlert([row.id])}
+          okText="确认"
+          cancelText="取消"
+        >
           <Button size="small" type="link">处理</Button>
         </Popconfirm>
       ),
