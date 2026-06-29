@@ -162,21 +162,26 @@ async function doReplenish(
     select: { id: true, platform: true, tracking_link: true, merchant_name: true },
   })
 
-  if (!merchant || !merchant.tracking_link) {
+  if (!merchant) {
+    // 孤儿引用：user_merchant_id>0 但商家行已不存在（换平台账号后旧商家被同步清理，或尚未重新同步进库）。
+    // 静默跳过、不报警——此类已在「换链接管理」列表显示为「未匹配商家」，并会由商家同步 + 自动关联修复；
+    // 反复报 merchant_not_found 只会刷屏（user_merchant_id<=0 已在前置闸门拦下，这里专治 orphan）。
+    return { campaignId: cid, skipped: true, reason: 'merchant_missing', before, generated: 0, after: before, failed: 0 }
+  }
+  if (!merchant.tracking_link) {
+    // 商家在库但缺联盟追踪链接：这是真正可操作的问题（需补链接），保留告警。
     await raiseAlert(campaign.user_id, {
       type: 'merchant_not_found',
       campaignId,
       level: 'error',
-      message: merchant
-        ? `商家「${merchant.merchant_name}」缺少联盟追踪链接（tracking_link），无法生成换链接库存`
-        : `广告系列「${campaign.campaign_name ?? cid}」关联的商家在商家库中不存在`,
+      message: `商家「${merchant.merchant_name}」缺少联盟追踪链接（tracking_link），无法生成换链接库存`,
       context: {
         campaignName: campaign.campaign_name,
         userMerchantId: campaign.user_merchant_id.toString(),
-        platform: merchant?.platform ?? null,
+        platform: merchant.platform ?? null,
       },
     })
-    return { campaignId: cid, skipped: true, reason: 'merchant_not_found', before, generated: 0, after: before, failed: 0 }
+    return { campaignId: cid, skipped: true, reason: 'merchant_no_tracking_link', before, generated: 0, after: before, failed: 0 }
   }
 
   const affiliateUrl = merchant.tracking_link
