@@ -45,6 +45,7 @@ model users {
   kylink_username           String?  @db.VarChar(255) // 该 API Key 对应的 kylink 账号标识（邮箱/姓名），测试连接成功时记录，便于辨认绑定的是谁
   link_exchange_click_count Int      @default(10) @db.UnsignedInt // 换链接工作台：上次设置的每广告刷点击数，新同步广告默认沿用
   link_exchange_disabled    Int      @default(0) @db.TinyInt // 1=该用户只同步数据、不参与换链接（如 jy 交垟队）；从 Google 回填的新广告不自动开换链，UI 也禁止开启
+  click_control_enabled     Int      @default(1) @db.TinyInt // 需求2：订单/点击比控制刷点击的用户级开关，默认开。1=开启「有订单→按 10-20:1 自动补刷联盟点击」，0=该用户关闭
   serpapi_key               String?  @db.VarChar(128) // 个人 SerpApi API Key（广告情报功能）
   atc_default_min_days      Int      @default(30) @db.UnsignedInt // 我的广告主-全局阈值，新增关注 / 统一设置时使用
   is_deleted                Int      @default(0) @db.TinyInt
@@ -655,6 +656,30 @@ model affiliate_transactions {
   @@index([user_id, transaction_time], map: "idx_user_txn_time")
   @@index([user_id, status], map: "idx_user_status")
   @@index([platform_connection_id], map: "idx_platform_conn")
+}
+
+// -----------------------------------------------------------
+// 需求2. 联盟「点击日聚合」表（订单/点击比控制刷点击的数据源）
+// 各平台 click API（fetchAllClicks）拉到的点击明细，按 用户/平台/商家/自然日 聚合成计数。
+// 既提供「当天真实点击 C」，也提供「过去 7 天日均基线 B」（B/4=每小时补点击上限）。
+// click_date 按 UTC+8（联盟 click_time 时区）切日，与平台后台口径一致。
+// 仅存计数，不落点击明细（低配机省存储）；同步游标存 system_configs(key=click_sync_cursor_{connId})。
+// -----------------------------------------------------------
+model affiliate_click_daily {
+  id                     BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id                BigInt   @db.UnsignedBigInt
+  platform               String   @db.VarChar(8)
+  merchant_id            String   @db.VarChar(64) // 平台商家标识（与 affiliate_transactions.merchant_id 同口径）
+  platform_connection_id BigInt?  @db.UnsignedBigInt
+  click_date             DateTime @db.Date // 自然日（UTC+8）
+  clicks                 Int      @default(0) @db.UnsignedInt
+  is_deleted             Int      @default(0) @db.TinyInt
+  created_at             DateTime @default(now()) @db.DateTime(0)
+  updated_at             DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@unique([user_id, platform, merchant_id, click_date], map: "uk_user_plat_merchant_date")
+  @@index([user_id, click_date], map: "idx_click_user_date")
+  @@index([user_id, merchant_id, click_date], map: "idx_click_user_merchant_date")
 }
 
 // -----------------------------------------------------------

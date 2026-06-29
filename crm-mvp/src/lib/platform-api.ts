@@ -1073,6 +1073,301 @@ export async function fetchAllTransactions(
   }
 }
 
+// ══════════════════════════════════════════════════════════════
+// 点击数据 API — 从各联盟平台拉取点击明细，聚合为「商家×自然日」计数
+// 需求2：订单/点击比控制刷点击的数据源（fetchAllClicks）。
+// 仅返回计数，不落明细；merchant_id 取数值型（与 parseTransactions / affiliate_transactions 同口径，便于按商家 join 订单）。
+// click_time 各平台均为 UTC+8 → click_date 直接取其日期部分（与平台后台/交易切日口径一致）。
+// ══════════════════════════════════════════════════════════════
+
+interface PlatformClickConfig {
+  mode: "post_json" | "post_form" | "get";
+  url: string;
+  source?: string;
+  /** beginDate/endDate(camel) vs begin_date/end_date(snake) */
+  dateFormat: "camel" | "snake";
+  /** true=传 "YYYY-MM-DD HH:mm:ss"；false=传 "YYYY-MM-DD"(LH 按天) */
+  withTime: boolean;
+  pageKey: string;
+  sizeKey: string;
+  maxSize: number;
+  /** 两次请求最小间隔（限频）。定版：LH/LB/RW 15/60s≈4200ms；MUI/PM 及同构 SaaS 10/min≈6500ms */
+  rateLimitMs: number;
+  /** 单次查询时间窗上限（小时）：多数 ≤1h，LH ≤1d */
+  maxWindowHours: number;
+  /** 列表所在位置：SaaS=data.list(code 0)；LH=payload.list(status 200)；LB/RW=payliad.list(原文档拼写,status 200) */
+  listPath: "data" | "payload" | "payliad";
+}
+
+const CLICK_RATE_SAAS = 6500; // 10/min
+const CLICK_RATE_LEGACY = 4200; // 15/60s
+
+const PLATFORM_CLICK_CONFIG: Record<string, PlatformClickConfig> = {
+  // ── SaaS 同构：POST JSON /api/click_report，source+dataScope=user，窗口≤1h，10/min ──
+  MUI: { mode: "post_json", url: "https://api.ultrainfluence.com/api/click_report", source: "ultrainfluence", dateFormat: "camel", withTime: true, pageKey: "curPage", sizeKey: "perPage", maxSize: 2000, rateLimitMs: CLICK_RATE_SAAS, maxWindowHours: 1, listPath: "data" },
+  PM:  { mode: "post_json", url: "https://api.partnermatic.com/api/click_report", source: "partnermatic", dateFormat: "camel", withTime: true, pageKey: "curPage", sizeKey: "perPage", maxSize: 2000, rateLimitMs: CLICK_RATE_SAAS, maxWindowHours: 1, listPath: "data" },
+  // CG/CF/BSH/EV：无独立文档，按 SaaS 同构推断 /api/click_report（⚠️ 需真 token 联调验证 url/source/字段）
+  CG:  { mode: "post_json", url: "https://api.collabglow.com/api/click_report", source: "collabglow", dateFormat: "camel", withTime: true, pageKey: "curPage", sizeKey: "perPage", maxSize: 2000, rateLimitMs: CLICK_RATE_SAAS, maxWindowHours: 1, listPath: "data" },
+  CF:  { mode: "post_json", url: "https://api.creatorflare.com/api/click_report", source: "creatorflare", dateFormat: "camel", withTime: true, pageKey: "curPage", sizeKey: "perPage", maxSize: 2000, rateLimitMs: CLICK_RATE_SAAS, maxWindowHours: 1, listPath: "data" },
+  BSH: { mode: "post_json", url: "https://api.brandsparkhub.com/api/click_report", source: "brandsparkhub", dateFormat: "camel", withTime: true, pageKey: "curPage", sizeKey: "perPage", maxSize: 2000, rateLimitMs: CLICK_RATE_SAAS, maxWindowHours: 1, listPath: "data" },
+  EV:  { mode: "post_json", url: "https://api.engagevantage.com/api/click_report", source: "engagevantage", dateFormat: "camel", withTime: true, pageKey: "curPage", sizeKey: "perPage", maxSize: 2000, rateLimitMs: CLICK_RATE_SAAS, maxWindowHours: 1, listPath: "data" },
+  // ── 独立文档平台 ──
+  LB:  { mode: "get", url: "https://www.linkbux.com/api.php?mod=medium&op=user_click", dateFormat: "snake", withTime: true, pageKey: "page", sizeKey: "per_page", maxSize: 2000, rateLimitMs: CLICK_RATE_LEGACY, maxWindowHours: 1, listPath: "payliad" },
+  LH:  { mode: "get", url: "https://www.linkhaitao.com/api.php?mod=medium&op=user_click2", dateFormat: "snake", withTime: false, pageKey: "page", sizeKey: "per_page", maxSize: 2000, rateLimitMs: CLICK_RATE_LEGACY, maxWindowHours: 24, listPath: "payload" },
+  RW:  { mode: "post_form", url: "https://admin.rewardoo.com/api.php?mod=medium&op=click_details", dateFormat: "snake", withTime: true, pageKey: "page", sizeKey: "limit", maxSize: 2000, rateLimitMs: CLICK_RATE_LEGACY, maxWindowHours: 1, listPath: "payliad" },
+};
+
+export interface PlatformClickCount {
+  merchant_id: string; // 数值型平台商家ID（与 affiliate_transactions.merchant_id 同口径）
+  merchant_name: string;
+  click_date: string; // YYYY-MM-DD（UTC+8）
+  clicks: number;
+}
+
+/** 点击 item → 数值型 merchant_id（与 parseTransactions 同口径） */
+function pickClickMerchantId(item: Record<string, unknown>, platform: string): string {
+  const candidates =
+    platform === "LH"
+      ? [item.mcid, item.mid, item.m_id, item.brand_id, item.brandId, item.merchant_id]
+      : [item.mid, item.m_id, item.merchant_id, item.merchantId, item.brand_id, item.brandId, item.advertiser_id];
+  for (const c of candidates) {
+    if (c != null) {
+      const s = String(c).trim();
+      if (s && /^\d+$/.test(s)) return s;
+    }
+  }
+  return "";
+}
+
+function clickMerchantName(item: Record<string, unknown>): string {
+  return String(item.merchant_name || item.merchantName || item.brand || item.name || "");
+}
+
+/** click_time（UTC+8）→ YYYY-MM-DD；取不到返回空 */
+function clickDateOf(item: Record<string, unknown>): string {
+  const t = String(item.click_time || item.clickTime || item.click_date || "").trim();
+  const m = t.match(/^(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : "";
+}
+
+function clickRefOf(item: Record<string, unknown>): string {
+  return String(item.click_ref || item.clickRef || "").trim();
+}
+
+function asObj(v: unknown): Record<string, unknown> | undefined {
+  return v && typeof v === "object" ? (v as Record<string, unknown>) : undefined;
+}
+
+function clickContainer(listPath: PlatformClickConfig["listPath"], data: Record<string, unknown>): Record<string, unknown> | undefined {
+  if (listPath === "data") return asObj(data.data);
+  if (listPath === "payload") return asObj(data.payload);
+  return asObj(data.payliad) ?? asObj(data.payload);
+}
+
+function getClickList(listPath: PlatformClickConfig["listPath"], data: Record<string, unknown>): Record<string, unknown>[] {
+  const list = clickContainer(listPath, data)?.list;
+  return Array.isArray(list) ? (list as Record<string, unknown>[]) : [];
+}
+
+function getClickTotalPages(listPath: PlatformClickConfig["listPath"], data: Record<string, unknown>, maxSize: number): number {
+  const container = clickContainer(listPath, data);
+  const totalNode = listPath === "data" ? container : asObj(container?.total);
+  if (!totalNode) return 1;
+  const tp = Number(totalNode.total_page ?? totalNode.totalPage);
+  if (Number.isFinite(tp) && tp > 0) return tp;
+  const ti = Number(totalNode.total_items ?? totalNode.totalItems);
+  if (Number.isFinite(ti) && ti > 0 && maxSize > 0) return Math.ceil(ti / maxSize);
+  return 1;
+}
+
+/** 错误判定：SaaS code!="0"；LH/LB/RW status!="200" */
+function clickErrorMessage(listPath: PlatformClickConfig["listPath"], data: Record<string, unknown>): string | null {
+  if (listPath === "data") {
+    const code = data.code;
+    if (code !== undefined && String(code) !== "0") return String(data.message ?? `code ${code}`);
+    return null;
+  }
+  const status = data.status;
+  if (status !== undefined && String(status) !== "200") return String(data.msg ?? `status ${status}`);
+  return null;
+}
+
+/** 把 [begin,end] 按窗口上限切片（字符串按 UTC 解析仅用于跨度计算，输出原样 "YYYY-MM-DD HH:mm:ss"） */
+function splitDateTimeRange(begin: string, end: string, maxHours: number): { start: string; end: string }[] {
+  const toMs = (s: string) => new Date(`${s.replace(" ", "T")}Z`).getTime();
+  const fmt = (ms: number) => new Date(ms).toISOString().slice(0, 19).replace("T", " ");
+  const beginMs = toMs(begin);
+  const endMs = toMs(end);
+  if (!Number.isFinite(beginMs) || !Number.isFinite(endMs) || beginMs >= endMs) return [{ start: begin, end }];
+  const stepMs = Math.max(1, maxHours) * 3600_000;
+  const chunks: { start: string; end: string }[] = [];
+  let cur = beginMs;
+  while (cur < endMs) {
+    const chunkEnd = Math.min(cur + stepMs, endMs);
+    chunks.push({ start: fmt(cur), end: fmt(chunkEnd) });
+    cur = chunkEnd;
+  }
+  return chunks;
+}
+
+async function callClickApi(
+  config: PlatformClickConfig,
+  token: string,
+  beginStr: string,
+  endStr: string,
+  page: number,
+): Promise<Record<string, unknown>> {
+  const { mode, url, source, dateFormat, pageKey, sizeKey, maxSize } = config;
+  const beginKey = dateFormat === "camel" ? "beginDate" : "begin_date";
+  const endKey = dateFormat === "camel" ? "endDate" : "end_date";
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 120000);
+    try {
+      let resp: Response;
+      if (mode === "post_json") {
+        const payload: Record<string, unknown> = {
+          token,
+          [beginKey]: beginStr,
+          [endKey]: endStr,
+          [pageKey]: page,
+          [sizeKey]: maxSize,
+          dataScope: "user",
+        };
+        if (source) payload.source = source;
+        resp = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+      } else if (mode === "post_form") {
+        const form = new URLSearchParams();
+        form.set("token", token);
+        form.set(beginKey, beginStr);
+        form.set(endKey, endStr);
+        form.set(pageKey, String(page));
+        form.set(sizeKey, String(maxSize));
+        resp = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: form.toString(),
+          signal: controller.signal,
+        });
+      } else {
+        const params = new URLSearchParams({ token, [beginKey]: beginStr, [endKey]: endStr, [pageKey]: String(page), [sizeKey]: String(maxSize) });
+        const sep = url.includes("?") ? "&" : "?";
+        resp = await fetch(`${url}${sep}${params}`, { signal: controller.signal });
+      }
+
+      if (!resp.ok) {
+        if (RETRYABLE_STATUS.has(resp.status) && attempt < MAX_RETRIES) {
+          clearTimeout(timer);
+          await sleep((attempt + 1) * 5000);
+          continue;
+        }
+        throw new Error(`HTTP ${resp.status}`);
+      }
+      return await resp.json();
+    } catch (err) {
+      clearTimeout(timer);
+      if (attempt < MAX_RETRIES && err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) {
+        await sleep((attempt + 1) * 5000);
+        continue;
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw new Error("max retries exceeded");
+}
+
+/**
+ * 拉取某平台某时间段的点击，聚合为「数值型商家ID × 自然日(UTC+8)」计数。
+ * @param beginDateTime "YYYY-MM-DD HH:mm:ss"（UTC+8 口径）
+ * @param endDateTime   "YYYY-MM-DD HH:mm:ss"
+ */
+export async function fetchAllClicks(
+  platform: string,
+  token: string,
+  beginDateTime: string,
+  endDateTime: string,
+): Promise<{ clicks: PlatformClickCount[]; error?: string }> {
+  const config = PLATFORM_CLICK_CONFIG[platform];
+  if (!config) return { clicks: [], error: `不支持的平台点击 API: ${platform}` };
+
+  const agg = new Map<string, PlatformClickCount>();
+  const seenRefs = new Set<string>(); // 按 click_ref 去重（相邻窗口边界秒可能重复返回）
+  const addClick = (item: Record<string, unknown>) => {
+    const ref = clickRefOf(item);
+    if (ref) {
+      if (seenRefs.has(ref)) return;
+      seenRefs.add(ref);
+    }
+    const mid = pickClickMerchantId(item, platform);
+    const date = clickDateOf(item);
+    if (!mid || !date) return;
+    const key = `${mid}|${date}`;
+    const cur = agg.get(key);
+    if (cur) {
+      cur.clicks++;
+      if (!cur.merchant_name) cur.merchant_name = clickMerchantName(item);
+    } else {
+      agg.set(key, { merchant_id: mid, merchant_name: clickMerchantName(item), click_date: date, clicks: 1 });
+    }
+  };
+  const toArray = () => Array.from(agg.values());
+
+  try {
+    const windows = splitDateTimeRange(beginDateTime, endDateTime, config.maxWindowHours);
+    let first = true;
+    for (const w of windows) {
+      const beginStr = config.withTime ? w.start : w.start.slice(0, 10);
+      const endStr = config.withTime ? w.end : w.end.slice(0, 10);
+
+      if (!first) await sleep(config.rateLimitMs);
+      first = false;
+      const firstPage = await callClickApi(config, token, beginStr, endStr, 1);
+
+      const errMsg = clickErrorMessage(config.listPath, firstPage);
+      if (errMsg) {
+        if (/no data|no record|无数据|empty/i.test(errMsg)) continue;
+        return { clicks: toArray(), error: `${platform}: ${errMsg}` };
+      }
+
+      const firstList = getClickList(config.listPath, firstPage);
+      for (const it of firstList) addClick(it);
+
+      let totalPages = getClickTotalPages(config.listPath, firstPage, config.maxSize);
+      let unknownPagination = false;
+      if (totalPages <= 1 && firstList.length >= config.maxSize) {
+        totalPages = 50;
+        unknownPagination = true;
+      }
+
+      for (let page = 2; page <= Math.min(totalPages, 50); page++) {
+        await sleep(config.rateLimitMs);
+        let pageData: Record<string, unknown>;
+        try {
+          pageData = await callClickApi(config, token, beginStr, endStr, page);
+        } catch (e) {
+          console.warn(`[ClickAPI] ${platform} page ${page} 请求失败: ${e instanceof Error ? e.message : String(e)}`);
+          break;
+        }
+        const list = getClickList(config.listPath, pageData);
+        if (list.length === 0) break;
+        for (const it of list) addClick(it);
+        if (unknownPagination && list.length < config.maxSize) break;
+      }
+    }
+    return { clicks: toArray() };
+  } catch (err) {
+    return { clicks: toArray(), error: `${platform}: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
 function splitDateRange(start: string, end: string, maxDays: number): { start: string; end: string }[] {
   const chunks: { start: string; end: string }[] = [];
   let cur = new Date(start);
@@ -1092,4 +1387,4 @@ function splitDateRange(start: string, end: string, maxDays: number): { start: s
   return chunks;
 }
 
-export { PLATFORM_API_CONFIG, PLATFORM_TXN_CONFIG };
+export { PLATFORM_API_CONFIG, PLATFORM_TXN_CONFIG, PLATFORM_CLICK_CONFIG };

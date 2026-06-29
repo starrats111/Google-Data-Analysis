@@ -143,7 +143,7 @@ export async function GET(req: NextRequest) {
 async function runQuickSync(startTime: number): Promise<NextResponse> {
   const users = await prisma.users.findMany({
     where: { is_deleted: 0, status: "active", role: { in: ["user", "leader"] } },
-    select: { id: true, username: true },
+    select: { id: true, username: true, click_control_enabled: true },
   });
 
   // C-084：联盟交易同步按 CST 切日，与平台后台口径一致（推翻 C-080，wj02 CG 实测对齐）
@@ -161,6 +161,8 @@ async function runQuickSync(startTime: number): Promise<NextResponse> {
 
   for (const user of users) {
     const userId = user.id;
+    // 需求2：本轮有订单变动的商家键（platform:merchant_id），供 ontxn 自动刷点击只处理这些商家
+    const affectedMerchantKeys = new Set<string>();
     try {
       // D-030：包含 status='error' 但已退避足够久的连接，避免一次临时 504/网关
       //   错误导致永久断连（5/26 实证 wj07 EV mevora + 11 个其它 504 连接因
@@ -342,6 +344,7 @@ async function runQuickSync(startTime: number): Promise<NextResponse> {
               },
             });
             upserted++;
+            if (mid) affectedMerchantKeys.add(`${platform}:${mid}`);
           }
 
           platformStats[platform] = (platformStats[platform] || 0) + r.transactions.length;
@@ -375,6 +378,28 @@ async function runQuickSync(startTime: number): Promise<NextResponse> {
         log(`  ${user.username}: commission writeback only (${commissionUpdated} rows)`);
       } else {
         log(`  ${user.username}: no change`);
+      }
+
+      // 需求2 ontxn：订单同步后立即「点击随订单一起返回」——先拉有新订单平台的联盟点击，
+      // 再按「订单/点击比」自动补刷（仅开关用户 + 本轮有订单变动的商家）
+      if (user.click_control_enabled === 1 && affectedMerchantKeys.size > 0) {
+        try {
+          const affectedPlatforms = new Set(
+            [...affectedMerchantKeys].map((k) => k.split(":")[0]).filter(Boolean),
+          );
+          const { syncUserClicks } = await import("@/lib/affiliate-click-sync");
+          const cs = await syncUserClicks(userId, affectedPlatforms);
+          if (cs.clicksCounted > 0 || cs.errors.length > 0) {
+            log(`  ${user.username}: click-sync 拉点击 ${cs.clicksCounted}（conn ${cs.connectionsSynced}，err ${cs.errors.length}）`);
+          }
+          const { runAutoClickForUser } = await import("@/lib/auto-click");
+          const ac = await runAutoClickForUser(userId, affectedMerchantKeys);
+          if (ac.scheduled > 0) {
+            log(`  ${user.username}: auto-click 补刷 ${ac.scheduled} 系列 / ${ac.clicksScheduled} 次点击`);
+          }
+        } catch (e) {
+          log(`  ${user.username} auto-click error: ${e instanceof Error ? e.message : String(e)}`);
+        }
       }
 
       results[user.username] = {

@@ -179,3 +179,19 @@ export function generateClickSchedule(count: number, countryCode?: string, start
   schedule.sort((a, b) => a.getTime() - b.getTime())
   return schedule
 }
+
+/**
+ * 需求2：把 count 次点击在「未来 windowMinutes 分钟内」随机均匀分散（已排序的绝对 UTC 时间）。
+ * 用于订单/点击比补刷——定版要求「1 小时内随机分散」，不走当天作息曲线。
+ */
+export function generateClickScheduleWithinWindow(count: number, windowMinutes = 60, startTime?: Date): Date[] {
+  if (count <= 0) return []
+  const nowMs = (startTime || new Date()).getTime()
+  const spanMs = Math.max(1, windowMinutes) * 60_000
+  const schedule: Date[] = []
+  for (let i = 0; i < count; i++) {
+    schedule.push(new Date(nowMs + Math.floor(Math.random() * spanMs)))
+  }
+  schedule.sort((a, b) => a.getTime() - b.getTime())
+  return schedule
+}

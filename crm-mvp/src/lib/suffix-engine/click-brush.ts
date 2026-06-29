@@ -18,7 +18,7 @@ import { generateOneSuffix } from './suffix-generator'
 import { recordExitIp } from './exit-ip'
 import { raiseAlert, resolveAlertsByType } from './alerts'
 import { STOCK_CONFIG } from './config'
-import { generateClickSchedule, randomPick, randomInt, USER_AGENTS, REFERERS } from './click-scheduler'
+import { generateClickSchedule, generateClickScheduleWithinWindow, randomPick, randomInt, USER_AGENTS, REFERERS } from './click-scheduler'
 import { resolveMerchantReferer } from './referer-resolver'
 
 /** 单次刷点击允许的最大次数（低配生产机保护） */
@@ -87,6 +87,66 @@ export async function startBrushTask(
 
   // 按目标国作息曲线排程到当天
   const schedule = generateClickSchedule(n, campaign.target_country || undefined)
+
+  const task = await prisma.kyads_click_tasks.create({
+    data: {
+      user_id: userId,
+      campaign_id: campaignId,
+      affiliate_url: merchant.tracking_link,
+      referer_url: referer.url ?? '',
+      target_count: n,
+      done_count: 0,
+      status: 'running',
+      started_at: new Date(),
+    },
+  })
+
+  if (schedule.length > 0) {
+    await prisma.kyads_click_task_items.createMany({
+      data: schedule.map((scheduledAt) => ({ task_id: task.id, scheduled_at: scheduledAt, status: 'pending' })),
+    })
+  }
+
+  return {
+    ok: true,
+    taskId: task.id.toString(),
+    target: n,
+    firstAt: schedule[0] ?? null,
+    lastAt: schedule[schedule.length - 1] ?? null,
+  }
+}
+
+/**
+ * 需求2：窗口化刷点击任务 —— 把 count 次点击排程到「未来 windowMinutes 分钟内」随机分散，
+ * 供「订单/点击比自动补刷」引擎调用（定版：1 小时内补完）。
+ *
+ * 与 startBrushTask 的区别：
+ *   - 排程用 generateClickScheduleWithinWindow（窗口内随机），不走当天作息曲线；
+ *   - 不做「已有进行中任务则拒绝」校验——自动补刷每小时可能多次小批补，允许并存
+ *     （每小时总量上限由调用方 auto-click 引擎按 B/4 控制）。
+ */
+export async function startBrushTaskWindowed(
+  campaignId: bigint,
+  userId: bigint,
+  count: number,
+  windowMinutes: number,
+): Promise<BrushStartResult | BrushStartError> {
+  const n = Math.min(Math.max(Math.floor(count) || 0, 1), MAX_BRUSH)
+
+  const campaign = await prisma.campaigns.findFirst({
+    where: { id: campaignId, user_id: userId, is_deleted: 0 },
+    select: { id: true, user_merchant_id: true, target_country: true },
+  })
+  if (!campaign) return { ok: false, message: '广告系列不存在或无权限' }
+
+  const merchant = await prisma.user_merchants.findFirst({
+    where: { id: campaign.user_merchant_id, is_deleted: 0 },
+    select: { tracking_link: true },
+  })
+  if (!merchant?.tracking_link) return { ok: false, message: '该广告系列未匹配到带追踪链接的商家' }
+
+  const referer = await resolveMerchantReferer(campaign.user_merchant_id)
+  const schedule = generateClickScheduleWithinWindow(n, windowMinutes)
 
   const task = await prisma.kyads_click_tasks.create({
     data: {

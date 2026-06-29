@@ -136,7 +136,7 @@ export async function GET(req: NextRequest) {
   // 6. 查用户默认点击数
   const userRecord = await prisma.users.findUnique({
     where: { id: userId },
-    select: { link_exchange_click_count: true },
+    select: { link_exchange_click_count: true, click_control_enabled: true },
   })
 
   // 7. 拼装返回
@@ -182,6 +182,7 @@ export async function GET(req: NextRequest) {
     data: {
       rows,
       defaultClickCount: userRecord?.link_exchange_click_count ?? 10,
+      clickControlEnabled: userRecord?.click_control_enabled === 1,
       taskSummary: { pending: pendingCount, running: runningCount },
       total: rows.length,
       matched: rows.filter((r) => r.matched).length,

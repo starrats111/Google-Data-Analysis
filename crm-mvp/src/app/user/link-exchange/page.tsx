@@ -58,6 +58,7 @@ interface OverviewData {
   rows: CampaignRow[];
   apiKey: string | null;
   defaultClickCount: number;
+  clickControlEnabled: boolean;
   summary: { total: number; matched: number; totalAvailable: number; lowStockCount: number; alertOpen: number };
   alertSummary: Record<string, number>;
   stockConfig: { target: number; lowWatermark: number };
@@ -281,6 +282,23 @@ export default function LinkExchangePage() {
     if (res.code === 0) {
       setData((prev) => prev ? { ...prev, rows: prev.rows.map((r) => r.campaignId === campaignId ? { ...r, suffixEnabled: enabled } : r) } : prev);
     } else message.error(res.message ?? "操作失败");
+  };
+
+  const [clickControlSaving, setClickControlSaving] = useState(false);
+  const handleToggleClickControl = async (enabled: boolean) => {
+    setClickControlSaving(true);
+    try {
+      const res = await fetch("/api/user/link-exchange/action", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "setClickControl", enabled }),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        setData((prev) => prev ? { ...prev, clickControlEnabled: enabled } : prev);
+        message.success(enabled ? "已开启订单/点击比自动补刷" : "已关闭订单/点击比自动补刷");
+      } else message.error(res.message ?? "操作失败");
+    } finally {
+      setClickControlSaving(false);
+    }
   };
 
   const handleResolveAlert = async (ids: string[]) => {
@@ -522,11 +540,24 @@ export default function LinkExchangePage() {
         icon={<SwapOutlined />}
         title="换链接管理"
         extra={
-          <Tooltip title="扫描已启用广告系列，为缺少链接/上级联盟的商家自动解析并验证联盟追踪链接">
-            <Button type="primary" icon={<SyncOutlined />} onClick={handleSyncLinks} loading={syncing}>
-              手动同步链接
-            </Button>
-          </Tooltip>
+          <Space>
+            <Tooltip title="开启后：有联盟订单时，系统按「每订单 10-20 次点击」自动补刷联盟点击，使转化率落在 5%-10%；每小时补量上限=该商家近7天日均点击的1/4，1小时内随机分散、真人化执行">
+              <Space size={4}>
+                <Text type="secondary" style={{ fontSize: 13 }}>订单/点击比自动补刷</Text>
+                <Switch
+                  size="small"
+                  checked={data?.clickControlEnabled ?? false}
+                  loading={clickControlSaving}
+                  onChange={handleToggleClickControl}
+                />
+              </Space>
+            </Tooltip>
+            <Tooltip title="扫描已启用广告系列，为缺少链接/上级联盟的商家自动解析并验证联盟追踪链接">
+              <Button type="primary" icon={<SyncOutlined />} onClick={handleSyncLinks} loading={syncing}>
+                手动同步链接
+              </Button>
+            </Tooltip>
+          </Space>
         }
       />
 

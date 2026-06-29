@@ -58,6 +58,8 @@ export async function GET(req: NextRequest) {
     parent_check_reason: true,
     parent_network: true,
     parent_blacklisted: true,
+    kyads_referer_url: true,
+    platform_connection_id: true,
   } as const
 
   // 巡航结果(tracking_status) 映射到前端状态。关键：resolve_failed/no_tracking 多为
@@ -104,6 +106,60 @@ export async function GET(req: NextRequest) {
   const merchantById = new Map(merchants.map((m) => [m.id.toString(), m]))
   const merchantByKey = new Map(merchants.map((m) => [`${normalizePlatformCode(m.platform)}:${m.merchant_id}`, m]))
 
+  // ── 来路来源批量预取（与 referer-resolver 同口径）：文章 published_url / 联盟账号绑定网站 domain ──
+  const allMerchantIds = merchants.map((m) => m.id)
+  const latestArticleByMerchant = new Map<string, string>()
+  if (allMerchantIds.length > 0) {
+    const arts = await prisma.articles.findMany({
+      where: { user_merchant_id: { in: allMerchantIds }, status: 'published', published_url: { not: null }, is_deleted: 0 },
+      orderBy: { published_at: 'desc' },
+      select: { user_merchant_id: true, published_url: true },
+    })
+    for (const a of arts) {
+      if (!a.user_merchant_id || !a.published_url) continue
+      const k = a.user_merchant_id.toString()
+      if (!latestArticleByMerchant.has(k)) latestArticleByMerchant.set(k, a.published_url)
+    }
+  }
+  const connIds = [...new Set(merchants.map((m) => m.platform_connection_id).filter((x): x is bigint => !!x))]
+  const siteIdByConn = new Map<string, bigint>()
+  if (connIds.length > 0) {
+    const conns = await prisma.platform_connections.findMany({
+      where: { id: { in: connIds }, is_deleted: 0 },
+      select: { id: true, publish_site_id: true },
+    })
+    for (const c of conns) if (c.publish_site_id) siteIdByConn.set(c.id.toString(), c.publish_site_id)
+  }
+  const siteIds = [...new Set([...siteIdByConn.values()])]
+  const domainBySite = new Map<string, string>()
+  if (siteIds.length > 0) {
+    const sites = await prisma.publish_sites.findMany({
+      where: { id: { in: siteIds }, is_deleted: 0 },
+      select: { id: true, domain: true },
+    })
+    for (const s of sites) if (s.domain) domainBySite.set(s.id.toString(), s.domain)
+  }
+
+  // 单条商家来路解析（优先级：手动 → 文章 → 网站 → 无）
+  const resolveReferer = (
+    m: { id: bigint; kyads_referer_url: string | null; platform_connection_id: bigint | null } | null,
+  ): { url: string | null; source: 'manual' | 'article' | 'website' | 'none' } => {
+    if (!m) return { url: null, source: 'none' }
+    const manual = m.kyads_referer_url?.trim()
+    if (manual) return { url: manual, source: 'manual' }
+    const art = latestArticleByMerchant.get(m.id.toString())
+    if (art) return { url: art, source: 'article' }
+    if (m.platform_connection_id) {
+      const siteId = siteIdByConn.get(m.platform_connection_id.toString())
+      const domain = siteId ? domainBySite.get(siteId.toString())?.trim() : undefined
+      if (domain) {
+        const d = domain.replace(/\/+$/, '')
+        return { url: /^https?:\/\//i.test(d) ? d : `https://${d}`, source: 'website' }
+      }
+    }
+    return { url: null, source: 'none' }
+  }
+
   // 按 campaign_id + status 统计库存
   const campaignIds = campaigns.map((c) => c.id)
   const stockRows =
@@ -149,6 +205,7 @@ export async function GET(req: NextRequest) {
       null
     const stock = stockMap.get(c.id.toString()) ?? { available: 0, leased: 0, consumed: 0 }
     const clickTask = clickTaskMap.get(c.id.toString()) ?? null
+    const referer = resolveReferer(merchant)
     return {
       campaignId: c.id.toString(),
       googleCampaignId: c.google_campaign_id,
@@ -166,6 +223,8 @@ export async function GET(req: NextRequest) {
       parentNetwork: merchant?.parent_network ?? null,
       parentBlacklisted: merchant?.parent_blacklisted === 1,
       suffixEnabled: c.suffix_exchange_enabled === 1,
+      refererUrl: referer.url,
+      refererSource: referer.source,
       lastApplyAt: c.suffix_last_apply_at,
       lastSuffix: c.suffix_last_content,
       stock,
@@ -183,7 +242,7 @@ export async function GET(req: NextRequest) {
 
   const apiKeyRecord = await prisma.users.findUnique({
     where: { id: userId },
-    select: { script_api_key: true, link_exchange_click_count: true },
+    select: { script_api_key: true, link_exchange_click_count: true, click_control_enabled: true },
   })
 
   const { summary: alertSummary, totalOpen } = await getAlertSummary(userId)
@@ -200,6 +259,7 @@ export async function GET(req: NextRequest) {
       rows,
       apiKey: apiKeyRecord?.script_api_key ?? null,
       defaultClickCount: apiKeyRecord?.link_exchange_click_count ?? 10,
+      clickControlEnabled: apiKeyRecord?.click_control_enabled === 1,
       summary: {
         total: enabledRows.length,
         matched: enabledRows.filter((r) => r.matched).length,

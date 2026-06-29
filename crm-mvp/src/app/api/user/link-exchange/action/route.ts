@@ -9,7 +9,7 @@ import { ensureCampaignMerchant } from '@/lib/campaign-merchant-link'
 import { STOCK_CONFIG } from '@/lib/suffix-engine/config'
 
 interface ActionBody {
-  action: 'replenish' | 'replenishAll' | 'toggle' | 'brushClicks' | 'brushAll' | 'syncLinks' | 'updateLink'
+  action: 'replenish' | 'replenishAll' | 'toggle' | 'brushClicks' | 'brushAll' | 'syncLinks' | 'updateLink' | 'setClickControl'
   campaignId?: string
   enabled?: boolean
   count?: number
@@ -26,6 +26,15 @@ export async function POST(req: NextRequest) {
     body = await req.json()
   } catch {
     return NextResponse.json({ code: -1, message: '请求体解析失败' }, { status: 400 })
+  }
+
+  // 需求2：用户级开关「订单/点击比自动补刷点击」
+  if (body.action === 'setClickControl') {
+    await prisma.users.update({
+      where: { id: userId },
+      data: { click_control_enabled: body.enabled ? 1 : 0 },
+    })
+    return NextResponse.json({ code: 0, data: { clickControlEnabled: !!body.enabled } })
   }
 
   // 单系列补货（同步等待，给用户即时结果）
