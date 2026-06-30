@@ -15,7 +15,7 @@
  */
 
 import prisma from "@/lib/prisma";
-import { normalizePlatformCode } from "@/lib/constants";
+import { normalizePlatformCode, isValidPlatformCode } from "@/lib/constants";
 
 // ── 命名解析 ──
 
@@ -74,6 +74,8 @@ export async function ensureCampaignMerchant(
 
   const parsed = parseCampaignNameFull(campaign.campaign_name || "");
   if (!parsed) return null;
+  // 平台代码非法（畸形系列名解析出的非标准/超长值）→ 不自建，避免写入非法 platform 列
+  if (!isValidPlatformCode(parsed.platform)) return null;
 
   const existing = await prisma.user_merchants.findFirst({
     where: { user_id: userId, platform: parsed.platform, merchant_id: parsed.mid, is_deleted: 0 },
@@ -207,6 +209,14 @@ async function autoLinkCampaigns(userId: bigint): Promise<number> {
     let merchant = merchantIndex.get(key);
 
     if (!merchant) {
+      // 平台代码非法（畸形系列名）→ 不自建，沿用旧行为：警告跳过，避免写入非法 platform 列
+      if (!isValidPlatformCode(parsed.platform)) {
+        console.warn(
+          `[MerchantAutoLink] 跳过非法平台: ${key}` +
+          ` (campaign: "${campaign.campaign_name}")`
+        );
+        continue;
+      }
       // 平台 API 未返回该商家（未加入/无数据）→ 在 CRM 自建商家，避免广告系列长期「未匹配」。
       // 挂上该平台联盟账号（来路取账号网站）；status=claimed + 被在投系列引用 → 商家同步不会清理它。
       // 后续若平台同步返回该商家(joined) 或 Google 回拉拿到 suffix，会按 (平台,MID) 命中本行并补全链接。

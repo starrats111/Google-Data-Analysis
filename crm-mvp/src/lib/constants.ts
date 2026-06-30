@@ -94,6 +94,11 @@ export function normalizePlatformCode(raw: string): string {
   return trimmed;
 }
 
+/** 是否为已知的标准平台代码（CG/RW/LH/...）。用于自建商家前校验，避免畸形系列名写入超长/非法 platform。 */
+export function isValidPlatformCode(code: string): boolean {
+  return VALID_CODES.has(code);
+}
+
 // 商家状态
 export const MERCHANT_STATUS = {
   AVAILABLE: "available",
