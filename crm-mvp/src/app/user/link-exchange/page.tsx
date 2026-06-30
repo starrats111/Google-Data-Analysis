@@ -63,6 +63,8 @@ interface OverviewData {
   defaultClickCount: number;
   clickControlEnabled: boolean;
   clickControlRatio: { minPct: number; maxPct: number };
+  scriptLoopIntervalSeconds: number | null;
+  scriptLoopIntervalDefault: number;
   summary: { total: number; matched: number; totalAvailable: number; lowStockCount: number; alertOpen: number };
   alertSummary: Record<string, number>;
   stockConfig: { target: number; lowWatermark: number };
@@ -325,6 +327,32 @@ export default function LinkExchangePage() {
         setData((prev) => prev ? { ...prev, clickControlRatio: { minPct: ratioMin, maxPct: ratioMax } } : prev);
       } else message.error(res.message ?? "保存失败");
     } finally { setRatioSaving(false); }
+  };
+
+  // 换链脚本轮询间隔(秒)：用户自助。空=用默认15。改后脚本下一轮启动自动生效，无需重发脚本
+  const scriptIntervalDefault = data?.scriptLoopIntervalDefault ?? 15;
+  const [intervalSec, setIntervalSec] = useState<number | null>(null);
+  const [intervalSaving, setIntervalSaving] = useState(false);
+  useEffect(() => {
+    if (data) setIntervalSec(data.scriptLoopIntervalSeconds ?? null);
+  }, [data?.scriptLoopIntervalSeconds]);
+  const handleSaveInterval = async (val: number | null) => {
+    if (val != null && !(Number.isInteger(val) && val >= 10 && val <= 120)) {
+      message.error("轮询间隔须为 10~120 秒整数（留空恢复默认15）"); return;
+    }
+    setIntervalSaving(true);
+    try {
+      const res = await fetch("/api/user/link-exchange/action", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "setScriptInterval", loopIntervalSeconds: val }),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        const saved = (res.data?.loopIntervalSeconds ?? null) as number | null;
+        setIntervalSec(saved);
+        setData((prev) => prev ? { ...prev, scriptLoopIntervalSeconds: saved } : prev);
+        message.success(saved == null ? `已恢复默认 ${scriptIntervalDefault} 秒` : `换链轮询间隔已设为 ${saved} 秒`);
+      } else message.error(res.message ?? "保存失败");
+    } finally { setIntervalSaving(false); }
   };
 
   const handleResolveAlert = async (ids: string[]) => {
@@ -606,6 +634,15 @@ export default function LinkExchangePage() {
                 <InputNumber size="small" min={2} max={100} value={ratioMax} controls={false}
                   style={{ width: 52 }} onChange={(v) => setRatioMax(Number(v) || 0)} addonAfter="%" />
                 <Button size="small" type="primary" ghost loading={ratioSaving} onClick={handleSaveRatio}>保存</Button>
+              </Space>
+            </Tooltip>
+            <Tooltip title="换链脚本检测点击增长的轮询间隔（秒）。越小换链越快但增加 Google Ads 脚本负载；范围 10~120，留空=默认15。改后脚本下一轮启动自动生效，无需重新粘贴脚本到 MCC。">
+              <Space size={4}>
+                <Text type="secondary" style={{ fontSize: 13 }}>换链轮询间隔</Text>
+                <InputNumber size="small" min={10} max={120} value={intervalSec} controls={false}
+                  style={{ width: 78 }} placeholder={`默认${scriptIntervalDefault}`} addonAfter="秒"
+                  onChange={(v) => setIntervalSec(v == null ? null : Number(v))} />
+                <Button size="small" type="primary" ghost loading={intervalSaving} onClick={() => handleSaveInterval(intervalSec)}>保存</Button>
               </Space>
             </Tooltip>
             <Tooltip title="扫描已启用广告系列，为缺少链接/上级联盟的商家自动解析并验证联盟追踪链接">

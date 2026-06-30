@@ -284,6 +284,7 @@ export async function GET(req: NextRequest) {
       click_control_enabled: true,
       click_control_ratio_min_pct: true,
       click_control_ratio_max_pct: true,
+      script_loop_interval_seconds: true,
     },
   })
 
@@ -306,6 +307,9 @@ export async function GET(req: NextRequest) {
         minPct: apiKeyRecord?.click_control_ratio_min_pct ?? 5,
         maxPct: apiKeyRecord?.click_control_ratio_max_pct ?? 10,
       },
+      // 换链脚本轮询间隔(秒)：用户自助；null=默认15
+      scriptLoopIntervalSeconds: apiKeyRecord?.script_loop_interval_seconds ?? null,
+      scriptLoopIntervalDefault: 15,
       summary: {
         total: enabledRows.length,
         matched: enabledRows.filter((r) => r.matched).length,

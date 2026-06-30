@@ -9,13 +9,14 @@ import { ensureCampaignMerchant } from '@/lib/campaign-merchant-link'
 import { STOCK_CONFIG } from '@/lib/suffix-engine/config'
 
 interface ActionBody {
-  action: 'replenish' | 'replenishAll' | 'toggle' | 'brushClicks' | 'brushAll' | 'syncLinks' | 'updateLink' | 'setClickControl'
+  action: 'replenish' | 'replenishAll' | 'toggle' | 'brushClicks' | 'brushAll' | 'syncLinks' | 'updateLink' | 'setClickControl' | 'setScriptInterval'
   campaignId?: string
   enabled?: boolean
   count?: number
   trackingLink?: string
   ratioMinPct?: number
   ratioMaxPct?: number
+  loopIntervalSeconds?: number | null
 }
 
 export async function POST(req: NextRequest) {
@@ -47,6 +48,22 @@ export async function POST(req: NextRequest) {
     if (Object.keys(data).length === 0) return NextResponse.json({ code: -1, message: '无更新内容' }, { status: 400 })
     await prisma.users.update({ where: { id: userId }, data })
     return NextResponse.json({ code: 0, data: { clickControlEnabled: data.click_control_enabled === 1 } })
+  }
+
+  // 用户自助调节「换链脚本轮询间隔(秒)」：脚本下一轮启动经 /api/v1/suffix/script-config 读取生效，无需重发脚本
+  if (body.action === 'setScriptInterval') {
+    // null/0 → 恢复默认（用 NULL 落库，接口回退默认15）
+    if (body.loopIntervalSeconds == null || Number(body.loopIntervalSeconds) === 0) {
+      await prisma.users.update({ where: { id: userId }, data: { script_loop_interval_seconds: null } })
+      return NextResponse.json({ code: 0, data: { loopIntervalSeconds: null } })
+    }
+    const sec = Math.round(Number(body.loopIntervalSeconds))
+    // 合理范围：10~120 秒（过小会增加 Google Ads 脚本压力/配额，过大失去意义）
+    if (!Number.isFinite(sec) || sec < 10 || sec > 120) {
+      return NextResponse.json({ code: -1, message: '轮询间隔须为 10~120 秒的整数（留空恢复默认15）' }, { status: 400 })
+    }
+    await prisma.users.update({ where: { id: userId }, data: { script_loop_interval_seconds: sec } })
+    return NextResponse.json({ code: 0, data: { loopIntervalSeconds: sec } })
   }
 
   // 单系列补货（同步等待，给用户即时结果）
