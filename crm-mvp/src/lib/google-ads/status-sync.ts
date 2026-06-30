@@ -73,9 +73,19 @@ export async function syncUserCampaignStatuses(userId: bigint): Promise<SyncResu
         customerIds = campaignCids.map((c) => c.customer_id!).filter(Boolean);
       }
       if (customerIds.length === 0) continue;
-      const { statuses, disabledCids } = await fetchAllCampaignStatuses(credentials, customerIds);
+      const { statuses, disabledCids, credentialDeniedCids } = await fetchAllCampaignStatuses(credentials, customerIds);
       let updated = 0;
       let newCampaigns = 0;
+
+      // 凭据/授权类错误（service account 失权、login-customer-id 配置问题等）不等于账号停用：
+      // 保持这些 CID 原状，绝不标记不可用 / 暂停广告，避免一次 MCC 凭据失效误杀整批正常 CID。
+      // 仅告警，提示去修复该 MCC 的凭据；修复后下一轮同步会自动恢复真实状态。
+      if (credentialDeniedCids.length > 0) {
+        console.warn(
+          `[StatusSync] MCC ${mcc.mcc_name || mcc.mcc_id}(id=${mcc.id}) 有 ${credentialDeniedCids.length} 个 CID 因凭据/权限错误无法访问，` +
+          `已跳过不改状态（请检查该 MCC 的 service account 是否仍有访问权）：${credentialDeniedCids.join(", ")}`
+        );
+      }
 
       // ── 1. 处理被停用/中止的 CID ─────────────────────────────────────────
       // 覆盖场景：账号未启用、权限撤销、政策违规中止（如"不可接受的商业行为"）
