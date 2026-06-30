@@ -58,6 +58,15 @@ export function classifyError(err: unknown): { category: string; userMessage: st
       canFallbackToCache: true,
     };
   }
+  // FIX-NODE-LIMIT：节点配额耗尽（系统已自动切节点仍失败）。区别于「该商家无数据(no_data)」，
+  // 必须明确提示是额度问题，否则会误以为商家无数据而手动填词。
+  if (/额度|配额|limits?\s*exceeded/i.test(msg)) {
+    return {
+      category: "quota_exceeded",
+      userMessage: "SemRush 节点今日额度已用尽（系统已尝试自动切换节点）。请稍后重试，或在管理后台切换 3UE 节点 / 升级套餐",
+      canFallbackToCache: true,
+    };
+  }
   if (
     msg.includes("3UE 服务暂时不可用") ||
     msg.includes("3UE 服务器内部错误") ||

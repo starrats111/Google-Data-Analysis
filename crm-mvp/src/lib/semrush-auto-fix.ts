@@ -116,7 +116,7 @@ export async function testConnection(): Promise<TestResult> {
   const password = configs["semrush_password"];
   const userId = configs["semrush_user_id"];
   const apiKey = configs["semrush_api_key"];
-  const node = configs["semrush_node"] || "2";
+  const node = configs["semrush_node"] || "14";
 
   const steps: DiagStep[] = [];
 
@@ -254,6 +254,64 @@ export async function testConnection(): Promise<TestResult> {
     return { overall: "fail", steps, errorType: "unknown" };
   }
 
+  // FIX-NODE-LIMIT Step 5：计量接口探测。user.Databases 是非计量方法，节点配额耗尽时它仍成功，
+  // 旧健康检查因此一直误报「✅ 正常」、从不告警/切节点。这里用真正会消耗配额的 organic.PositionsOverview
+  // 查 google.com（必有数据）：命中 Limits exceeded 或返回 0 条 → 判定当前节点不可用(errorType=node)，
+  // 交由 health-cron 调 trySwitchNode 自动切到有配额的节点。
+  try {
+    const cookieStr = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join("; ");
+    const kwRes = await curlFetch(RPC_URL, {
+      method: "POST",
+      headers: {
+        "user-agent": USER_AGENT,
+        "content-type": "application/json; charset=utf-8",
+        origin: RPC_ORIGIN,
+        referer: "https://sem.3ue.co/analytics/overview/",
+        accept: "application/json, text/plain, */*",
+        cookie: cookieStr,
+      },
+      body: JSON.stringify({
+        id: 13,
+        jsonrpc: "2.0",
+        method: "organic.PositionsOverview",
+        params: {
+          request_id: crypto.randomUUID(),
+          report: "domain.overview",
+          args: { database: configs["semrush_database"] || "us", dateType: "daily", dateFormat: "date", searchItem: "google.com", searchType: "domain", positionsType: "all" },
+          userId: parseInt(userId),
+          apiKey,
+        },
+      }),
+      timeoutMs: 15000,
+    });
+    let kb = kwRes.body.trim();
+    if (kb.startsWith("HTTP/")) {
+      const sep = kb.indexOf("\r\n\r\n");
+      if (sep > 0) kb = kb.slice(sep + 4).trim();
+    }
+    if (!kb || kb.startsWith("<")) {
+      steps.push({ step: "关键词查询", status: "fail", detail: "返回空响应或 HTML，节点可能不可用" });
+      return { overall: "fail", steps, errorType: "node" };
+    }
+    const kd = JSON.parse(kb) as any;
+    if (kd.error) {
+      const msg = kd.error?.message || JSON.stringify(kd.error);
+      const isLimit = kd.error?.code === -32098 || /limits?\s*exceeded|额度|配额/i.test(String(msg));
+      steps.push({ step: "关键词查询", status: "fail", detail: `RPC 错误: ${msg}` });
+      // 配额耗尽按 node 处理（切节点可解）；其它错误归 unknown
+      return { overall: "fail", steps, errorType: isLimit ? "node" : "unknown" };
+    }
+    const kwCount = Array.isArray(kd.result) ? kd.result.length : 0;
+    if (kwCount === 0) {
+      steps.push({ step: "关键词查询", status: "fail", detail: "google.com 返回 0 条，当前节点配额可能已耗尽" });
+      return { overall: "fail", steps, errorType: "node" };
+    }
+    steps.push({ step: "关键词查询", status: "success", detail: `google.com 返回 ${kwCount} 条` });
+  } catch (err) {
+    // 计量探测本身异常不阻断整体（前面 RPC 已通过）：记 skip，不误判为故障
+    steps.push({ step: "关键词查询", status: "skip", detail: `查询异常（不阻断）: ${err instanceof Error ? err.message : String(err)}` });
+  }
+
   return { overall: "success", steps };
   }
 }
@@ -266,7 +324,7 @@ export async function trySwitchNode(): Promise<AutoFixResult> {
   const password = configs["semrush_password"];
   const userId = configs["semrush_user_id"];
   const apiKey = configs["semrush_api_key"];
-  const currentNode = configs["semrush_node"] || "2";
+  const currentNode = configs["semrush_node"] || "14";
 
   if (!username || !password || !userId || !apiKey) {
     return { action: "failed", detail: "配置不完整，无法切换节点" };
@@ -293,9 +351,8 @@ export async function trySwitchNode(): Promise<AutoFixResult> {
 
   // BUG-07b：登录后无论成功/失败，结束都登出本次会话，释放 3UE 设备。
   try {
-  // 遍历节点 1-10，跳过当前节点
-  const nodesToTry = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "1"].filter(n => n !== currentNode);
-  nodesToTry.unshift(...(currentNode !== "2" ? ["2"] : [])); // 优先试节点 2
+  // FIX-NODE-LIMIT：候选节点改为现有 GURU 套餐有效节点 9~20（旧 1~8 多已失效），跳过当前节点。
+  const nodesToTry = ["14", "13", "12", "11", "10", "15", "16", "17", "18", "19", "20", "9"].filter(n => n !== currentNode);
 
   for (const node of nodesToTry) {
     cookies["GMITM_token"] = token;
@@ -327,8 +384,18 @@ export async function trySwitchNode(): Promise<AutoFixResult> {
           accept: "application/json, text/plain, */*",
           cookie: rpcCookieStr,
         },
-        body: JSON.stringify({ id: 1, jsonrpc: "2.0", method: "user.Databases", params: { userId: parseInt(userId), apiKey } }),
-        timeoutMs: 12000,
+        // FIX-NODE-LIMIT：用【计量接口】organic.PositionsOverview 测节点，而非 user.Databases。
+        // user.Databases 不计配额，节点额度耗尽时仍成功 → 旧逻辑会把已耗尽节点误判为可用。
+        // 只有该计量方法能查出数据(google.com 必有词)的节点，才是真正还有配额、可切过去的节点。
+        body: JSON.stringify({
+          id: 13, jsonrpc: "2.0", method: "organic.PositionsOverview",
+          params: {
+            request_id: crypto.randomUUID(), report: "domain.overview",
+            args: { database: configs["semrush_database"] || "us", dateType: "daily", dateFormat: "date", searchItem: "google.com", searchType: "domain", positionsType: "all" },
+            userId: parseInt(userId), apiKey,
+          },
+        }),
+        timeoutMs: 15000,
       });
 
       if (rpcRes.status >= 400) continue;
@@ -341,7 +408,7 @@ export async function trySwitchNode(): Promise<AutoFixResult> {
       if (!body || body.startsWith("<")) continue;
 
       const data = JSON.parse(body) as any;
-      if (data.error) continue;
+      if (data.error) continue; // 含 -32098 Limits exceeded：该节点配额耗尽，跳过
       if (!Array.isArray(data.result) || data.result.length === 0) continue;
 
       // 找到可用节点，更新 DB
@@ -364,7 +431,7 @@ export async function refreshApiKey(): Promise<AutoFixResult> {
   const configs = await getSystemConfigsByPrefix("semrush_");
   const username = configs["semrush_username"];
   const password = configs["semrush_password"];
-  const node = configs["semrush_node"] || "2";
+  const node = configs["semrush_node"] || "14";
 
   if (!username || !password) {
     return { action: "failed", detail: "用户名或密码未配置，无法刷新 API Key" };

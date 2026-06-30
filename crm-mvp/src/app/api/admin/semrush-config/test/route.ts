@@ -227,11 +227,34 @@ export async function POST(req: NextRequest) {
       steps.push({ step: "关键词查询", status: "fail", detail: `响应不是合法 JSON：${kwBody.slice(0, 100)}` });
       return apiSuccess({ steps, overall: "fail" });
     }
-    const rows = (kwData as any)?.result || [];
+    // FIX-NODE-LIMIT：旧逻辑把「返回 0 条」也判为 ✅ 通过，于是节点配额耗尽时仍显示"功能可正常使用"。
+    // 改为：RPC error（含 -32098 Limits exceeded）或 0 条 → 判定失败。google.com 必有数据，0 条即异常。
+    const kd = kwData as any;
+    if (kd?.error) {
+      const msg = kd.error?.message || JSON.stringify(kd.error);
+      const isLimit = kd.error?.code === -32098 || /limits?\s*exceeded|额度|配额/i.test(String(msg));
+      steps.push({
+        step: "关键词查询",
+        status: "fail",
+        detail: isLimit
+          ? `当前节点今日额度已用尽（${msg}）——请在上方「节点」换一个节点后重试`
+          : `RPC 错误: ${msg}`,
+      });
+      return apiSuccess({ steps, overall: "fail" });
+    }
+    const rows = Array.isArray(kd?.result) ? kd.result : [];
+    if (rows.length === 0) {
+      steps.push({
+        step: "关键词查询",
+        status: "fail",
+        detail: "查询 google.com 返回 0 条 —— 当前节点可能配额耗尽或不可用，请更换节点后重试",
+      });
+      return apiSuccess({ steps, overall: "fail" });
+    }
     steps.push({
       step: "关键词查询",
       status: "success",
-      detail: `查询 google.com 返回 ${Array.isArray(rows) ? rows.length : 0} 条结果`,
+      detail: `查询 google.com 返回 ${rows.length} 条结果`,
     });
   } catch (err) {
     steps.push({ step: "关键词查询", status: "fail", detail: `查询异常: ${err instanceof Error ? err.message : String(err)}` });

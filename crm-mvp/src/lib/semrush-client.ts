@@ -62,14 +62,22 @@ const LOGOUT_URL = "https://dash.3ue.co/api/account/logout";
 // 节点宕机（"节点暂不可用"）短期拉黑；套餐不可用（"套餐无法使用该节点"）长期拉黑。
 const NODE_DOWN_TTL_MS = 10 * 60 * 1000;        // 节点暂时宕机：10 分钟内不再尝试
 const NODE_FORBIDDEN_TTL_MS = 12 * 60 * 60 * 1000; // 套餐不支持该节点：12 小时内不再尝试
+// FIX-NODE-LIMIT：节点「今日 API 配额」耗尽 → 3UE 返回 HTTP200 + JSON {"error":{"code":-32098,"message":"Limits exceeded"}}。
+// 这是【按节点】的日配额（每节点各有倍率/额度，次日重置），不是账号整体不可用。旧逻辑 JSON.parse 成功后
+// 直接当「成功 0 条」并把该节点 setPreferredNode 持久化 → 永久卡死在已耗尽节点。这里识别它并做节点级失效转移。
+// TTL 取 3h：节点很多（9-20），短期拉黑后轮换其它节点；日配额次日重置，3h 内不再无谓重试该节点。
+const NODE_LIMIT_TTL_MS = 3 * 60 * 60 * 1000;
+const LIMITS_EXCEEDED_RE = /limits?\s*exceeded|额度|配额/i;
 // D-087：设备并发超限（账号级，与节点无关）→ 原地退避重试同一节点，绝不切节点/拉黑。
 // "超出同一时间设备数量限制" 是 SemRush 账号同时在线会话数到顶，切节点换出口 IP 只会
 // 再开一台设备→越切越糟，旧逻辑还会把健康节点误判为宕机全部拉黑，导致持续"所有节点不可用"。
 const MAX_DEVICE_LIMIT_RETRIES = 4;
 const DEVICE_LIMIT_BACKOFF_MS = [1500, 3000, 5000, 8000];
 const DEVICE_LIMIT_RE = /设备数量限制|设备数限制|退出其他设备|同一时间设备|设备数超限/i;
-// 候选节点全集（3UE 当前为 1..8；实际可用性以响应为准，本表仅决定尝试顺序与范围）
-const NODE_UNIVERSE = ["1", "2", "3", "4", "5", "6", "7", "8"];
+// 候选节点全集。实测（2026-06-30）：当前订阅为 GURU 套餐，有效节点是 9~20；旧节点 1~8 多数已失效
+// （如节点 2 长期 "Limits exceeded"）。故候选池改为现有 GURU 节点，14 优先（与网页默认一致）。
+// 实际可用性仍以响应为准，本表仅决定失败转移的尝试顺序与范围。
+const NODE_UNIVERSE = ["14", "13", "12", "11", "10", "15", "16", "17", "18", "19", "20", "9"];
 // D-061：与既有 health-cron（semrush-auto-fix.trySwitchNode）统一写回同一个 key，
 // 避免双真相源；semrush_node 本就是运行时可变的有效节点（cron 已在写它）。
 const NODE_CONFIG_KEY = "semrush_node";
@@ -740,7 +748,7 @@ export class SemRushClient {
 
   constructor(creds: SemRushCredentials) {
     this.creds = creds;
-    this.activeNode = creds.nodeConfig.semrushNode || "3";
+    this.activeNode = creds.nodeConfig.semrushNode || "14";
     this.guard = getSemrushGuard(creds.username);
   }
 
@@ -756,8 +764,8 @@ export class SemRushClient {
     }
     const db = country ? countryToDatabase(country) : (configs["semrush_database"] || "us");
     // D-061：种子节点取自 semrush_node（health-cron 与本类的失败转移都会把它更新为最近可用节点），
-    // 进程重启后即从上次可用节点起步，避免重启都撞已宕机的节点。
-    const seedNode = configs[NODE_CONFIG_KEY] || "2";
+    // 进程重启后即从上次可用节点起步，避免重启都撞已宕机的节点。默认回退 14（现有 GURU 套餐有效节点）。
+    const seedNode = configs[NODE_CONFIG_KEY] || "14";
     return new SemRushClient({
       username,
       password,
@@ -796,7 +804,7 @@ export class SemRushClient {
           return SemRushClient.fromConfig(country);
         }
         const db = country ? countryToDatabase(country) : (configs["semrush_database"] || "us");
-        const seedNode = configs[NODE_CONFIG_KEY] || row.node || "3";
+        const seedNode = configs[NODE_CONFIG_KEY] || row.node || "14";
         return new SemRushClient({
           username: row.username,
           password: row.password,
@@ -842,6 +850,19 @@ export class SemRushClient {
       if (!tried.has(n)) return n;
     }
     return null;
+  }
+
+  // FIX-NODE-LIMIT：判断 RPC 响应是否为「节点配额耗尽」(-32098 / Limits exceeded)。
+  // 兼容单请求({id,error})与批量([{id,error},...])两种结构——批量里只要任一子请求命中即视为节点受限
+  // （计量类方法 organic/adwords.PositionsOverview 会全部 -32098，user.Databases 等非计量方法仍可能成功）。
+  private hasNodeLimitError(parsed: unknown): boolean {
+    const hit = (o: unknown): boolean => {
+      if (!o || typeof o !== "object") return false;
+      const err = (o as { error?: { code?: number; message?: string } }).error;
+      if (!err) return false;
+      return err.code === -32098 || LIMITS_EXCEEDED_RE.test(String(err.message || ""));
+    };
+    return Array.isArray(parsed) ? parsed.some(hit) : hit(parsed);
   }
 
   private buildHeaders(token: string, includeCookie = true): Record<string, string> {
@@ -1104,6 +1125,27 @@ export class SemRushClient {
 
     try {
       const parsed = JSON.parse(body);
+
+      // FIX-NODE-LIMIT：识别「节点今日配额耗尽」(-32098 Limits exceeded)。它是 HTTP200+JSON error，
+      // JSON.parse 不会抛错，旧逻辑会把它当「成功 0 条」并把坏节点 setPreferredNode 持久化 → 永久卡死。
+      // 正确处理：按节点级失效 —— 拉黑当前节点(NODE_LIMIT_TTL_MS) + 切换到下一个候选节点重试；
+      // markNodeBad 内部会顺带清掉 preferredNode（若等于本节点），因此坏节点绝不会被记为优先节点（修复点②）。
+      if (this.hasNodeLimitError(parsed)) {
+        this.guard.markNodeBad(node, NODE_LIMIT_TTL_MS);
+        const next = this.selectNode(triedNodes);
+        console.warn(
+          `[SemRush] 节点 ${node} 今日额度已用尽(Limits exceeded)，` +
+            `${next ? `切换到节点 ${next} 重试` : "已无其它可用节点"}。`,
+        );
+        if (next) {
+          this.activeNode = next;
+          return this.rpc(payload, retryCount, sessionRefreshed, emptyBodyRetryCount, triedNodes, deviceLimitRetryCount);
+        }
+        throw new Error(
+          "SemRush 所有可用节点今日额度均已用尽（Limits exceeded），请稍后重试，或在管理后台切换 3UE 节点 / 升级套餐",
+        );
+      }
+
       // D-061：本次请求节点可用 → 记为进程内优先节点；若与种子节点不同（发生过故障转移），
       // 持久化到 semrush_node（= NODE_CONFIG_KEY，与 health-cron 同一真相源），使进程重启后直接复用，
       // 不再撞已宕机的种子节点。ARCH-01 T0b：旧注释误写 semrush_active_node（已废弃的孤儿 key），此处更正。
