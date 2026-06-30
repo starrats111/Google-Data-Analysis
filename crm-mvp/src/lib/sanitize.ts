@@ -21,37 +21,37 @@ const ALLOWED_TAGS = new Set([
 const DANGEROUS_CSS = /expression|javascript|vbscript|url\s*\(/gi;
 
 export const ARTICLE_HYPERLINK_CLASS = "crm-affiliate-link";
+// 编辑风格的内联超链接样式：酒红色 + 细下划线，去掉"荧光笔高亮块"那种广告感。
+// 颜色取自站点主题 --burgundy (#8B1A2F)。不用 !important，便于站点 CSS 进一步覆盖。
 export const ARTICLE_HYPERLINK_INLINE_STYLE = [
-  "color:#b42318 !important",
-  "font-weight:700 !important",
-  "text-decoration:underline !important",
-  "text-decoration-thickness:2px",
-  "text-underline-offset:3px",
-  "background:linear-gradient(180deg,rgba(255,244,179,0) 0%,rgba(255,244,179,0.96) 100%) !important",
-  "padding:0 0.18em",
-  "border-radius:4px",
-  "box-shadow:inset 0 -0.55em 0 rgba(255,244,179,0.96)",
+  "color:#8B1A2F",
+  "font-weight:600",
+  "text-decoration:underline",
+  "text-decoration-color:rgba(139,26,47,0.4)",
+  "text-decoration-thickness:1px",
+  "text-underline-offset:2px",
 ].join(";") + ";";
 
 export const ARTICLE_HYPERLINK_STYLE_BLOCK = `
 .article-content a,
 .${ARTICLE_HYPERLINK_CLASS} {
-  color:#b42318 !important;
-  font-weight:700 !important;
-  text-decoration:underline !important;
-  text-decoration-thickness:2px;
-  text-underline-offset:3px;
-  background:linear-gradient(180deg,rgba(255,244,179,0) 0%,rgba(255,244,179,0.96) 100%) !important;
-  padding:0 0.18em;
-  border-radius:4px;
-  box-shadow:inset 0 -0.55em 0 rgba(255,244,179,0.96);
+  color:#8B1A2F;
+  font-weight:600;
+  text-decoration:underline;
+  text-decoration-color:rgba(139,26,47,0.4);
+  text-decoration-thickness:1px;
+  text-underline-offset:2px;
+  transition:color .15s ease, text-decoration-color .15s ease;
 }
 .article-content a:hover,
 .${ARTICLE_HYPERLINK_CLASS}:hover {
-  color:#8f1d15 !important;
-  background:linear-gradient(180deg,rgba(255,230,109,0) 0%,rgba(255,230,109,1) 100%) !important;
+  color:#6B1424;
+  text-decoration-color:#8B1A2F;
 }
 `;
+
+// 我们托管的、会被覆盖重写的内联样式属性（用于把旧的"荧光笔高亮"等历史样式洗掉后重新套用 tasteful 样式）
+const MANAGED_LINK_STYLE_PROPS = /\b(?:color|font-weight|text-decoration(?:-color|-thickness|-line|-style)?|text-underline-offset|background(?:-color|-image|-clip)?|padding(?:-[a-z]+)?|border-radius|box-shadow)\s*:[^;]*;?/gi;
 
 function escapeAttrValue(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
@@ -83,12 +83,15 @@ function mergeTokenAttr(current: string, required: string[]): string {
 }
 
 function mergeStyleAttr(current: string): string {
-  const normalized = current.trim();
-  if (normalized.includes("crm-affiliate-link") || normalized.includes("box-shadow:inset 0 -0.55em")) {
-    return normalized;
-  }
-  if (!normalized) return ARTICLE_HYPERLINK_INLINE_STYLE;
-  return `${normalized.replace(/;?\s*$/, ";")} ${ARTICLE_HYPERLINK_INLINE_STYLE}`;
+  // 把历史遗留的链接样式（包括旧的红字 + 黄色荧光笔高亮）洗掉，再统一套用当前 tasteful 样式。
+  // 这样无论新文章还是已存库的旧文章，重新渲染/重新发布时都会被刷新成新样式。
+  const cleaned = (current || "")
+    .replace(MANAGED_LINK_STYLE_PROPS, "")
+    .replace(/\s{2,}/g, " ")
+    .trim()
+    .replace(/;?\s*$/, "");
+  const prefix = cleaned ? `${cleaned}; ` : "";
+  return `${prefix}${ARTICLE_HYPERLINK_INLINE_STYLE}`;
 }
 
 export function emphasizeArticleHyperlinks(html: string): string {

@@ -820,26 +820,219 @@ function normalizeEntryForA1(entry: Record<string, unknown>): Record<string, unk
   };
 }
 
-function buildA1IndexHtml(cacheVersion: string): string {
+// marker：用于识别 CRM 生成的兜底首页（再次标准化时可安全升级，绝不覆盖站点原创设计）
+const A1_HOME_MARKER = "crm-a1-home";
+
+// 旧版兜底首页签名（无 marker），用于识别历史生成的简陋列表页
+function isCrmManagedFallbackIndex(html: string): boolean {
+  if (!html) return false;
+  if (html.includes(A1_HOME_MARKER)) return true;
+  // 旧版特征：同时含「文章列表」标题 + CRM 统一管理站点 footer + id=article-list
+  const oldFallback = html.includes("CRM 统一管理站点")
+    && html.includes('id="article-list"')
+    && html.includes("文章列表");
+  return oldFallback;
+}
+
+function a1Hash(str: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+interface A1Theme {
+  name: string;
+  rootVars: string;
+  fontImport: string;
+  bodyClass: string;
+}
+
+// 按域名做确定性差异化：调色板 / 字体搭配 / 版式，统一在「杂志/编辑」原型内变化，避免站群指纹。
+function a1Theme(domain: string): A1Theme {
+  const h = a1Hash(domain || "site");
+  const palettes = [
+    // British editorial
+    { bg: "#F5F0E8", surface: "#FFFDF8", ink: "#2A2A2A", muted: "#6B6055", accent: "#8B1A2F", accent2: "#C9A84C", headBg: "#1B3A5C", headInk: "#FFFDF8", headDark: "#122638", border: "#D4C8B0" },
+    // Warm sand / terracotta
+    { bg: "#F7F2EC", surface: "#FFFFFF", ink: "#2B2622", muted: "#7A6E63", accent: "#B5532A", accent2: "#C99A4B", headBg: "#33291F", headInk: "#F7F2EC", headDark: "#241C15", border: "#E0D5C6" },
+    // Cool slate / teal
+    { bg: "#F1F3F4", surface: "#FFFFFF", ink: "#222A2E", muted: "#647077", accent: "#0F6E6B", accent2: "#C9803A", headBg: "#1C2B33", headInk: "#F1F3F4", headDark: "#121E24", border: "#D2D9DC" },
+    // Forest green / brass
+    { bg: "#F2F1EA", surface: "#FFFFFF", ink: "#22271F", muted: "#646A5C", accent: "#2F5D3A", accent2: "#B08A3E", headBg: "#1E2A1F", headInk: "#F2F1EA", headDark: "#141D15", border: "#D6D8CB" },
+    // Newsprint mono / red
+    { bg: "#F4F2EE", surface: "#FFFFFF", ink: "#1C1A17", muted: "#6E665C", accent: "#B11E2A", accent2: "#444039", headBg: "#1A1814", headInk: "#F4F2EE", headDark: "#0F0E0B", border: "#DAD5CC" },
+    // Plum / blush
+    { bg: "#F6F1F2", surface: "#FFFFFF", ink: "#2A2126", muted: "#73646B", accent: "#7A2E4A", accent2: "#B98AA0", headBg: "#2E1F28", headInk: "#F6F1F2", headDark: "#20151C", border: "#E2D6DA" },
+  ];
+  const fonts = [
+    { serif: "'Playfair Display', Georgia, serif", sans: "'Source Sans 3', system-ui, sans-serif", import: "family=Playfair+Display:ital,wght@0,500;0,700;1,500&family=Source+Sans+3:wght@300;400;600;700" },
+    { serif: "'Libre Baskerville', Georgia, serif", sans: "'Source Sans 3', system-ui, sans-serif", import: "family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Source+Sans+3:wght@300;400;600;700" },
+    { serif: "'DM Serif Display', Georgia, serif", sans: "'Inter', system-ui, sans-serif", import: "family=DM+Serif+Display:ital@0;1&family=Inter:wght@300;400;500;600;700" },
+    { serif: "'Fraunces', Georgia, serif", sans: "'Inter', system-ui, sans-serif", import: "family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;1,9..144,500&family=Inter:wght@300;400;500;600;700" },
+    { serif: "'Cormorant Garamond', Georgia, serif", sans: "'Work Sans', system-ui, sans-serif", import: "family=Cormorant+Garamond:ital,wght@0,500;0,600;1,500&family=Work+Sans:wght@300;400;500;600" },
+  ];
+  const p = palettes[h % palettes.length];
+  const f = fonts[(h >>> 3) % fonts.length];
+  const leadRight = ((h >>> 6) & 1) === 1;
+  const cols3 = ((h >>> 7) & 1) === 1;
+  // 同时提供 --navy/--burgundy/--gold 别名，使文章详情页（ARTICLE_LAYOUT_STYLE_BLOCK）继承同一套配色
+  const rootVars = `--bg:${p.bg};--surface:${p.surface};--ink:${p.ink};--muted:${p.muted};--accent:${p.accent};--accent2:${p.accent2};--headBg:${p.headBg};--headInk:${p.headInk};--headDark:${p.headDark};--border:${p.border};--navy:${p.headBg};--burgundy:${p.accent};--gold:${p.accent2};--ff-serif:${f.serif};--ff-sans:${f.sans};`;
+  const fontImport = `https://fonts.googleapis.com/css2?${f.import}&display=swap`;
+  const bodyClass = `${leadRight ? "lead-right" : "lead-left"} ${cols3 ? "cols-3" : "cols-2"}`;
+  return { name: prettifySiteName(domain), rootVars, fontImport, bodyClass };
+}
+
+function prettifySiteName(domain: string): string {
+  const base = (domain || "").replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0];
+  const noTld = base.replace(/\.[a-z]{2,}$/i, "").replace(/\.[a-z]{2,}$/i, "");
+  const words = noTld.split(/[-_.]+/).filter(Boolean).map((w) => w.charAt(0).toUpperCase() + w.slice(1));
+  return words.join(" ") || "Journal";
+}
+
+function buildA1IndexHtml(cacheVersion: string, domain = ""): string {
+  const t = a1Theme(domain);
+  const name = escapeHtml(t.name);
   return `<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>首页</title>
+  <title>${name}</title>
+  <!-- ${A1_HOME_MARKER} -->
+  <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="${t.fontImport}">
   <style>
-    body{font-family:system-ui,-apple-system,sans-serif;max-width:900px;margin:0 auto;padding:24px;line-height:1.6;color:#222}
-    h1{font-size:1.5rem;font-weight:600}
-    .list{list-style:none;padding:0;margin:24px 0}
-    .list li{border-bottom:1px solid #eee;padding:16px 0}
-    .list a{color:#1677ff;text-decoration:none;font-weight:600;font-size:1.05rem}
-    .list .meta{color:#888;font-size:.85rem;margin-top:6px}
+    :root{${t.rootVars}}
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    html{scroll-behavior:smooth}
+    body{background:var(--bg);color:var(--ink);font-family:var(--ff-sans);line-height:1.7;-webkit-font-smoothing:antialiased}
+    a{color:inherit;text-decoration:none}
+    img{max-width:100%;display:block}
+    .inner{max-width:1180px;margin:0 auto;padding:0 28px}
+    .reveal{opacity:0;transform:translateY(20px);transition:opacity .7s ease,transform .7s ease}
+    .reveal.in{opacity:1;transform:none}
+    .topbar{background:var(--headDark);color:rgba(255,255,255,.55)}
+    .topbar-in{display:flex;align-items:center;justify-content:space-between;height:38px;font-size:.7rem;letter-spacing:.16em;text-transform:uppercase}
+    .topbar .soc{display:flex;gap:14px}.topbar .soc a{color:inherit;transition:color .2s}.topbar .soc a:hover{color:var(--accent2)}.topbar svg{width:14px;height:14px;fill:currentColor}
+    .site-header{background:var(--headBg);color:var(--headInk);border-bottom:4px solid var(--accent2);position:sticky;top:0;z-index:60}
+    .header-inner{display:flex;align-items:center;justify-content:space-between;gap:24px;height:78px;max-width:1180px;margin:0 auto;padding:0 28px}
+    .site-logo{font-family:var(--ff-serif);font-size:1.7rem;font-weight:700;color:var(--headInk);letter-spacing:.02em;white-space:nowrap}
+    .site-logo span{color:var(--accent2)}
+    .search-toggle{background:none;border:none;color:var(--headInk);cursor:pointer;padding:6px;display:flex;opacity:.85}.search-toggle:hover{color:var(--accent2)}.search-toggle svg{width:20px;height:20px}
+    .search-bar{max-height:0;overflow:hidden;background:var(--headDark);transition:max-height .3s ease}
+    .search-bar.open{max-height:90px}
+    .search-bar input{width:100%;background:none;border:none;border-bottom:1px solid rgba(255,255,255,.25);color:var(--headInk);font-family:var(--ff-serif);font-size:1.3rem;font-style:italic;padding:18px 0;outline:none}
+    .lead{padding:54px 0 10px}
+    .lead-grid{display:grid;grid-template-columns:1.15fr 1fr;gap:48px;align-items:center}
+    body.lead-right .lead-grid{grid-template-columns:1fr 1.15fr}
+    body.lead-right .lead-img{order:2}
+    .lead-img{display:block;overflow:hidden;aspect-ratio:11/8;background:var(--border)}
+    .lead-img img{width:100%;height:100%;object-fit:cover;transition:transform .6s ease}
+    .lead-img:hover img{transform:scale(1.04)}
+    .lead-ph{display:block;width:100%;height:100%;background:linear-gradient(135deg,var(--headBg),var(--accent))}
+    .lead-kicker{display:inline-block;font-size:.74rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin-bottom:16px}
+    .lead-title{font-family:var(--ff-serif);font-weight:700;color:var(--headBg);font-size:clamp(2rem,3.8vw,3.1rem);line-height:1.14;margin-bottom:18px;letter-spacing:-.01em}
+    .lead-title a:hover{color:var(--accent)}
+    .lead-dek{font-size:1.12rem;color:var(--muted);line-height:1.6;margin-bottom:20px;max-width:46ch}
+    .lead-meta{font-size:.82rem;color:var(--muted);font-style:italic;margin-bottom:22px}.lead-meta b{font-style:normal;color:var(--ink)}
+    .lead-read{font-size:.78rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--headBg);border-bottom:2px solid var(--accent2);padding-bottom:4px}
+    .lead-read:hover{color:var(--accent)}
+    @media(max-width:820px){.lead-grid,body.lead-right .lead-grid{grid-template-columns:1fr;gap:24px}body.lead-right .lead-img{order:0}}
+    .catbar{display:flex;flex-wrap:wrap;gap:10px;padding:8px 0 0}
+    .chip{font-size:.74rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);border:1px solid var(--border);background:var(--surface);padding:7px 14px;cursor:pointer;transition:all .2s}
+    .chip:hover,.chip.active{background:var(--headBg);color:var(--headInk);border-color:var(--headBg)}
+    .main-cols{display:grid;grid-template-columns:1fr 320px;gap:56px;padding:40px 28px 80px;max-width:1180px;margin:0 auto}
+    @media(max-width:980px){.main-cols{grid-template-columns:1fr;gap:48px}}
+    .sec-hd{border-bottom:2px solid var(--headBg);padding-bottom:12px;margin-bottom:30px}
+    .pre-ttl{display:block;font-size:.72rem;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);margin-bottom:7px}
+    .sec-ttl{font-family:var(--ff-serif);font-size:1.7rem;color:var(--headBg);font-weight:700}
+    .art-grid{display:grid;grid-template-columns:1fr 1fr;gap:32px}
+    body.cols-3 .art-grid{grid-template-columns:repeat(3,1fr)}
+    @media(max-width:900px){body.cols-3 .art-grid{grid-template-columns:1fr 1fr}}
+    @media(max-width:560px){.art-grid,body.cols-3 .art-grid{grid-template-columns:1fr}}
+    .art-card{background:var(--surface);border:1px solid var(--border);display:flex;flex-direction:column;transition:box-shadow .3s ease,transform .3s ease}
+    .art-card:hover{box-shadow:0 14px 40px rgba(0,0,0,.12);transform:translateY(-3px)}
+    .card-img{display:block;aspect-ratio:3/2;overflow:hidden;background:var(--border)}
+    .card-img img{width:100%;height:100%;object-fit:cover;transition:transform .5s ease}
+    .art-card:hover .card-img img{transform:scale(1.05)}
+    .card-ph{display:block;width:100%;height:100%;background:linear-gradient(135deg,var(--headBg),var(--accent))}
+    .card-body{padding:22px;flex:1;display:flex;flex-direction:column;border-top:3px solid var(--accent2)}
+    .card-cat{font-size:.68rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);margin-bottom:9px}
+    .card-ttl{font-family:var(--ff-serif);font-size:1.28rem;line-height:1.3;color:var(--headBg);margin-bottom:10px}
+    .card-ttl a:hover{color:var(--accent)}
+    .card-exc{font-size:.92rem;color:var(--muted);line-height:1.6;flex:1;margin-bottom:14px}
+    .card-meta{font-size:.74rem;color:var(--muted);display:flex;gap:14px;font-style:italic;border-top:1px solid var(--border);padding-top:12px;margin-top:auto}
+    .empty-st{text-align:center;padding:60px 0;color:var(--muted)}.empty-ico{font-size:2rem;color:var(--accent2);margin-bottom:14px}.empty-st h3{font-family:var(--ff-serif);font-size:1.4rem;color:var(--headBg);margin-bottom:6px}
+    .pagination{display:flex;gap:8px;justify-content:center;margin-top:44px;flex-wrap:wrap}
+    .pg-btn{font-size:.82rem;font-weight:700;color:var(--headBg);border:1px solid var(--border);background:var(--surface);padding:9px 15px;cursor:pointer;transition:all .2s}
+    .pg-btn:hover:not(:disabled),.pg-btn.active{background:var(--headBg);color:var(--headInk);border-color:var(--headBg)}
+    .pg-btn:disabled{opacity:.4;cursor:default}
+    .sb-block{margin-bottom:38px}
+    .sb-hd{font-family:var(--ff-serif);font-size:1.15rem;color:var(--headBg);border-bottom:2px solid var(--accent2);padding-bottom:10px;margin-bottom:16px}
+    .sb-list{list-style:none;counter-reset:n}
+    .sb-list li{counter-increment:n;display:flex;gap:14px;padding:13px 0;border-bottom:1px solid var(--border)}
+    .sb-list li::before{content:counter(n,decimal-leading-zero);font-family:var(--ff-serif);font-size:1.4rem;color:var(--accent2);line-height:1;font-weight:700}
+    .sb-list a{font-family:var(--ff-serif);font-size:.98rem;line-height:1.35;color:var(--headBg)}.sb-list a:hover{color:var(--accent)}
+    .sb-list .sb-cat{display:block;font-family:var(--ff-sans);font-size:.64rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);margin-bottom:3px}
+    .sb-nl{background:var(--surface);border:1px solid var(--border);padding:24px}
+    .sb-nl p{font-size:.88rem;color:var(--muted);margin-bottom:16px}
+    .sb-form{display:flex;flex-direction:column;gap:10px}
+    .sb-form input{padding:11px 14px;border:1px solid var(--border);background:var(--bg);font-size:.88rem;outline:none}
+    .sb-form input:focus{border-color:var(--accent2)}
+    .sb-form button{padding:11px;background:var(--headBg);color:var(--headInk);border:none;font-weight:700;font-size:.78rem;letter-spacing:.08em;text-transform:uppercase;cursor:pointer;transition:background .2s}
+    .sb-form button:hover{background:var(--accent)}
+    .soc-row{display:flex;gap:12px}
+    .soc-row a{width:38px;height:38px;border:1px solid var(--border);display:flex;align-items:center;justify-content:center;color:var(--headBg);transition:all .2s}
+    .soc-row a:hover{background:var(--headBg);color:var(--headInk);border-color:var(--headBg)}.soc-row svg{width:16px;height:16px;fill:currentColor}
+    .site-footer{background:var(--headDark);color:rgba(255,255,255,.55);border-top:4px solid var(--accent2)}
+    .footer-grid{display:grid;grid-template-columns:1.6fr 1fr;gap:48px;padding:56px 28px 36px;max-width:1180px;margin:0 auto}
+    @media(max-width:680px){.footer-grid{grid-template-columns:1fr;gap:28px}}
+    .footer-logo{font-family:var(--ff-serif);font-size:1.5rem;color:#fff;margin-bottom:12px}.footer-logo span{color:var(--accent2)}
+    .footer-brand p{font-size:.9rem;line-height:1.7;max-width:360px;margin-bottom:16px}
+    .footer-brand .soc-row a{border-color:rgba(255,255,255,.2);color:rgba(255,255,255,.6)}.footer-brand .soc-row a:hover{background:var(--accent2);color:var(--headDark)}
+    .footer-col h4{font-size:.72rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--accent2);margin-bottom:14px}
+    .footer-col ul{list-style:none}.footer-col li{padding:5px 0}.footer-col a{font-size:.9rem;color:rgba(255,255,255,.6)}.footer-col a:hover{color:#fff}
+    .footer-bottom{max-width:1180px;margin:0 auto;padding:20px 28px;border-top:1px solid rgba(255,255,255,.12);font-size:.78rem;font-style:italic}
+    @media(max-width:560px){.header-inner{height:auto;flex-wrap:wrap;padding:14px 20px;gap:10px}.lead{padding:30px 0 0}.main-cols{padding:32px 20px 60px}}
   </style>
 </head>
-<body>
-  <header><h1>文章列表</h1></header>
-  <main><ul id="article-list" class="list"></ul></main>
-  <footer style="margin-top:48px;color:#888;font-size:.85rem">CRM 统一管理站点</footer>
+<body class="${t.bodyClass}">
+  <div class="topbar"><div class="inner topbar-in"><span>The ${name} Journal</span><div class="soc" id="socTop"></div></div></div>
+  <header class="site-header">
+    <div class="header-inner">
+      <a href="/" class="site-logo" id="brand">${name}</a>
+      <button class="search-toggle" id="searchToggle" aria-label="Search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35" stroke-linecap="round"/></svg></button>
+    </div>
+    <div class="search-bar" id="searchBar"><div class="inner"><input type="text" id="searchInput" placeholder="Search the journal…" autocomplete="off"></div></div>
+  </header>
+
+  <section class="lead" id="leadWrap"><div class="inner"><div class="lead-grid reveal" id="lead"></div></div></section>
+  <div class="inner"><div class="catbar reveal" id="catbar"></div></div>
+
+  <div class="main-cols">
+    <main>
+      <div class="sec-hd"><span class="pre-ttl" id="secKicker">Latest</span><h2 class="sec-ttl" id="secTitle">From the Journal</h2></div>
+      <div class="art-grid" id="article-list"></div>
+      <div class="empty-st" id="empty" hidden><div class="empty-ico">✦</div><h3>Nothing here yet</h3><p>Try another section or search.</p></div>
+      <div class="pagination" id="pagination"></div>
+    </main>
+    <aside class="sidebar">
+      <div class="sb-block"><h4 class="sb-hd">Most Read</h4><ol class="sb-list" id="mostRead"></ol></div>
+      <div class="sb-block sb-nl"><h4 class="sb-hd">The Weekly Note</h4><p>Our quietest, best writing — once a week, no noise.</p><form class="sb-form" onsubmit="return false"><input type="email" placeholder="your@email.com"><button>Subscribe</button></form></div>
+      <div class="sb-block"><h4 class="sb-hd">Follow</h4><div class="soc-row" id="socSide"></div></div>
+    </aside>
+  </div>
+
+  <footer class="site-footer">
+    <div class="footer-grid">
+      <div class="footer-brand"><div class="footer-logo">${name}</div><p>A lifestyle journal — written slowly, for readers who linger.</p><div class="soc-row" id="socFoot"></div></div>
+      <div class="footer-col"><h4>The Journal</h4><ul><li><a href="/">All Stories</a></li><li><a href="#" id="footTop">Back to top</a></li></ul></div>
+    </div>
+    <div class="footer-bottom"><span>&copy; ${new Date().getFullYear()} ${name}. All rights reserved.</span></div>
+  </footer>
   <script src="assets/js/main.js?v=${cacheVersion}"></script>
 </body>
 </html>
@@ -850,29 +1043,117 @@ function buildA1MainJs(postsJson: string): string {
   return `const posts = ${postsJson};
 
 (function () {
-  var ul = document.getElementById("article-list");
-  if (!ul) return;
-  if (!posts.length) {
-    ul.innerHTML = '<li style="color:#888">暂无文章，可在 CRM 中发布到本站</li>';
+  var SOC = '<a href="#" aria-label="X"><svg viewBox="0 0 24 24"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.746l7.73-8.835L1.254 2.25H8.08l4.253 5.622zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg></a>'
+    + '<a href="#" aria-label="Instagram"><svg viewBox="0 0 24 24"><path d="M12 2.16c3.2 0 3.58.01 4.85.07 3.25.15 4.77 1.69 4.92 4.92.06 1.27.07 1.65.07 4.85s-.01 3.58-.07 4.85c-.15 3.23-1.66 4.77-4.92 4.92-1.27.06-1.64.07-4.85.07s-3.58-.01-4.85-.07c-3.26-.15-4.77-1.7-4.92-4.92C2.17 15.58 2.16 15.2 2.16 12s.01-3.58.07-4.85c.15-3.23 1.66-4.77 4.92-4.92C8.42 2.17 8.8 2.16 12 2.16zm0 1.62c-3.15 0-3.52.01-4.76.07-2.4.11-3.52 1.25-3.63 3.63-.06 1.24-.07 1.61-.07 4.52s.01 3.28.07 4.52c.11 2.38 1.23 3.52 3.63 3.63 1.24.06 1.61.07 4.76.07s3.52-.01 4.76-.07c2.4-.11 3.52-1.25 3.63-3.63.06-1.24.07-1.61.07-4.52s-.01-3.28-.07-4.52c-.11-2.38-1.23-3.52-3.63-3.63-1.24-.06-1.61-.07-4.76-.07zm0 2.76a5.3 5.3 0 110 10.6 5.3 5.3 0 010-10.6zm0 1.62a3.68 3.68 0 100 7.36 3.68 3.68 0 000-7.36zm5.5-2.9a1.24 1.24 0 110 2.48 1.24 1.24 0 010-2.48z"/></svg></a>'
+    + '<a href="#" aria-label="Pinterest"><svg viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.08 3.16 9.42 7.63 11.17-.11-.95-.2-2.4.04-3.44.22-.94 1.4-5.96 1.4-5.96s-.36-.72-.36-1.78c0-1.67.97-2.91 2.17-2.91 1.02 0 1.52.77 1.52 1.69 0 1.03-.66 2.57-1 4-.28 1.19.6 2.17 1.77 2.17 2.13 0 3.77-2.25 3.77-5.49 0-2.87-2.06-4.88-5.01-4.88-3.41 0-5.42 2.56-5.42 5.21 0 1.03.4 2.14.89 2.74.1.12.11.22.08.34l-.33 1.36c-.05.22-.17.27-.4.16-1.5-.7-2.44-2.89-2.44-4.65 0-3.79 2.75-7.26 7.93-7.26 4.16 0 7.4 2.97 7.4 6.93 0 4.14-2.61 7.47-6.23 7.47-1.22 0-2.36-.63-2.75-1.38l-.75 2.85c-.27 1.04-1 2.35-1.49 3.15C9.57 23.81 10.76 24 12 24c6.63 0 12-5.37 12-12S18.63 0 12 0z"/></svg></a>'
+    + '<a href="#" aria-label="Facebook"><svg viewBox="0 0 24 24"><path d="M24 12.07C24 5.4 18.63 0 12 0S0 5.4 0 12.07C0 18.1 4.39 23.1 10.13 24v-8.44H7.08v-3.49h3.05V9.41c0-3.02 1.79-4.69 4.53-4.69 1.31 0 2.69.24 2.69.24v2.97h-1.52c-1.5 0-1.96.93-1.96 1.89v2.25h3.33l-.53 3.49h-2.8V24C19.61 23.1 24 18.1 24 12.07z"/></svg></a>';
+  ['socTop','socSide','socFoot'].forEach(function(id){var el=document.getElementById(id);if(el)el.innerHTML=SOC;});
+
+  var io = new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);}});},{threshold:.12});
+  function observe(el){if(el)io.observe(el);}
+  document.querySelectorAll('.reveal').forEach(observe);
+
+  var st=document.getElementById('searchToggle'),sb=document.getElementById('searchBar'),si=document.getElementById('searchInput');
+  if(st&&sb)st.addEventListener('click',function(){sb.classList.toggle('open');if(sb.classList.contains('open')&&si)si.focus();});
+  var ft=document.getElementById('footTop');if(ft)ft.addEventListener('click',function(ev){ev.preventDefault();window.scrollTo({top:0,behavior:'smooth'});});
+
+  var grid=document.getElementById('article-list');
+  if(!grid)return;
+
+  function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+  function href(p){var path=(p.detailUrl||('post-'+(p.slug||''))).replace(/^\\/+/, '');return path.indexOf('?')>=0?('/'+path):('/'+path.replace(/\\/$/, '')+'/');}
+  function img(p){return p.heroImage||p.image||'';}
+  function catLabel(c){return String(c||'').replace(/[-_]/g,' ').replace(/\\b\\w/g,function(m){return m.toUpperCase();});}
+  function metaText(p){var d=p.dateLabel||p.date||'';return d+(p.readTime?(' · '+p.readTime):'');}
+
+  // sort newest first when date available
+  var all=posts.slice();
+  all.sort(function(a,b){return String(b.dateISO||b.date||'').localeCompare(String(a.dateISO||a.date||''));});
+
+  var cat='', q='', page=1, PER=6;
+  var params=new URLSearchParams(location.search);
+  cat=(params.get('cat')||'').toLowerCase();
+
+  function filtered(){return all.filter(function(p){
+    var pc=String(p.category||'').toLowerCase();
+    var hay=((p.title||'')+' '+(p.excerpt||'')).toLowerCase();
+    return (!cat||pc===cat)&&(!q||hay.indexOf(q)>=0);
+  });}
+
+  function cardImg(p,cls){var s=img(p);return s?('<span class="'+cls+'"><img loading="lazy" src="'+esc(s)+'" alt="'+esc(p.title)+'"></span>'):('<span class="'+cls+'"><span class="'+(cls==='lead-img'?'lead-ph':'card-ph')+'"></span></span>');}
+
+  function renderLead(){
+    var lead=document.getElementById('lead');if(!lead)return;
+    var list=filtered();
+    if(!list.length||q||cat){document.getElementById('leadWrap').style.display=q||cat?'none':'';if(!list.length){lead.innerHTML='';return;}}
+    var p=list[0];
+    var imgHtml=img(p)?'<a class="lead-img" href="'+href(p)+'"><img loading="lazy" src="'+esc(img(p))+'" alt="'+esc(p.title)+'"></a>':'<a class="lead-img" href="'+href(p)+'"><span class="lead-ph"></span></a>';
+    lead.innerHTML=imgHtml+'<div class="lead-body">'
+      +(p.category?('<a href="?cat='+encodeURIComponent(String(p.category).toLowerCase())+'" class="lead-kicker">'+esc(catLabel(p.category))+'</a>'):'<span class="lead-kicker">Featured</span>')
+      +'<h1 class="lead-title"><a href="'+href(p)+'">'+esc(p.title)+'</a></h1>'
+      +(p.excerpt?('<p class="lead-dek">'+esc(p.excerpt)+'</p>'):'')
+      +'<div class="lead-meta">'+esc(metaText(p))+'</div>'
+      +'<a class="lead-read" href="'+href(p)+'">Read the story →</a></div>';
+  }
+
+  function renderChips(){
+    var bar=document.getElementById('catbar');if(!bar)return;
+    var seen={},order=[];
+    all.forEach(function(p){var c=String(p.category||'').toLowerCase();if(c&&!seen[c]){seen[c]=1;order.push(c);}});
+    if(!order.length){bar.style.display='none';return;}
+    var html='<button class="chip'+(!cat?' active':'')+'" data-c="">All</button>';
+    order.forEach(function(c){html+='<button class="chip'+(cat===c?' active':'')+'" data-c="'+esc(c)+'">'+esc(catLabel(c))+'</button>';});
+    bar.innerHTML=html;
+    bar.querySelectorAll('.chip').forEach(function(b){b.addEventListener('click',function(){cat=b.getAttribute('data-c');q='';if(si)si.value='';page=1;sync();});});
+  }
+
+  function renderMostRead(){
+    var mr=document.getElementById('mostRead');if(!mr)return;
+    mr.innerHTML=all.slice(0,4).map(function(p){return '<li><div>'+(p.category?'<span class="sb-cat">'+esc(catLabel(p.category))+'</span>':'')+'<a href="'+href(p)+'">'+esc(p.title)+'</a></div></li>';}).join('');
+  }
+
+  function renderGrid(){
+    var list=filtered();
+    var kick=document.getElementById('secKicker'),tit=document.getElementById('secTitle');
+    if(q){kick.textContent='Search';tit.textContent='“'+q+'”';}
+    else if(cat){kick.textContent='Section';tit.textContent=catLabel(cat);}
+    else{kick.textContent='Latest';tit.textContent='From the Journal';}
+    var pages=Math.max(1,Math.ceil(list.length/PER));if(page>pages)page=pages;
+    var slice=list.slice((page-1)*PER,page*PER);
+    grid.innerHTML=slice.map(function(p){
+      return '<article class="art-card reveal in">'
+        +'<a class="card-img" href="'+href(p)+'">'+(img(p)?'<img loading="lazy" src="'+esc(img(p))+'" alt="'+esc(p.title)+'">':'<span class="card-ph"></span>')+'</a>'
+        +'<div class="card-body">'
+        +(p.category?'<span class="card-cat">'+esc(catLabel(p.category))+'</span>':'')
+        +'<h3 class="card-ttl"><a href="'+href(p)+'">'+esc(p.title)+'</a></h3>'
+        +(p.excerpt?'<p class="card-exc">'+esc(p.excerpt)+'</p>':'')
+        +'<div class="card-meta"><span>'+esc(metaText(p))+'</span></div>'
+        +'</div></article>';
+    }).join('');
+    document.getElementById('empty').hidden=list.length>0;
+    var pg=document.getElementById('pagination');
+    if(pages<=1){pg.innerHTML='';}
+    else{
+      var h='<button class="pg-btn" data-p="'+(page-1)+'"'+(page<=1?' disabled':'')+'>← Prev</button>';
+      for(var i=1;i<=pages;i++)h+='<button class="pg-btn'+(i===page?' active':'')+'" data-p="'+i+'">'+i+'</button>';
+      h+='<button class="pg-btn" data-p="'+(page+1)+'"'+(page>=pages?' disabled':'')+'>Next →</button>';
+      pg.innerHTML=h;
+      pg.querySelectorAll('[data-p]').forEach(function(b){b.addEventListener('click',function(){var x=+b.getAttribute('data-p');if(x>=1&&x<=pages){page=x;renderGrid();var mc=document.querySelector('.main-cols');if(mc)mc.scrollIntoView({behavior:'smooth'});}});});
+    }
+  }
+
+  function sync(){renderChips();renderLead();renderGrid();}
+
+  if(si)si.addEventListener('input',function(){q=si.value.trim().toLowerCase();cat='';page=1;sync();});
+
+  if(!all.length){
+    grid.innerHTML='';
+    var em=document.getElementById('empty');if(em){em.hidden=false;}
+    document.getElementById('leadWrap').style.display='none';
     return;
   }
-  posts.forEach(function (p) {
-    var li = document.createElement("li");
-    var a = document.createElement("a");
-    var path = (p.detailUrl || ("post-" + (p.slug || ""))).replace(/^\\/+/, "");
-    if (path.indexOf("?") >= 0) {
-      a.href = "/" + path;
-    } else {
-      a.href = "/" + path.replace(/\\/$/, "") + "/";
-    }
-    a.textContent = p.title || p.slug || "Untitled";
-    li.appendChild(a);
-    var meta = document.createElement("div");
-    meta.className = "meta";
-    meta.textContent = (p.dateLabel || p.date || "") + (p.readTime ? " · " + p.readTime : "");
-    li.appendChild(meta);
-    ul.appendChild(li);
-  });
+  renderMostRead();
+  sync();
 })();
 `;
 }
@@ -1133,9 +1414,19 @@ export async function applyA1SiteStandard(sitePath: string, domain = ""): Promis
     await sftpWriteFile(sftp, `${sitePath}/assets/js/main.js`, mainJs);
 
     const indexInfo = await sftpStatInfo(sftp, `${sitePath}/index.html`);
-    if (!indexInfo.exists || indexInfo.size <= 0 || indexInfo.isDirectory) {
+    let shouldWriteIndex = !indexInfo.exists || indexInfo.size <= 0 || indexInfo.isDirectory;
+    if (!shouldWriteIndex) {
+      // 已存在首页：仅当它是 CRM 生成的兜底首页时才升级，绝不覆盖站点原创设计
+      try {
+        const existingIndex = await sftpReadFile(sftp, `${sitePath}/index.html`);
+        if (isCrmManagedFallbackIndex(existingIndex)) shouldWriteIndex = true;
+      } catch {
+        /* 读不到则保守不覆盖 */
+      }
+    }
+    if (shouldWriteIndex) {
       const cacheVersion = String(Math.floor(Date.now() / 1000));
-      await sftpWriteFile(sftp, `${sitePath}/index.html`, buildA1IndexHtml(cacheVersion));
+      await sftpWriteFile(sftp, `${sitePath}/index.html`, buildA1IndexHtml(cacheVersion, domain));
     }
 
     await execCommand(
@@ -1395,6 +1686,35 @@ function rewriteHtmlRelativeUrls(html: string): string {
  * 从已有 post 页面提取 head/header/footer，组装新文章页面。
  * 如果找不到模板，回退为独立页面。
  */
+// 文章详情页排版样式：套用站点主题变量（衬线标题 + 正文留白 + 克制的图片阴影）。
+// 用 var(--xxx, fallback) 形式，即使站点没定义变量也能优雅降级。
+// marker: crm-article-layout —— 用于避免重复注入。
+const ARTICLE_LAYOUT_STYLE_BLOCK = `
+/* crm-article-layout */
+.article-wrap{max-width:760px;margin:56px auto 72px;padding:0 24px;}
+.article-back{display:inline-block;font-family:var(--ff-sans,system-ui,sans-serif);font-size:.76rem;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--muted,#6B6055);margin-bottom:30px;}
+.article-back:hover{color:var(--burgundy,#8B1A2F);}
+.article-head{margin-bottom:32px;padding-bottom:24px;border-bottom:1px solid var(--border,#D4C8B0);}
+.article-cat{font-family:var(--ff-sans,system-ui,sans-serif);font-size:.72rem;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--burgundy,#8B1A2F);margin-bottom:14px;}
+.article-title{font-family:var(--ff-serif,Georgia,serif);font-weight:700;color:var(--navy,#1B3A5C);font-size:clamp(1.95rem,4.5vw,2.75rem);line-height:1.22;margin:0 0 16px;}
+.article-meta{font-family:var(--ff-sans,system-ui,sans-serif);font-size:.82rem;color:var(--muted,#6B6055);font-style:italic;}
+.article-content{font-family:var(--ff-sans,system-ui,sans-serif);font-size:1.075rem;line-height:1.85;color:var(--ink,#2A2A2A);}
+.article-content p{margin:0 0 1.5em;}
+.article-content>p:first-of-type{font-size:1.18rem;line-height:1.7;color:#33414f;}
+.article-content>p:first-of-type::first-letter{font-family:var(--ff-serif,Georgia,serif);font-size:3.4rem;font-weight:700;float:left;line-height:.82;padding:6px 12px 0 0;color:var(--navy,#1B3A5C);}
+.article-content h2{font-family:var(--ff-serif,Georgia,serif);font-weight:700;color:var(--navy,#1B3A5C);font-size:1.55rem;line-height:1.3;margin:2.3em 0 .7em;}
+.article-content h3{font-family:var(--ff-serif,Georgia,serif);font-weight:700;color:var(--navy,#1B3A5C);font-size:1.22rem;margin:1.9em 0 .5em;}
+.article-content img{width:100%;height:auto;border-radius:10px;margin:2em 0;box-shadow:0 10px 30px rgba(27,58,92,.13);}
+.article-content figure{margin:2.2em 0;}
+.article-content figure img{margin:0;}
+.article-content figcaption{font-size:.82rem;color:var(--muted,#6B6055);font-style:italic;text-align:center;margin-top:10px;padding:0 10px;}
+.article-content a{color:var(--burgundy,#8B1A2F);font-weight:600;}
+.article-content ul,.article-content ol{margin:0 0 1.5em 1.4em;}
+.article-content li{margin:0 0 .5em;}
+.article-content blockquote{margin:1.8em 0;padding:6px 0 6px 22px;border-left:3px solid var(--gold,#C9A84C);font-family:var(--ff-serif,Georgia,serif);font-style:italic;color:var(--navy,#1B3A5C);font-size:1.15rem;}
+@media(max-width:600px){.article-wrap{margin:32px auto 48px;}.article-content{font-size:1.02rem;}.article-content>p:first-of-type::first-letter{font-size:2.8rem;}}
+`;
+
 async function createArticleHtmlPage(
   sftp: SFTPWrapper,
   client: Client,
@@ -1446,11 +1766,11 @@ async function createArticleHtmlPage(
       }
       // Remove main.js to avoid loading article listing code on detail page
       headSection = headSection.replace(/<script[^>]*main\.js[^>]*><\/script>\s*/gi, "");
-      if (!headSection.includes("crm-affiliate-link")) {
-        headSection = headSection.replace(/<\/head>/i, `  <style>${ARTICLE_HYPERLINK_STYLE_BLOCK}</style>\n</head>`);
+      if (!headSection.includes("crm-article-layout")) {
+        headSection = headSection.replace(/<\/head>/i, `  <style>${ARTICLE_LAYOUT_STYLE_BLOCK}${ARTICLE_HYPERLINK_STYLE_BLOCK}</style>\n</head>`);
       }
     } else {
-      headSection = `<head>\n<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n<title>${escapeHtml(article.title)}</title>\n<style>${ARTICLE_HYPERLINK_STYLE_BLOCK}</style>\n</head>`;
+      headSection = `<head>\n<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n<title>${escapeHtml(article.title)}</title>\n<style>${ARTICLE_LAYOUT_STYLE_BLOCK}${ARTICLE_HYPERLINK_STYLE_BLOCK}</style>\n</head>`;
     }
 
     let headerNav = "";
@@ -1466,12 +1786,14 @@ ${htmlOpenTag}
 ${headSection}
 ${bodyOpenTag}
   ${headerNav}
-  <main style="max-width:800px;margin:40px auto;padding:0 20px;">
-    <a href="/" style="color:#888;text-decoration:none;display:inline-block;margin-bottom:20px;">&larr; Back to articles</a>
+  <main class="article-wrap">
+    <a href="/" class="article-back">&larr; Back to articles</a>
     <article>
-      <h1>${escapeHtml(article.title)}</h1>
-      <div style="color:#888;margin-bottom:24px;font-size:14px;">${escapeHtml(dateLabel)}</div>
-      <div class="article-content" style="line-height:1.8;">
+      <header class="article-head">
+        <h1 class="article-title">${escapeHtml(article.title)}</h1>
+        <div class="article-meta">${escapeHtml(dateLabel)}</div>
+      </header>
+      <div class="article-content">
         ${cleanedContent}
       </div>
     </article>
@@ -1486,13 +1808,19 @@ ${bodyOpenTag}
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>${escapeHtml(article.title)}</title>
-  <style>body{font-family:Georgia,serif;max-width:800px;margin:40px auto;padding:0 20px;line-height:1.8;color:#333}h1{font-size:2em}img{max-width:100%;height:auto}.meta{color:#888;margin-bottom:24px}a.back{color:#888;text-decoration:none}${ARTICLE_HYPERLINK_STYLE_BLOCK}</style>
+  <style>body{background:#F5F0E8;color:#2A2A2A;}${ARTICLE_LAYOUT_STYLE_BLOCK}${ARTICLE_HYPERLINK_STYLE_BLOCK}</style>
 </head>
 <body>
-  <a class="back" href="/">&larr; Back</a>
-  <h1>${escapeHtml(article.title)}</h1>
-  <div class="meta">${escapeHtml(dateLabel)}</div>
-  <div>${cleanedContent}</div>
+  <main class="article-wrap">
+    <a href="/" class="article-back">&larr; Back to articles</a>
+    <article>
+      <header class="article-head">
+        <h1 class="article-title">${escapeHtml(article.title)}</h1>
+        <div class="article-meta">${escapeHtml(dateLabel)}</div>
+      </header>
+      <div class="article-content">${cleanedContent}</div>
+    </article>
+  </main>
 </body>
 </html>`;
   }
