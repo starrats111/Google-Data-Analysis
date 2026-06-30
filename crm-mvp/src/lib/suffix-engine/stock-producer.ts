@@ -123,6 +123,15 @@ async function doReplenish(
   if (!campaign) {
     return { campaignId: cid, skipped: true, reason: 'campaign_not_found', before: 0, generated: 0, after: 0, failed: 0 }
   }
+  // 用户级闸门：jy 交垟队等「只同步数据、不参与换链接」的账号(link_exchange_disabled=1)一律不补货，
+  // 避免其系列被 lease 触发或 cron 选中后空跑生成、白烧低配机预算并刷 no_tracking/invalid_link 告警。
+  const owner = await prisma.users.findUnique({
+    where: { id: campaign.user_id },
+    select: { link_exchange_disabled: true },
+  })
+  if (owner?.link_exchange_disabled === 1) {
+    return { campaignId: cid, skipped: true, reason: 'user_exchange_disabled', before: 0, generated: 0, after: 0, failed: 0 }
+  }
   // 仅对「已启用」广告系列补货/告警：active + Google ENABLED + 已真正投放(有 gcid)。
   // 否则暂停/草稿广告会被脚本租用触发补货并刷出告警（用户反馈：告警成未启用广告）。
   const isEnabled =
@@ -326,6 +335,14 @@ export async function replenishLowStock(
 ): Promise<{ scanned: number; lowStock: number; replenished: number; results: ReplenishResult[] }> {
   const maxCampaigns = opts.maxCampaigns ?? STOCK_CONFIG.CRON_MAX_CAMPAIGNS
 
+  // 用户级闸门：排除「只同步数据、不参与换链接」的账号(link_exchange_disabled=1，如 jy 交垟队)，
+  // 这些用户的系列即便 suffix_exchange_enabled=1 也不补货，从源头不进补货队列。
+  const disabledUsers = await prisma.users.findMany({
+    where: { link_exchange_disabled: 1, is_deleted: 0 },
+    select: { id: true },
+  })
+  const disabledUserIds = disabledUsers.map((u) => u.id)
+
   // 1. 所有已启用换链系列：active + Google ENABLED + 已真正投放(有 gcid) + 换链开 + 已匹配商家
   const enabled = await prisma.campaigns.findMany({
     where: {
@@ -335,6 +352,7 @@ export async function replenishLowStock(
       suffix_exchange_enabled: 1,
       is_deleted: 0,
       user_merchant_id: { not: BigInt(0) },
+      ...(disabledUserIds.length > 0 ? { user_id: { notIn: disabledUserIds } } : {}),
     },
     select: { id: true },
   })
