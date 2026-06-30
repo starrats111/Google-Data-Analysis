@@ -84,6 +84,13 @@ export async function ensureCampaignMerchant(
   if (existing) {
     merchantId = existing.id;
   } else {
+    // 自建商家时挂上该平台的联盟账号（默认取最早创建的连接）。否则 platform_connection_id 为空，
+    // 「来路」解析链 商家→账号→发布网站 第一步即断，商家会一直落到「随机」来路（即便账号已绑网站）。
+    const conn = await prisma.platform_connections.findFirst({
+      where: { user_id: userId, platform: parsed.platform, is_deleted: 0 },
+      select: { id: true },
+      orderBy: { created_at: "asc" },
+    });
     const created = await prisma.user_merchants.create({
       data: {
         user_id: userId,
@@ -94,6 +101,7 @@ export async function ensureCampaignMerchant(
         status: "claimed",
         claimed_at: new Date(),
         source: "platform",
+        platform_connection_id: conn?.id ?? null,
       },
       select: { id: true },
     });
@@ -138,7 +146,7 @@ async function autoLinkCampaigns(userId: bigint): Promise<number> {
       is_deleted: 0,
       google_campaign_id: { not: null },
     },
-    select: { id: true, campaign_name: true, user_merchant_id: true },
+    select: { id: true, campaign_name: true, user_merchant_id: true, target_country: true },
     take: 2000,
   });
 
@@ -168,14 +176,27 @@ async function autoLinkCampaigns(userId: bigint): Promise<number> {
     where: { user_id: userId, is_deleted: 0 },
     select: { id: true, platform: true, merchant_id: true },
   });
-  const merchantIndex = new Map(
+  const merchantIndex = new Map<string, { id: bigint; platform: string; merchant_id: string }>(
     userMerchants.map((m) => [
       `${normalizePlatformCode(m.platform)}_${m.merchant_id}`,
-      m,
+      { id: m.id, platform: m.platform, merchant_id: m.merchant_id },
     ])
   );
 
+  // 各平台默认联盟账号（最早创建的连接）：自建商家时挂上，使「来路」能取到账号绑定的发布网站。
+  const userConns = await prisma.platform_connections.findMany({
+    where: { user_id: userId, is_deleted: 0 },
+    select: { id: true, platform: true },
+    orderBy: { created_at: "asc" },
+  });
+  const connByPlatform = new Map<string, bigint>();
+  for (const c of userConns) {
+    const p = normalizePlatformCode(c.platform);
+    if (!connByPlatform.has(p)) connByPlatform.set(p, c.id);
+  }
+
   let linked = 0;
+  let created = 0;
   const ops: Promise<unknown>[] = [];
 
   for (const campaign of unlinked) {
@@ -183,15 +204,29 @@ async function autoLinkCampaigns(userId: bigint): Promise<number> {
     if (!parsed) continue;
 
     const key = `${parsed.platform}_${parsed.mid}`;
-    const merchant = merchantIndex.get(key);
+    let merchant = merchantIndex.get(key);
 
     if (!merchant) {
-      console.warn(
-        `[MerchantAutoLink] 未找到商家: ${key}` +
-        ` (campaign: "${campaign.campaign_name}")` +
-        ` — 请在「商家库」中手动添加该商家后重新刷新`
-      );
-      continue;
+      // 平台 API 未返回该商家（未加入/无数据）→ 在 CRM 自建商家，避免广告系列长期「未匹配」。
+      // 挂上该平台联盟账号（来路取账号网站）；status=claimed + 被在投系列引用 → 商家同步不会清理它。
+      // 后续若平台同步返回该商家(joined) 或 Google 回拉拿到 suffix，会按 (平台,MID) 命中本行并补全链接。
+      const newM = await prisma.user_merchants.create({
+        data: {
+          user_id: userId,
+          platform: parsed.platform,
+          merchant_id: parsed.mid,
+          merchant_name: parsed.merchantName || parsed.mid,
+          target_country: campaign.target_country || parsed.country || null,
+          status: "claimed",
+          claimed_at: new Date(),
+          source: "platform",
+          platform_connection_id: connByPlatform.get(parsed.platform) ?? null,
+        },
+        select: { id: true },
+      });
+      merchant = { id: newM.id, platform: parsed.platform, merchant_id: parsed.mid };
+      merchantIndex.set(key, merchant);
+      created++;
     }
 
     ops.push(
@@ -213,7 +248,7 @@ async function autoLinkCampaigns(userId: bigint): Promise<number> {
   if (ops.length > 0) await Promise.all(ops);
 
   if (linked > 0) {
-    console.log(`[MerchantAutoLink] 关联 ${linked} 条广告系列`);
+    console.log(`[MerchantAutoLink] 关联 ${linked} 条广告系列（其中自建商家 ${created} 个）`);
   }
   return linked;
 }
