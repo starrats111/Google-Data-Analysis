@@ -592,10 +592,36 @@ async function resolveViaBrowser(startUrl: string, country: string): Promise<Bro
     } catch {
       /* 跳转中断属正常 */
     }
+    // 跳板/中转页（LH lhdeal、awin、webgains 等）常靠「延迟 JS 跳转」把用户带到广告主落地页：
+    // 单纯 waitForNetworkIdle 会在 JS 跳转触发前（跳板页此刻已网络空闲）提前返回，把 page.url() 快照在
+    // 跳板域名上 → 误判 resolve_failed 并丢弃浏览器结果（这正是 LH 商家被大量误报 no_tracking 的根因）。
+    // 故：先短等空闲；若仍停在跳板/中转域名，再主动轮询等它 JS 跳离，跳离后再等落地页网络稳定。
     try {
-      await page.waitForNetworkIdle({ idleTime: 1500, timeout: 18000 });
+      await page.waitForNetworkIdle({ idleTime: 1200, timeout: 12000 });
     } catch {
       /* 超时无妨 */
+    }
+    const onJumpHost = (): boolean => {
+      try {
+        const h = new URL(page.url()).hostname;
+        return isTrackerHost(h) || isNetworkClickHost(h);
+      } catch {
+        return false;
+      }
+    };
+    if (onJumpHost()) {
+      const deadline = Date.now() + 18000;
+      while (onJumpHost() && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 700));
+      }
+      // 已跳离跳板域名 → 再等落地页网络稳定，确保拿到完整追踪 query（clickref/ranMID/utm 等）
+      if (!onJumpHost()) {
+        try {
+          await page.waitForNetworkIdle({ idleTime: 1200, timeout: 10000 });
+        } catch {
+          /* 超时无妨 */
+        }
+      }
     }
     const finalUrl = page.url();
     chain.push(finalUrl);

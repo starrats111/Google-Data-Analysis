@@ -14,10 +14,14 @@ export const STOCK_CONFIG = {
   LOW_WATERMARK: 6,
   /** 单次补货最多生成数量（防止单系列长时间占用资源） */
   MAX_PER_REPLENISH: 24,
-  /** 批量生成并发度（低配机串行偏保守） */
-  CONCURRENCY: 3,
-  /** 单条 suffix 生成总超时（毫秒）：含轻量跟链 + 代理 + 可能的无头浏览器兜底重试 */
-  GEN_TIMEOUT_MS: 75000,
+  /** 批量生成并发度。
+   *  说明：无头浏览器并发由 puppeteer-semaphore 独立封顶（NORMAL=2），与此值解耦——
+   *  即便 5 路并行，同时存在的 Chrome 仍 ≤2，内存安全；提到 5 主要加速「占多数的 HTTP 可解析链接」。 */
+  CONCURRENCY: 5,
+  /** 单条 suffix 生成总超时（毫秒）：含轻量跟链 + 代理 + 可能的无头浏览器兜底重试。
+   *  取 55s：浏览器兜底正确跟随 LH/中转 JS 延迟跳转后单条可达 ~25-30s，叠加最长 30s 抢 puppeteer slot
+   *  排队，故不能砍到 45s（会误杀正在成功跟链的 LH）；55s 较 75s 仍显著提速且不误伤合法慢链。 */
+  GEN_TIMEOUT_MS: 55000,
   /** 连续失败多少条后熔断本次补货（probe 阶段失败直接熔断） */
   CIRCUIT_FAIL_THRESHOLD: 4,
   /** suffix 默认有效期（小时），过期回收；0 表示不过期。
@@ -25,8 +29,8 @@ export const STOCK_CONFIG = {
   EXPIRE_HOURS: 36,
   /** leased 后多久仍未回执（write_success）视为卡死，回收为 expired（小时） */
   LEASE_STALE_HOURS: 6,
-  /** cron 单次最多处理多少个广告系列 */
-  CRON_MAX_CAMPAIGNS: 30,
+  /** cron 单次最多处理多少个广告系列（提到 50：缓解「每轮只够补 2-3 个、库存分布两极」问题） */
+  CRON_MAX_CAMPAIGNS: 50,
   /** 只补货最近多少小时内有 lease 活动的广告系列 */
   ACTIVE_WINDOW_HOURS: 48,
 } as const
