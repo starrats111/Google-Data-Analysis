@@ -14,6 +14,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { checkAllProxiesHealth } from '@/lib/suffix-engine/proxy-health'
+import { checkKookeeyTraffic } from '@/lib/suffix-engine/kookeey-quota'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
@@ -97,12 +98,41 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // 3) kookeey 剩余流量预警：流量 ≤ 阈值（默认 5GB）→ 提前提醒，趁还能用赶紧续费/加量
+    const traffic = await checkKookeeyTraffic()
+    if (traffic.ok && traffic.low.length > 0) {
+      const title = `[换链接代理] kookeey 流量即将耗尽（≤${traffic.thresholdGB}GB）`
+      const content = [
+        `kookeey 动态住宅流量余额已低于告警阈值 ${traffic.thresholdGB}GB：`,
+        ...traffic.low.map(
+          (s) =>
+            `  • 子账户 ${s.authname}（${s.name || 'uid=' + s.uid}）：剩 ${s.trafficLeftGB}GB` +
+            (s.expireTime ? `，到期 ${new Date(s.expireTime * 1000).toISOString().slice(0, 10)}` : ''),
+        ),
+        '',
+        '流量耗尽后 SOCKS5 会开始认证失败、换链接补货断供。请尽快登录 kookeey 后台购买动态代理流量包/续费。',
+      ].join('\n')
+      if (
+        await notifyAdminOnce(title, content, {
+          source: 'proxy-health',
+          scope: 'kookeey_traffic_low',
+          thresholdGB: traffic.thresholdGB,
+          low: traffic.low.map((s) => ({ authname: s.authname, trafficLeftGB: s.trafficLeftGB })),
+        })
+      ) {
+        notified++
+      }
+    }
+
     console.log(
       `[cron/proxy-health] active=${report.activeCount} healthy=${report.healthy.length} failed=${report.failed.length}` +
         ` notified=${notified} cost=${Date.now() - startedAt}ms` +
-        (report.failed.length ? ` downList=${report.failed.map((f) => f.name).join(',')}` : ''),
+        (report.failed.length ? ` downList=${report.failed.map((f) => f.name).join(',')}` : '') +
+        (traffic.ok
+          ? ` kookeeyTraffic=[${traffic.subAccounts.map((s) => s.authname + ':' + s.trafficLeftGB + 'GB').join(',')}]`
+          : ` kookeeyTraffic=skip(${traffic.message})`),
     )
-    return NextResponse.json({ code: 0, data: { ...report, notified } })
+    return NextResponse.json({ code: 0, data: { ...report, notified, kookeeyTraffic: traffic } })
   } catch (error) {
     console.error('[cron/proxy-health] error:', error)
     return NextResponse.json(
