@@ -1095,8 +1095,8 @@ interface PlatformClickConfig {
   rateLimitMs: number;
   /** 单次查询时间窗上限（小时）：多数 ≤1h，LH ≤1d */
   maxWindowHours: number;
-  /** 列表所在位置：SaaS=data.list(code 0)；LH=payload.list(status 200)；LB/RW=payliad.list(原文档拼写,status 200) */
-  listPath: "data" | "payload" | "payliad";
+  /** 列表所在位置：SaaS=data.list(code 0)；LH=根级 list(status 0)；LB/RW=payliad.list(原文档拼写,status 200) */
+  listPath: "data" | "payload" | "payliad" | "root";
 }
 
 const CLICK_RATE_SAAS = 6500; // 10/min
@@ -1112,8 +1112,10 @@ const PLATFORM_CLICK_CONFIG: Record<string, PlatformClickConfig> = {
   BSH: { mode: "post_json", url: "https://api.brandsparkhub.com/api/click_report", source: "brandsparkhub", dateFormat: "camel", withTime: true, pageKey: "curPage", sizeKey: "perPage", maxSize: 2000, rateLimitMs: CLICK_RATE_SAAS, maxWindowHours: 1, listPath: "data" },
   EV:  { mode: "post_json", url: "https://api.engagevantage.com/api/click_report", source: "engagevantage", dateFormat: "camel", withTime: true, pageKey: "curPage", sizeKey: "perPage", maxSize: 2000, rateLimitMs: CLICK_RATE_SAAS, maxWindowHours: 1, listPath: "data" },
   // ── 独立文档平台 ──
-  LB:  { mode: "get", url: "https://www.linkbux.com/api.php?mod=medium&op=user_click", dateFormat: "snake", withTime: true, pageKey: "page", sizeKey: "per_page", maxSize: 2000, rateLimitMs: CLICK_RATE_LEGACY, maxWindowHours: 1, listPath: "payliad" },
-  LH:  { mode: "get", url: "https://www.linkhaitao.com/api.php?mod=medium&op=user_click2", dateFormat: "snake", withTime: false, pageKey: "page", sizeKey: "per_page", maxSize: 2000, rateLimitMs: CLICK_RATE_LEGACY, maxWindowHours: 24, listPath: "payload" },
+  // LB：只接受纯日期(withTime=false)，窗口≤24h；否则返回 status 1007 Wrong time format
+  LB:  { mode: "get", url: "https://www.linkbux.com/api.php?mod=medium&op=user_click", dateFormat: "snake", withTime: false, pageKey: "page", sizeKey: "per_page", maxSize: 2000, rateLimitMs: CLICK_RATE_LEGACY, maxWindowHours: 24, listPath: "payliad" },
+  // LH：实际返回 {status:0, list:[...]}（list 在根级、成功标志 status=0），故 listPath=root
+  LH:  { mode: "get", url: "https://www.linkhaitao.com/api.php?mod=medium&op=user_click2", dateFormat: "snake", withTime: false, pageKey: "page", sizeKey: "per_page", maxSize: 2000, rateLimitMs: CLICK_RATE_LEGACY, maxWindowHours: 24, listPath: "root" },
   RW:  { mode: "post_form", url: "https://admin.rewardoo.com/api.php?mod=medium&op=click_details", dateFormat: "snake", withTime: true, pageKey: "page", sizeKey: "limit", maxSize: 2000, rateLimitMs: CLICK_RATE_LEGACY, maxWindowHours: 1, listPath: "payliad" },
 };
 
@@ -1161,6 +1163,7 @@ function asObj(v: unknown): Record<string, unknown> | undefined {
 function clickContainer(listPath: PlatformClickConfig["listPath"], data: Record<string, unknown>): Record<string, unknown> | undefined {
   if (listPath === "data") return asObj(data.data);
   if (listPath === "payload") return asObj(data.payload);
+  if (listPath === "root") return data; // LH：list 直接在根级
   return asObj(data.payliad) ?? asObj(data.payload);
 }
 
@@ -1171,7 +1174,7 @@ function getClickList(listPath: PlatformClickConfig["listPath"], data: Record<st
 
 function getClickTotalPages(listPath: PlatformClickConfig["listPath"], data: Record<string, unknown>, maxSize: number): number {
   const container = clickContainer(listPath, data);
-  const totalNode = listPath === "data" ? container : asObj(container?.total);
+  const totalNode = listPath === "data" || listPath === "root" ? container : asObj(container?.total);
   if (!totalNode) return 1;
   const tp = Number(totalNode.total_page ?? totalNode.totalPage);
   if (Number.isFinite(tp) && tp > 0) return tp;
@@ -1180,7 +1183,7 @@ function getClickTotalPages(listPath: PlatformClickConfig["listPath"], data: Rec
   return 1;
 }
 
-/** 错误判定：SaaS code!="0"；LH/LB/RW status!="200" */
+/** 错误判定：SaaS code!="0"；LB/RW status="200" 成功、LH status="0" 成功（两者都接受，其余判为错误如 LB 1007） */
 function clickErrorMessage(listPath: PlatformClickConfig["listPath"], data: Record<string, unknown>): string | null {
   if (listPath === "data") {
     const code = data.code;
@@ -1188,7 +1191,7 @@ function clickErrorMessage(listPath: PlatformClickConfig["listPath"], data: Reco
     return null;
   }
   const status = data.status;
-  if (status !== undefined && String(status) !== "200") return String(data.msg ?? `status ${status}`);
+  if (status !== undefined && String(status) !== "200" && String(status) !== "0") return String(data.msg ?? `status ${status}`);
   return null;
 }
 
