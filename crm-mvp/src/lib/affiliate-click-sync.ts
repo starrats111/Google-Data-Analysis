@@ -24,6 +24,13 @@ const MAX_SPAN_HOURS = 6
 const INITIAL_SPAN_HOURS = 6
 const CURSOR_PREFIX = 'click_sync_cursor_'
 
+/**
+ * 进程内「每连接同步锁」：PM2 单实例下，txn-quick-sync 的 scoped click-sync 与全量 click-sync cron
+ * 跑在同一 Node 进程，若并发同步同一连接，会各自读到旧游标、拉同一窗口、双双 increment → 重复计数。
+ * 用连接级内存锁串行化同连接的同步；被锁跳过的连接不推进游标，下轮/另一路自然补上，不丢数据。
+ */
+const syncingConns = new Set<string>()
+
 /** UTC+8 日期串 → DATE 列对应的 Date（按该日历日存储） */
 function clickDateToDate(dateStr: string): Date {
   return new Date(`${dateStr}T00:00:00Z`)
@@ -72,56 +79,64 @@ export async function syncUserClicks(userId: bigint, onlyPlatforms?: Set<string>
     if (onlyPlatforms && !onlyPlatforms.has(platform)) continue
     if (!conn.api_key || conn.api_key.length < 5) continue
 
-    const now = nowCST()
-    const cursor = await readCursor(conn.id)
-    const beginC = cursor ? dayjs.tz(cursor, TZ) : now.subtract(INITIAL_SPAN_HOURS, 'hour')
-    if (!beginC.isValid() || now.diff(beginC, 'minute') < 1) continue // 不足 1 分钟无需拉
-
-    // 单轮跨度封顶：超过 MAX_SPAN_HOURS 则只拉前段，剩余下轮续拉
-    const endC = now.diff(beginC, 'hour', true) > MAX_SPAN_HOURS ? beginC.add(MAX_SPAN_HOURS, 'hour') : now
-    const beginStr = beginC.format('YYYY-MM-DD HH:mm:ss')
-    const endStr = endC.format('YYYY-MM-DD HH:mm:ss')
-
-    let r: { clicks: { merchant_id: string; merchant_name: string; click_date: string; clicks: number }[]; error?: string }
+    // 连接级并发锁：正被另一路（scoped/全量）同步则本轮跳过，避免重复 increment
+    const lockKey = String(conn.id)
+    if (syncingConns.has(lockKey)) continue
+    syncingConns.add(lockKey)
     try {
-      r = await fetchAllClicks(platform, conn.api_key, beginStr, endStr)
-    } catch (e) {
-      result.errors.push(`${conn.account_name || platform}: ${e instanceof Error ? e.message : String(e)}`)
-      continue
-    }
-    if (r.error) {
-      // 拉取失败：不推进游标，下轮重试（避免漏计数）
-      result.errors.push(`${conn.account_name || platform}: ${r.error}`)
-      continue
-    }
+      const now = nowCST()
+      const cursor = await readCursor(conn.id)
+      const beginC = cursor ? dayjs.tz(cursor, TZ) : now.subtract(INITIAL_SPAN_HOURS, 'hour')
+      if (!beginC.isValid() || now.diff(beginC, 'minute') < 1) continue // 不足 1 分钟无需拉
 
-    for (const row of r.clicks) {
-      if (!row.merchant_id || row.clicks <= 0) continue
-      await prisma.affiliate_click_daily.upsert({
-        where: {
-          user_id_platform_merchant_id_click_date: {
+      // 单轮跨度封顶：超过 MAX_SPAN_HOURS 则只拉前段，剩余下轮续拉
+      const endC = now.diff(beginC, 'hour', true) > MAX_SPAN_HOURS ? beginC.add(MAX_SPAN_HOURS, 'hour') : now
+      const beginStr = beginC.format('YYYY-MM-DD HH:mm:ss')
+      const endStr = endC.format('YYYY-MM-DD HH:mm:ss')
+
+      let r: { clicks: { merchant_id: string; merchant_name: string; click_date: string; clicks: number }[]; error?: string }
+      try {
+        r = await fetchAllClicks(platform, conn.api_key, beginStr, endStr)
+      } catch (e) {
+        result.errors.push(`${conn.account_name || platform}: ${e instanceof Error ? e.message : String(e)}`)
+        continue
+      }
+      if (r.error) {
+        // 拉取失败：不推进游标，下轮重试（避免漏计数）
+        result.errors.push(`${conn.account_name || platform}: ${r.error}`)
+        continue
+      }
+
+      for (const row of r.clicks) {
+        if (!row.merchant_id || row.clicks <= 0) continue
+        await prisma.affiliate_click_daily.upsert({
+          where: {
+            user_id_platform_merchant_id_click_date: {
+              user_id: userId,
+              platform,
+              merchant_id: row.merchant_id,
+              click_date: clickDateToDate(row.click_date),
+            },
+          },
+          create: {
             user_id: userId,
             platform,
             merchant_id: row.merchant_id,
+            platform_connection_id: conn.id,
             click_date: clickDateToDate(row.click_date),
+            clicks: row.clicks,
           },
-        },
-        create: {
-          user_id: userId,
-          platform,
-          merchant_id: row.merchant_id,
-          platform_connection_id: conn.id,
-          click_date: clickDateToDate(row.click_date),
-          clicks: row.clicks,
-        },
-        update: { clicks: { increment: row.clicks }, platform_connection_id: conn.id, is_deleted: 0 },
-      })
-      result.rowsUpserted++
-      result.clicksCounted += row.clicks
-    }
+          update: { clicks: { increment: row.clicks }, platform_connection_id: conn.id, is_deleted: 0 },
+        })
+        result.rowsUpserted++
+        result.clicksCounted += row.clicks
+      }
 
-    await writeCursor(conn.id, endStr)
-    result.connectionsSynced++
+      await writeCursor(conn.id, endStr)
+      result.connectionsSynced++
+    } finally {
+      syncingConns.delete(lockKey)
+    }
   }
 
   return result

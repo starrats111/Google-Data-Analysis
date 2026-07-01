@@ -1116,7 +1116,11 @@ const PLATFORM_CLICK_CONFIG: Record<string, PlatformClickConfig> = {
   LB:  { mode: "get", url: "https://www.linkbux.com/api.php?mod=medium&op=user_click", dateFormat: "snake", withTime: false, pageKey: "page", sizeKey: "per_page", maxSize: 2000, rateLimitMs: CLICK_RATE_LEGACY, maxWindowHours: 24, listPath: "payliad" },
   // LH：实际返回 {status:0, list:[...]}（list 在根级、成功标志 status=0），故 listPath=root
   LH:  { mode: "get", url: "https://www.linkhaitao.com/api.php?mod=medium&op=user_click2", dateFormat: "snake", withTime: false, pageKey: "page", sizeKey: "per_page", maxSize: 2000, rateLimitMs: CLICK_RATE_LEGACY, maxWindowHours: 24, listPath: "root" },
-  RW:  { mode: "post_form", url: "https://admin.rewardoo.com/api.php?mod=medium&op=click_details", dateFormat: "snake", withTime: true, pageKey: "page", sizeKey: "limit", maxSize: 2000, rateLimitMs: CLICK_RATE_LEGACY, maxWindowHours: 1, listPath: "payliad" },
+  // RW：click_details / user_click 是真实 handler（返回 status:200 格式），但实测对我方所有 medium token
+  //     在任意窗口（今日/昨天/7天/纯日期/带时分/Unix 时间戳/带不带 status）恒返回 total:0 —— RW 不通过 API 暴露点击数据。
+  //     故不纳入 click-sync（否则每轮空打接口浪费限流、还会撞上 RW 网关偶发 504 制造错误噪声）。
+  //     auto-click 对 RW 仍正常工作：effectiveC 用我方 kyads_click_task_items 成功/在途数兜底（见 auto-click.ts），
+  //     不依赖平台点击 API，不会过刷；代价仅是看不到自然点击（偏保守，方向安全）。
 };
 
 export interface PlatformClickCount {

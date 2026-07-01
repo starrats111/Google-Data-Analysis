@@ -5,8 +5,9 @@
  * 各平台 click API 的窗口切片/限频由 fetchAllClicks 内部处理。
  *
  * 鉴权：CRON_SECRET（Authorization: Bearer ...）
- * 建议每 30-60 分钟一跑（与订单同步错峰）：
- *   星/45 * * * * curl -s -H 'Authorization: Bearer ${CRON_SECRET}' 'http://localhost:20050/api/cron/click-sync' >> /var/log/cron-click-sync.log 2>&1
+ * 与 txn-quick-sync（每 30 分钟，:00/:30）错峰：跑在 :20/:50，避开订单同步峰值。
+ *   crontab: 20,50 * * * * curl -s -H 'Authorization: Bearer <CRON_SECRET>' 'http://localhost:20050/api/cron/click-sync' >> /var/log/crm-cron/click-sync.log 2>&1
+ * 并发安全：syncUserClicks 内置连接级内存锁，与 txn-quick-sync 的 scoped click-sync 并发也不会重复计数。
  */
 
 import { NextRequest, NextResponse } from 'next/server'
