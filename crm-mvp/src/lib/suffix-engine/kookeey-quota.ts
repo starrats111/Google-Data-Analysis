@@ -109,3 +109,15 @@ export async function checkKookeeyTraffic(): Promise<KookeeyTrafficReport> {
 
   return { ok: true, message: 'ok', thresholdGB: cfg.thresholdGB, subAccounts, low, checkedAt }
 }
+
+// 带缓存的取数：换链接页面/overview 接口每次刷新都要用，缓存避免频繁外呼 kookeey API。
+let _cache: { at: number; report: KookeeyTrafficReport } | null = null
+const CACHE_TTL_MS = 10 * 60 * 1000
+
+/** 查询 kookeey 剩余流量（默认 10 分钟缓存）。仅缓存成功结果，失败下次重试。 */
+export async function getKookeeyTrafficCached(ttlMs = CACHE_TTL_MS): Promise<KookeeyTrafficReport> {
+  if (_cache && Date.now() - _cache.at < ttlMs) return _cache.report
+  const report = await checkKookeeyTraffic()
+  if (report.ok) _cache = { at: Date.now(), report }
+  return report
+}

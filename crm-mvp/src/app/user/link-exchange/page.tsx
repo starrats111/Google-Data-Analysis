@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Table, Tag, Button, Input, InputNumber, Space, Typography, Card, Row, Col,
-  Tooltip, App, Statistic, Switch, Tabs, Popconfirm, Badge,
+  Tooltip, App, Statistic, Switch, Tabs, Popconfirm, Badge, Alert,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import {
@@ -68,6 +68,7 @@ interface OverviewData {
   summary: { total: number; matched: number; totalAvailable: number; lowStockCount: number; alertOpen: number };
   alertSummary: Record<string, number>;
   stockConfig: { target: number; lowWatermark: number };
+  proxyStatus: { kookeeyLow: boolean; kookeeyLeftGB: number | null; thresholdGB: number } | null;
 }
 
 const ALERT_TYPE_LABEL: Record<string, string> = {
@@ -653,6 +654,27 @@ export default function LinkExchangePage() {
           </Space>
         }
       />
+
+      {/* 换链接代理 kookeey 流量耗尽预警横幅：剩余 ≤ 阈值(默认5GB)时提示重置 */}
+      {data?.proxyStatus?.kookeeyLow && (
+        <Alert
+          type="error"
+          showIcon
+          icon={<WarningOutlined />}
+          style={{ marginBottom: 16 }}
+          message="换链接代理 kookeey 流量即将耗尽，请重置"
+          description={
+            <>
+              kookeey 动态住宅流量仅剩{" "}
+              <Text strong style={{ color: "#cf1322" }}>
+                {data.proxyStatus.kookeeyLeftGB != null ? `${data.proxyStatus.kookeeyLeftGB} GB` : `≤ ${data.proxyStatus.thresholdGB} GB`}
+              </Text>
+              （告警阈值 {data.proxyStatus.thresholdGB} GB）。流量耗尽后 SOCKS5 会认证失败、换链接补货中断。
+              请尽快登录 kookeey 后台重置/购买动态代理流量包。
+            </>
+          }
+        />
+      )}
 
       {/* 概览统计 */}
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>

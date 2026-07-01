@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getUserFromRequest } from '@/lib/auth'
 import { getAlertSummary } from '@/lib/suffix-engine/alerts'
+import { getKookeeyTrafficCached } from '@/lib/suffix-engine/kookeey-quota'
 import { STOCK_CONFIG } from '@/lib/suffix-engine/config'
 import { parseCampaignNameFull } from '@/lib/campaign-merchant-link'
 import { normalizePlatformCode } from '@/lib/constants'
@@ -290,6 +291,17 @@ export async function GET(req: NextRequest) {
 
   const { summary: alertSummary, totalOpen } = await getAlertSummary(userId)
 
+  // 换链接住宅代理 kookeey 剩余流量：≤ 阈值时前端顶部横幅提醒重置（带缓存，不每次外呼）
+  const kk = await getKookeeyTrafficCached()
+  const kkActive = kk.ok ? kk.subAccounts.filter((s) => s.status === 1) : []
+  const proxyStatus = kk.ok
+    ? {
+        kookeeyLow: kk.low.length > 0,
+        kookeeyLeftGB: kkActive.length > 0 ? Math.min(...kkActive.map((s) => s.trafficLeftGB)) : null,
+        thresholdGB: kk.thresholdGB,
+      }
+    : null
+
   // 顶部统计与「链接管理 / 库存管理」列表口径保持一致：只统计已启用
   // (Google Ads ENABLED / 默认) 的广告系列，排除 PAUSED/REMOVED 等未在投系列。
   const enabledRows = rows.filter((r) => (r.googleStatus ?? 'ENABLED') === 'ENABLED')
@@ -319,6 +331,7 @@ export async function GET(req: NextRequest) {
       },
       alertSummary,
       stockConfig: { target: STOCK_CONFIG.TARGET_STOCK, lowWatermark: STOCK_CONFIG.LOW_WATERMARK },
+      proxyStatus,
     },
   })
 }
