@@ -2039,6 +2039,14 @@ export default function AdPreviewPage() {
     const validD = descriptions.filter((d) => d.trim().length > 0);
     if (validH.length < 3) { message.error("至少需要 3 条标题"); return; }
     if (validD.length < 2) { message.error("至少需要 2 条描述"); return; }
+    // 关键字空提交硬闸：与「生成」步骤同口径。关键字靠 SemRush 异步回填，若此刻为空
+    // （SemRush 慢/失败、SSE 漏收、旧草稿重开）仍提交，会创建无关键字的无效广告系列
+    // （Google 判定「广告系列中没有关键字」无法投放）。
+    const validKw = kwList.filter((k) => k.text && k.text.trim().length > 0);
+    if (validKw.length === 0) {
+      message.error("请先添加至少一个关键词后再提交，否则广告将因「广告系列中没有关键字」无法投放");
+      return;
+    }
     const overH = validH.filter((h) => h.length > HEADLINE_MAX);
     if (overH.length > 0) { message.error(`有 ${overH.length} 条标题超过 ${HEADLINE_MAX} 字符限制`); return; }
     const overD = validD.filter((d) => d.length > DESC_MAX);
@@ -2091,7 +2099,7 @@ export default function AdPreviewPage() {
         ...(confirmReachable ? { confirm_reachable: true } : {}),
         headlines: validH,
         descriptions: validD,
-        keywords: kwList,
+        keywords: validKw,
         daily_budget: budget,
         max_cpc_limit: maxCpc,
         bidding_strategy: biddingStrategy,

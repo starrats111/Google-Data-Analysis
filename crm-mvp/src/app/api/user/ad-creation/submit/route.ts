@@ -111,6 +111,37 @@ export async function POST(req: NextRequest) {
   });
   if (!adGroup) return apiError("广告组不存在");
 
+  // ═════════════════════════════════════════════════════════════════
+  // 关键字空提交硬闸 + DB 兜底（根治「广告系列中没有关键字」偶发无效广告）
+  //   关键字在整条链路里只活在前端内存 kwList，靠 SemRush 的 SSE 事件异步回填。
+  //   一旦提交那刻内存里为空（SemRush 慢/失败、SSE 漏收、旧草稿重开），旧逻辑会照样
+  //   建出「预算+系列+广告组+RSA」却零关键字 → Google 判定无效、无法投放。
+  //   这里：① 请求体为空 → 回查 keywords 表兜底；② 兜底后仍为空 → 直接拒绝提交，
+  //   绝不创建无关键字的系列。
+  // ═════════════════════════════════════════════════════════════════
+  type SubmitKeyword = string | { text: string; matchType?: string };
+  let effectiveKeywords: SubmitKeyword[] = (Array.isArray(keywords) ? keywords : []).filter(
+    (k: SubmitKeyword) => (typeof k === "string" ? k.trim().length > 0 : !!k?.text && k.text.trim().length > 0),
+  );
+  if (effectiveKeywords.length === 0) {
+    const dbKeywords = await prisma.keywords.findMany({
+      where: { ad_group_id: adGroup.id },
+      select: { keyword_text: true, match_type: true },
+    });
+    effectiveKeywords = dbKeywords
+      .filter((k) => !!k.keyword_text && k.keyword_text.trim().length > 0)
+      .map((k) => ({ text: k.keyword_text.trim(), matchType: (k.match_type || "PHRASE").toUpperCase() }));
+    if (effectiveKeywords.length > 0) {
+      console.warn(`[AdSubmit] 请求体关键字为空，已从 DB 兜底补齐 ${effectiveKeywords.length} 个 (campaign_id=${campaign.id})`);
+    }
+  }
+  if (effectiveKeywords.length === 0) {
+    return apiError(
+      "该广告系列没有任何关键字，提交会导致广告无法投放（Google 会判定「广告系列中没有关键字」）。请先添加至少一个关键字后再提交。",
+      422,
+    );
+  }
+
   const adSettings = await prisma.ad_default_settings.findFirst({
     where: { user_id: userId, is_deleted: 0 },
     select: { ai_rule_profile: true },
@@ -975,7 +1006,9 @@ export async function POST(req: NextRequest) {
 
     // ─── 7. 关键词（政策风险词硬拦截，不发送给 Google） ───
     const seenKeywords = new Set<string>();
-    for (const kw of keywords) {
+    // 记录真正进入 operations 的关键字，供成功后回写 DB（让 keywords 表成为可信真相来源）
+    const submittedKeywords: { text: string; matchType: string }[] = [];
+    for (const kw of effectiveKeywords) {
       const text = typeof kw === "string" ? kw : kw.text;
       if (isPolicyRiskKeyword(text)) {
         console.warn(`[AdSubmit] 拦截政策风险关键词，不提交: "${text}"`);
@@ -986,6 +1019,7 @@ export async function POST(req: NextRequest) {
       const kwKey = `${text.toLowerCase()}|${matchType}`;
       if (seenKeywords.has(kwKey)) continue;
       seenKeywords.add(kwKey);
+      submittedKeywords.push({ text, matchType });
       operations.push({
         ad_group_criterion_operation: {
           create: {
@@ -995,6 +1029,14 @@ export async function POST(req: NextRequest) {
           },
         },
       });
+    }
+    // 兜底后关键字仍被政策风险词全部过滤 → 同样是「零可投放关键字」，直接拒绝提交，
+    // 不制造无关键字的无效系列。
+    if (submittedKeywords.length === 0) {
+      return apiError(
+        "该广告系列的关键字均被政策风险过滤，提交后将没有可投放关键字。请更换或新增合规关键字后再提交。",
+        422,
+      );
     }
 
     // ─── 8. Sitelink 扩展（标题/描述需符合 Google Ads 大写和标点规范） ───
@@ -1782,6 +1824,27 @@ export async function POST(req: NextRequest) {
       where: { id: adGroup.id },
       data: { google_ad_group_id: googleAdGroupId },
     });
+
+    // 根治③：把本次实际提交给 Google 的关键字回写 keywords 表，让 DB 成为可信真相来源
+    //   （历史上关键字多只走「SSE→内存→随提交发 Google」而未落库，导致 DB 关键字大面积为空、
+    //   无法用于兜底/审计）。剔除政策重试阶段被丢弃的词（skippedKeywords）。
+    try {
+      const persistRows = submittedKeywords
+        .filter((k) => k.text.trim().length > 0 && !skippedKeywords.includes(k.text))
+        .map((k) => ({
+          ad_group_id: adGroup.id,
+          keyword_text: k.text.trim(),
+          match_type: (k.matchType || "PHRASE").toUpperCase(),
+        }));
+      if (persistRows.length > 0) {
+        await prisma.$transaction([
+          prisma.keywords.deleteMany({ where: { ad_group_id: adGroup.id } }),
+          prisma.keywords.createMany({ data: persistRows, skipDuplicates: true }),
+        ]);
+      }
+    } catch (e) {
+      console.warn("[AdSubmit] 关键字回写 DB 失败（不影响广告投放）:", e instanceof Error ? e.message : e);
+    }
 
     await prisma.ad_creatives.update({
       where: { id: adCreative.id },
