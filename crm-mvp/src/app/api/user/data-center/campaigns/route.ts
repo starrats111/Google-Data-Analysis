@@ -5,6 +5,7 @@ import prisma from "@/lib/prisma";
 import { cachedQuery, cacheDelete } from "@/lib/cache";
 import { nowCST, isTodayCST, dateColumnStart, dateColumnEndExclusive, dateColumnTodayEndExclusive, parseTxnDateStart, parseTxnDateEndExclusive, txnStartOfMonthUTC } from "@/lib/date-utils";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
+import { mergeMerchantCampaigns } from "@/lib/merchant-campaign-merge";
 
 /**
  * GET /api/user/data-center/campaigns
@@ -144,6 +145,7 @@ export async function GET(req: NextRequest) {
       target_country: true,
       last_google_sync_at: true,
       user_merchant_id: true,
+      created_at: true,
     },
   });
 
@@ -292,6 +294,11 @@ export async function GET(req: NextRequest) {
     totalPendingFromTxn += Number(r.pending_commission || 0);
   }
 
+  // 同商家汇总：把同一个商家的 花费/点击/展示/佣金 统一汇总到一条【代表广告系列】
+  //（已启用优先 → 多条已启用取 created_at 最近 → 无已启用回退到最高优先级状态里最近的一条）。
+  // 仅影响逐行展示；总览合计与按 MCC 花费分布继续基于原始 per-campaign 统计（allStatsMap）。
+  const merge = mergeMerchantCampaigns(dedupedCampaigns, allStatsMap);
+
   // ─── 全量计算总览 summary 和 costByMcc ───
   let totalCost = 0, totalClicks = 0, totalImpressions = 0;
   let enabledCount = 0, pausedCount = 0;
@@ -415,16 +422,16 @@ export async function GET(req: NextRequest) {
   const filteredForDisplay = dedupedCampaigns.filter((c) => {
     if (c.google_status !== "REMOVED") return true;
     if (showRemoved) return true;
-    const s = allStatsMap.get(String(c.id));
-    return (s?.cost || 0) > 0;
+    // 汇总口径下按展示花费判断；代表行（携带同商家汇总花费/佣金）始终保留
+    const s = merge.displayStats.get(String(c.id));
+    return (s?.cost || 0) > 0 || merge.representativeIds.has(String(c.id));
   });
   // D-040 v2 BUG-3：取消 200 行硬截断，让 wj07（264 个广告系列）等用户能看到全部数据
   // 性能：MCC 维度的 campaign 量级在数百至数千之间，前端表格分页足够，后端不再切片
   const displayCampaigns = filteredForDisplay;
-  const merchantWritten = new Set<string>();
 
   const rows = displayCampaigns.map((c) => {
-    const s = allStatsMap.get(String(c.id));
+    const s = merge.displayStats.get(String(c.id));
     const cost = s?.cost || 0;
     const clicks = s?.clicks || 0;
     const impressions = s?.impressions || 0;
@@ -432,13 +439,13 @@ export async function GET(req: NextRequest) {
 
     const merchantId = String(c.user_merchant_id);
     let commission = 0, rejectedComm = 0, approvedComm = 0, orders = 0;
-    if (merchantId && merchantId !== "0" && commissionByMerchant.has(merchantId) && !merchantWritten.has(merchantId)) {
+    if (merchantId && merchantId !== "0" && commissionByMerchant.has(merchantId)
+        && merge.commissionTarget.get(merchantId) === String(c.id)) {
       const comm = commissionByMerchant.get(merchantId)!;
       commission = comm.commission;
       rejectedComm = comm.rejected;
       approvedComm = comm.approved;
       orders = comm.orders;
-      merchantWritten.add(merchantId);
     }
 
     const roi = cost > 0 ? Number(((commission - rejectedComm - cost) / cost).toFixed(2)) : 0;

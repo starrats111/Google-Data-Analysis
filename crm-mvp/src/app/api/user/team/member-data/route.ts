@@ -5,6 +5,7 @@ import { withLeader } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
 import { nowCST, isTodayCST, dateColumnStart, dateColumnEndExclusive, dateColumnTodayEndExclusive, parseTxnDateStart, parseTxnDateEndExclusive, txnStartOfMonthUTC } from "@/lib/date-utils";
+import { mergeMerchantCampaigns } from "@/lib/merchant-campaign-merge";
 
 /**
  * 获取指定组员的详细数据（组长专用）
@@ -57,6 +58,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       campaign_name: true,
       google_status: true,
       user_merchant_id: true,
+      created_at: true,
     },
   });
 
@@ -175,11 +177,12 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     totalOrdersFromTxn += Number(r.order_count || 0);
   }
 
-  // C-094：与用户自己视角口径对齐 —— 先按 (ENABLED→PAUSED→REMOVED + extractSeq) 排序，
-  // 再按排序后顺序分配 commission（商家维度互斥），最终 commission 总是落在
-  // "ENABLED 优先 + 序号小" 的那一条 campaign 上。
-  // 否则若按 prisma id desc 原始顺序分配，可能把 commission 误落在已暂停的旧 campaign 上，
-  // 导致 ENABLED 的当前活跃 campaign 显示 commission=0 / ROI=-100%，与用户自己看到的不一致。
+  // 同商家汇总：把同一个商家的 花费/点击/展示/佣金 统一汇总到一条【代表广告系列】
+  //（已启用优先 → 多条已启用取 created_at 最近 → 无已启用回退到最高优先级状态里最近的一条）。
+  // 这样避免"有佣金却 0 花费 / 有花费却 0 佣金"的分家现象；总览合计不受影响（同商家内重新归集）。
+  const merge = mergeMerchantCampaigns(campaigns, statsMap);
+
+  // 展示排序：ENABLED→PAUSED→REMOVED，同状态内按广告系列名称中的序号升序
   const STATUS_ORDER: Record<string, number> = { ENABLED: 0, PAUSED: 1, REMOVED: 2 };
   const extractSeq = (name: string | null): number => {
     if (!name) return 999999;
@@ -194,23 +197,22 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     return extractSeq(a.campaign_name) - extractSeq(b.campaign_name);
   });
 
-  const merchantWritten = new Set<string>();
   let totalCost = 0, totalClicks = 0, totalImpressions = 0;
 
   const campaignDetails = orderedCampaigns.map((c) => {
-    const s = statsMap.get(String(c.id));
+    const s = merge.displayStats.get(String(c.id));
     const cost = s?.cost || 0;
     const clicks = s?.clicks || 0;
     const impressions = s?.impressions || 0;
 
     const merchantId = String(c.user_merchant_id);
     let commission = 0, rejectedComm = 0, orders = 0;
-    if (merchantId && merchantId !== "0" && commissionByMerchant.has(merchantId) && !merchantWritten.has(merchantId)) {
+    if (merchantId && merchantId !== "0" && commissionByMerchant.has(merchantId)
+        && merge.commissionTarget.get(merchantId) === String(c.id)) {
       const comm = commissionByMerchant.get(merchantId)!;
       commission = comm.commission;
       rejectedComm = comm.rejected;
       orders = comm.orders;
-      merchantWritten.add(merchantId);
     }
 
     const net = commission - rejectedComm - cost;
