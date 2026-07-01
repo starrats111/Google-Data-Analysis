@@ -17,6 +17,7 @@ import { generateOneSuffix, type GenFailure } from './suffix-generator'
 import { raiseAlert, resolveAlertsByType } from './alerts'
 import { recordExitIp } from './exit-ip'
 import { resolveMerchantReferer } from './referer-resolver'
+import { pickCampaignAffiliateLink } from '@/lib/merchant-connection'
 
 const inflight = new Map<string, Promise<ReplenishResult>>()
 
@@ -49,6 +50,7 @@ interface CampaignForReplenish {
   id: bigint
   user_id: bigint
   user_merchant_id: bigint
+  platform_connection_id: bigint | null
   target_country: string
   suffix_exchange_enabled: number
   is_deleted: number
@@ -110,6 +112,7 @@ async function doReplenish(
       id: true,
       user_id: true,
       user_merchant_id: true,
+      platform_connection_id: true,
       target_country: true,
       suffix_exchange_enabled: true,
       is_deleted: true,
@@ -168,7 +171,7 @@ async function doReplenish(
   // 加载商家联盟链接 + 平台
   const merchant = await prisma.user_merchants.findFirst({
     where: { id: campaign.user_merchant_id, is_deleted: 0 },
-    select: { id: true, platform: true, tracking_link: true, merchant_name: true },
+    select: { id: true, platform: true, tracking_link: true, campaign_link: true, connection_campaign_links: true, platform_connection_id: true, merchant_name: true },
   })
 
   if (!merchant) {
@@ -177,15 +180,18 @@ async function doReplenish(
     // 反复报 merchant_not_found 只会刷屏（user_merchant_id<=0 已在前置闸门拦下，这里专治 orphan）。
     return { campaignId: cid, skipped: true, reason: 'merchant_missing', before, generated: 0, after: before, failed: 0 }
   }
-  if (!merchant.tracking_link) {
-    // 商家在库但缺联盟追踪链接：补货路径一律静默跳过、不再报警。
+  // 账号感知：按广告归属账号(platform_connection_id)挑该号的链接。生成的 suffix 会应用到 live 广告，
+  // 必须用广告自己账号的链接，否则真实转化会记到别的号（wj02 CG1/CG2 串号根治点）。
+  // 归属账号没配链接 → 静默跳过（判定是否人工处理交给 merchant-link-health）。
+  const affiliateUrl = pickCampaignAffiliateLink(campaign.platform_connection_id, merchant)
+  if (!affiliateUrl) {
+    // 商家在库但该账号缺联盟追踪链接：补货路径一律静默跳过、不再报警。
     // 「断链是否要人工处理」的判定统一交给 /api/cron/merchant-link-health：
     // 只有「该商家近 30 天有真实交易(affiliate_transactions)却仍断链」才升级为高优先告警，
     // 其余视为「仍在自愈流程中」（商家同步 / Google 回拉 / 手动填链接会修复），静默不刷屏。
     return { campaignId: cid, skipped: true, reason: 'merchant_no_tracking_link', before, generated: 0, after: before, failed: 0 }
   }
 
-  const affiliateUrl = merchant.tracking_link
   const country = campaign.target_country
   const platform = merchant.platform
 

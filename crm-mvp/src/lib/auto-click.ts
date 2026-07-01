@@ -21,6 +21,7 @@ import { normalizePlatformCode } from '@/lib/constants'
 import { PLATFORM_CLICK_CONFIG } from '@/lib/platform-api'
 import { randomInt } from '@/lib/suffix-engine/click-scheduler'
 import { startBrushTaskWindowed } from '@/lib/suffix-engine/click-brush'
+import { pickCampaignAffiliateLink } from '@/lib/merchant-connection'
 
 /** 转化率目标改为按用户配置（click_control_ratio_min/max_pct）运行时计算，默认 5%~10%（每订单 10~20 点击） */
 /** 基线回看天数 */
@@ -85,15 +86,15 @@ export async function runAutoClickForUser(
       suffix_exchange_enabled: 1,
       user_merchant_id: { not: BigInt(0) },
     },
-    select: { id: true, user_merchant_id: true, campaign_name: true },
+    select: { id: true, user_merchant_id: true, campaign_name: true, platform_connection_id: true },
   })
   if (campaigns.length === 0) return res
 
-  // 关联商家（platform / merchant_id / tracking_link）
+  // 关联商家（platform / merchant_id / 各账号链接）
   const merchantIds = [...new Set(campaigns.map((c) => c.user_merchant_id).filter((id): id is bigint => !!id && id > BigInt(0)))]
   const merchants = await prisma.user_merchants.findMany({
     where: { id: { in: merchantIds }, user_id: userId, is_deleted: 0 },
-    select: { id: true, platform: true, merchant_id: true, tracking_link: true, campaign_link: true },
+    select: { id: true, platform: true, merchant_id: true, tracking_link: true, campaign_link: true, connection_campaign_links: true, platform_connection_id: true },
   })
   const merchantById = new Map(merchants.map((m) => [m.id.toString(), m]))
 
@@ -117,18 +118,27 @@ export async function runAutoClickForUser(
     const mid = merchant.merchant_id || ''
     if (!platform || !mid) continue
     if (!PLATFORM_CLICK_CONFIG[platform]) continue // 无点击 API 的平台无法控比，跳过
-    if (!(merchant.tracking_link?.trim() || merchant.campaign_link?.trim())) continue // 无链接无法刷
+
+    // 该广告归属的联盟账号（连接）。建广告时写入，是「这条广告用哪个号」的唯一可靠依据。
+    // NULL=存量未回填，pickCampaignAffiliateLink 回退旧逻辑（主连接/tracking_link）。
+    const connId = c.platform_connection_id ?? null
+    // 账号感知选链接：拿不到该号的链接就跳过（宁可不刷，也不刷到没配链接/别的号）
+    const affiliateUrl = pickCampaignAffiliateLink(connId, merchant)
+    if (!affiliateUrl) continue
 
     if (onlyMerchantKeys && !onlyMerchantKeys.has(`${platform}:${mid}`)) continue
 
     res.campaignsConsidered++
 
-    // O：当天订单数
+    // O：当天订单数（按该广告归属账号 platform_connection_id 归属；affiliate_transactions 每行带真实连接，
+    // 可靠可拆）。没出单的号 O=0 直接跳过，不会被误补刷（wj02 CG1/CG2 串号根治点）。
+    // connId=NULL（存量未回填）时不按连接拆，退化为商家级（合并口径），行为与旧版一致。
     const O = await prisma.affiliate_transactions.count({
       where: {
         user_id: userId,
         platform,
         merchant_id: mid,
+        ...(connId != null ? { platform_connection_id: connId } : {}),
         is_deleted: 0,
         transaction_time: { gte: todayStartUTC, lt: todayEndUTC },
       },
@@ -138,7 +148,10 @@ export async function runAutoClickForUser(
       continue
     }
 
-    // C：当天真实点击（聚合表）
+    // C：当天真实点击（聚合表）。
+    // 注意：affiliate_click_daily 唯一键为 (user_id, platform, merchant_id, click_date)，不含连接，
+    // 同商家跨账号的点击被合并成一行，无法按 connId 拆分，故 C 保持商家级（合并口径）。
+    // 影响仅为「保守」：合并 C 偏大 → 至多少补一点，绝不会导致刷到错号（错号已被 O=0 拦下）。
     const todayAgg = await prisma.affiliate_click_daily.aggregate({
       where: { user_id: userId, platform, merchant_id: mid, click_date: todayDate, is_deleted: 0 },
       _sum: { clicks: true },

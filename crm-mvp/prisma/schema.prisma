@@ -377,6 +377,10 @@ model campaigns {
   id                         BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
   user_id                    BigInt    @db.UnsignedBigInt
   user_merchant_id           BigInt    @db.UnsignedBigInt
+  // 该广告归属的联盟账号（连接）。建广告时按当时选链接用的账号写入，是「这条广告用哪个号的链接」的唯一可靠依据。
+  // NULL = 存量未回填（回退旧逻辑：用商家主连接/tracking_link）。换链 / 刷点击 / 订单归属均以此为准，
+  // 避免商家主连接随重同步漂移导致「换错号 / 刷到没出单的号」（wj02 CG1/CG2 串号问题）。
+  platform_connection_id     BigInt?   @db.UnsignedBigInt
   google_campaign_id         String?   @db.VarChar(64)
   mcc_id                     BigInt?   @db.UnsignedBigInt
   customer_id                String?   @db.VarChar(32)
@@ -414,6 +418,7 @@ model campaigns {
   @@index([user_id, mcc_id], map: "idx_user_mcc")
   @@index([user_merchant_id], map: "idx_user_merchant")
   @@index([google_campaign_id], map: "idx_google_campaign")
+  @@index([platform_connection_id], map: "idx_platform_connection")
 }
 
 // -----------------------------------------------------------

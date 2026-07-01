@@ -825,6 +825,7 @@ export async function POST(req: NextRequest) {
         google_campaign_id: existingCampaign.id,
         customer_id: cid,
         mcc_id: mccAccount!.id,
+        platform_connection_id: submitMerchant?.platform_connection_id ?? null,
         google_status: "ENABLED",
       },
     }).catch(() => {});
@@ -1809,6 +1810,9 @@ export async function POST(req: NextRequest) {
         google_campaign_id: googleCampaignId,
         customer_id: cid,
         mcc_id: mccAccount.id,
+        // 该广告归属的联盟账号 = 本次选链接/命名(CGx)所用的商家主连接。写死在广告行，
+        // 后续换链/刷点击/订单归属都以此为准，不再随商家主连接漂移（wj02 CG1/CG2 串号根治点）。
+        platform_connection_id: submitMerchant.platform_connection_id ?? null,
         daily_budget: daily_budget,
         bidding_strategy: bidding_strategy,
         max_cpc_limit: max_cpc_limit,

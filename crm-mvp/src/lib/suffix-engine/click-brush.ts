@@ -20,6 +20,7 @@ import { raiseAlert, resolveAlertsByType } from './alerts'
 import { STOCK_CONFIG } from './config'
 import { generateClickSchedule, generateClickScheduleWithinWindow, randomPick, randomInt, USER_AGENTS, REFERERS } from './click-scheduler'
 import { resolveMerchantReferer } from './referer-resolver'
+import { pickCampaignAffiliateLink } from '@/lib/merchant-connection'
 
 /** 单次刷点击允许的最大次数（低配生产机保护） */
 export const MAX_BRUSH = 1000
@@ -62,15 +63,17 @@ export async function startBrushTask(
 
   const campaign = await prisma.campaigns.findFirst({
     where: { id: campaignId, user_id: userId, is_deleted: 0 },
-    select: { id: true, user_merchant_id: true, target_country: true },
+    select: { id: true, user_merchant_id: true, target_country: true, platform_connection_id: true },
   })
   if (!campaign) return { ok: false, message: '广告系列不存在或无权限' }
 
   const merchant = await prisma.user_merchants.findFirst({
     where: { id: campaign.user_merchant_id, is_deleted: 0 },
-    select: { tracking_link: true },
+    select: { tracking_link: true, campaign_link: true, connection_campaign_links: true, platform_connection_id: true },
   })
-  if (!merchant?.tracking_link) return { ok: false, message: '该广告系列未匹配到带追踪链接的商家' }
+  // 账号感知：按广告归属账号(platform_connection_id)挑对应号的链接，避免刷到别的号（wj02 串号）
+  const affiliateUrl = merchant ? pickCampaignAffiliateLink(campaign.platform_connection_id, merchant) : ''
+  if (!affiliateUrl) return { ok: false, message: '该广告系列所属联盟账号未配置追踪链接' }
 
   // 来路优先级：手动来路 → 最新文章 → 联盟账号网站 → （空则执行时回退随机来路池）
   const referer = await resolveMerchantReferer(campaign.user_merchant_id)
@@ -92,7 +95,7 @@ export async function startBrushTask(
     data: {
       user_id: userId,
       campaign_id: campaignId,
-      affiliate_url: merchant.tracking_link,
+      affiliate_url: affiliateUrl,
       referer_url: referer.url ?? '',
       target_count: n,
       done_count: 0,
@@ -135,15 +138,17 @@ export async function startBrushTaskWindowed(
 
   const campaign = await prisma.campaigns.findFirst({
     where: { id: campaignId, user_id: userId, is_deleted: 0 },
-    select: { id: true, user_merchant_id: true, target_country: true },
+    select: { id: true, user_merchant_id: true, target_country: true, platform_connection_id: true },
   })
   if (!campaign) return { ok: false, message: '广告系列不存在或无权限' }
 
   const merchant = await prisma.user_merchants.findFirst({
     where: { id: campaign.user_merchant_id, is_deleted: 0 },
-    select: { tracking_link: true },
+    select: { tracking_link: true, campaign_link: true, connection_campaign_links: true, platform_connection_id: true },
   })
-  if (!merchant?.tracking_link) return { ok: false, message: '该广告系列未匹配到带追踪链接的商家' }
+  // 账号感知：按广告归属账号挑对应号的链接（订单归属由调用方 auto-click 按同一 connId 统计）
+  const affiliateUrl = merchant ? pickCampaignAffiliateLink(campaign.platform_connection_id, merchant) : ''
+  if (!affiliateUrl) return { ok: false, message: '该广告系列所属联盟账号未配置追踪链接' }
 
   const referer = await resolveMerchantReferer(campaign.user_merchant_id)
   const schedule = generateClickScheduleWithinWindow(n, windowMinutes)
@@ -152,7 +157,7 @@ export async function startBrushTaskWindowed(
     data: {
       user_id: userId,
       campaign_id: campaignId,
-      affiliate_url: merchant.tracking_link,
+      affiliate_url: affiliateUrl,
       referer_url: referer.url ?? '',
       target_count: n,
       done_count: 0,
