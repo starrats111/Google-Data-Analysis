@@ -11,6 +11,7 @@
 import { prisma } from '@/lib/prisma'
 import { fetchViaProxy } from '@/lib/crawl-proxy'
 import { decryptPassword } from '@/lib/crypto'
+import { isProviderOpen, selectHealthy } from './proxy-circuit'
 
 // ── 用户名模板占位替换 ──────────────────────────────────────────
 
@@ -84,9 +85,26 @@ const PROVIDER_SELECT = {
   country_code_map: true,
 } as const
 
+/** 全局可用池里选一个健康供应商（按 priority 升序，跳过熔断中的）。 */
+async function pickHealthyGlobal(): Promise<ProviderRow | null> {
+  const all = await prisma.kyads_proxies.findMany({
+    where: { status: 'active', is_deleted: 0 },
+    orderBy: { priority: 'asc' },
+    select: PROVIDER_SELECT,
+  })
+  return selectHealthy(all)
+}
+
 /**
- * 选取一个可用代理供应商：active + 未删除，按 priority 升序。
- * 传 userId 时优先取分配给该用户的供应商；该用户无专属分配则回退全局可用供应商。
+ * 选取一个可用代理供应商：active + 未删除，按 priority 升序，并跳过熔断中的供应商
+ * （见 proxy-circuit：单点降级时自动顺延到下一个健康代理）。
+ *
+ * 传 userId 时：
+ *  1. 优先取分配给该用户的供应商中「健康」的（尊重多租户代理隔离）；
+ *  2. 分配池全部熔断 → 降级到全局健康池（扛单点故障，如 06-30 kookeey 全站降级——
+ *     当前 16 个用户全部只绑 kookeey，不降级就等于没有故障转移）；
+ *  3. 全局也无健康的 → 尽力而为返回分配池「最快恢复者」。
+ * 无专属分配则直接走全局健康池。
  */
 export async function pickProvider(userId?: bigint | null): Promise<ProviderRow | null> {
   if (userId && userId > BigInt(0)) {
@@ -96,19 +114,24 @@ export async function pickProvider(userId?: bigint | null): Promise<ProviderRow 
     })
     const ids = bindings.map((b) => b.proxy_id)
     if (ids.length > 0) {
-      const assigned = await prisma.kyads_proxies.findFirst({
+      const assigned = await prisma.kyads_proxies.findMany({
         where: { id: { in: ids }, status: 'active', is_deleted: 0 },
         orderBy: { priority: 'asc' },
         select: PROVIDER_SELECT,
       })
-      if (assigned) return assigned
+      // 分配池里有健康的 → 用分配（尊重隔离）
+      const healthyAssigned = assigned.find((p) => !isProviderOpen(p.id.toString()))
+      if (healthyAssigned) return healthyAssigned
+      // 分配池全部熔断 → 落到全局健康池扛单点故障
+      if (assigned.length > 0) {
+        const globalRow = await pickHealthyGlobal()
+        if (globalRow) return globalRow
+        // 全局也没有健康的 → 尽力而为返回分配池最快恢复者
+        return selectHealthy(assigned)
+      }
     }
   }
-  return prisma.kyads_proxies.findFirst({
-    where: { status: 'active', is_deleted: 0 },
-    orderBy: { priority: 'asc' },
-    select: PROVIDER_SELECT,
-  })
+  return pickHealthyGlobal()
 }
 
 /** 用供应商 + 国家组装带认证的代理 URL（默认 socks5；http/https 按 proxy_type）。 */
@@ -122,6 +145,36 @@ export function buildProviderProxyUrl(provider: ProviderRow, country: string): s
   return `${proto}://${auth}${provider.host}:${provider.port}`
 }
 
+export interface ProviderSelection {
+  url: string
+  /** 选中的供应商 id（字符串，供 proxy-circuit 熔断上报按供应商归因） */
+  providerId: string
+  providerName: string
+}
+
+/**
+ * 取一个供应商代理选择（URL + 供应商 id）。无可用供应商返回 null（上层兜底模板）。
+ * 相比 getProviderProxyUrl 多回传 providerId，供调用方把真实成败上报给熔断器。
+ */
+export async function getProviderSelection(
+  country: string,
+  opts: { userId?: bigint | null } = {},
+): Promise<ProviderSelection | null> {
+  if (!country) return null
+  try {
+    const provider = await pickProvider(opts.userId)
+    if (!provider) return null
+    return {
+      url: buildProviderProxyUrl(provider, country),
+      providerId: provider.id.toString(),
+      providerName: provider.name,
+    }
+  } catch (e) {
+    console.warn('[proxy-provider] getProviderSelection error:', e instanceof Error ? e.message : e)
+    return null
+  }
+}
+
 /**
  * 取一个供应商代理 URL（换链接引擎用）。无可用供应商返回 null（上层兜底模板）。
  */
@@ -129,15 +182,8 @@ export async function getProviderProxyUrl(
   country: string,
   opts: { userId?: bigint | null } = {},
 ): Promise<string | null> {
-  if (!country) return null
-  try {
-    const provider = await pickProvider(opts.userId)
-    if (!provider) return null
-    return buildProviderProxyUrl(provider, country)
-  } catch (e) {
-    console.warn('[proxy-provider] getProviderProxyUrl error:', e instanceof Error ? e.message : e)
-    return null
-  }
+  const sel = await getProviderSelection(country, opts)
+  return sel?.url ?? null
 }
 
 // ── 出口 IP 测试（后台「测试」按钮用）────────────────────────────

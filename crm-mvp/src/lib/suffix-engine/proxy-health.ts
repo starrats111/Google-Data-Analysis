@@ -13,6 +13,7 @@
 
 import { prisma } from '@/lib/prisma'
 import { testProviderExitIp } from './proxy-provider'
+import { openProvider, clearProvider } from './proxy-circuit'
 
 /** 探活用的金丝雀国家（三家住宅代理均支持 US 出口，作统一探活基准） */
 const CANARY_COUNTRY = 'US'
@@ -77,8 +78,14 @@ export async function checkAllProxiesHealth(): Promise<ProxyHealthReport> {
       }
       if (last.ok) break
     }
-    if (last.ok) healthy.push(last)
-    else failed.push(last)
+    // 探活结果直接喂熔断器（A 路径）：失败即熔断→pickProvider 自动故障转移；成功即解除。
+    if (last.ok) {
+      clearProvider(last.id)
+      healthy.push(last)
+    } else {
+      openProvider(last.id)
+      failed.push(last)
+    }
   }
 
   return {

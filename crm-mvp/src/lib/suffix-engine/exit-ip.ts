@@ -18,6 +18,7 @@
 
 import { prisma } from '@/lib/prisma'
 import { getProxyUrlForCountry, fetchViaProxy } from '@/lib/crawl-proxy'
+import { getProviderSelection } from './proxy-provider'
 
 /** 去重窗口：24 小时 */
 const DEDUP_WINDOW_MS = 24 * 60 * 60 * 1000
@@ -35,6 +36,8 @@ export interface DedupedProxy {
   exitIp: string | null
   /** true=所有尝试都命中 24h 已用 IP（尽力而为返回最后一个），用于诊断 */
   dup: boolean
+  /** 选中的供应商 id（走 system_config/env 兜底或无供应商时为 null）；供调用方向熔断器归因成败 */
+  providerId: string | null
 }
 
 /** 取某系列 24h 内已使用的出口 IP 集合 */
@@ -109,26 +112,38 @@ export async function acquireDedupedProxy(
   const usedIps = opts.usedIps ?? new Set<string>()
   let lastUrl: string | null = null
   let lastIp: string | null = null
+  let lastProviderId: string | null = null
 
   for (let i = 0; i < MAX_FRESH_TRIES; i++) {
-    const proxyUrl = await getProxyUrlForCountry(country, { userId: opts.userId }).catch(() => null)
+    // 优先走供应商选择（含熔断故障转移 + 回传 providerId 供归因）；无供应商时回退 system_config/env 模板。
+    const sel = await getProviderSelection(country, { userId: opts.userId }).catch(() => null)
+    let proxyUrl: string | null
+    let providerId: string | null
+    if (sel) {
+      proxyUrl = sel.url
+      providerId = sel.providerId
+    } else {
+      proxyUrl = await getProxyUrlForCountry(country, { userId: opts.userId }).catch(() => null)
+      providerId = null
+    }
     if (!proxyUrl) {
-      // 无供应商代理：交给 resolver 内部兜底（env/直连），不做去重
-      return { proxyUrl: null, exitIp: null, dup: false }
+      // 无供应商代理且无兜底模板：交给 resolver 内部兜底（env/直连），不做去重
+      return { proxyUrl: null, exitIp: null, dup: false, providerId: null }
     }
     lastUrl = proxyUrl
+    lastProviderId = providerId
     const ip = await probeExitIp(proxyUrl)
     if (!ip) {
       // 探活失败：用当前会话，放弃去重（降级），不再多探以省时间
-      return { proxyUrl, exitIp: null, dup: false }
+      return { proxyUrl, exitIp: null, dup: false, providerId }
     }
     lastIp = ip
     if (!usedIps.has(ip)) {
-      return { proxyUrl, exitIp: ip, dup: false }
+      return { proxyUrl, exitIp: ip, dup: false, providerId }
     }
     // 命中 24h 已用 → 换会话再试
   }
 
   // 多次都命中已用 IP：尽力而为返回最后一个（不阻断换链；rotating 池 IP 有限时可能发生）
-  return { proxyUrl: lastUrl, exitIp: lastIp, dup: true }
+  return { proxyUrl: lastUrl, exitIp: lastIp, dup: true, providerId: lastProviderId }
 }
