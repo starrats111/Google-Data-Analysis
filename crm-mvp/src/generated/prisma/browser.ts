@@ -118,6 +118,11 @@ export type ad_creatives = Prisma.ad_creativesModel
  */
 export type ad_generation_jobs = Prisma.ad_generation_jobsModel
 /**
+ * Model ad_submit_jobs
+ * 
+ */
+export type ad_submit_jobs = Prisma.ad_submit_jobsModel
+/**
  * Model publish_sites
  * 
  */
@@ -147,6 +152,11 @@ export type google_mcc_accounts = Prisma.google_mcc_accountsModel
  * 
  */
 export type affiliate_transactions = Prisma.affiliate_transactionsModel
+/**
+ * Model affiliate_click_daily
+ * 
+ */
+export type affiliate_click_daily = Prisma.affiliate_click_dailyModel
 /**
  * Model affiliate_payments
  * 
@@ -229,6 +239,21 @@ export type suffix_assignments = Prisma.suffix_assignmentsModel
  * 
  */
 export type kyads_click_tasks = Prisma.kyads_click_tasksModel
+/**
+ * Model kyads_click_task_items
+ * 
+ */
+export type kyads_click_task_items = Prisma.kyads_click_task_itemsModel
+/**
+ * Model proxy_exit_ip_usage
+ * 
+ */
+export type proxy_exit_ip_usage = Prisma.proxy_exit_ip_usageModel
+/**
+ * Model suffix_alerts
+ * 
+ */
+export type suffix_alerts = Prisma.suffix_alertsModel
 /**
  * Model merchant_atc_snapshots
  * 

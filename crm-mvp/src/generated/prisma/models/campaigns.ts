@@ -30,6 +30,7 @@ export type CampaignsAvgAggregateOutputType = {
   id: number | null
   user_id: number | null
   user_merchant_id: number | null
+  platform_connection_id: number | null
   mcc_id: number | null
   daily_budget: runtime.Decimal | null
   max_cpc_limit: runtime.Decimal | null
@@ -45,6 +46,7 @@ export type CampaignsSumAggregateOutputType = {
   id: bigint | null
   user_id: bigint | null
   user_merchant_id: bigint | null
+  platform_connection_id: bigint | null
   mcc_id: bigint | null
   daily_budget: runtime.Decimal | null
   max_cpc_limit: runtime.Decimal | null
@@ -60,6 +62,7 @@ export type CampaignsMinAggregateOutputType = {
   id: bigint | null
   user_id: bigint | null
   user_merchant_id: bigint | null
+  platform_connection_id: bigint | null
   google_campaign_id: string | null
   mcc_id: bigint | null
   customer_id: string | null
@@ -91,6 +94,7 @@ export type CampaignsMaxAggregateOutputType = {
   id: bigint | null
   user_id: bigint | null
   user_merchant_id: bigint | null
+  platform_connection_id: bigint | null
   google_campaign_id: string | null
   mcc_id: bigint | null
   customer_id: string | null
@@ -122,6 +126,7 @@ export type CampaignsCountAggregateOutputType = {
   id: number
   user_id: number
   user_merchant_id: number
+  platform_connection_id: number
   google_campaign_id: number
   mcc_id: number
   customer_id: number
@@ -156,6 +161,7 @@ export type CampaignsAvgAggregateInputType = {
   id?: true
   user_id?: true
   user_merchant_id?: true
+  platform_connection_id?: true
   mcc_id?: true
   daily_budget?: true
   max_cpc_limit?: true
@@ -171,6 +177,7 @@ export type CampaignsSumAggregateInputType = {
   id?: true
   user_id?: true
   user_merchant_id?: true
+  platform_connection_id?: true
   mcc_id?: true
   daily_budget?: true
   max_cpc_limit?: true
@@ -186,6 +193,7 @@ export type CampaignsMinAggregateInputType = {
   id?: true
   user_id?: true
   user_merchant_id?: true
+  platform_connection_id?: true
   google_campaign_id?: true
   mcc_id?: true
   customer_id?: true
@@ -217,6 +225,7 @@ export type CampaignsMaxAggregateInputType = {
   id?: true
   user_id?: true
   user_merchant_id?: true
+  platform_connection_id?: true
   google_campaign_id?: true
   mcc_id?: true
   customer_id?: true
@@ -248,6 +257,7 @@ export type CampaignsCountAggregateInputType = {
   id?: true
   user_id?: true
   user_merchant_id?: true
+  platform_connection_id?: true
   google_campaign_id?: true
   mcc_id?: true
   customer_id?: true
@@ -367,6 +377,7 @@ export type CampaignsGroupByOutputType = {
   id: bigint
   user_id: bigint
   user_merchant_id: bigint
+  platform_connection_id: bigint | null
   google_campaign_id: string | null
   mcc_id: bigint | null
   customer_id: string | null
@@ -422,6 +433,7 @@ export type campaignsWhereInput = {
   id?: Prisma.BigIntFilter<"campaigns"> | bigint | number
   user_id?: Prisma.BigIntFilter<"campaigns"> | bigint | number
   user_merchant_id?: Prisma.BigIntFilter<"campaigns"> | bigint | number
+  platform_connection_id?: Prisma.BigIntNullableFilter<"campaigns"> | bigint | number | null
   google_campaign_id?: Prisma.StringNullableFilter<"campaigns"> | string | null
   mcc_id?: Prisma.BigIntNullableFilter<"campaigns"> | bigint | number | null
   customer_id?: Prisma.StringNullableFilter<"campaigns"> | string | null
@@ -454,6 +466,7 @@ export type campaignsOrderByWithRelationInput = {
   id?: Prisma.SortOrder
   user_id?: Prisma.SortOrder
   user_merchant_id?: Prisma.SortOrder
+  platform_connection_id?: Prisma.SortOrderInput | Prisma.SortOrder
   google_campaign_id?: Prisma.SortOrderInput | Prisma.SortOrder
   mcc_id?: Prisma.SortOrderInput | Prisma.SortOrder
   customer_id?: Prisma.SortOrderInput | Prisma.SortOrder
@@ -490,6 +503,7 @@ export type campaignsWhereUniqueInput = Prisma.AtLeast<{
   NOT?: Prisma.campaignsWhereInput | Prisma.campaignsWhereInput[]
   user_id?: Prisma.BigIntFilter<"campaigns"> | bigint | number
   user_merchant_id?: Prisma.BigIntFilter<"campaigns"> | bigint | number
+  platform_connection_id?: Prisma.BigIntNullableFilter<"campaigns"> | bigint | number | null
   google_campaign_id?: Prisma.StringNullableFilter<"campaigns"> | string | null
   mcc_id?: Prisma.BigIntNullableFilter<"campaigns"> | bigint | number | null
   customer_id?: Prisma.StringNullableFilter<"campaigns"> | string | null
@@ -522,6 +536,7 @@ export type campaignsOrderByWithAggregationInput = {
   id?: Prisma.SortOrder
   user_id?: Prisma.SortOrder
   user_merchant_id?: Prisma.SortOrder
+  platform_connection_id?: Prisma.SortOrderInput | Prisma.SortOrder
   google_campaign_id?: Prisma.SortOrderInput | Prisma.SortOrder
   mcc_id?: Prisma.SortOrderInput | Prisma.SortOrder
   customer_id?: Prisma.SortOrderInput | Prisma.SortOrder
@@ -562,6 +577,7 @@ export type campaignsScalarWhereWithAggregatesInput = {
   id?: Prisma.BigIntWithAggregatesFilter<"campaigns"> | bigint | number
   user_id?: Prisma.BigIntWithAggregatesFilter<"campaigns"> | bigint | number
   user_merchant_id?: Prisma.BigIntWithAggregatesFilter<"campaigns"> | bigint | number
+  platform_connection_id?: Prisma.BigIntNullableWithAggregatesFilter<"campaigns"> | bigint | number | null
   google_campaign_id?: Prisma.StringNullableWithAggregatesFilter<"campaigns"> | string | null
   mcc_id?: Prisma.BigIntNullableWithAggregatesFilter<"campaigns"> | bigint | number | null
   customer_id?: Prisma.StringNullableWithAggregatesFilter<"campaigns"> | string | null
@@ -594,6 +610,7 @@ export type campaignsCreateInput = {
   id?: bigint | number
   user_id: bigint | number
   user_merchant_id: bigint | number
+  platform_connection_id?: bigint | number | null
   google_campaign_id?: string | null
   mcc_id?: bigint | number | null
   customer_id?: string | null
@@ -626,6 +643,7 @@ export type campaignsUncheckedCreateInput = {
   id?: bigint | number
   user_id: bigint | number
   user_merchant_id: bigint | number
+  platform_connection_id?: bigint | number | null
   google_campaign_id?: string | null
   mcc_id?: bigint | number | null
   customer_id?: string | null
@@ -658,6 +676,7 @@ export type campaignsUpdateInput = {
   id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   user_id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   user_merchant_id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
+  platform_connection_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   google_campaign_id?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   mcc_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   customer_id?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -690,6 +709,7 @@ export type campaignsUncheckedUpdateInput = {
   id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   user_id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   user_merchant_id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
+  platform_connection_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   google_campaign_id?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   mcc_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   customer_id?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -722,6 +742,7 @@ export type campaignsCreateManyInput = {
   id?: bigint | number
   user_id: bigint | number
   user_merchant_id: bigint | number
+  platform_connection_id?: bigint | number | null
   google_campaign_id?: string | null
   mcc_id?: bigint | number | null
   customer_id?: string | null
@@ -754,6 +775,7 @@ export type campaignsUpdateManyMutationInput = {
   id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   user_id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   user_merchant_id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
+  platform_connection_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   google_campaign_id?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   mcc_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   customer_id?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -786,6 +808,7 @@ export type campaignsUncheckedUpdateManyInput = {
   id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   user_id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   user_merchant_id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
+  platform_connection_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   google_campaign_id?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   mcc_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   customer_id?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
@@ -824,6 +847,7 @@ export type campaignsCountOrderByAggregateInput = {
   id?: Prisma.SortOrder
   user_id?: Prisma.SortOrder
   user_merchant_id?: Prisma.SortOrder
+  platform_connection_id?: Prisma.SortOrder
   google_campaign_id?: Prisma.SortOrder
   mcc_id?: Prisma.SortOrder
   customer_id?: Prisma.SortOrder
@@ -856,6 +880,7 @@ export type campaignsAvgOrderByAggregateInput = {
   id?: Prisma.SortOrder
   user_id?: Prisma.SortOrder
   user_merchant_id?: Prisma.SortOrder
+  platform_connection_id?: Prisma.SortOrder
   mcc_id?: Prisma.SortOrder
   daily_budget?: Prisma.SortOrder
   max_cpc_limit?: Prisma.SortOrder
@@ -871,6 +896,7 @@ export type campaignsMaxOrderByAggregateInput = {
   id?: Prisma.SortOrder
   user_id?: Prisma.SortOrder
   user_merchant_id?: Prisma.SortOrder
+  platform_connection_id?: Prisma.SortOrder
   google_campaign_id?: Prisma.SortOrder
   mcc_id?: Prisma.SortOrder
   customer_id?: Prisma.SortOrder
@@ -902,6 +928,7 @@ export type campaignsMinOrderByAggregateInput = {
   id?: Prisma.SortOrder
   user_id?: Prisma.SortOrder
   user_merchant_id?: Prisma.SortOrder
+  platform_connection_id?: Prisma.SortOrder
   google_campaign_id?: Prisma.SortOrder
   mcc_id?: Prisma.SortOrder
   customer_id?: Prisma.SortOrder
@@ -933,6 +960,7 @@ export type campaignsSumOrderByAggregateInput = {
   id?: Prisma.SortOrder
   user_id?: Prisma.SortOrder
   user_merchant_id?: Prisma.SortOrder
+  platform_connection_id?: Prisma.SortOrder
   mcc_id?: Prisma.SortOrder
   daily_budget?: Prisma.SortOrder
   max_cpc_limit?: Prisma.SortOrder
@@ -950,6 +978,7 @@ export type campaignsSelect<ExtArgs extends runtime.Types.Extensions.InternalArg
   id?: boolean
   user_id?: boolean
   user_merchant_id?: boolean
+  platform_connection_id?: boolean
   google_campaign_id?: boolean
   mcc_id?: boolean
   customer_id?: boolean
@@ -984,6 +1013,7 @@ export type campaignsSelectScalar = {
   id?: boolean
   user_id?: boolean
   user_merchant_id?: boolean
+  platform_connection_id?: boolean
   google_campaign_id?: boolean
   mcc_id?: boolean
   customer_id?: boolean
@@ -1012,7 +1042,7 @@ export type campaignsSelectScalar = {
   updated_at?: boolean
 }
 
-export type campaignsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "user_merchant_id" | "google_campaign_id" | "mcc_id" | "customer_id" | "campaign_name" | "daily_budget" | "bidding_strategy" | "max_cpc_limit" | "target_country" | "geo_target" | "language_id" | "network_search" | "network_partners" | "network_display" | "status" | "google_status" | "last_google_sync_at" | "previous_gcids" | "final_url_suffix" | "suffix_exchange_enabled" | "suffix_last_content" | "suffix_last_apply_at" | "suffix_click_baseline" | "suffix_click_checkpoint_at" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["campaigns"]>
+export type campaignsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "user_merchant_id" | "platform_connection_id" | "google_campaign_id" | "mcc_id" | "customer_id" | "campaign_name" | "daily_budget" | "bidding_strategy" | "max_cpc_limit" | "target_country" | "geo_target" | "language_id" | "network_search" | "network_partners" | "network_display" | "status" | "google_status" | "last_google_sync_at" | "previous_gcids" | "final_url_suffix" | "suffix_exchange_enabled" | "suffix_last_content" | "suffix_last_apply_at" | "suffix_click_baseline" | "suffix_click_checkpoint_at" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["campaigns"]>
 
 export type $campaignsPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "campaigns"
@@ -1021,6 +1051,7 @@ export type $campaignsPayload<ExtArgs extends runtime.Types.Extensions.InternalA
     id: bigint
     user_id: bigint
     user_merchant_id: bigint
+    platform_connection_id: bigint | null
     google_campaign_id: string | null
     mcc_id: bigint | null
     customer_id: string | null
@@ -1419,6 +1450,7 @@ export interface campaignsFieldRefs {
   readonly id: Prisma.FieldRef<"campaigns", 'BigInt'>
   readonly user_id: Prisma.FieldRef<"campaigns", 'BigInt'>
   readonly user_merchant_id: Prisma.FieldRef<"campaigns", 'BigInt'>
+  readonly platform_connection_id: Prisma.FieldRef<"campaigns", 'BigInt'>
   readonly google_campaign_id: Prisma.FieldRef<"campaigns", 'String'>
   readonly mcc_id: Prisma.FieldRef<"campaigns", 'BigInt'>
   readonly customer_id: Prisma.FieldRef<"campaigns", 'String'>

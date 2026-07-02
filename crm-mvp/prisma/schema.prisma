@@ -508,6 +508,28 @@ model ad_generation_jobs {
   @@index([status], map: "idx_status")
 }
 
+// 广告提交后台任务：把 /ad-creation/submit 从「长连接同步请求」解耦为「后台任务 + 短轮询」。
+// submit 核心（AI 合规返工 + 图片处理 + Google Ads mutate）单次可耗时 >2min，超过 Cloudflare
+// ~100s 边缘超时会给前端回 HTML 524，前端按 JSON 解析即报 Unexpected token '<'。改为后台跑、
+// 结果落 result，前端轮询 /submit-status 读取，彻底绕开边缘超时。
+model ad_submit_jobs {
+  id           BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  campaign_id  BigInt    @db.UnsignedBigInt
+  user_id      BigInt    @db.UnsignedBigInt
+  payload      Json // 提交请求体（供 runner 回放 + 幂等复用判定）
+  status       String    @default("queued") @db.VarChar(16) // queued | running | done | failed
+  http_status  Int       @default(0) @db.SmallInt // 核心逻辑返回的 HTTP 状态（200/400/422...）
+  result       Json? // 核心逻辑最终返回体 { code, message, data }，前端据此复用旧分支
+  error        String?   @db.Text
+  attempt      Int       @default(0) @db.TinyInt
+  heartbeat_at DateTime? @db.DateTime(0)
+  created_at   DateTime  @default(now()) @db.DateTime(0)
+  updated_at   DateTime  @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([campaign_id, status], map: "idx_submit_campaign_status")
+  @@index([status], map: "idx_submit_status")
+}
+
 // -----------------------------------------------------------
 // 13. 站点表（全局资源，管理员统一管理）
 // -----------------------------------------------------------

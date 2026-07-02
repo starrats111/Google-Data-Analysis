@@ -404,12 +404,14 @@ export const ModelName = {
   keywords: 'keywords',
   ad_creatives: 'ad_creatives',
   ad_generation_jobs: 'ad_generation_jobs',
+  ad_submit_jobs: 'ad_submit_jobs',
   publish_sites: 'publish_sites',
   site_migrations: 'site_migrations',
   articles: 'articles',
   ads_daily_stats: 'ads_daily_stats',
   google_mcc_accounts: 'google_mcc_accounts',
   affiliate_transactions: 'affiliate_transactions',
+  affiliate_click_daily: 'affiliate_click_daily',
   affiliate_payments: 'affiliate_payments',
   notifications: 'notifications',
   notification_preferences: 'notification_preferences',
@@ -426,6 +428,9 @@ export const ModelName = {
   suffix_pool: 'suffix_pool',
   suffix_assignments: 'suffix_assignments',
   kyads_click_tasks: 'kyads_click_tasks',
+  kyads_click_task_items: 'kyads_click_task_items',
+  proxy_exit_ip_usage: 'proxy_exit_ip_usage',
+  suffix_alerts: 'suffix_alerts',
   merchant_atc_snapshots: 'merchant_atc_snapshots',
   atc_advertiser_domain_snapshot: 'atc_advertiser_domain_snapshot',
   ad_image_ocr_cache: 'ad_image_ocr_cache',
@@ -452,7 +457,7 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
     omit: GlobalOmitOptions
   }
   meta: {
-    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "parent_networks" | "platform_blacklist" | "ad_rejection_feedback" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "holiday_calendar" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "ad_generation_jobs" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "google_mcc_accounts" | "affiliate_transactions" | "affiliate_payments" | "notifications" | "notification_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "user_serpapi_keys" | "user_semrush_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log" | "semrush_keyword_cache" | "semrush_health_logs" | "policy_violations"
+    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "parent_networks" | "platform_blacklist" | "ad_rejection_feedback" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "holiday_calendar" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "ad_generation_jobs" | "ad_submit_jobs" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "google_mcc_accounts" | "affiliate_transactions" | "affiliate_click_daily" | "affiliate_payments" | "notifications" | "notification_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "kyads_click_task_items" | "proxy_exit_ip_usage" | "suffix_alerts" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "user_serpapi_keys" | "user_semrush_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log" | "semrush_keyword_cache" | "semrush_health_logs" | "policy_violations"
     txIsolationLevel: TransactionIsolationLevel
   }
   model: {
@@ -1776,6 +1781,72 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         }
       }
     }
+    ad_submit_jobs: {
+      payload: Prisma.$ad_submit_jobsPayload<ExtArgs>
+      fields: Prisma.ad_submit_jobsFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.ad_submit_jobsFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_submit_jobsPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.ad_submit_jobsFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_submit_jobsPayload>
+        }
+        findFirst: {
+          args: Prisma.ad_submit_jobsFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_submit_jobsPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.ad_submit_jobsFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_submit_jobsPayload>
+        }
+        findMany: {
+          args: Prisma.ad_submit_jobsFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_submit_jobsPayload>[]
+        }
+        create: {
+          args: Prisma.ad_submit_jobsCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_submit_jobsPayload>
+        }
+        createMany: {
+          args: Prisma.ad_submit_jobsCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.ad_submit_jobsDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_submit_jobsPayload>
+        }
+        update: {
+          args: Prisma.ad_submit_jobsUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_submit_jobsPayload>
+        }
+        deleteMany: {
+          args: Prisma.ad_submit_jobsDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.ad_submit_jobsUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.ad_submit_jobsUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_submit_jobsPayload>
+        }
+        aggregate: {
+          args: Prisma.Ad_submit_jobsAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateAd_submit_jobs>
+        }
+        groupBy: {
+          args: Prisma.ad_submit_jobsGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Ad_submit_jobsGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.ad_submit_jobsCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Ad_submit_jobsCountAggregateOutputType> | number
+        }
+      }
+    }
     publish_sites: {
       payload: Prisma.$publish_sitesPayload<ExtArgs>
       fields: Prisma.publish_sitesFieldRefs
@@ -2169,6 +2240,72 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         count: {
           args: Prisma.affiliate_transactionsCountArgs<ExtArgs>
           result: runtime.Types.Utils.Optional<Prisma.Affiliate_transactionsCountAggregateOutputType> | number
+        }
+      }
+    }
+    affiliate_click_daily: {
+      payload: Prisma.$affiliate_click_dailyPayload<ExtArgs>
+      fields: Prisma.affiliate_click_dailyFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.affiliate_click_dailyFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$affiliate_click_dailyPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.affiliate_click_dailyFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$affiliate_click_dailyPayload>
+        }
+        findFirst: {
+          args: Prisma.affiliate_click_dailyFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$affiliate_click_dailyPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.affiliate_click_dailyFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$affiliate_click_dailyPayload>
+        }
+        findMany: {
+          args: Prisma.affiliate_click_dailyFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$affiliate_click_dailyPayload>[]
+        }
+        create: {
+          args: Prisma.affiliate_click_dailyCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$affiliate_click_dailyPayload>
+        }
+        createMany: {
+          args: Prisma.affiliate_click_dailyCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.affiliate_click_dailyDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$affiliate_click_dailyPayload>
+        }
+        update: {
+          args: Prisma.affiliate_click_dailyUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$affiliate_click_dailyPayload>
+        }
+        deleteMany: {
+          args: Prisma.affiliate_click_dailyDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.affiliate_click_dailyUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.affiliate_click_dailyUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$affiliate_click_dailyPayload>
+        }
+        aggregate: {
+          args: Prisma.Affiliate_click_dailyAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateAffiliate_click_daily>
+        }
+        groupBy: {
+          args: Prisma.affiliate_click_dailyGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Affiliate_click_dailyGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.affiliate_click_dailyCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Affiliate_click_dailyCountAggregateOutputType> | number
         }
       }
     }
@@ -3228,6 +3365,204 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         }
       }
     }
+    kyads_click_task_items: {
+      payload: Prisma.$kyads_click_task_itemsPayload<ExtArgs>
+      fields: Prisma.kyads_click_task_itemsFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.kyads_click_task_itemsFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_click_task_itemsPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.kyads_click_task_itemsFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_click_task_itemsPayload>
+        }
+        findFirst: {
+          args: Prisma.kyads_click_task_itemsFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_click_task_itemsPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.kyads_click_task_itemsFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_click_task_itemsPayload>
+        }
+        findMany: {
+          args: Prisma.kyads_click_task_itemsFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_click_task_itemsPayload>[]
+        }
+        create: {
+          args: Prisma.kyads_click_task_itemsCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_click_task_itemsPayload>
+        }
+        createMany: {
+          args: Prisma.kyads_click_task_itemsCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.kyads_click_task_itemsDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_click_task_itemsPayload>
+        }
+        update: {
+          args: Prisma.kyads_click_task_itemsUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_click_task_itemsPayload>
+        }
+        deleteMany: {
+          args: Prisma.kyads_click_task_itemsDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.kyads_click_task_itemsUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.kyads_click_task_itemsUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$kyads_click_task_itemsPayload>
+        }
+        aggregate: {
+          args: Prisma.Kyads_click_task_itemsAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateKyads_click_task_items>
+        }
+        groupBy: {
+          args: Prisma.kyads_click_task_itemsGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Kyads_click_task_itemsGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.kyads_click_task_itemsCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Kyads_click_task_itemsCountAggregateOutputType> | number
+        }
+      }
+    }
+    proxy_exit_ip_usage: {
+      payload: Prisma.$proxy_exit_ip_usagePayload<ExtArgs>
+      fields: Prisma.proxy_exit_ip_usageFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.proxy_exit_ip_usageFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$proxy_exit_ip_usagePayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.proxy_exit_ip_usageFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$proxy_exit_ip_usagePayload>
+        }
+        findFirst: {
+          args: Prisma.proxy_exit_ip_usageFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$proxy_exit_ip_usagePayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.proxy_exit_ip_usageFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$proxy_exit_ip_usagePayload>
+        }
+        findMany: {
+          args: Prisma.proxy_exit_ip_usageFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$proxy_exit_ip_usagePayload>[]
+        }
+        create: {
+          args: Prisma.proxy_exit_ip_usageCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$proxy_exit_ip_usagePayload>
+        }
+        createMany: {
+          args: Prisma.proxy_exit_ip_usageCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.proxy_exit_ip_usageDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$proxy_exit_ip_usagePayload>
+        }
+        update: {
+          args: Prisma.proxy_exit_ip_usageUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$proxy_exit_ip_usagePayload>
+        }
+        deleteMany: {
+          args: Prisma.proxy_exit_ip_usageDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.proxy_exit_ip_usageUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.proxy_exit_ip_usageUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$proxy_exit_ip_usagePayload>
+        }
+        aggregate: {
+          args: Prisma.Proxy_exit_ip_usageAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateProxy_exit_ip_usage>
+        }
+        groupBy: {
+          args: Prisma.proxy_exit_ip_usageGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Proxy_exit_ip_usageGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.proxy_exit_ip_usageCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Proxy_exit_ip_usageCountAggregateOutputType> | number
+        }
+      }
+    }
+    suffix_alerts: {
+      payload: Prisma.$suffix_alertsPayload<ExtArgs>
+      fields: Prisma.suffix_alertsFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.suffix_alertsFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$suffix_alertsPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.suffix_alertsFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$suffix_alertsPayload>
+        }
+        findFirst: {
+          args: Prisma.suffix_alertsFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$suffix_alertsPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.suffix_alertsFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$suffix_alertsPayload>
+        }
+        findMany: {
+          args: Prisma.suffix_alertsFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$suffix_alertsPayload>[]
+        }
+        create: {
+          args: Prisma.suffix_alertsCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$suffix_alertsPayload>
+        }
+        createMany: {
+          args: Prisma.suffix_alertsCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.suffix_alertsDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$suffix_alertsPayload>
+        }
+        update: {
+          args: Prisma.suffix_alertsUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$suffix_alertsPayload>
+        }
+        deleteMany: {
+          args: Prisma.suffix_alertsDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.suffix_alertsUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.suffix_alertsUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$suffix_alertsPayload>
+        }
+        aggregate: {
+          args: Prisma.Suffix_alertsAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateSuffix_alerts>
+        }
+        groupBy: {
+          args: Prisma.suffix_alertsGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Suffix_alertsGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.suffix_alertsCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Suffix_alertsCountAggregateOutputType> | number
+        }
+      }
+    }
     merchant_atc_snapshots: {
       payload: Prisma.$merchant_atc_snapshotsPayload<ExtArgs>
       fields: Prisma.merchant_atc_snapshotsFieldRefs
@@ -3998,6 +4333,7 @@ export const TeamsScalarFieldEnum = {
   team_code: 'team_code',
   team_name: 'team_name',
   leader_id: 'leader_id',
+  cross_team_visible: 'cross_team_visible',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
   updated_at: 'updated_at'
@@ -4016,7 +4352,15 @@ export const UsersScalarFieldEnum = {
   team_id: 'team_id',
   display_name: 'display_name',
   script_api_key: 'script_api_key',
+  kylink_api_key: 'kylink_api_key',
+  kylink_linked_at: 'kylink_linked_at',
+  kylink_username: 'kylink_username',
   link_exchange_click_count: 'link_exchange_click_count',
+  link_exchange_disabled: 'link_exchange_disabled',
+  click_control_enabled: 'click_control_enabled',
+  click_control_ratio_min_pct: 'click_control_ratio_min_pct',
+  click_control_ratio_max_pct: 'click_control_ratio_max_pct',
+  script_loop_interval_seconds: 'script_loop_interval_seconds',
   serpapi_key: 'serpapi_key',
   atc_default_min_days: 'atc_default_min_days',
   is_deleted: 'is_deleted',
@@ -4290,6 +4634,7 @@ export const CampaignsScalarFieldEnum = {
   id: 'id',
   user_id: 'user_id',
   user_merchant_id: 'user_merchant_id',
+  platform_connection_id: 'platform_connection_id',
   google_campaign_id: 'google_campaign_id',
   mcc_id: 'mcc_id',
   customer_id: 'customer_id',
@@ -4395,6 +4740,24 @@ export const Ad_generation_jobsScalarFieldEnum = {
 } as const
 
 export type Ad_generation_jobsScalarFieldEnum = (typeof Ad_generation_jobsScalarFieldEnum)[keyof typeof Ad_generation_jobsScalarFieldEnum]
+
+
+export const Ad_submit_jobsScalarFieldEnum = {
+  id: 'id',
+  campaign_id: 'campaign_id',
+  user_id: 'user_id',
+  payload: 'payload',
+  status: 'status',
+  http_status: 'http_status',
+  result: 'result',
+  error: 'error',
+  attempt: 'attempt',
+  heartbeat_at: 'heartbeat_at',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Ad_submit_jobsScalarFieldEnum = (typeof Ad_submit_jobsScalarFieldEnum)[keyof typeof Ad_submit_jobsScalarFieldEnum]
 
 
 export const Publish_sitesScalarFieldEnum = {
@@ -4533,6 +4896,22 @@ export const Affiliate_transactionsScalarFieldEnum = {
 } as const
 
 export type Affiliate_transactionsScalarFieldEnum = (typeof Affiliate_transactionsScalarFieldEnum)[keyof typeof Affiliate_transactionsScalarFieldEnum]
+
+
+export const Affiliate_click_dailyScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  platform: 'platform',
+  merchant_id: 'merchant_id',
+  platform_connection_id: 'platform_connection_id',
+  click_date: 'click_date',
+  clicks: 'clicks',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Affiliate_click_dailyScalarFieldEnum = (typeof Affiliate_click_dailyScalarFieldEnum)[keyof typeof Affiliate_click_dailyScalarFieldEnum]
 
 
 export const Affiliate_paymentsScalarFieldEnum = {
@@ -4739,6 +5118,10 @@ export const Kyads_proxiesScalarFieldEnum = {
   host: 'host',
   port: 'port',
   proxy_type: 'proxy_type',
+  username_template: 'username_template',
+  password: 'password',
+  country_code_map: 'country_code_map',
+  session_mode: 'session_mode',
   status: 'status',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
@@ -4765,6 +5148,8 @@ export const Suffix_poolScalarFieldEnum = {
   suffix_content: 'suffix_content',
   status: 'status',
   leased_assignment_id: 'leased_assignment_id',
+  exit_ip: 'exit_ip',
+  source_merchant_id: 'source_merchant_id',
   expires_at: 'expires_at',
   is_deleted: 'is_deleted',
   created_at: 'created_at'
@@ -4814,6 +5199,55 @@ export const Kyads_click_tasksScalarFieldEnum = {
 } as const
 
 export type Kyads_click_tasksScalarFieldEnum = (typeof Kyads_click_tasksScalarFieldEnum)[keyof typeof Kyads_click_tasksScalarFieldEnum]
+
+
+export const Kyads_click_task_itemsScalarFieldEnum = {
+  id: 'id',
+  task_id: 'task_id',
+  scheduled_at: 'scheduled_at',
+  status: 'status',
+  exit_ip: 'exit_ip',
+  error: 'error',
+  executed_at: 'executed_at',
+  duration_ms: 'duration_ms',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Kyads_click_task_itemsScalarFieldEnum = (typeof Kyads_click_task_itemsScalarFieldEnum)[keyof typeof Kyads_click_task_itemsScalarFieldEnum]
+
+
+export const Proxy_exit_ip_usageScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  campaign_id: 'campaign_id',
+  exit_ip: 'exit_ip',
+  used_at: 'used_at',
+  expires_at: 'expires_at'
+} as const
+
+export type Proxy_exit_ip_usageScalarFieldEnum = (typeof Proxy_exit_ip_usageScalarFieldEnum)[keyof typeof Proxy_exit_ip_usageScalarFieldEnum]
+
+
+export const Suffix_alertsScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  campaign_id: 'campaign_id',
+  type: 'type',
+  level: 'level',
+  message: 'message',
+  context: 'context',
+  status: 'status',
+  occur_count: 'occur_count',
+  last_seen_at: 'last_seen_at',
+  resolved_at: 'resolved_at',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Suffix_alertsScalarFieldEnum = (typeof Suffix_alertsScalarFieldEnum)[keyof typeof Suffix_alertsScalarFieldEnum]
 
 
 export const Merchant_atc_snapshotsScalarFieldEnum = {
@@ -5059,6 +5493,8 @@ export const usersOrderByRelevanceFieldEnum = {
   status: 'status',
   display_name: 'display_name',
   script_api_key: 'script_api_key',
+  kylink_api_key: 'kylink_api_key',
+  kylink_username: 'kylink_username',
   serpapi_key: 'serpapi_key'
 } as const
 
@@ -5300,6 +5736,14 @@ export const ad_generation_jobsOrderByRelevanceFieldEnum = {
 export type ad_generation_jobsOrderByRelevanceFieldEnum = (typeof ad_generation_jobsOrderByRelevanceFieldEnum)[keyof typeof ad_generation_jobsOrderByRelevanceFieldEnum]
 
 
+export const ad_submit_jobsOrderByRelevanceFieldEnum = {
+  status: 'status',
+  error: 'error'
+} as const
+
+export type ad_submit_jobsOrderByRelevanceFieldEnum = (typeof ad_submit_jobsOrderByRelevanceFieldEnum)[keyof typeof ad_submit_jobsOrderByRelevanceFieldEnum]
+
+
 export const publish_sitesOrderByRelevanceFieldEnum = {
   site_name: 'site_name',
   domain: 'domain',
@@ -5375,6 +5819,14 @@ export const affiliate_transactionsOrderByRelevanceFieldEnum = {
 } as const
 
 export type affiliate_transactionsOrderByRelevanceFieldEnum = (typeof affiliate_transactionsOrderByRelevanceFieldEnum)[keyof typeof affiliate_transactionsOrderByRelevanceFieldEnum]
+
+
+export const affiliate_click_dailyOrderByRelevanceFieldEnum = {
+  platform: 'platform',
+  merchant_id: 'merchant_id'
+} as const
+
+export type affiliate_click_dailyOrderByRelevanceFieldEnum = (typeof affiliate_click_dailyOrderByRelevanceFieldEnum)[keyof typeof affiliate_click_dailyOrderByRelevanceFieldEnum]
 
 
 export const affiliate_paymentsOrderByRelevanceFieldEnum = {
@@ -5483,6 +5935,9 @@ export const kyads_proxiesOrderByRelevanceFieldEnum = {
   name: 'name',
   host: 'host',
   proxy_type: 'proxy_type',
+  username_template: 'username_template',
+  password: 'password',
+  session_mode: 'session_mode',
   status: 'status'
 } as const
 
@@ -5492,7 +5947,8 @@ export type kyads_proxiesOrderByRelevanceFieldEnum = (typeof kyads_proxiesOrderB
 export const suffix_poolOrderByRelevanceFieldEnum = {
   suffix_content: 'suffix_content',
   status: 'status',
-  leased_assignment_id: 'leased_assignment_id'
+  leased_assignment_id: 'leased_assignment_id',
+  exit_ip: 'exit_ip'
 } as const
 
 export type suffix_poolOrderByRelevanceFieldEnum = (typeof suffix_poolOrderByRelevanceFieldEnum)[keyof typeof suffix_poolOrderByRelevanceFieldEnum]
@@ -5516,6 +5972,32 @@ export const kyads_click_tasksOrderByRelevanceFieldEnum = {
 } as const
 
 export type kyads_click_tasksOrderByRelevanceFieldEnum = (typeof kyads_click_tasksOrderByRelevanceFieldEnum)[keyof typeof kyads_click_tasksOrderByRelevanceFieldEnum]
+
+
+export const kyads_click_task_itemsOrderByRelevanceFieldEnum = {
+  status: 'status',
+  exit_ip: 'exit_ip',
+  error: 'error'
+} as const
+
+export type kyads_click_task_itemsOrderByRelevanceFieldEnum = (typeof kyads_click_task_itemsOrderByRelevanceFieldEnum)[keyof typeof kyads_click_task_itemsOrderByRelevanceFieldEnum]
+
+
+export const proxy_exit_ip_usageOrderByRelevanceFieldEnum = {
+  exit_ip: 'exit_ip'
+} as const
+
+export type proxy_exit_ip_usageOrderByRelevanceFieldEnum = (typeof proxy_exit_ip_usageOrderByRelevanceFieldEnum)[keyof typeof proxy_exit_ip_usageOrderByRelevanceFieldEnum]
+
+
+export const suffix_alertsOrderByRelevanceFieldEnum = {
+  type: 'type',
+  level: 'level',
+  message: 'message',
+  status: 'status'
+} as const
+
+export type suffix_alertsOrderByRelevanceFieldEnum = (typeof suffix_alertsOrderByRelevanceFieldEnum)[keyof typeof suffix_alertsOrderByRelevanceFieldEnum]
 
 
 export const merchant_atc_snapshotsOrderByRelevanceFieldEnum = {
@@ -5819,12 +6301,14 @@ export type GlobalOmitConfig = {
   keywords?: Prisma.keywordsOmit
   ad_creatives?: Prisma.ad_creativesOmit
   ad_generation_jobs?: Prisma.ad_generation_jobsOmit
+  ad_submit_jobs?: Prisma.ad_submit_jobsOmit
   publish_sites?: Prisma.publish_sitesOmit
   site_migrations?: Prisma.site_migrationsOmit
   articles?: Prisma.articlesOmit
   ads_daily_stats?: Prisma.ads_daily_statsOmit
   google_mcc_accounts?: Prisma.google_mcc_accountsOmit
   affiliate_transactions?: Prisma.affiliate_transactionsOmit
+  affiliate_click_daily?: Prisma.affiliate_click_dailyOmit
   affiliate_payments?: Prisma.affiliate_paymentsOmit
   notifications?: Prisma.notificationsOmit
   notification_preferences?: Prisma.notification_preferencesOmit
@@ -5841,6 +6325,9 @@ export type GlobalOmitConfig = {
   suffix_pool?: Prisma.suffix_poolOmit
   suffix_assignments?: Prisma.suffix_assignmentsOmit
   kyads_click_tasks?: Prisma.kyads_click_tasksOmit
+  kyads_click_task_items?: Prisma.kyads_click_task_itemsOmit
+  proxy_exit_ip_usage?: Prisma.proxy_exit_ip_usageOmit
+  suffix_alerts?: Prisma.suffix_alertsOmit
   merchant_atc_snapshots?: Prisma.merchant_atc_snapshotsOmit
   atc_advertiser_domain_snapshot?: Prisma.atc_advertiser_domain_snapshotOmit
   ad_image_ocr_cache?: Prisma.ad_image_ocr_cacheOmit

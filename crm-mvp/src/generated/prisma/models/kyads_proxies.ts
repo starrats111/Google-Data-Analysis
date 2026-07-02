@@ -47,6 +47,9 @@ export type Kyads_proxiesMinAggregateOutputType = {
   host: string | null
   port: number | null
   proxy_type: string | null
+  username_template: string | null
+  password: string | null
+  session_mode: string | null
   status: string | null
   is_deleted: number | null
   created_at: Date | null
@@ -60,6 +63,9 @@ export type Kyads_proxiesMaxAggregateOutputType = {
   host: string | null
   port: number | null
   proxy_type: string | null
+  username_template: string | null
+  password: string | null
+  session_mode: string | null
   status: string | null
   is_deleted: number | null
   created_at: Date | null
@@ -73,6 +79,10 @@ export type Kyads_proxiesCountAggregateOutputType = {
   host: number
   port: number
   proxy_type: number
+  username_template: number
+  password: number
+  country_code_map: number
+  session_mode: number
   status: number
   is_deleted: number
   created_at: number
@@ -102,6 +112,9 @@ export type Kyads_proxiesMinAggregateInputType = {
   host?: true
   port?: true
   proxy_type?: true
+  username_template?: true
+  password?: true
+  session_mode?: true
   status?: true
   is_deleted?: true
   created_at?: true
@@ -115,6 +128,9 @@ export type Kyads_proxiesMaxAggregateInputType = {
   host?: true
   port?: true
   proxy_type?: true
+  username_template?: true
+  password?: true
+  session_mode?: true
   status?: true
   is_deleted?: true
   created_at?: true
@@ -128,6 +144,10 @@ export type Kyads_proxiesCountAggregateInputType = {
   host?: true
   port?: true
   proxy_type?: true
+  username_template?: true
+  password?: true
+  country_code_map?: true
+  session_mode?: true
   status?: true
   is_deleted?: true
   created_at?: true
@@ -228,6 +248,10 @@ export type Kyads_proxiesGroupByOutputType = {
   host: string
   port: number
   proxy_type: string
+  username_template: string | null
+  password: string | null
+  country_code_map: runtime.JsonValue | null
+  session_mode: string | null
   status: string
   is_deleted: number
   created_at: Date
@@ -264,6 +288,10 @@ export type kyads_proxiesWhereInput = {
   host?: Prisma.StringFilter<"kyads_proxies"> | string
   port?: Prisma.IntFilter<"kyads_proxies"> | number
   proxy_type?: Prisma.StringFilter<"kyads_proxies"> | string
+  username_template?: Prisma.StringNullableFilter<"kyads_proxies"> | string | null
+  password?: Prisma.StringNullableFilter<"kyads_proxies"> | string | null
+  country_code_map?: Prisma.JsonNullableFilter<"kyads_proxies">
+  session_mode?: Prisma.StringNullableFilter<"kyads_proxies"> | string | null
   status?: Prisma.StringFilter<"kyads_proxies"> | string
   is_deleted?: Prisma.IntFilter<"kyads_proxies"> | number
   created_at?: Prisma.DateTimeFilter<"kyads_proxies"> | Date | string
@@ -277,6 +305,10 @@ export type kyads_proxiesOrderByWithRelationInput = {
   host?: Prisma.SortOrder
   port?: Prisma.SortOrder
   proxy_type?: Prisma.SortOrder
+  username_template?: Prisma.SortOrderInput | Prisma.SortOrder
+  password?: Prisma.SortOrderInput | Prisma.SortOrder
+  country_code_map?: Prisma.SortOrderInput | Prisma.SortOrder
+  session_mode?: Prisma.SortOrderInput | Prisma.SortOrder
   status?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
@@ -294,6 +326,10 @@ export type kyads_proxiesWhereUniqueInput = Prisma.AtLeast<{
   host?: Prisma.StringFilter<"kyads_proxies"> | string
   port?: Prisma.IntFilter<"kyads_proxies"> | number
   proxy_type?: Prisma.StringFilter<"kyads_proxies"> | string
+  username_template?: Prisma.StringNullableFilter<"kyads_proxies"> | string | null
+  password?: Prisma.StringNullableFilter<"kyads_proxies"> | string | null
+  country_code_map?: Prisma.JsonNullableFilter<"kyads_proxies">
+  session_mode?: Prisma.StringNullableFilter<"kyads_proxies"> | string | null
   status?: Prisma.StringFilter<"kyads_proxies"> | string
   is_deleted?: Prisma.IntFilter<"kyads_proxies"> | number
   created_at?: Prisma.DateTimeFilter<"kyads_proxies"> | Date | string
@@ -307,6 +343,10 @@ export type kyads_proxiesOrderByWithAggregationInput = {
   host?: Prisma.SortOrder
   port?: Prisma.SortOrder
   proxy_type?: Prisma.SortOrder
+  username_template?: Prisma.SortOrderInput | Prisma.SortOrder
+  password?: Prisma.SortOrderInput | Prisma.SortOrder
+  country_code_map?: Prisma.SortOrderInput | Prisma.SortOrder
+  session_mode?: Prisma.SortOrderInput | Prisma.SortOrder
   status?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
@@ -328,6 +368,10 @@ export type kyads_proxiesScalarWhereWithAggregatesInput = {
   host?: Prisma.StringWithAggregatesFilter<"kyads_proxies"> | string
   port?: Prisma.IntWithAggregatesFilter<"kyads_proxies"> | number
   proxy_type?: Prisma.StringWithAggregatesFilter<"kyads_proxies"> | string
+  username_template?: Prisma.StringNullableWithAggregatesFilter<"kyads_proxies"> | string | null
+  password?: Prisma.StringNullableWithAggregatesFilter<"kyads_proxies"> | string | null
+  country_code_map?: Prisma.JsonNullableWithAggregatesFilter<"kyads_proxies">
+  session_mode?: Prisma.StringNullableWithAggregatesFilter<"kyads_proxies"> | string | null
   status?: Prisma.StringWithAggregatesFilter<"kyads_proxies"> | string
   is_deleted?: Prisma.IntWithAggregatesFilter<"kyads_proxies"> | number
   created_at?: Prisma.DateTimeWithAggregatesFilter<"kyads_proxies"> | Date | string
@@ -341,6 +385,10 @@ export type kyads_proxiesCreateInput = {
   host: string
   port: number
   proxy_type?: string
+  username_template?: string | null
+  password?: string | null
+  country_code_map?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  session_mode?: string | null
   status?: string
   is_deleted?: number
   created_at?: Date | string
@@ -354,6 +402,10 @@ export type kyads_proxiesUncheckedCreateInput = {
   host: string
   port: number
   proxy_type?: string
+  username_template?: string | null
+  password?: string | null
+  country_code_map?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  session_mode?: string | null
   status?: string
   is_deleted?: number
   created_at?: Date | string
@@ -367,6 +419,10 @@ export type kyads_proxiesUpdateInput = {
   host?: Prisma.StringFieldUpdateOperationsInput | string
   port?: Prisma.IntFieldUpdateOperationsInput | number
   proxy_type?: Prisma.StringFieldUpdateOperationsInput | string
+  username_template?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  password?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  country_code_map?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  session_mode?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   status?: Prisma.StringFieldUpdateOperationsInput | string
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -380,6 +436,10 @@ export type kyads_proxiesUncheckedUpdateInput = {
   host?: Prisma.StringFieldUpdateOperationsInput | string
   port?: Prisma.IntFieldUpdateOperationsInput | number
   proxy_type?: Prisma.StringFieldUpdateOperationsInput | string
+  username_template?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  password?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  country_code_map?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  session_mode?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   status?: Prisma.StringFieldUpdateOperationsInput | string
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -393,6 +453,10 @@ export type kyads_proxiesCreateManyInput = {
   host: string
   port: number
   proxy_type?: string
+  username_template?: string | null
+  password?: string | null
+  country_code_map?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  session_mode?: string | null
   status?: string
   is_deleted?: number
   created_at?: Date | string
@@ -406,6 +470,10 @@ export type kyads_proxiesUpdateManyMutationInput = {
   host?: Prisma.StringFieldUpdateOperationsInput | string
   port?: Prisma.IntFieldUpdateOperationsInput | number
   proxy_type?: Prisma.StringFieldUpdateOperationsInput | string
+  username_template?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  password?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  country_code_map?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  session_mode?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   status?: Prisma.StringFieldUpdateOperationsInput | string
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -419,6 +487,10 @@ export type kyads_proxiesUncheckedUpdateManyInput = {
   host?: Prisma.StringFieldUpdateOperationsInput | string
   port?: Prisma.IntFieldUpdateOperationsInput | number
   proxy_type?: Prisma.StringFieldUpdateOperationsInput | string
+  username_template?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  password?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  country_code_map?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  session_mode?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   status?: Prisma.StringFieldUpdateOperationsInput | string
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -438,6 +510,10 @@ export type kyads_proxiesCountOrderByAggregateInput = {
   host?: Prisma.SortOrder
   port?: Prisma.SortOrder
   proxy_type?: Prisma.SortOrder
+  username_template?: Prisma.SortOrder
+  password?: Prisma.SortOrder
+  country_code_map?: Prisma.SortOrder
+  session_mode?: Prisma.SortOrder
   status?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
@@ -458,6 +534,9 @@ export type kyads_proxiesMaxOrderByAggregateInput = {
   host?: Prisma.SortOrder
   port?: Prisma.SortOrder
   proxy_type?: Prisma.SortOrder
+  username_template?: Prisma.SortOrder
+  password?: Prisma.SortOrder
+  session_mode?: Prisma.SortOrder
   status?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
@@ -471,6 +550,9 @@ export type kyads_proxiesMinOrderByAggregateInput = {
   host?: Prisma.SortOrder
   port?: Prisma.SortOrder
   proxy_type?: Prisma.SortOrder
+  username_template?: Prisma.SortOrder
+  password?: Prisma.SortOrder
+  session_mode?: Prisma.SortOrder
   status?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
@@ -493,6 +575,10 @@ export type kyads_proxiesSelect<ExtArgs extends runtime.Types.Extensions.Interna
   host?: boolean
   port?: boolean
   proxy_type?: boolean
+  username_template?: boolean
+  password?: boolean
+  country_code_map?: boolean
+  session_mode?: boolean
   status?: boolean
   is_deleted?: boolean
   created_at?: boolean
@@ -508,13 +594,17 @@ export type kyads_proxiesSelectScalar = {
   host?: boolean
   port?: boolean
   proxy_type?: boolean
+  username_template?: boolean
+  password?: boolean
+  country_code_map?: boolean
+  session_mode?: boolean
   status?: boolean
   is_deleted?: boolean
   created_at?: boolean
   updated_at?: boolean
 }
 
-export type kyads_proxiesOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "name" | "priority" | "host" | "port" | "proxy_type" | "status" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["kyads_proxies"]>
+export type kyads_proxiesOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "name" | "priority" | "host" | "port" | "proxy_type" | "username_template" | "password" | "country_code_map" | "session_mode" | "status" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["kyads_proxies"]>
 
 export type $kyads_proxiesPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "kyads_proxies"
@@ -526,6 +616,10 @@ export type $kyads_proxiesPayload<ExtArgs extends runtime.Types.Extensions.Inter
     host: string
     port: number
     proxy_type: string
+    username_template: string | null
+    password: string | null
+    country_code_map: runtime.JsonValue | null
+    session_mode: string | null
     status: string
     is_deleted: number
     created_at: Date
@@ -905,6 +999,10 @@ export interface kyads_proxiesFieldRefs {
   readonly host: Prisma.FieldRef<"kyads_proxies", 'String'>
   readonly port: Prisma.FieldRef<"kyads_proxies", 'Int'>
   readonly proxy_type: Prisma.FieldRef<"kyads_proxies", 'String'>
+  readonly username_template: Prisma.FieldRef<"kyads_proxies", 'String'>
+  readonly password: Prisma.FieldRef<"kyads_proxies", 'String'>
+  readonly country_code_map: Prisma.FieldRef<"kyads_proxies", 'Json'>
+  readonly session_mode: Prisma.FieldRef<"kyads_proxies", 'String'>
   readonly status: Prisma.FieldRef<"kyads_proxies", 'String'>
   readonly is_deleted: Prisma.FieldRef<"kyads_proxies", 'Int'>
   readonly created_at: Prisma.FieldRef<"kyads_proxies", 'DateTime'>

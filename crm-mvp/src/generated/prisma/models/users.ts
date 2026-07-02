@@ -30,6 +30,11 @@ export type UsersAvgAggregateOutputType = {
   id: number | null
   team_id: number | null
   link_exchange_click_count: number | null
+  link_exchange_disabled: number | null
+  click_control_enabled: number | null
+  click_control_ratio_min_pct: number | null
+  click_control_ratio_max_pct: number | null
+  script_loop_interval_seconds: number | null
   atc_default_min_days: number | null
   is_deleted: number | null
 }
@@ -38,6 +43,11 @@ export type UsersSumAggregateOutputType = {
   id: bigint | null
   team_id: bigint | null
   link_exchange_click_count: number | null
+  link_exchange_disabled: number | null
+  click_control_enabled: number | null
+  click_control_ratio_min_pct: number | null
+  click_control_ratio_max_pct: number | null
+  script_loop_interval_seconds: number | null
   atc_default_min_days: number | null
   is_deleted: number | null
 }
@@ -52,7 +62,15 @@ export type UsersMinAggregateOutputType = {
   team_id: bigint | null
   display_name: string | null
   script_api_key: string | null
+  kylink_api_key: string | null
+  kylink_linked_at: Date | null
+  kylink_username: string | null
   link_exchange_click_count: number | null
+  link_exchange_disabled: number | null
+  click_control_enabled: number | null
+  click_control_ratio_min_pct: number | null
+  click_control_ratio_max_pct: number | null
+  script_loop_interval_seconds: number | null
   serpapi_key: string | null
   atc_default_min_days: number | null
   is_deleted: number | null
@@ -70,7 +88,15 @@ export type UsersMaxAggregateOutputType = {
   team_id: bigint | null
   display_name: string | null
   script_api_key: string | null
+  kylink_api_key: string | null
+  kylink_linked_at: Date | null
+  kylink_username: string | null
   link_exchange_click_count: number | null
+  link_exchange_disabled: number | null
+  click_control_enabled: number | null
+  click_control_ratio_min_pct: number | null
+  click_control_ratio_max_pct: number | null
+  script_loop_interval_seconds: number | null
   serpapi_key: string | null
   atc_default_min_days: number | null
   is_deleted: number | null
@@ -88,7 +114,15 @@ export type UsersCountAggregateOutputType = {
   team_id: number
   display_name: number
   script_api_key: number
+  kylink_api_key: number
+  kylink_linked_at: number
+  kylink_username: number
   link_exchange_click_count: number
+  link_exchange_disabled: number
+  click_control_enabled: number
+  click_control_ratio_min_pct: number
+  click_control_ratio_max_pct: number
+  script_loop_interval_seconds: number
   serpapi_key: number
   atc_default_min_days: number
   is_deleted: number
@@ -102,6 +136,11 @@ export type UsersAvgAggregateInputType = {
   id?: true
   team_id?: true
   link_exchange_click_count?: true
+  link_exchange_disabled?: true
+  click_control_enabled?: true
+  click_control_ratio_min_pct?: true
+  click_control_ratio_max_pct?: true
+  script_loop_interval_seconds?: true
   atc_default_min_days?: true
   is_deleted?: true
 }
@@ -110,6 +149,11 @@ export type UsersSumAggregateInputType = {
   id?: true
   team_id?: true
   link_exchange_click_count?: true
+  link_exchange_disabled?: true
+  click_control_enabled?: true
+  click_control_ratio_min_pct?: true
+  click_control_ratio_max_pct?: true
+  script_loop_interval_seconds?: true
   atc_default_min_days?: true
   is_deleted?: true
 }
@@ -124,7 +168,15 @@ export type UsersMinAggregateInputType = {
   team_id?: true
   display_name?: true
   script_api_key?: true
+  kylink_api_key?: true
+  kylink_linked_at?: true
+  kylink_username?: true
   link_exchange_click_count?: true
+  link_exchange_disabled?: true
+  click_control_enabled?: true
+  click_control_ratio_min_pct?: true
+  click_control_ratio_max_pct?: true
+  script_loop_interval_seconds?: true
   serpapi_key?: true
   atc_default_min_days?: true
   is_deleted?: true
@@ -142,7 +194,15 @@ export type UsersMaxAggregateInputType = {
   team_id?: true
   display_name?: true
   script_api_key?: true
+  kylink_api_key?: true
+  kylink_linked_at?: true
+  kylink_username?: true
   link_exchange_click_count?: true
+  link_exchange_disabled?: true
+  click_control_enabled?: true
+  click_control_ratio_min_pct?: true
+  click_control_ratio_max_pct?: true
+  script_loop_interval_seconds?: true
   serpapi_key?: true
   atc_default_min_days?: true
   is_deleted?: true
@@ -160,7 +220,15 @@ export type UsersCountAggregateInputType = {
   team_id?: true
   display_name?: true
   script_api_key?: true
+  kylink_api_key?: true
+  kylink_linked_at?: true
+  kylink_username?: true
   link_exchange_click_count?: true
+  link_exchange_disabled?: true
+  click_control_enabled?: true
+  click_control_ratio_min_pct?: true
+  click_control_ratio_max_pct?: true
+  script_loop_interval_seconds?: true
   serpapi_key?: true
   atc_default_min_days?: true
   is_deleted?: true
@@ -265,7 +333,15 @@ export type UsersGroupByOutputType = {
   team_id: bigint | null
   display_name: string | null
   script_api_key: string | null
+  kylink_api_key: string | null
+  kylink_linked_at: Date | null
+  kylink_username: string | null
   link_exchange_click_count: number
+  link_exchange_disabled: number
+  click_control_enabled: number
+  click_control_ratio_min_pct: number
+  click_control_ratio_max_pct: number
+  script_loop_interval_seconds: number | null
   serpapi_key: string | null
   atc_default_min_days: number
   is_deleted: number
@@ -306,7 +382,15 @@ export type usersWhereInput = {
   team_id?: Prisma.BigIntNullableFilter<"users"> | bigint | number | null
   display_name?: Prisma.StringNullableFilter<"users"> | string | null
   script_api_key?: Prisma.StringNullableFilter<"users"> | string | null
+  kylink_api_key?: Prisma.StringNullableFilter<"users"> | string | null
+  kylink_linked_at?: Prisma.DateTimeNullableFilter<"users"> | Date | string | null
+  kylink_username?: Prisma.StringNullableFilter<"users"> | string | null
   link_exchange_click_count?: Prisma.IntFilter<"users"> | number
+  link_exchange_disabled?: Prisma.IntFilter<"users"> | number
+  click_control_enabled?: Prisma.IntFilter<"users"> | number
+  click_control_ratio_min_pct?: Prisma.IntFilter<"users"> | number
+  click_control_ratio_max_pct?: Prisma.IntFilter<"users"> | number
+  script_loop_interval_seconds?: Prisma.IntNullableFilter<"users"> | number | null
   serpapi_key?: Prisma.StringNullableFilter<"users"> | string | null
   atc_default_min_days?: Prisma.IntFilter<"users"> | number
   is_deleted?: Prisma.IntFilter<"users"> | number
@@ -324,7 +408,15 @@ export type usersOrderByWithRelationInput = {
   team_id?: Prisma.SortOrderInput | Prisma.SortOrder
   display_name?: Prisma.SortOrderInput | Prisma.SortOrder
   script_api_key?: Prisma.SortOrderInput | Prisma.SortOrder
+  kylink_api_key?: Prisma.SortOrderInput | Prisma.SortOrder
+  kylink_linked_at?: Prisma.SortOrderInput | Prisma.SortOrder
+  kylink_username?: Prisma.SortOrderInput | Prisma.SortOrder
   link_exchange_click_count?: Prisma.SortOrder
+  link_exchange_disabled?: Prisma.SortOrder
+  click_control_enabled?: Prisma.SortOrder
+  click_control_ratio_min_pct?: Prisma.SortOrder
+  click_control_ratio_max_pct?: Prisma.SortOrder
+  script_loop_interval_seconds?: Prisma.SortOrderInput | Prisma.SortOrder
   serpapi_key?: Prisma.SortOrderInput | Prisma.SortOrder
   atc_default_min_days?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
@@ -346,7 +438,15 @@ export type usersWhereUniqueInput = Prisma.AtLeast<{
   status?: Prisma.StringFilter<"users"> | string
   team_id?: Prisma.BigIntNullableFilter<"users"> | bigint | number | null
   display_name?: Prisma.StringNullableFilter<"users"> | string | null
+  kylink_api_key?: Prisma.StringNullableFilter<"users"> | string | null
+  kylink_linked_at?: Prisma.DateTimeNullableFilter<"users"> | Date | string | null
+  kylink_username?: Prisma.StringNullableFilter<"users"> | string | null
   link_exchange_click_count?: Prisma.IntFilter<"users"> | number
+  link_exchange_disabled?: Prisma.IntFilter<"users"> | number
+  click_control_enabled?: Prisma.IntFilter<"users"> | number
+  click_control_ratio_min_pct?: Prisma.IntFilter<"users"> | number
+  click_control_ratio_max_pct?: Prisma.IntFilter<"users"> | number
+  script_loop_interval_seconds?: Prisma.IntNullableFilter<"users"> | number | null
   serpapi_key?: Prisma.StringNullableFilter<"users"> | string | null
   atc_default_min_days?: Prisma.IntFilter<"users"> | number
   is_deleted?: Prisma.IntFilter<"users"> | number
@@ -364,7 +464,15 @@ export type usersOrderByWithAggregationInput = {
   team_id?: Prisma.SortOrderInput | Prisma.SortOrder
   display_name?: Prisma.SortOrderInput | Prisma.SortOrder
   script_api_key?: Prisma.SortOrderInput | Prisma.SortOrder
+  kylink_api_key?: Prisma.SortOrderInput | Prisma.SortOrder
+  kylink_linked_at?: Prisma.SortOrderInput | Prisma.SortOrder
+  kylink_username?: Prisma.SortOrderInput | Prisma.SortOrder
   link_exchange_click_count?: Prisma.SortOrder
+  link_exchange_disabled?: Prisma.SortOrder
+  click_control_enabled?: Prisma.SortOrder
+  click_control_ratio_min_pct?: Prisma.SortOrder
+  click_control_ratio_max_pct?: Prisma.SortOrder
+  script_loop_interval_seconds?: Prisma.SortOrderInput | Prisma.SortOrder
   serpapi_key?: Prisma.SortOrderInput | Prisma.SortOrder
   atc_default_min_days?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
@@ -390,7 +498,15 @@ export type usersScalarWhereWithAggregatesInput = {
   team_id?: Prisma.BigIntNullableWithAggregatesFilter<"users"> | bigint | number | null
   display_name?: Prisma.StringNullableWithAggregatesFilter<"users"> | string | null
   script_api_key?: Prisma.StringNullableWithAggregatesFilter<"users"> | string | null
+  kylink_api_key?: Prisma.StringNullableWithAggregatesFilter<"users"> | string | null
+  kylink_linked_at?: Prisma.DateTimeNullableWithAggregatesFilter<"users"> | Date | string | null
+  kylink_username?: Prisma.StringNullableWithAggregatesFilter<"users"> | string | null
   link_exchange_click_count?: Prisma.IntWithAggregatesFilter<"users"> | number
+  link_exchange_disabled?: Prisma.IntWithAggregatesFilter<"users"> | number
+  click_control_enabled?: Prisma.IntWithAggregatesFilter<"users"> | number
+  click_control_ratio_min_pct?: Prisma.IntWithAggregatesFilter<"users"> | number
+  click_control_ratio_max_pct?: Prisma.IntWithAggregatesFilter<"users"> | number
+  script_loop_interval_seconds?: Prisma.IntNullableWithAggregatesFilter<"users"> | number | null
   serpapi_key?: Prisma.StringNullableWithAggregatesFilter<"users"> | string | null
   atc_default_min_days?: Prisma.IntWithAggregatesFilter<"users"> | number
   is_deleted?: Prisma.IntWithAggregatesFilter<"users"> | number
@@ -408,7 +524,15 @@ export type usersCreateInput = {
   team_id?: bigint | number | null
   display_name?: string | null
   script_api_key?: string | null
+  kylink_api_key?: string | null
+  kylink_linked_at?: Date | string | null
+  kylink_username?: string | null
   link_exchange_click_count?: number
+  link_exchange_disabled?: number
+  click_control_enabled?: number
+  click_control_ratio_min_pct?: number
+  click_control_ratio_max_pct?: number
+  script_loop_interval_seconds?: number | null
   serpapi_key?: string | null
   atc_default_min_days?: number
   is_deleted?: number
@@ -426,7 +550,15 @@ export type usersUncheckedCreateInput = {
   team_id?: bigint | number | null
   display_name?: string | null
   script_api_key?: string | null
+  kylink_api_key?: string | null
+  kylink_linked_at?: Date | string | null
+  kylink_username?: string | null
   link_exchange_click_count?: number
+  link_exchange_disabled?: number
+  click_control_enabled?: number
+  click_control_ratio_min_pct?: number
+  click_control_ratio_max_pct?: number
+  script_loop_interval_seconds?: number | null
   serpapi_key?: string | null
   atc_default_min_days?: number
   is_deleted?: number
@@ -444,7 +576,15 @@ export type usersUpdateInput = {
   team_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   display_name?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   script_api_key?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  kylink_api_key?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  kylink_linked_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  kylink_username?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   link_exchange_click_count?: Prisma.IntFieldUpdateOperationsInput | number
+  link_exchange_disabled?: Prisma.IntFieldUpdateOperationsInput | number
+  click_control_enabled?: Prisma.IntFieldUpdateOperationsInput | number
+  click_control_ratio_min_pct?: Prisma.IntFieldUpdateOperationsInput | number
+  click_control_ratio_max_pct?: Prisma.IntFieldUpdateOperationsInput | number
+  script_loop_interval_seconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   serpapi_key?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   atc_default_min_days?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
@@ -462,7 +602,15 @@ export type usersUncheckedUpdateInput = {
   team_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   display_name?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   script_api_key?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  kylink_api_key?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  kylink_linked_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  kylink_username?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   link_exchange_click_count?: Prisma.IntFieldUpdateOperationsInput | number
+  link_exchange_disabled?: Prisma.IntFieldUpdateOperationsInput | number
+  click_control_enabled?: Prisma.IntFieldUpdateOperationsInput | number
+  click_control_ratio_min_pct?: Prisma.IntFieldUpdateOperationsInput | number
+  click_control_ratio_max_pct?: Prisma.IntFieldUpdateOperationsInput | number
+  script_loop_interval_seconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   serpapi_key?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   atc_default_min_days?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
@@ -480,7 +628,15 @@ export type usersCreateManyInput = {
   team_id?: bigint | number | null
   display_name?: string | null
   script_api_key?: string | null
+  kylink_api_key?: string | null
+  kylink_linked_at?: Date | string | null
+  kylink_username?: string | null
   link_exchange_click_count?: number
+  link_exchange_disabled?: number
+  click_control_enabled?: number
+  click_control_ratio_min_pct?: number
+  click_control_ratio_max_pct?: number
+  script_loop_interval_seconds?: number | null
   serpapi_key?: string | null
   atc_default_min_days?: number
   is_deleted?: number
@@ -498,7 +654,15 @@ export type usersUpdateManyMutationInput = {
   team_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   display_name?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   script_api_key?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  kylink_api_key?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  kylink_linked_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  kylink_username?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   link_exchange_click_count?: Prisma.IntFieldUpdateOperationsInput | number
+  link_exchange_disabled?: Prisma.IntFieldUpdateOperationsInput | number
+  click_control_enabled?: Prisma.IntFieldUpdateOperationsInput | number
+  click_control_ratio_min_pct?: Prisma.IntFieldUpdateOperationsInput | number
+  click_control_ratio_max_pct?: Prisma.IntFieldUpdateOperationsInput | number
+  script_loop_interval_seconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   serpapi_key?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   atc_default_min_days?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
@@ -516,7 +680,15 @@ export type usersUncheckedUpdateManyInput = {
   team_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   display_name?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   script_api_key?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  kylink_api_key?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  kylink_linked_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  kylink_username?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   link_exchange_click_count?: Prisma.IntFieldUpdateOperationsInput | number
+  link_exchange_disabled?: Prisma.IntFieldUpdateOperationsInput | number
+  click_control_enabled?: Prisma.IntFieldUpdateOperationsInput | number
+  click_control_ratio_min_pct?: Prisma.IntFieldUpdateOperationsInput | number
+  click_control_ratio_max_pct?: Prisma.IntFieldUpdateOperationsInput | number
+  script_loop_interval_seconds?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   serpapi_key?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   atc_default_min_days?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
@@ -540,7 +712,15 @@ export type usersCountOrderByAggregateInput = {
   team_id?: Prisma.SortOrder
   display_name?: Prisma.SortOrder
   script_api_key?: Prisma.SortOrder
+  kylink_api_key?: Prisma.SortOrder
+  kylink_linked_at?: Prisma.SortOrder
+  kylink_username?: Prisma.SortOrder
   link_exchange_click_count?: Prisma.SortOrder
+  link_exchange_disabled?: Prisma.SortOrder
+  click_control_enabled?: Prisma.SortOrder
+  click_control_ratio_min_pct?: Prisma.SortOrder
+  click_control_ratio_max_pct?: Prisma.SortOrder
+  script_loop_interval_seconds?: Prisma.SortOrder
   serpapi_key?: Prisma.SortOrder
   atc_default_min_days?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
@@ -552,6 +732,11 @@ export type usersAvgOrderByAggregateInput = {
   id?: Prisma.SortOrder
   team_id?: Prisma.SortOrder
   link_exchange_click_count?: Prisma.SortOrder
+  link_exchange_disabled?: Prisma.SortOrder
+  click_control_enabled?: Prisma.SortOrder
+  click_control_ratio_min_pct?: Prisma.SortOrder
+  click_control_ratio_max_pct?: Prisma.SortOrder
+  script_loop_interval_seconds?: Prisma.SortOrder
   atc_default_min_days?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
 }
@@ -566,7 +751,15 @@ export type usersMaxOrderByAggregateInput = {
   team_id?: Prisma.SortOrder
   display_name?: Prisma.SortOrder
   script_api_key?: Prisma.SortOrder
+  kylink_api_key?: Prisma.SortOrder
+  kylink_linked_at?: Prisma.SortOrder
+  kylink_username?: Prisma.SortOrder
   link_exchange_click_count?: Prisma.SortOrder
+  link_exchange_disabled?: Prisma.SortOrder
+  click_control_enabled?: Prisma.SortOrder
+  click_control_ratio_min_pct?: Prisma.SortOrder
+  click_control_ratio_max_pct?: Prisma.SortOrder
+  script_loop_interval_seconds?: Prisma.SortOrder
   serpapi_key?: Prisma.SortOrder
   atc_default_min_days?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
@@ -584,7 +777,15 @@ export type usersMinOrderByAggregateInput = {
   team_id?: Prisma.SortOrder
   display_name?: Prisma.SortOrder
   script_api_key?: Prisma.SortOrder
+  kylink_api_key?: Prisma.SortOrder
+  kylink_linked_at?: Prisma.SortOrder
+  kylink_username?: Prisma.SortOrder
   link_exchange_click_count?: Prisma.SortOrder
+  link_exchange_disabled?: Prisma.SortOrder
+  click_control_enabled?: Prisma.SortOrder
+  click_control_ratio_min_pct?: Prisma.SortOrder
+  click_control_ratio_max_pct?: Prisma.SortOrder
+  script_loop_interval_seconds?: Prisma.SortOrder
   serpapi_key?: Prisma.SortOrder
   atc_default_min_days?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
@@ -596,12 +797,29 @@ export type usersSumOrderByAggregateInput = {
   id?: Prisma.SortOrder
   team_id?: Prisma.SortOrder
   link_exchange_click_count?: Prisma.SortOrder
+  link_exchange_disabled?: Prisma.SortOrder
+  click_control_enabled?: Prisma.SortOrder
+  click_control_ratio_min_pct?: Prisma.SortOrder
+  click_control_ratio_max_pct?: Prisma.SortOrder
+  script_loop_interval_seconds?: Prisma.SortOrder
   atc_default_min_days?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
 }
 
 export type NullableStringFieldUpdateOperationsInput = {
   set?: string | null
+}
+
+export type NullableDateTimeFieldUpdateOperationsInput = {
+  set?: Date | string | null
+}
+
+export type NullableIntFieldUpdateOperationsInput = {
+  set?: number | null
+  increment?: number
+  decrement?: number
+  multiply?: number
+  divide?: number
 }
 
 
@@ -616,7 +834,15 @@ export type usersSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = 
   team_id?: boolean
   display_name?: boolean
   script_api_key?: boolean
+  kylink_api_key?: boolean
+  kylink_linked_at?: boolean
+  kylink_username?: boolean
   link_exchange_click_count?: boolean
+  link_exchange_disabled?: boolean
+  click_control_enabled?: boolean
+  click_control_ratio_min_pct?: boolean
+  click_control_ratio_max_pct?: boolean
+  script_loop_interval_seconds?: boolean
   serpapi_key?: boolean
   atc_default_min_days?: boolean
   is_deleted?: boolean
@@ -636,7 +862,15 @@ export type usersSelectScalar = {
   team_id?: boolean
   display_name?: boolean
   script_api_key?: boolean
+  kylink_api_key?: boolean
+  kylink_linked_at?: boolean
+  kylink_username?: boolean
   link_exchange_click_count?: boolean
+  link_exchange_disabled?: boolean
+  click_control_enabled?: boolean
+  click_control_ratio_min_pct?: boolean
+  click_control_ratio_max_pct?: boolean
+  script_loop_interval_seconds?: boolean
   serpapi_key?: boolean
   atc_default_min_days?: boolean
   is_deleted?: boolean
@@ -644,7 +878,7 @@ export type usersSelectScalar = {
   updated_at?: boolean
 }
 
-export type usersOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "username" | "password_hash" | "plain_password" | "role" | "status" | "team_id" | "display_name" | "script_api_key" | "link_exchange_click_count" | "serpapi_key" | "atc_default_min_days" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["users"]>
+export type usersOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "username" | "password_hash" | "plain_password" | "role" | "status" | "team_id" | "display_name" | "script_api_key" | "kylink_api_key" | "kylink_linked_at" | "kylink_username" | "link_exchange_click_count" | "link_exchange_disabled" | "click_control_enabled" | "click_control_ratio_min_pct" | "click_control_ratio_max_pct" | "script_loop_interval_seconds" | "serpapi_key" | "atc_default_min_days" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["users"]>
 
 export type $usersPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "users"
@@ -659,7 +893,15 @@ export type $usersPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs 
     team_id: bigint | null
     display_name: string | null
     script_api_key: string | null
+    kylink_api_key: string | null
+    kylink_linked_at: Date | null
+    kylink_username: string | null
     link_exchange_click_count: number
+    link_exchange_disabled: number
+    click_control_enabled: number
+    click_control_ratio_min_pct: number
+    click_control_ratio_max_pct: number
+    script_loop_interval_seconds: number | null
     serpapi_key: string | null
     atc_default_min_days: number
     is_deleted: number
@@ -1043,7 +1285,15 @@ export interface usersFieldRefs {
   readonly team_id: Prisma.FieldRef<"users", 'BigInt'>
   readonly display_name: Prisma.FieldRef<"users", 'String'>
   readonly script_api_key: Prisma.FieldRef<"users", 'String'>
+  readonly kylink_api_key: Prisma.FieldRef<"users", 'String'>
+  readonly kylink_linked_at: Prisma.FieldRef<"users", 'DateTime'>
+  readonly kylink_username: Prisma.FieldRef<"users", 'String'>
   readonly link_exchange_click_count: Prisma.FieldRef<"users", 'Int'>
+  readonly link_exchange_disabled: Prisma.FieldRef<"users", 'Int'>
+  readonly click_control_enabled: Prisma.FieldRef<"users", 'Int'>
+  readonly click_control_ratio_min_pct: Prisma.FieldRef<"users", 'Int'>
+  readonly click_control_ratio_max_pct: Prisma.FieldRef<"users", 'Int'>
+  readonly script_loop_interval_seconds: Prisma.FieldRef<"users", 'Int'>
   readonly serpapi_key: Prisma.FieldRef<"users", 'String'>
   readonly atc_default_min_days: Prisma.FieldRef<"users", 'Int'>
   readonly is_deleted: Prisma.FieldRef<"users", 'Int'>

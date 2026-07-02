@@ -14,6 +14,7 @@ import type { GoogleAdsViolation } from "@/lib/google-ads";
 import { parsePolicyError, logPolicyViolations, rewriteAdCopyForPolicy, type ParsedPolicyError } from "@/lib/policy-hub";
 import { checkReachability, isHardUnreachable } from "@/lib/intellicenter/ad-creation";
 import { assignFormalCampaignNameBeforeSubmit, resolvePlatformLabel } from "@/lib/campaign-naming";
+import { createOrReuseSubmitJob, enqueueSubmitJob } from "@/lib/submit-runner";
 import { readFile } from "fs/promises";
 import { existsSync } from "fs";
 import path from "path";
@@ -48,14 +49,52 @@ async function loadImageAsBase64(imageUrl: string): Promise<{ data: string; name
 
 /**
  * POST /api/user/ad-creation/submit
- * 提交广告到 Google Ads（REST API 批量 Mutate）
- * 单次请求创建 Budget + Campaign + AdGroup + RSA Ad + Keywords + Extensions
+ *
+ * 后台任务版：轻校验 campaign 归属后 createOrReuseSubmitJob 建/复用 job 并入队，立即返回
+ * { async:true, job_id }。前端随后短轮询 /submit-status 读结果。彻底绕开 Cloudflare ~100s
+ * 边缘超时（合规返工 + 图片 + Google mutate 单次可 >2min，旧同步链路会被 CF 断成 HTML 524，
+ * 前端按 JSON 解析报 Unexpected token '<'）。
+ *
+ * 灰度回滚：SUBMIT_ASYNC_OFF=1 → 同步执行 runSubmitCore（旧行为）。
  */
 export async function POST(req: NextRequest) {
   const user = getUserFromRequest(req);
   if (!user) return apiError("未授权", 401);
 
-  const body = await req.json();
+  let body: any;
+  try {
+    body = await req.json();
+  } catch {
+    return apiError("请求体格式错误");
+  }
+  const userId = BigInt(user.userId);
+
+  // 灰度回滚：同步执行（旧行为），前端拿到最终结果，无 job_id。
+  if (process.env.SUBMIT_ASYNC_OFF === "1") {
+    return runSubmitCore(userId, body);
+  }
+
+  // 轻量校验：避免给非法请求建 job（完整校验/执行在 runSubmitCore 内）。
+  const campaignId = body?.campaign_id;
+  if (!campaignId) return apiError("缺少 campaign_id");
+  const campaign = await prisma.campaigns.findFirst({
+    where: { id: BigInt(campaignId), user_id: userId, is_deleted: 0 },
+    select: { id: true, google_campaign_id: true },
+  });
+  if (!campaign) return apiError("广告系列不存在", 404);
+  if (campaign.google_campaign_id) return apiError("该广告系列已提交到 Google Ads");
+
+  const job = await createOrReuseSubmitJob({ campaignId: campaign.id, userId, payload: body });
+  enqueueSubmitJob(job.id);
+  return apiSuccess({ async: true, job_id: job.id.toString(), reused: job.reused });
+}
+
+/**
+ * 提交广告到 Google Ads（REST API 批量 Mutate）核心逻辑。
+ * 单次请求创建 Budget + Campaign + AdGroup + RSA Ad + Keywords + Extensions。
+ * 由 submit-runner 在后台调用（或 SUBMIT_ASYNC_OFF 时由 POST 同步调用），返回标准 Response。
+ */
+export async function runSubmitCore(userId: bigint, body: any): Promise<Response> {
   const {
     campaign_id, headlines, descriptions, keywords = [],
     daily_budget = 2, max_cpc_limit = 0.3,
@@ -78,8 +117,6 @@ export async function POST(req: NextRequest) {
   if (!campaign_id) return apiError("缺少 campaign_id");
   if (!headlines?.length || headlines.length < 3) return apiError("至少需要 3 条标题");
   if (!descriptions?.length || descriptions.length < 2) return apiError("至少需要 2 条描述");
-
-  const userId = BigInt(user.userId);
 
   const campaign = await prisma.campaigns.findFirst({
     where: { id: BigInt(campaign_id), user_id: userId, is_deleted: 0 },

@@ -29,12 +29,14 @@ export type AggregateTeams = {
 export type TeamsAvgAggregateOutputType = {
   id: number | null
   leader_id: number | null
+  cross_team_visible: number | null
   is_deleted: number | null
 }
 
 export type TeamsSumAggregateOutputType = {
   id: bigint | null
   leader_id: bigint | null
+  cross_team_visible: number | null
   is_deleted: number | null
 }
 
@@ -43,6 +45,7 @@ export type TeamsMinAggregateOutputType = {
   team_code: string | null
   team_name: string | null
   leader_id: bigint | null
+  cross_team_visible: number | null
   is_deleted: number | null
   created_at: Date | null
   updated_at: Date | null
@@ -53,6 +56,7 @@ export type TeamsMaxAggregateOutputType = {
   team_code: string | null
   team_name: string | null
   leader_id: bigint | null
+  cross_team_visible: number | null
   is_deleted: number | null
   created_at: Date | null
   updated_at: Date | null
@@ -63,6 +67,7 @@ export type TeamsCountAggregateOutputType = {
   team_code: number
   team_name: number
   leader_id: number
+  cross_team_visible: number
   is_deleted: number
   created_at: number
   updated_at: number
@@ -73,12 +78,14 @@ export type TeamsCountAggregateOutputType = {
 export type TeamsAvgAggregateInputType = {
   id?: true
   leader_id?: true
+  cross_team_visible?: true
   is_deleted?: true
 }
 
 export type TeamsSumAggregateInputType = {
   id?: true
   leader_id?: true
+  cross_team_visible?: true
   is_deleted?: true
 }
 
@@ -87,6 +94,7 @@ export type TeamsMinAggregateInputType = {
   team_code?: true
   team_name?: true
   leader_id?: true
+  cross_team_visible?: true
   is_deleted?: true
   created_at?: true
   updated_at?: true
@@ -97,6 +105,7 @@ export type TeamsMaxAggregateInputType = {
   team_code?: true
   team_name?: true
   leader_id?: true
+  cross_team_visible?: true
   is_deleted?: true
   created_at?: true
   updated_at?: true
@@ -107,6 +116,7 @@ export type TeamsCountAggregateInputType = {
   team_code?: true
   team_name?: true
   leader_id?: true
+  cross_team_visible?: true
   is_deleted?: true
   created_at?: true
   updated_at?: true
@@ -204,6 +214,7 @@ export type TeamsGroupByOutputType = {
   team_code: string
   team_name: string
   leader_id: bigint | null
+  cross_team_visible: number
   is_deleted: number
   created_at: Date
   updated_at: Date
@@ -237,6 +248,7 @@ export type teamsWhereInput = {
   team_code?: Prisma.StringFilter<"teams"> | string
   team_name?: Prisma.StringFilter<"teams"> | string
   leader_id?: Prisma.BigIntNullableFilter<"teams"> | bigint | number | null
+  cross_team_visible?: Prisma.IntFilter<"teams"> | number
   is_deleted?: Prisma.IntFilter<"teams"> | number
   created_at?: Prisma.DateTimeFilter<"teams"> | Date | string
   updated_at?: Prisma.DateTimeFilter<"teams"> | Date | string
@@ -247,6 +259,7 @@ export type teamsOrderByWithRelationInput = {
   team_code?: Prisma.SortOrder
   team_name?: Prisma.SortOrder
   leader_id?: Prisma.SortOrderInput | Prisma.SortOrder
+  cross_team_visible?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -261,6 +274,7 @@ export type teamsWhereUniqueInput = Prisma.AtLeast<{
   NOT?: Prisma.teamsWhereInput | Prisma.teamsWhereInput[]
   team_name?: Prisma.StringFilter<"teams"> | string
   leader_id?: Prisma.BigIntNullableFilter<"teams"> | bigint | number | null
+  cross_team_visible?: Prisma.IntFilter<"teams"> | number
   is_deleted?: Prisma.IntFilter<"teams"> | number
   created_at?: Prisma.DateTimeFilter<"teams"> | Date | string
   updated_at?: Prisma.DateTimeFilter<"teams"> | Date | string
@@ -271,6 +285,7 @@ export type teamsOrderByWithAggregationInput = {
   team_code?: Prisma.SortOrder
   team_name?: Prisma.SortOrder
   leader_id?: Prisma.SortOrderInput | Prisma.SortOrder
+  cross_team_visible?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -289,6 +304,7 @@ export type teamsScalarWhereWithAggregatesInput = {
   team_code?: Prisma.StringWithAggregatesFilter<"teams"> | string
   team_name?: Prisma.StringWithAggregatesFilter<"teams"> | string
   leader_id?: Prisma.BigIntNullableWithAggregatesFilter<"teams"> | bigint | number | null
+  cross_team_visible?: Prisma.IntWithAggregatesFilter<"teams"> | number
   is_deleted?: Prisma.IntWithAggregatesFilter<"teams"> | number
   created_at?: Prisma.DateTimeWithAggregatesFilter<"teams"> | Date | string
   updated_at?: Prisma.DateTimeWithAggregatesFilter<"teams"> | Date | string
@@ -299,6 +315,7 @@ export type teamsCreateInput = {
   team_code: string
   team_name: string
   leader_id?: bigint | number | null
+  cross_team_visible?: number
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -309,6 +326,7 @@ export type teamsUncheckedCreateInput = {
   team_code: string
   team_name: string
   leader_id?: bigint | number | null
+  cross_team_visible?: number
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -319,6 +337,7 @@ export type teamsUpdateInput = {
   team_code?: Prisma.StringFieldUpdateOperationsInput | string
   team_name?: Prisma.StringFieldUpdateOperationsInput | string
   leader_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
+  cross_team_visible?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -329,6 +348,7 @@ export type teamsUncheckedUpdateInput = {
   team_code?: Prisma.StringFieldUpdateOperationsInput | string
   team_name?: Prisma.StringFieldUpdateOperationsInput | string
   leader_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
+  cross_team_visible?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -339,6 +359,7 @@ export type teamsCreateManyInput = {
   team_code: string
   team_name: string
   leader_id?: bigint | number | null
+  cross_team_visible?: number
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -349,6 +370,7 @@ export type teamsUpdateManyMutationInput = {
   team_code?: Prisma.StringFieldUpdateOperationsInput | string
   team_name?: Prisma.StringFieldUpdateOperationsInput | string
   leader_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
+  cross_team_visible?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -359,6 +381,7 @@ export type teamsUncheckedUpdateManyInput = {
   team_code?: Prisma.StringFieldUpdateOperationsInput | string
   team_name?: Prisma.StringFieldUpdateOperationsInput | string
   leader_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
+  cross_team_visible?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -375,6 +398,7 @@ export type teamsCountOrderByAggregateInput = {
   team_code?: Prisma.SortOrder
   team_name?: Prisma.SortOrder
   leader_id?: Prisma.SortOrder
+  cross_team_visible?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -383,6 +407,7 @@ export type teamsCountOrderByAggregateInput = {
 export type teamsAvgOrderByAggregateInput = {
   id?: Prisma.SortOrder
   leader_id?: Prisma.SortOrder
+  cross_team_visible?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
 }
 
@@ -391,6 +416,7 @@ export type teamsMaxOrderByAggregateInput = {
   team_code?: Prisma.SortOrder
   team_name?: Prisma.SortOrder
   leader_id?: Prisma.SortOrder
+  cross_team_visible?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -401,6 +427,7 @@ export type teamsMinOrderByAggregateInput = {
   team_code?: Prisma.SortOrder
   team_name?: Prisma.SortOrder
   leader_id?: Prisma.SortOrder
+  cross_team_visible?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -409,6 +436,7 @@ export type teamsMinOrderByAggregateInput = {
 export type teamsSumOrderByAggregateInput = {
   id?: Prisma.SortOrder
   leader_id?: Prisma.SortOrder
+  cross_team_visible?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
 }
 
@@ -451,6 +479,7 @@ export type teamsSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = 
   team_code?: boolean
   team_name?: boolean
   leader_id?: boolean
+  cross_team_visible?: boolean
   is_deleted?: boolean
   created_at?: boolean
   updated_at?: boolean
@@ -463,12 +492,13 @@ export type teamsSelectScalar = {
   team_code?: boolean
   team_name?: boolean
   leader_id?: boolean
+  cross_team_visible?: boolean
   is_deleted?: boolean
   created_at?: boolean
   updated_at?: boolean
 }
 
-export type teamsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "team_code" | "team_name" | "leader_id" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["teams"]>
+export type teamsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "team_code" | "team_name" | "leader_id" | "cross_team_visible" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["teams"]>
 
 export type $teamsPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "teams"
@@ -478,6 +508,7 @@ export type $teamsPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs 
     team_code: string
     team_name: string
     leader_id: bigint | null
+    cross_team_visible: number
     is_deleted: number
     created_at: Date
     updated_at: Date
@@ -854,6 +885,7 @@ export interface teamsFieldRefs {
   readonly team_code: Prisma.FieldRef<"teams", 'String'>
   readonly team_name: Prisma.FieldRef<"teams", 'String'>
   readonly leader_id: Prisma.FieldRef<"teams", 'BigInt'>
+  readonly cross_team_visible: Prisma.FieldRef<"teams", 'Int'>
   readonly is_deleted: Prisma.FieldRef<"teams", 'Int'>
   readonly created_at: Prisma.FieldRef<"teams", 'DateTime'>
   readonly updated_at: Prisma.FieldRef<"teams", 'DateTime'>

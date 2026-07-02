@@ -30,6 +30,7 @@ export type Suffix_poolAvgAggregateOutputType = {
   id: number | null
   user_id: number | null
   campaign_id: number | null
+  source_merchant_id: number | null
   is_deleted: number | null
 }
 
@@ -37,6 +38,7 @@ export type Suffix_poolSumAggregateOutputType = {
   id: bigint | null
   user_id: bigint | null
   campaign_id: bigint | null
+  source_merchant_id: bigint | null
   is_deleted: number | null
 }
 
@@ -47,6 +49,8 @@ export type Suffix_poolMinAggregateOutputType = {
   suffix_content: string | null
   status: string | null
   leased_assignment_id: string | null
+  exit_ip: string | null
+  source_merchant_id: bigint | null
   expires_at: Date | null
   is_deleted: number | null
   created_at: Date | null
@@ -59,6 +63,8 @@ export type Suffix_poolMaxAggregateOutputType = {
   suffix_content: string | null
   status: string | null
   leased_assignment_id: string | null
+  exit_ip: string | null
+  source_merchant_id: bigint | null
   expires_at: Date | null
   is_deleted: number | null
   created_at: Date | null
@@ -71,6 +77,8 @@ export type Suffix_poolCountAggregateOutputType = {
   suffix_content: number
   status: number
   leased_assignment_id: number
+  exit_ip: number
+  source_merchant_id: number
   expires_at: number
   is_deleted: number
   created_at: number
@@ -82,6 +90,7 @@ export type Suffix_poolAvgAggregateInputType = {
   id?: true
   user_id?: true
   campaign_id?: true
+  source_merchant_id?: true
   is_deleted?: true
 }
 
@@ -89,6 +98,7 @@ export type Suffix_poolSumAggregateInputType = {
   id?: true
   user_id?: true
   campaign_id?: true
+  source_merchant_id?: true
   is_deleted?: true
 }
 
@@ -99,6 +109,8 @@ export type Suffix_poolMinAggregateInputType = {
   suffix_content?: true
   status?: true
   leased_assignment_id?: true
+  exit_ip?: true
+  source_merchant_id?: true
   expires_at?: true
   is_deleted?: true
   created_at?: true
@@ -111,6 +123,8 @@ export type Suffix_poolMaxAggregateInputType = {
   suffix_content?: true
   status?: true
   leased_assignment_id?: true
+  exit_ip?: true
+  source_merchant_id?: true
   expires_at?: true
   is_deleted?: true
   created_at?: true
@@ -123,6 +137,8 @@ export type Suffix_poolCountAggregateInputType = {
   suffix_content?: true
   status?: true
   leased_assignment_id?: true
+  exit_ip?: true
+  source_merchant_id?: true
   expires_at?: true
   is_deleted?: true
   created_at?: true
@@ -222,6 +238,8 @@ export type Suffix_poolGroupByOutputType = {
   suffix_content: string
   status: string
   leased_assignment_id: string | null
+  exit_ip: string | null
+  source_merchant_id: bigint | null
   expires_at: Date | null
   is_deleted: number
   created_at: Date
@@ -257,6 +275,8 @@ export type suffix_poolWhereInput = {
   suffix_content?: Prisma.StringFilter<"suffix_pool"> | string
   status?: Prisma.StringFilter<"suffix_pool"> | string
   leased_assignment_id?: Prisma.StringNullableFilter<"suffix_pool"> | string | null
+  exit_ip?: Prisma.StringNullableFilter<"suffix_pool"> | string | null
+  source_merchant_id?: Prisma.BigIntNullableFilter<"suffix_pool"> | bigint | number | null
   expires_at?: Prisma.DateTimeNullableFilter<"suffix_pool"> | Date | string | null
   is_deleted?: Prisma.IntFilter<"suffix_pool"> | number
   created_at?: Prisma.DateTimeFilter<"suffix_pool"> | Date | string
@@ -269,6 +289,8 @@ export type suffix_poolOrderByWithRelationInput = {
   suffix_content?: Prisma.SortOrder
   status?: Prisma.SortOrder
   leased_assignment_id?: Prisma.SortOrderInput | Prisma.SortOrder
+  exit_ip?: Prisma.SortOrderInput | Prisma.SortOrder
+  source_merchant_id?: Prisma.SortOrderInput | Prisma.SortOrder
   expires_at?: Prisma.SortOrderInput | Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
@@ -285,6 +307,8 @@ export type suffix_poolWhereUniqueInput = Prisma.AtLeast<{
   suffix_content?: Prisma.StringFilter<"suffix_pool"> | string
   status?: Prisma.StringFilter<"suffix_pool"> | string
   leased_assignment_id?: Prisma.StringNullableFilter<"suffix_pool"> | string | null
+  exit_ip?: Prisma.StringNullableFilter<"suffix_pool"> | string | null
+  source_merchant_id?: Prisma.BigIntNullableFilter<"suffix_pool"> | bigint | number | null
   expires_at?: Prisma.DateTimeNullableFilter<"suffix_pool"> | Date | string | null
   is_deleted?: Prisma.IntFilter<"suffix_pool"> | number
   created_at?: Prisma.DateTimeFilter<"suffix_pool"> | Date | string
@@ -297,6 +321,8 @@ export type suffix_poolOrderByWithAggregationInput = {
   suffix_content?: Prisma.SortOrder
   status?: Prisma.SortOrder
   leased_assignment_id?: Prisma.SortOrderInput | Prisma.SortOrder
+  exit_ip?: Prisma.SortOrderInput | Prisma.SortOrder
+  source_merchant_id?: Prisma.SortOrderInput | Prisma.SortOrder
   expires_at?: Prisma.SortOrderInput | Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
@@ -317,6 +343,8 @@ export type suffix_poolScalarWhereWithAggregatesInput = {
   suffix_content?: Prisma.StringWithAggregatesFilter<"suffix_pool"> | string
   status?: Prisma.StringWithAggregatesFilter<"suffix_pool"> | string
   leased_assignment_id?: Prisma.StringNullableWithAggregatesFilter<"suffix_pool"> | string | null
+  exit_ip?: Prisma.StringNullableWithAggregatesFilter<"suffix_pool"> | string | null
+  source_merchant_id?: Prisma.BigIntNullableWithAggregatesFilter<"suffix_pool"> | bigint | number | null
   expires_at?: Prisma.DateTimeNullableWithAggregatesFilter<"suffix_pool"> | Date | string | null
   is_deleted?: Prisma.IntWithAggregatesFilter<"suffix_pool"> | number
   created_at?: Prisma.DateTimeWithAggregatesFilter<"suffix_pool"> | Date | string
@@ -329,6 +357,8 @@ export type suffix_poolCreateInput = {
   suffix_content: string
   status?: string
   leased_assignment_id?: string | null
+  exit_ip?: string | null
+  source_merchant_id?: bigint | number | null
   expires_at?: Date | string | null
   is_deleted?: number
   created_at?: Date | string
@@ -341,6 +371,8 @@ export type suffix_poolUncheckedCreateInput = {
   suffix_content: string
   status?: string
   leased_assignment_id?: string | null
+  exit_ip?: string | null
+  source_merchant_id?: bigint | number | null
   expires_at?: Date | string | null
   is_deleted?: number
   created_at?: Date | string
@@ -353,6 +385,8 @@ export type suffix_poolUpdateInput = {
   suffix_content?: Prisma.StringFieldUpdateOperationsInput | string
   status?: Prisma.StringFieldUpdateOperationsInput | string
   leased_assignment_id?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  exit_ip?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  source_merchant_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   expires_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -365,6 +399,8 @@ export type suffix_poolUncheckedUpdateInput = {
   suffix_content?: Prisma.StringFieldUpdateOperationsInput | string
   status?: Prisma.StringFieldUpdateOperationsInput | string
   leased_assignment_id?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  exit_ip?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  source_merchant_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   expires_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -377,6 +413,8 @@ export type suffix_poolCreateManyInput = {
   suffix_content: string
   status?: string
   leased_assignment_id?: string | null
+  exit_ip?: string | null
+  source_merchant_id?: bigint | number | null
   expires_at?: Date | string | null
   is_deleted?: number
   created_at?: Date | string
@@ -389,6 +427,8 @@ export type suffix_poolUpdateManyMutationInput = {
   suffix_content?: Prisma.StringFieldUpdateOperationsInput | string
   status?: Prisma.StringFieldUpdateOperationsInput | string
   leased_assignment_id?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  exit_ip?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  source_merchant_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   expires_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -401,6 +441,8 @@ export type suffix_poolUncheckedUpdateManyInput = {
   suffix_content?: Prisma.StringFieldUpdateOperationsInput | string
   status?: Prisma.StringFieldUpdateOperationsInput | string
   leased_assignment_id?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  exit_ip?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  source_merchant_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   expires_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -419,6 +461,8 @@ export type suffix_poolCountOrderByAggregateInput = {
   suffix_content?: Prisma.SortOrder
   status?: Prisma.SortOrder
   leased_assignment_id?: Prisma.SortOrder
+  exit_ip?: Prisma.SortOrder
+  source_merchant_id?: Prisma.SortOrder
   expires_at?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
@@ -428,6 +472,7 @@ export type suffix_poolAvgOrderByAggregateInput = {
   id?: Prisma.SortOrder
   user_id?: Prisma.SortOrder
   campaign_id?: Prisma.SortOrder
+  source_merchant_id?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
 }
 
@@ -438,6 +483,8 @@ export type suffix_poolMaxOrderByAggregateInput = {
   suffix_content?: Prisma.SortOrder
   status?: Prisma.SortOrder
   leased_assignment_id?: Prisma.SortOrder
+  exit_ip?: Prisma.SortOrder
+  source_merchant_id?: Prisma.SortOrder
   expires_at?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
@@ -450,6 +497,8 @@ export type suffix_poolMinOrderByAggregateInput = {
   suffix_content?: Prisma.SortOrder
   status?: Prisma.SortOrder
   leased_assignment_id?: Prisma.SortOrder
+  exit_ip?: Prisma.SortOrder
+  source_merchant_id?: Prisma.SortOrder
   expires_at?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
@@ -459,6 +508,7 @@ export type suffix_poolSumOrderByAggregateInput = {
   id?: Prisma.SortOrder
   user_id?: Prisma.SortOrder
   campaign_id?: Prisma.SortOrder
+  source_merchant_id?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
 }
 
@@ -471,6 +521,8 @@ export type suffix_poolSelect<ExtArgs extends runtime.Types.Extensions.InternalA
   suffix_content?: boolean
   status?: boolean
   leased_assignment_id?: boolean
+  exit_ip?: boolean
+  source_merchant_id?: boolean
   expires_at?: boolean
   is_deleted?: boolean
   created_at?: boolean
@@ -485,12 +537,14 @@ export type suffix_poolSelectScalar = {
   suffix_content?: boolean
   status?: boolean
   leased_assignment_id?: boolean
+  exit_ip?: boolean
+  source_merchant_id?: boolean
   expires_at?: boolean
   is_deleted?: boolean
   created_at?: boolean
 }
 
-export type suffix_poolOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "campaign_id" | "suffix_content" | "status" | "leased_assignment_id" | "expires_at" | "is_deleted" | "created_at", ExtArgs["result"]["suffix_pool"]>
+export type suffix_poolOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "campaign_id" | "suffix_content" | "status" | "leased_assignment_id" | "exit_ip" | "source_merchant_id" | "expires_at" | "is_deleted" | "created_at", ExtArgs["result"]["suffix_pool"]>
 
 export type $suffix_poolPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "suffix_pool"
@@ -502,6 +556,8 @@ export type $suffix_poolPayload<ExtArgs extends runtime.Types.Extensions.Interna
     suffix_content: string
     status: string
     leased_assignment_id: string | null
+    exit_ip: string | null
+    source_merchant_id: bigint | null
     expires_at: Date | null
     is_deleted: number
     created_at: Date
@@ -880,6 +936,8 @@ export interface suffix_poolFieldRefs {
   readonly suffix_content: Prisma.FieldRef<"suffix_pool", 'String'>
   readonly status: Prisma.FieldRef<"suffix_pool", 'String'>
   readonly leased_assignment_id: Prisma.FieldRef<"suffix_pool", 'String'>
+  readonly exit_ip: Prisma.FieldRef<"suffix_pool", 'String'>
+  readonly source_merchant_id: Prisma.FieldRef<"suffix_pool", 'BigInt'>
   readonly expires_at: Prisma.FieldRef<"suffix_pool", 'DateTime'>
   readonly is_deleted: Prisma.FieldRef<"suffix_pool", 'Int'>
   readonly created_at: Prisma.FieldRef<"suffix_pool", 'DateTime'>

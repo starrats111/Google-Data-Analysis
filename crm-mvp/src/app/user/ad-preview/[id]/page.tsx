@@ -267,6 +267,59 @@ function normalizeImageUrls(items: unknown): string[] {
   ));
 }
 
+/**
+ * 短轮询提交 job，直到 done/failed，返回核心逻辑的最终结果 { code, message, data }。
+ * 每 2.5s 拉一次 /submit-status；对瞬时网络/网关抖动容错（连续多次异常才放弃）；
+ * 超时（默认 10min）或多次失败均不误报为失败，提示去数据中心确认（后台可能已建成）。
+ */
+async function pollSubmitJob(
+  jobId: string,
+): Promise<{ code: number; message: string; data: unknown }> {
+  const deadline = Date.now() + 10 * 60 * 1000;
+  let consecutiveErr = 0;
+  const MAX_CONSECUTIVE_ERR = 24; // 约 1 分钟连续失败才放弃
+
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 2500));
+    try {
+      const r = await fetch(
+        `/api/user/ad-creation/submit-status?job_id=${encodeURIComponent(jobId)}`,
+      );
+      if (!r.ok) {
+        consecutiveErr += 1;
+        if (consecutiveErr > MAX_CONSECUTIVE_ERR) break;
+        continue;
+      }
+      const j = await r.json();
+      const d = j?.data;
+      if (j?.code !== 0 || !d?.found) {
+        consecutiveErr += 1;
+        if (consecutiveErr > MAX_CONSECUTIVE_ERR) break;
+        continue;
+      }
+      consecutiveErr = 0;
+      if (d.status === "done" || d.status === "failed") {
+        const result = (d.result || {}) as { code?: number; message?: string; data?: unknown };
+        return {
+          code: typeof result.code === "number" ? result.code : -1,
+          message: result.message ?? d.error ?? "提交失败",
+          data: result.data ?? null,
+        };
+      }
+      // 仍在 queued/running：继续轮询
+    } catch {
+      consecutiveErr += 1;
+      if (consecutiveErr > MAX_CONSECUTIVE_ERR) break;
+    }
+  }
+
+  return {
+    code: -1,
+    message: "提交仍在后台处理中，请稍后到数据中心查看广告是否已创建（本次不代表失败）。",
+    data: null,
+  };
+}
+
 export default function AdPreviewPage() {
   const params = useParams();
   const router = useRouter();
@@ -2138,10 +2191,24 @@ export default function AdPreviewPage() {
         submitBody.structured_snippet = { header: snippetHeader, values: snippetValues.filter((v) => v.trim()) };
       }
 
-      const res = await mutateApi("/api/user/ad-creation/submit", {
+      const startRes = await mutateApi("/api/user/ad-creation/submit", {
         method: "POST",
         body: submitBody,
       });
+
+      // 后台任务版：submit 立即返回 { async:true, job_id }，前端短轮询 /submit-status 读最终结果。
+      // 这样即便合规返工/图片/Google mutate 跑 2-3min，也不会触发 Cloudflare ~100s 边缘超时
+      // （旧同步链路会被 CF 断成 HTML 524，前端按 JSON 解析报 Unexpected token '<'）。
+      // SUBMIT_ASYNC_OFF=1 灰度回滚时无 job_id，startRes 即最终结果，跳过轮询。
+      let res = startRes;
+      const asyncJobId =
+        (startRes.data as any)?.async === true ? (startRes.data as any)?.job_id : null;
+      if (asyncJobId) {
+        message.loading({ content: "正在提交到 Google Ads，请稍候（约 1-3 分钟，勿关闭页面）…", key: "ad-submit", duration: 0 });
+        res = await pollSubmitJob(String(asyncJobId));
+        message.destroy("ad-submit");
+      }
+
       if (res.code === 0) {
         const articleSlug = (res.data as any)?.article_slug;
         if (articleSlug) {
@@ -2192,6 +2259,7 @@ export default function AdPreviewPage() {
     } catch (err: unknown) {
       message.error(describeClientError(err, "提交失败"));
     } finally {
+      message.destroy("ad-submit");
       setSubmitting(false);
     }
   }, [headlines, descriptions, kwList, budget, maxCpc, biddingStrategy, networkSearch, networkPartners, networkDisplay, campaignId, message, modal, router, sitelinks, imageUrls, enableCallouts, callouts, selectedCid, selectedMccId, adLanguage, euPoliticalAd, fetchAndValidateSitelink, enablePromotion, promotion, enablePrice, priceItems, priceType, enableCall, callPhoneNumber, callCountryCode, enableSnippet, snippetHeader, snippetValues, campaignNameDraft]);
