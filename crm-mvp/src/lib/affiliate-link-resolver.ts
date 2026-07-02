@@ -19,6 +19,7 @@ import { existsSync } from "node:fs";
 import prisma from "@/lib/prisma";
 import { getProxyUrlForCountry, ensureCountryEgressHttpProxy } from "@/lib/crawl-proxy";
 import { acquirePuppeteerSlot } from "@/lib/puppeteer-semaphore";
+import { probeExitIp } from "@/lib/suffix-engine/exit-ip";
 
 export type LinkStatus = "ok" | "no_tracking" | "forbidden_network" | "resolve_failed";
 
@@ -32,6 +33,9 @@ export interface ResolveResult {
   chain: string[];
   usedProxy: boolean;
   usedBrowser: boolean;
+  /** 本次解析「实际点击」所用代理的真实出口 IP（浏览器兜底/内部自取代理路径回填；复用调用方粘性会话时为 null，
+   *  由调用方用其预探测值兜底）。用于把「刷点击真实出口 IP」准确落库（suffix_pool / proxy_exit_ip_usage / click item）。 */
+  exitIp: string | null;
   error?: string;
   // 内部提示：本结果来自 EV/MUI 中转域名的静态参数解包（只拿回广告主域名、缺网络追踪参数），
   // 外层应再用真实浏览器跟随一次以补全完整落地页（带追踪 query）。
@@ -505,6 +509,8 @@ function findBrowserPath(): string | null {
 interface BrowserChainResult {
   finalUrl: string;
   chain: string[];
+  /** 浏览器本次实际使用的 http 代理出口 IP（同会话粘性期内稳定；无代理/探活失败为 null） */
+  exitIp?: string | null;
   error?: string;
 }
 
@@ -626,7 +632,10 @@ async function resolveViaBrowser(startUrl: string, country: string): Promise<Bro
     const finalUrl = page.url();
     chain.push(finalUrl);
     const dedup = chain.filter((u, i) => i === 0 || u !== chain[i - 1]);
-    return { finalUrl, chain: dedup };
+    // 探本次浏览器出口 IP：复用同一 http 代理 URL（会话粘性期内出口 IP 稳定），即为浏览器实际点击出口。
+    // 失败/无代理返回 null（不阻断换链）。让上层把「真实点击出口 IP」准确落库，修复浏览器兜底路径 exit_ip 丢失。
+    const exitIp = httpProxy ? await probeExitIp(httpProxy) : null;
+    return { finalUrl, chain: dedup, exitIp };
   } catch (e) {
     return { finalUrl: "", chain, error: e instanceof Error ? e.message.slice(0, 200) : String(e) };
   } finally {
@@ -668,6 +677,7 @@ export async function resolveAffiliateLink(
     chain: [],
     usedProxy: false,
     usedBrowser: false,
+    exitIp: null,
   };
 
   if (!affiliateUrl || !/^https?:\/\//i.test(affiliateUrl)) {
@@ -692,6 +702,7 @@ export async function resolveAffiliateLink(
       chain: res.chain,
       usedProxy,
       usedBrowser,
+      exitIp: null,
     };
 
     // App 深链解包：finalUrl 若停在 Adjust/AppsFlyer/Branch 等深链域名，真实 web 落地藏在其回退参数里。
@@ -818,18 +829,25 @@ export async function resolveAffiliateLink(
     opts.proxyUrl != null ? opts.proxyUrl : await getProxyUrlForCountry(cc, { userId: opts.userId }).catch(() => null);
 
   // ── 第一遍抓取 ──
+  // 记录「胜出结果」实际使用的代理出口，供末尾回填 result.exitIp（让上层准确记录真实点击出口 IP）：
+  //   httpProxyUsed = 纯 HTTP 路径实际用的代理 URL；browserExitIp = 浏览器路径探到的出口 IP。
   let result: ResolveResult;
+  let httpProxyUsed: string | null = null;
+  let browserExitIp: string | null = null;
   if (opts.useBrowser) {
     const br = await resolveViaBrowser(affiliateUrl, cc);
     if (br.finalUrl) {
+      browserExitIp = br.exitIp ?? null;
       result = await evaluate(br, false, true);
     } else {
       const proxyUrl = await acquireProxy();
+      httpProxyUsed = proxyUrl;
       const r0 = await fetchChain(affiliateUrl, proxyUrl, 10, 18000, { userAgent: opts.userAgent, referer: opts.referer });
       result = await evaluate(r0, !!proxyUrl, false);
     }
   } else {
     const proxyUrl = await acquireProxy();
+    httpProxyUsed = proxyUrl;
     const r0 = await fetchChain(affiliateUrl, proxyUrl, 10, 18000, { userAgent: opts.userAgent, referer: opts.referer });
     result = await evaluate(r0, !!proxyUrl, false);
   }
@@ -847,13 +865,30 @@ export async function resolveAffiliateLink(
         !!result.error &&
         (result.error.startsWith("停在跳板域名") || result.error.startsWith("停在联盟点击中转域名"))))
   ) {
-    const br = await resolveViaBrowser(affiliateUrl, cc).catch(() => ({ finalUrl: "", chain: [] as string[] }));
+    const br = await resolveViaBrowser(affiliateUrl, cc).catch(
+      () => ({ finalUrl: "", chain: [] as string[], exitIp: null }) as BrowserChainResult,
+    );
     if (br.finalUrl) {
       const r2 = await evaluate(br, false, true);
       // 仅当浏览器结果更优（拿到 ok / 命中黑名单）才采用，否则保留首次结果
       if (r2.status === "ok" || r2.status === "forbidden_network") {
         result = r2;
+        browserExitIp = br.exitIp ?? null;
       }
+    }
+  }
+
+  // ── 出口 IP 回填 ──
+  // 目标：让上层（generateOneSuffix）记录「实际点击出口 IP」而非仅预探测值，修复浏览器兜底/内部自取代理
+  // 路径的 exit_ip 丢失（success 无 IP）问题。仅对成功结果回填：
+  //   - 浏览器路径：用浏览器 http 代理探到的出口 IP；
+  //   - 纯 HTTP 且 resolver 内部自取代理（未传 opts.proxyUrl）：探该内部代理出口 IP；
+  //   - 纯 HTTP 且复用调用方粘性会话（opts.proxyUrl 已传）：保持 null，调用方的预探测 IP 即为准（同会话一致）。
+  if (result.status === "ok") {
+    if (result.usedBrowser) {
+      result.exitIp = browserExitIp;
+    } else if (opts.proxyUrl == null && httpProxyUsed) {
+      result.exitIp = await probeExitIp(httpProxyUsed);
     }
   }
 

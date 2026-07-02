@@ -8,9 +8,10 @@
  *   C = 当天该商家真实联盟点击（affiliate_click_daily）+ 我们已排程/已执行但可能尚未回流到聚合表的点击
  *   目标 T = O×rand(cpoMin,cpoMax)：订单倒推「应有点击数」，使转化率落在用户区间内。
  *   缺口 deficit = T − C；deficit ≤ 0 不刷。
- *   B = 过去 7 天该商家联盟点击日均（排除今天）：仅作「有历史」时的限速封顶——当天累计 ≤ ⌊B/4⌋×剩余小时。
- *   ★ 基线为 0 不再跳过：有订单就按 T 补刷，把缺口「铺到当天剩余全部时段」随机分散执行，避免一小时内突增。
- *   补刷复用 click-brush（startBrushTaskWindowed）；C 已含我方今日 pending，重复触发不会重复下单。
+ *   B = 过去 7 天该商家联盟点击日均（排除今天）：仅作「当天基线总预算」封顶——当天累计 ≤ ⌊B/4⌋×剩余小时。
+ *   ★ 基线为 0 不再跳过：有订单就按 T 补刷。补刷窗口固定 1 小时：本轮缺口在「未来 60 分钟内」
+ *     随机分散执行，实现「订单传回 1 小时内刷完」（每 30min 的 txn-sync 触发一轮，effectiveC 含 pending 不会重复下单）。
+ *   补刷复用 click-brush（startBrushTaskWindowed，windowMinutes=60）。
  *
  * 触发：订单同步后（ontxn，见 txn-quick-sync 钩子）；仅对开启 click_control_enabled 的用户生效。
  */
@@ -203,25 +204,25 @@ export async function runAutoClickForUser(
     const baseline = Math.max(avg7, realClicksToday)
     const hourlyCap = Math.floor(baseline / HOURLY_DIVISOR) // 0=无基线
 
-    // 当天剩余小时数（北京时间到 24:00），把缺口铺到剩余时段随机分散
+    // 当天剩余小时数（北京时间到 24:00），仅用于「当天基线总预算」封顶（非补刷窗口）。
     const hoursLeft = Math.max(1, Math.ceil((todayEndUTC.getTime() - now.getTime()) / 3_600_000))
 
-    // 有基线：当天累计不超过 ⌊B/4⌋×剩余小时（平均速率≈日均1/4每小时）。
-    // 无基线：仅受订单倒推目标 T 约束（T 本身很小，铺到当天剩余时段即足够温和、真人化）。
+    // 有基线：当天累计不超过 ⌊B/4⌋×剩余小时（当天基线总预算上限，防止全天严重超刷）。
+    // 补刷窗口已固定 1 小时（见下），此处仅作日预算天花板；订单倒推目标 T 通常很小，几乎不触顶。
     if (hourlyCap > 0) deficit = Math.min(deficit, hourlyCap * hoursLeft)
     if (deficit <= 0) {
       res.details.push(`${platform}:${mid} O=${O} C=${effectiveC} 受基线限速(${hourlyCap}/h)本轮不补`)
       continue
     }
 
-    // 窗口=当天剩余全部时段；scheduler 在窗口内随机分散（真人化）。
-    // effectiveC 已含我方今日 pending，订单再次同步触发也不会重复下单。
-    const windowMinutes = hoursLeft * 60
+    // 窗口固定 1 小时：本轮缺口在「未来 60 分钟内」随机分散补刷，实现「订单传回 1 小时内刷完」。
+    // scheduler 在窗口内随机分散（真人化）；effectiveC 已含我方今日 pending，订单再次同步触发也不会重复下单。
+    const windowMinutes = 60
     const r = await startBrushTaskWindowed(c.id, userId, deficit, windowMinutes)
     if (r.ok) {
       res.scheduled++
       res.clicksScheduled += r.target
-      res.details.push(`${platform}:${mid} O=${O} C=${effectiveC} T=${T} 铺${r.target}点击/${hoursLeft}h(基线${hourlyCap}/h)`)
+      res.details.push(`${platform}:${mid} O=${O} C=${effectiveC} T=${T} 铺${r.target}点击/1h(基线${hourlyCap}/h)`)
     } else {
       res.details.push(`${platform}:${mid} 补刷失败: ${r.message}`)
     }
