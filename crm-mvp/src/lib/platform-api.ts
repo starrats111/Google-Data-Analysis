@@ -1328,7 +1328,15 @@ export async function fetchAllClicks(
   const toArray = () => Array.from(agg.values());
 
   try {
-    const windows = splitDateTimeRange(beginDateTime, endDateTime, config.maxWindowHours);
+    // 时间窗平台：按 maxWindowHours 小时切片；纯日期平台(LB/LH)：按自然日切片，
+    // 保证每次请求 begin_date==end_date。否则跨午夜的 6h 窗会得到 begin=昨日/end=今日，
+    // LB 按「begin_date 00:00 ~ end_date 23:59」理解成近 48h → 报 "Interval cannot be longer than 24 hour"。
+    const windows = config.withTime
+      ? splitDateTimeRange(beginDateTime, endDateTime, config.maxWindowHours)
+      : splitDateRange(beginDateTime.slice(0, 10), endDateTime.slice(0, 10), 1).map((d) => ({
+          start: `${d.start} 00:00:00`,
+          end: `${d.end} 23:59:59`,
+        }));
     let first = true;
     for (const w of windows) {
       const beginStr = config.withTime ? w.start : w.start.slice(0, 10);

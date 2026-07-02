@@ -86,13 +86,27 @@ export async function syncUserClicks(userId: bigint, onlyPlatforms?: Set<string>
     try {
       const now = nowCST()
       const cursor = await readCursor(conn.id)
-      const beginC = cursor ? dayjs.tz(cursor, TZ) : now.subtract(INITIAL_SPAN_HOURS, 'hour')
-      if (!beginC.isValid() || now.diff(beginC, 'minute') < 1) continue // 不足 1 分钟无需拉
 
-      // 单轮跨度封顶：超过 MAX_SPAN_HOURS 则只拉前段，剩余下轮续拉
-      const endC = now.diff(beginC, 'hour', true) > MAX_SPAN_HOURS ? beginC.add(MAX_SPAN_HOURS, 'hour') : now
-      const beginStr = beginC.format('YYYY-MM-DD HH:mm:ss')
-      const endStr = endC.format('YYYY-MM-DD HH:mm:ss')
+      // 纯日期平台(LB/LH withTime=false)：click API 只按自然日查询、单次返回整日全量点击，
+      //   故用 SET 覆盖（幂等），并从「游标当天」拉到「今日」——天然处理跨午夜/迟到点击，
+      //   且不会像 increment 那样每 30 分钟重拉整天叠加导致点击数虚高。
+      // 时间窗平台(MUI/PM/CG/CF/BSH/EV withTime=true)：按 6h 增量切片 + increment 累加。
+      const dayGranular = PLATFORM_CLICK_CONFIG[platform]?.withTime === false
+
+      let beginStr: string
+      let endStr: string
+      if (dayGranular) {
+        const startDay = cursor && dayjs.tz(cursor, TZ).isValid() ? dayjs.tz(cursor, TZ) : now.subtract(1, 'day')
+        beginStr = startDay.format('YYYY-MM-DD 00:00:00')
+        endStr = now.format('YYYY-MM-DD 23:59:59')
+      } else {
+        const beginC = cursor ? dayjs.tz(cursor, TZ) : now.subtract(INITIAL_SPAN_HOURS, 'hour')
+        if (!beginC.isValid() || now.diff(beginC, 'minute') < 1) continue // 不足 1 分钟无需拉
+        // 单轮跨度封顶：超过 MAX_SPAN_HOURS 则只拉前段，剩余下轮续拉
+        const endC = now.diff(beginC, 'hour', true) > MAX_SPAN_HOURS ? beginC.add(MAX_SPAN_HOURS, 'hour') : now
+        beginStr = beginC.format('YYYY-MM-DD HH:mm:ss')
+        endStr = endC.format('YYYY-MM-DD HH:mm:ss')
+      }
 
       let r: { clicks: { merchant_id: string; merchant_name: string; click_date: string; clicks: number }[]; error?: string }
       try {
@@ -126,13 +140,16 @@ export async function syncUserClicks(userId: bigint, onlyPlatforms?: Set<string>
             click_date: clickDateToDate(row.click_date),
             clicks: row.clicks,
           },
-          update: { clicks: { increment: row.clicks }, platform_connection_id: conn.id, is_deleted: 0 },
+          // 纯日期平台：SET 覆盖为权威整日全量；时间窗平台：increment 累加本片增量
+          update: dayGranular
+            ? { clicks: row.clicks, platform_connection_id: conn.id, is_deleted: 0 }
+            : { clicks: { increment: row.clicks }, platform_connection_id: conn.id, is_deleted: 0 },
         })
         result.rowsUpserted++
         result.clicksCounted += row.clicks
       }
 
-      await writeCursor(conn.id, endStr)
+      await writeCursor(conn.id, dayGranular ? now.format('YYYY-MM-DD HH:mm:ss') : endStr)
       result.connectionsSynced++
     } finally {
       syncingConns.delete(lockKey)
