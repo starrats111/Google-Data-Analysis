@@ -20,7 +20,7 @@
  */
 
 import { callAiWithFallback } from "@/lib/ai-service";
-import { extractJsonFromAi, smartTruncate } from "@/lib/crawl-pipeline";
+import { parseAiJsonLoose, smartTruncate } from "@/lib/crawl-pipeline";
 import type { CrawlCache } from "@/lib/crawl-pipeline";
 import type { IndustryProfile } from "@/lib/industry-profile";
 import type { MerchantIntelligenceProfile } from "@/lib/intellicenter/merchant-profile/types";
@@ -574,7 +574,7 @@ async function generateAndScoreBatch(
         ],
         Math.max(1024, askCount * 90),
       );
-      const json = JSON.parse(extractJsonFromAi(raw)) as Record<string, unknown>;
+      const json = parseAiJsonLoose(raw) as Record<string, unknown>;
       const arr = json[opts.fieldName];
       if (Array.isArray(arr)) {
         // C-116: 超长项「截断」而非「丢弃」—— smartTruncate 在词边界截到 maxLen，保住数量；
@@ -588,6 +588,9 @@ async function generateAndScoreBatch(
       console.warn(
         `[Orchestrator] ${opts.task} attempt ${attempt + 1} parse/AI failed: ${err instanceof Error ? err.message : err}`,
       );
+      // 解析失败：给下一轮明确「只返回合法 JSON」的纠正提示，否则重发同一 prompt 会同样失败
+      // （2026-07-02 oglmove：3 轮同样的 JSON 语法错 → headlines 全空 → 提交按钮置灰）。
+      retryHint = `Your previous reply could not be parsed as JSON (${err instanceof Error ? err.message : "parse error"}). Return ONLY one valid JSON object of the form {"${opts.fieldName}": ["item 1", "item 2", ...]}. Escape every inner double quote as \\", put a comma between every array element, and output no prose or markdown.`;
     }
 
     if (parsed.length > 0) {
@@ -653,7 +656,7 @@ async function generateSimpleTask<T>(
       ],
       Math.max(1024, opts.count * 120),
     );
-    const json = JSON.parse(extractJsonFromAi(raw)) as Record<string, unknown>;
+    const json = parseAiJsonLoose(raw) as Record<string, unknown>;
     return { items: (json[opts.fieldName] as unknown as T) ?? null, aiCalls: 1 };
   } catch (err) {
     console.warn(
