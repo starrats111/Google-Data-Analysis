@@ -1149,11 +1149,18 @@ function clickMerchantName(item: Record<string, unknown>): string {
   return String(item.merchant_name || item.merchantName || item.brand || item.name || "");
 }
 
-/** click_time（UTC+8）→ YYYY-MM-DD；取不到返回空 */
+/** click_time → YYYY-MM-DD（UTC+8 自然日）；取不到返回空。
+ *  兼容两类：日期串("YYYY-MM-DD HH:mm:ss"，如 LH)；Unix 时间戳(LB 为秒级，如 1782931668，也兼容毫秒级)。 */
 function clickDateOf(item: Record<string, unknown>): string {
-  const t = String(item.click_time || item.clickTime || item.click_date || "").trim();
-  const m = t.match(/^(\d{4}-\d{2}-\d{2})/);
-  return m ? m[1] : "";
+  const t = String(item.click_time ?? item.clickTime ?? item.click_date ?? "").trim()
+  if (!t) return ""
+  const m = t.match(/^(\d{4}-\d{2}-\d{2})/)
+  if (m) return m[1]
+  if (/^\d{10}$/.test(t) || /^\d{13}$/.test(t)) {
+    const ms = t.length === 13 ? Number(t) : Number(t) * 1000
+    if (Number.isFinite(ms)) return new Date(ms + 8 * 3600 * 1000).toISOString().slice(0, 10)
+  }
+  return ""
 }
 
 function clickRefOf(item: Record<string, unknown>): string {
