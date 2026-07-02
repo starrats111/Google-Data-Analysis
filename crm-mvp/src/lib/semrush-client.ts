@@ -936,8 +936,26 @@ export class SemRushClient {
       }
       throw new Error(`3UE 登录失败（HTTP ${res.status}），请稍后再试或联系管理员`);
     }
+    // 3UE 软失败：密码错/账号异常/风控时仍返回 HTTP 200，但 body 为空或形如 {"c":<非0>,"msg":...}。
+    // 必须在此显式识别真实原因，否则会被下面 extractToken 误报成「未找到 token」而掩盖真因
+    // （2026-07-02：wj11/wj12 等员工账号密码错，页面只显示"未找到 token"，排查半天才定位）。
+    const rawBody = (res.body || "").trim();
+    if (!rawBody) {
+      throw new Error("3UE 登录返回空响应（账号可能异常或被风控），请稍后重试或更换账号");
+    }
+    let payload: unknown;
+    try {
+      payload = JSON.parse(rawBody);
+    } catch {
+      throw new Error(`3UE 登录响应异常（非 JSON）：${rawBody.slice(0, 80)}`);
+    }
+    const pObj = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+    const code = typeof pObj.c === "number" ? pObj.c : typeof pObj.code === "number" ? pObj.code : 0;
+    if (code !== 0) {
+      const msg = String(pObj.msg || pObj.message || pObj.error || `错误码 ${code}`);
+      throw new Error(`3UE 登录失败：${msg}`);
+    }
     Object.assign(this.cookies, res.cookies);
-    const payload = JSON.parse(res.body);
     const token = this.extractToken(payload);
     if (!token) throw new Error(`登录成功但未找到 token`);
     this.token = token;
