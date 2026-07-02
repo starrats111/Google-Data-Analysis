@@ -15,6 +15,7 @@ import { getProxyUrlForCountry, getHttpProxyUrlForCountry, ensureCountryEgressHt
 import { isLowValueSitelink } from "@/lib/sitelink-filter";
 import { hostMatchesCountryTld } from "@/lib/country-url-resolver";
 import { getHostKey, isHostChallenged } from "@/lib/crawl-host-cache";
+import JSON5 from "json5";
 // C-016: ccTLD 切换逻辑移出 crawl-pipeline，改由 country-url-resolver 在 route 层调度
 
 // 全局爬取并发控制：最多 2 个同时执行
@@ -314,6 +315,30 @@ export function extractJsonFromAi(raw: string): string {
     return sliced;
   }
   return text;
+}
+
+/**
+ * 容错解析 AI 返回的 JSON —— 治「AI 偶发非法 JSON 致整批 headline/description 解析为空、
+ * 广告无内容、提交按钮置灰」（见 2026-07-02 oglmove：position 541 报 Expected ',' or ']'）。
+ * 逐级降级：extractJsonFromAi 清洗 → 严格 JSON.parse → JSON5.parse（容尾逗号/单引号等）
+ *   → 轻修复（补元素间「换行分隔却漏逗号」）后再 JSON/JSON5。全败才抛错，交上层返工重试。
+ */
+export function parseAiJsonLoose(raw: string): unknown {
+  const extracted = extractJsonFromAi(raw);
+  try { return JSON.parse(extracted); } catch { /* 降级 JSON5 */ }
+  try { return JSON5.parse(extracted); } catch { /* 降级修复 */ }
+  const repaired = repairAiJson(extracted);
+  try { return JSON.parse(repaired); } catch { /* 降级 JSON5 */ }
+  return JSON5.parse(repaired); // 仍失败则抛出，交由上层重试
+}
+
+/**
+ * 轻量修复 AI 最常见的 JSON 病症（保守，只改低风险处，避免误伤合法数据）：
+ * 元素间「换行分隔却漏逗号」——`"a"\n"b"` → `"a",\n"b"`。合法 JSON 字符串值内不含裸换行，
+ * 故「引号 + 裸换行 + 引号」必是两个相邻值缺逗号，补之安全（已有逗号者中间为 `,` 不匹配）。
+ */
+function repairAiJson(text: string): string {
+  return text.replace(/"(\s*[\r\n]\s*)"/g, '",$1"');
 }
 
 export function extractMerchantFeatures(html: string, extraFeatures?: string[]): string[] {
