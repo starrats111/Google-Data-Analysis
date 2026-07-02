@@ -214,6 +214,10 @@ export async function fetchViaProxy(
     agent = new HttpsProxyAgent(proxyUrl);
   }
 
+  // 全局并发会话名额：把同时在飞的代理会话压到安全线内，避免撞 kookeey 单子账号并发上限
+  // （超限会被 kookeey 拒绝、表现为 Socks5 Authentication failed）。整个重定向链共用一个名额。
+  const { withProxySlot } = await import("@/lib/suffix-engine/proxy-throttle");
+
   const doRequest = (targetUrl: string, redirectCount: number): Promise<ProxyFetchResponse> => {
     return new Promise((resolve, reject) => {
       if (options.signal?.aborted) return reject(new Error("Aborted"));
@@ -275,5 +279,5 @@ export async function fetchViaProxy(
     });
   };
 
-  return doRequest(url, 0);
+  return withProxySlot(() => doRequest(url, 0));
 }

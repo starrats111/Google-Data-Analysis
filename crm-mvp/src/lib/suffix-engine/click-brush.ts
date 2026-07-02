@@ -37,6 +37,14 @@ const MIN_CLICK_INTERVAL_MS = 3000
 const MAX_CLICK_INTERVAL_MS = 9000
 /** executing 子项卡死回收阈值（毫秒） */
 const EXECUTING_STALE_MS = 5 * 60 * 1000
+/** 瞬时代理并发错误（多为撞 kookeey 子账号并发上限被拒/连接抖动）：延后重排一次而非直接判失败 */
+const TRANSIENT_PROXY_ERR =
+  /socks5 authentication failed|rejected by the socks5 server|proxy request timeout|socket hang up|econnreset|econnrefused|etimedout|tunneling socket/i
+/** 重排标记（写在 error 前缀），用于「最多重排 1 次」判定，避免无限重排 */
+const RETRY_MARK = '[retry]'
+/** 重排延后区间（毫秒）：等并发尖峰过去、会话名额释放后再试 */
+const REQUEUE_MIN_MS = 120_000
+const REQUEUE_MAX_MS = 300_000
 
 export interface BrushStartResult {
   ok: true
@@ -284,6 +292,11 @@ async function buildTaskRuntime(taskId: bigint): Promise<TaskRuntime | null> {
 /** 执行单条点击子项 */
 async function executeItem(rt: TaskRuntime, itemId: bigint): Promise<{ ok: boolean }> {
   const startedAt = Date.now()
+  // 读取上次错误，判断是否已重排过（error 以 RETRY_MARK 开头 = 本子项已延后重试过一次）
+  const prior = await prisma.kyads_click_task_items
+    .findUnique({ where: { id: itemId }, select: { error: true } })
+    .catch(() => null)
+  const alreadyRequeued = !!prior?.error && prior.error.startsWith(RETRY_MARK)
   await prisma.kyads_click_task_items
     .update({ where: { id: itemId }, data: { status: 'executing', executed_at: new Date() } })
     .catch(() => {})
@@ -324,6 +337,25 @@ async function executeItem(rt: TaskRuntime, itemId: bigint): Promise<{ ok: boole
       .catch(() => {})
     await prisma.kyads_click_tasks.update({ where: { id: rt.taskId }, data: { done_count: { increment: 1 } } }).catch(() => {})
     return { ok: true }
+  }
+
+  // 瞬时代理并发错误（撞 kookeey 并发上限被拒/连接抖动）：延后重排一次，等会话名额释放后再试。
+  // 已重排过（alreadyRequeued）则按失败处理，避免无限重排。
+  if (TRANSIENT_PROXY_ERR.test(r.error) && !alreadyRequeued) {
+    const delayMs = randomInt(REQUEUE_MIN_MS, REQUEUE_MAX_MS)
+    await prisma.kyads_click_task_items
+      .update({
+        where: { id: itemId },
+        data: {
+          status: 'pending',
+          error: `${RETRY_MARK} ${r.error}`.slice(0, 500),
+          scheduled_at: new Date(Date.now() + delayMs),
+          executed_at: null,
+          duration_ms: duration,
+        },
+      })
+      .catch(() => {})
+    return { ok: false }
   }
 
   await prisma.kyads_click_task_items

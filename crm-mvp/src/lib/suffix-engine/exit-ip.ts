@@ -21,8 +21,10 @@ import { getProxyUrlForCountry, fetchViaProxy } from '@/lib/crawl-proxy'
 
 /** 去重窗口：24 小时 */
 const DEDUP_WINDOW_MS = 24 * 60 * 60 * 1000
-/** 探到重复 IP 时，最多换几次会话找新 IP */
-const MAX_FRESH_TRIES = 4
+/** 探到重复 IP 时，最多换几次会话找新 IP。
+ *  ⚠️ 每次尝试都会新建一个 kookeey 粘性会话（life-5m），失败/丢弃的会话仍占用上游 IP 5 分钟。
+ *  16 用户共用单子账号时这是并发放大的主因，故从 4 收敛到 2：仍保留基本去重、把探测会话减半。 */
+const MAX_FRESH_TRIES = 2
 /** 出口 IP 探活超时（毫秒），需在 suffix 生成预算内 */
 const PROBE_TIMEOUT_MS = 6000
 
