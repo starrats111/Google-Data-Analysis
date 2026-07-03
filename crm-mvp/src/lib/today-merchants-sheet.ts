@@ -1,87 +1,17 @@
 /**
- * 今日投放商家 — Google Sheet 读取与解析
+ * 今日投放商家 + 新广告快速回填 — Google Sheet CampaignInfo 读取与解析
  *
  * 数据来源：每个 MCC 账户的 sheet_url（CampaignInfo Tab）
- * 逻辑：筛出 CreationDateCST = 今日CST 的行（即今天创建的广告系列）
- *       通过 google_campaign_id 关联 campaigns 表，按 user_id 统计去重商家数
+ * 读取方式：公开 CSV 导出链接（gviz/tq，与 sheet-sync 读 DailyData 同通道）。
+ *   ⚠️ 此前走 Sheets API + SA token，但所有 SA 项目均未启用 Sheets API，
+ *   33 个 MCC 全部 403（today_merchants 长期为 0）——CSV 导出无需 API/授权，一并根治。
+ * 逻辑：筛出 CreationDateCST ∈ {今日, 昨日}（CST）的行（近两日新建系列）
+ *       今日行用于统计投放商家数；全部行供 today-merchants-sync 快速回填 campaigns
  *       对不走 CRM 建系列的成员同样有效（Google Ads Script 会导出全部系列）
  */
-import { JWT } from "google-auth-library";
 import prisma from "@/lib/prisma";
 import { todayCST } from "@/lib/date-utils";
-
-const SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly";
-const SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets";
-
-// 每个 MCC 独立的 token 缓存（key = mcc DB id）
-const tokenCache = new Map<string, { token: string; expiry: number }>();
-
-async function getTokenForMcc(mccId: string, saJson: string): Promise<string> {
-  const cached = tokenCache.get(mccId);
-  if (cached && Date.now() < cached.expiry - 60_000) return cached.token;
-
-  const sa = JSON.parse(saJson);
-  const jwt = new JWT({
-    email: sa.client_email,
-    key: sa.private_key,
-    scopes: [SHEETS_SCOPE],
-  });
-  const { token } = await jwt.getAccessToken();
-  if (!token) throw new Error(`MCC ${mccId}: 无法获取 Google Sheets token`);
-  tokenCache.set(mccId, { token, expiry: Date.now() + 3_500_000 });
-  return token;
-}
-
-function extractSheetId(url: string): string | null {
-  const m = url.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
-  return m ? m[1] : null;
-}
-
-async function fetchSheetValues(
-  sheetId: string,
-  tabName: string,
-  token: string,
-  range = "A1:P2000"
-): Promise<string[][]> {
-  const url = `${SHEETS_API}/${sheetId}/values/${encodeURIComponent(`${tabName}!${range}`)}`;
-  const resp = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!resp.ok) {
-    const body = await resp.text();
-    throw new Error(`Sheets API ${resp.status}: ${body.slice(0, 200)}`);
-  }
-  const json = (await resp.json()) as { values?: string[][] };
-  return json.values ?? [];
-}
-
-async function getSheetTabs(sheetId: string, token: string): Promise<string[] | null> {
-  // C-078：返回 null 表示调用失败（区别于 sheet 真的没有 tab），便于上层精确错误分类
-  const url = `${SHEETS_API}/${sheetId}?fields=sheets.properties.title`;
-  const resp = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (!resp.ok) {
-    const body = await resp.text();
-    throw new Error(`Sheets metadata ${resp.status}: ${body.slice(0, 200)}`);
-  }
-  const json = (await resp.json()) as { sheets?: { properties: { title: string } }[] };
-  return (json.sheets ?? []).map((s) => s.properties.title);
-}
-
-/**
- * C-078：将 Google Sheets API 错误归类，便于 07 一眼看出根因。
- * 返回：API_DISABLED | MISSING_TAB | PERMISSION_DENIED | SHEET_NOT_FOUND | OTHER
- */
-function classifySheetError(msg: string): string {
-  if (/API has not been used.*before or it is disabled/i.test(msg)) return "API_DISABLED";
-  if (/Unable to parse range/i.test(msg)) return "MISSING_TAB";
-  if (/The caller does not have permission/i.test(msg) || /403/.test(msg)) return "PERMISSION_DENIED";
-  if (/Requested entity was not found|404/i.test(msg)) return "SHEET_NOT_FOUND";
-  return "OTHER";
-}
+import { readSheetCsv, extractSheetId } from "@/lib/sheet-sync";
 
 /** CampaignInfo 单行（近两日 CST 创建的系列） */
 export interface CampaignInfoRow {
@@ -142,7 +72,8 @@ export interface TodayMerchantsResult {
 }
 
 /**
- * 主函数：遍历所有配置了 sheet_url 的 MCC，统计今日投放商家数（按 user_id 汇总）
+ * 主函数：遍历所有配置了 sheet_url 的 MCC，读取 CampaignInfo：
+ * 统计今日投放商家数（按 user_id 汇总）+ 收集近两日新建系列行（供快速回填）
  */
 export async function fetchTodayMerchantsFromSheets(): Promise<TodayMerchantsResult> {
   const todayStr = todayCST(); // YYYY-MM-DD
@@ -154,30 +85,28 @@ export async function fetchTodayMerchantsFromSheets(): Promise<TodayMerchantsRes
   let mccCount = 0;
   let mccWithData = 0;
 
-  // 1. 读取所有有 sheet_url + service_account_json 的 MCC
+  // 1. 读取所有有 sheet_url 的 MCC（CSV 导出无需 service_account）
   const mccs = await prisma.google_mcc_accounts.findMany({
     where: {
       is_deleted: 0,
       sheet_url: { not: null },
-      service_account_json: { not: null },
     },
     select: {
       id: true,
       user_id: true,
       mcc_id: true,
       sheet_url: true,
-      service_account_json: true,
     },
   });
 
   mccCount = mccs.length;
 
-  // 2. 按 MCC 读取 Sheet，收集近两日新建系列（今日行计数 + 全部行供回填）
+  // 2. 按 MCC 读取 Sheet CampaignInfo，收集近两日新建系列（今日行计数 + 全部行供回填）
   const userCampaignIds = new Map<string, Set<string>>();
   const recentRows: TodayMerchantsResult["recentRows"] = [];
 
   for (const mcc of mccs) {
-    if (!mcc.sheet_url || !mcc.service_account_json) continue;
+    if (!mcc.sheet_url) continue;
 
     const sheetId = extractSheetId(mcc.sheet_url);
     if (!sheetId) {
@@ -189,37 +118,24 @@ export async function fetchTodayMerchantsFromSheets(): Promise<TodayMerchantsRes
     const userId = String(mcc.user_id);
 
     try {
-      const token = await getTokenForMcc(mccDbId, mcc.service_account_json);
-
-      // 查找 CampaignInfo tab（名称可能有大小写变体）
-      const tabs = await getSheetTabs(sheetId, token);
-      if (!tabs || tabs.length === 0) {
-        errors.push(`MCC ${mcc.mcc_id} [MISSING_TAB]: sheet 中无任何 tab，需 Google Ads Script 先生成 CampaignInfo`);
+      // readSheetCsv：Tab 不存在时返回 []（HTTP 400 静默），权限不足抛错
+      const rows = await readSheetCsv(sheetId, "CampaignInfo");
+      if (rows.length === 0) {
+        errors.push(`MCC ${mcc.mcc_id} [MISSING_TAB]: sheet 缺 CampaignInfo tab（需 Google Ads Script 生成）`);
         continue;
       }
-      const infoTab = tabs.find((t) => t.toLowerCase() === "campaigninfo");
-      if (!infoTab) {
-        errors.push(
-          `MCC ${mcc.mcc_id} [MISSING_TAB]: sheet 缺 CampaignInfo tab，现有 tabs: ${tabs.slice(0, 10).join(", ")}`
-        );
-        continue;
-      }
-
-      // CampaignInfo tab 数据量小（每系列一行，无日期维度），取前 5000 行足够
-      const rows = await fetchSheetValues(sheetId, infoTab, token, "A1:E5000");
       const parsedRows = parseCampaignInfoRows(rows, recentDates);
 
-      const todayIds = parsedRows.filter((r) => r.creationDate === todayStr);
-      if (todayIds.length > 0) {
+      const todayRows = parsedRows.filter((r) => r.creationDate === todayStr);
+      if (todayRows.length > 0) {
         mccWithData++;
         if (!userCampaignIds.has(userId)) userCampaignIds.set(userId, new Set());
-        for (const r of todayIds) userCampaignIds.get(userId)!.add(r.campaignId);
+        for (const r of todayRows) userCampaignIds.get(userId)!.add(r.campaignId);
       }
       for (const r of parsedRows) recentRows.push({ ...r, userId, mccDbId });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      const category = classifySheetError(msg);
-      errors.push(`MCC ${mcc.mcc_id} [${category}]: ${msg.slice(0, 200)}`);
+      errors.push(`MCC ${mcc.mcc_id}: ${msg.slice(0, 200)}`);
     }
   }
 

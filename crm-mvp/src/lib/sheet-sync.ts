@@ -26,8 +26,8 @@ export function extractSheetId(url: string): string | null {
   return null;
 }
 
-/** 通过公开 CSV 导出链接读取指定 Tab 数据 */
-async function readSheetCsv(
+/** 通过公开 CSV 导出链接读取指定 Tab 数据（导出供 today-merchants-sheet 等复用；无需 Sheets API） */
+export async function readSheetCsv(
   spreadsheetId: string,
   sheetName: string
 ): Promise<string[][]> {
