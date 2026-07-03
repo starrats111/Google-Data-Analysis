@@ -3,7 +3,8 @@
  *
  * 目标：让「订单/点击」落在 5%~10%（即每订单 10~20 次联盟点击），避免转化率过高被联盟风控。
  *
- * 逻辑（每个「已启用换链、已匹配带追踪链接商家」的广告系列）：
+ * 逻辑（每个「已启用换链、已匹配带追踪链接商家」的广告系列，含已暂停——
+ * 广告暂停后订单仍随 cookie 归因回传数天，同样必须按比例补点击，否则出现「只有订单没有点击」）：
  *   O = 当天该商家联盟订单数（affiliate_transactions，UTC+8 切日）
  *   C = 当天该商家真实联盟点击（affiliate_click_daily）+ 我们已排程/已执行但可能尚未回流到聚合表的点击
  *   目标 T = O×rand(cpoMin,cpoMax)：订单倒推「应有点击数」，使转化率落在用户区间内。
@@ -77,18 +78,36 @@ export async function runAutoClickForUser(
   const cpoMin = Math.max(1, Math.round(100 / maxPct)) // 达标所需最少点击/订单（C≥O×cpoMin ⇒ 转化率≤maxPct）
   const cpoMax = Math.max(cpoMin + 1, Math.round(100 / minPct)) // 补刷目标上限点击/订单
 
-  // 候选系列：已启用换链、已匹配商家
-  const campaigns = await prisma.campaigns.findMany({
+  // 候选系列：已启用换链、已匹配商家。
+  // ★ active + paused 都参与：广告暂停后订单仍随 cookie 归因回传数天，联盟侧转化率风控
+  //   与 Google 状态无关；只看 active 会造成「暂停商家只有订单没有点击」（wj02 Ballboyz 事故）。
+  const allCampaigns = await prisma.campaigns.findMany({
     where: {
       user_id: userId,
-      status: 'active',
-      google_status: 'ENABLED',
+      status: { in: ['active', 'paused'] },
       is_deleted: 0,
       suffix_exchange_enabled: 1,
       user_merchant_id: { not: BigInt(0) },
     },
-    select: { id: true, user_merchant_id: true, campaign_name: true, platform_connection_id: true },
+    select: { id: true, user_merchant_id: true, campaign_name: true, platform_connection_id: true, status: true, google_status: true },
   })
+  // 每个 (商家×连接) 只保留一个「载体」系列，优先 active+ENABLED > active > 最新的暂停系列，
+  // 防止同商家多系列重复计算缺口、重复下任务。
+  const rankOf = (c: { status: string; google_status: string | null }) =>
+    c.status === 'active' && c.google_status === 'ENABLED' ? 2 : c.status === 'active' ? 1 : 0
+  const byMerchantConn = new Map<string, (typeof allCampaigns)[number]>()
+  const campaignIdsByKey = new Map<string, bigint[]>()
+  for (const c of allCampaigns) {
+    const key = `${c.user_merchant_id}:${c.platform_connection_id ?? 'null'}`
+    const prev = byMerchantConn.get(key)
+    if (!prev || rankOf(c) > rankOf(prev) || (rankOf(c) === rankOf(prev) && c.id > prev.id)) {
+      byMerchantConn.set(key, c)
+    }
+    const ids = campaignIdsByKey.get(key) ?? []
+    ids.push(c.id)
+    campaignIdsByKey.set(key, ids)
+  }
+  const campaigns = [...byMerchantConn.values()]
   if (campaigns.length === 0) return res
 
   // 关联商家（platform / merchant_id / 各账号链接）
@@ -159,9 +178,11 @@ export async function runAutoClickForUser(
     })
     const realClicksToday = todayAgg._sum.clicks ?? 0
 
-    // 我们今天已排程/执行的点击（按系列 → 任务 → 子项）
+    // 我们今天已排程/执行的点击（同商家×同连接的全部系列 → 任务 → 子项，避免载体系列切换后漏计已排点击）
+    const keyForC = `${c.user_merchant_id}:${c.platform_connection_id ?? 'null'}`
+    const siblingCampaignIds = campaignIdsByKey.get(keyForC) ?? [c.id]
     const todayTasks = await prisma.kyads_click_tasks.findMany({
-      where: { campaign_id: c.id, user_id: userId, is_deleted: 0, created_at: { gte: todayStartUTC } },
+      where: { campaign_id: { in: siblingCampaignIds }, user_id: userId, is_deleted: 0, created_at: { gte: todayStartUTC } },
       select: { id: true },
     })
     const todayTaskIds = todayTasks.map((t) => t.id)
