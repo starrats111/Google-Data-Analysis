@@ -72,12 +72,37 @@ export async function createCampaignDedup(
     return active;
   }
 
-  // 2) 防回灌：无活跃行但有软删行（被刻意清洗）→ 跳过
+  // 2) 无活跃行但有软删行：
+  //    - 若本轮 Google 实时状态为 ENABLED（在服务/在花钱）→ 该广告并非"被清理的僵尸"，
+  //      而是"仍在跑却被误删/迁移遗漏"的活广告，必须复活（否则订单进来 CRM 失明、无法补刷）。
+  //      商家可在多 MCC / 多 CG 账号 / 同 MCC 内合法重复投放；只要 Google 说 ENABLED 就以其为准。
+  //    - 其余（PAUSED/REMOVED 等）保持防回灌：被刻意清洗的暂停/移除僵尸不再拉回。
+  //    严格只认 ENABLED 复活，避免把人为暂停清理掉的广告误拉回。
   const deleted = await prisma.campaigns.findFirst({
     where: { user_id: ctx.userId, google_campaign_id: ctx.gcid, is_deleted: 1 },
-    select: { id: true },
+    orderBy: { id: "asc" },
+    select: { id: true, mcc_id: true, customer_id: true },
   });
-  if (deleted) return null;
+  if (deleted) {
+    const googleStatus = (data as { google_status?: string | null }).google_status ?? null;
+    if (googleStatus !== "ENABLED") return null; // 非 ENABLED：维持防回灌
+
+    const nextMcc = (data as { mcc_id?: bigint | null }).mcc_id ?? deleted.mcc_id ?? null;
+    const nextCustomer =
+      (data as { customer_id?: string | null }).customer_id ?? deleted.customer_id ?? null;
+    const resurrectData: Record<string, unknown> = {
+      is_deleted: 0,
+      google_status: "ENABLED",
+      status: "active",
+      last_google_sync_at: new Date(),
+    };
+    if (nextMcc != null) resurrectData.mcc_id = nextMcc;
+    if (nextCustomer != null) resurrectData.customer_id = nextCustomer;
+    console.log(
+      `[CampaignDedup] 复活软删活广告 gcid=${ctx.gcid}（Google 实时 ENABLED）campaign#${deleted.id}`,
+    );
+    return await prisma.campaigns.update({ where: { id: deleted.id }, data: resurrectData });
+  }
 
   // 3) 真正不存在 → 创建；P2002（唯一约束/并发）→ 取已存在活跃行返回
   try {

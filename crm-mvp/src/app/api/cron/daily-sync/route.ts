@@ -714,6 +714,32 @@ async function syncAllCampaignStatuses(): Promise<unknown> {
             },
           });
           updated += result.count;
+
+          // 复活闸门：Google 实时 ENABLED 但 CRM 无活跃行（被误删/迁移遗漏的活广告）→ 复活。
+          // 商家可在多 MCC / 多 CG 账号合法重复投放；只要 Google 说 ENABLED 就以其为准，
+          // 否则订单进来 CRM 失明、无法补刷（"只有订单没有点击"）。仅认 ENABLED，PAUSED/REMOVED 不复活。
+          // result.count===0 已保证无活跃孪生行；同 gcid 若有多条软删行只复活最早一条，避免重建重复行（C-095 双计）。
+          if (result.count === 0 && s.status === "ENABLED") {
+            const softRow = await prisma.campaigns.findFirst({
+              where: { user_id: mcc.user_id, google_campaign_id: s.campaign_id, is_deleted: 1 },
+              orderBy: { id: "asc" },
+              select: { id: true, campaign_name: true },
+            });
+            if (softRow) {
+              await prisma.campaigns.update({
+                where: { id: softRow.id },
+                data: {
+                  is_deleted: 0,
+                  google_status: "ENABLED",
+                  status: "active",
+                  customer_id: s.customer_id || undefined,
+                  last_google_sync_at: new Date(),
+                },
+              });
+              updated++;
+              log(`  [复活] Google 实时 ENABLED 的软删活广告 gcid=${s.campaign_id} campaign#${softRow.id} cid=${s.customer_id}`);
+            }
+          }
         }
       }
 
