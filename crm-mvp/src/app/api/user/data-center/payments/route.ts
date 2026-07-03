@@ -3,6 +3,7 @@ import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { parseTxnDateStart, parseTxnDateEndExclusive, txnStartOfMonthUTC } from "@/lib/date-utils";
+import { paymentDisplayAmount } from "@/lib/report-metrics";
 
 /**
  * GET /api/user/data-center/payments
@@ -10,6 +11,8 @@ import { parseTxnDateStart, parseTxnDateEndExclusive, txnStartOfMonthUTC } from 
  * D-072：打款/实付记录列表（affiliate_payments）。
  * 结算页「打款记录」区使用。支持时间 / 平台 / 员工筛选（与结算查询一致）。
  * 时间口径按 paid_date（实际打款日）。
+ * 金额口径（2026-07 对齐平台后台）：amount 一律为平台毛额（gross 优先，空则回退净额），
+ * 与平台后台打款记录逐笔一致；净额与手续费以 net_amount / fee 附带返回。
  */
 export async function GET(req: NextRequest) {
   const user = getUserFromRequest(req);
@@ -128,6 +131,9 @@ export async function GET(req: NextRequest) {
     const accountName = r.platform_connection_id ? (connNameMap.get(String(r.platform_connection_id)) || "") : "";
     const memberName = isLeader ? (userNameMap.get(String(r.user_id)) || "") : "";
     const payee = r.platform_connection_id ? (connPayeeMap.get(String(r.platform_connection_id)) || "") : "";
+    // 对齐平台后台：展示金额一律用毛额（gross 优先），净额/手续费附带返回
+    const netAmount = +Number(r.amount).toFixed(2);
+    const displayAmount = +paymentDisplayAmount(Number(r.amount), r.gross_amount != null ? Number(r.gross_amount) : null).toFixed(2);
     return {
       id: String(r.id),
       platform: r.platform,
@@ -137,7 +143,9 @@ export async function GET(req: NextRequest) {
       payment_no: r.payment_no,
       source_kind: r.source_kind,
       paid_date: r.paid_date ? r.paid_date.toISOString().slice(0, 10) : null,
-      amount: +Number(r.amount).toFixed(2),
+      amount: displayAmount,
+      net_amount: netAmount,
+      fee: +(displayAmount - netAmount).toFixed(2),
       gross_amount: r.gross_amount != null ? +Number(r.gross_amount).toFixed(2) : null,
       currency: r.currency,
       payment_type: r.payment_type,

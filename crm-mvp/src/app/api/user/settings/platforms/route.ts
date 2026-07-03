@@ -18,11 +18,32 @@ export async function POST(req: NextRequest) {
   const user = getUserFromRequest(req);
   if (!user) return apiError("未授权", 401);
 
-  const { id, platform, account_name, api_key, publish_site_id, payee } = await req.json();
+  const { id, platform, account_name, api_key, publish_site_id, payee, payment_method_id } = await req.json();
   if (!platform) return apiError("平台代码不能为空");
 
   const userId = BigInt(user.userId);
   const normalizedPayee = typeof payee === "string" ? payee.trim() : "";
+
+  // R-01：校验收款方式属于本人所在小组（payment_method_id 传 null 表示解绑）
+  let methodId: bigint | null | undefined = undefined;
+  if (payment_method_id !== undefined) {
+    if (payment_method_id === null || payment_method_id === "") {
+      methodId = null;
+    } else {
+      const me = await prisma.users.findFirst({
+        where: { id: userId, is_deleted: 0 },
+        select: { team_id: true },
+      });
+      const method = await prisma.payment_methods.findFirst({
+        where: { id: BigInt(payment_method_id), is_deleted: 0 },
+        select: { id: true, team_id: true },
+      });
+      if (!method || !me?.team_id || method.team_id !== me.team_id) {
+        return apiError("收款方式不存在或不属于本组");
+      }
+      methodId = method.id;
+    }
+  }
 
   // 编辑模式：按 id 更新
   if (id) {
@@ -37,6 +58,7 @@ export async function POST(req: NextRequest) {
     if (account_name !== undefined) data.account_name = account_name;
     if (api_key && api_key.trim()) data.api_key = api_key;
     if (payee !== undefined) data.payee = normalizedPayee || null;
+    if (methodId !== undefined) data.payment_method_id = methodId;
 
     await prisma.platform_connections.update({ where: { id: existing.id }, data });
     return apiSuccess(null, "保存成功");
@@ -58,6 +80,7 @@ export async function POST(req: NextRequest) {
     const data: Record<string, unknown> = {};
     if (providedName) data.account_name = providedName;
     if (payee !== undefined) data.payee = normalizedPayee || null;
+    if (methodId !== undefined) data.payment_method_id = methodId;
     if (publish_site_id !== undefined) data.publish_site_id = publish_site_id ? BigInt(publish_site_id) : null;
     if (Object.keys(data).length > 0) {
       await prisma.platform_connections.update({ where: { id: sameKeyConn.id }, data });
@@ -99,6 +122,7 @@ export async function POST(req: NextRequest) {
       api_key: trimmedKey,
       channel_id: null,
       payee: normalizedPayee || null,
+      payment_method_id: methodId ?? null,
       publish_site_id: publish_site_id ? BigInt(publish_site_id) : null,
       status: "connected",
     },

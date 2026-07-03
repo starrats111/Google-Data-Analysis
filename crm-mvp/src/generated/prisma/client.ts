@@ -329,6 +329,21 @@ export type semrush_keyword_cache = Prisma.semrush_keyword_cacheModel
  */
 export type semrush_health_logs = Prisma.semrush_health_logsModel
 /**
+ * Model payment_methods
+ * 
+ */
+export type payment_methods = Prisma.payment_methodsModel
+/**
+ * Model report_overrides
+ * 
+ */
+export type report_overrides = Prisma.report_overridesModel
+/**
+ * Model payment_binding_snapshots
+ * 
+ */
+export type payment_binding_snapshots = Prisma.payment_binding_snapshotsModel
+/**
  * Model policy_violations
  * 
  */

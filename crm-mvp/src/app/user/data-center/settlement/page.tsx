@@ -12,6 +12,7 @@ import {
 import type { ColumnsType } from "antd/es/table";
 import { COLORS } from "@/styles/themeConfig";
 import { PLATFORMS } from "@/lib/constants";
+import { TXN_TZ_NOTE } from "@/lib/report-metrics";
 import MonthlySettleProgressCard from "@/components/data-center/MonthlySettleProgressCard";
 import dayjs, { Dayjs } from "dayjs";
 import AppPageHeader from "@/components/AppPageHeader";
@@ -91,7 +92,12 @@ interface PaymentRow {
   payment_no: string;
   source_kind: string;
   paid_date: string | null;
+  /** 展示金额 = 平台毛额（gross 优先，与平台后台一致；gross 缺失回退净额） */
   amount: number;
+  /** 净额（到账金额） */
+  net_amount?: number;
+  /** 手续费 = 毛额 − 净额 */
+  fee?: number;
   gross_amount: number | null;
   currency: string;
   payment_type: string | null;
@@ -383,7 +389,14 @@ export default function SettlementPage() {
     {
       title: "实付佣金($)", dataIndex: "amount", width: 120, align: "right",
       sorter: (a, b) => a.amount - b.amount,
-      render: (v: number) => <span style={{ color: "#1890ff", fontWeight: 600 }}>${v.toFixed(2)}</span>,
+      render: (v: number, r: PaymentRow) =>
+        r.fee && r.fee > 0 ? (
+          <Tooltip title={`平台毛额 $${v.toFixed(2)}（到账净额 $${(r.net_amount ?? v).toFixed(2)}，手续费 $${r.fee.toFixed(2)}）`}>
+            <span style={{ color: "#1890ff", fontWeight: 600, cursor: "help" }}>${v.toFixed(2)}</span>
+          </Tooltip>
+        ) : (
+          <span style={{ color: "#1890ff", fontWeight: 600 }}>${v.toFixed(2)}</span>
+        ),
     },
     {
       title: "类型", dataIndex: "source_kind", width: 90, align: "center",
@@ -521,7 +534,7 @@ export default function SettlementPage() {
         />
       )}
       <Text type="secondary" style={{ fontSize: 11 }}>
-        注：本页为账户级实际到账（提现/打款，按打款日，来源支付API），用于对账参照；与「佣金查询」里订单级「已支付」桶口径不同，二者因手续费/汇率/时间归属会有差额。
+        注：本页为账户级打款记录（提现/打款，按打款日，来源支付API），金额为平台毛额、与平台后台逐笔一致（含手续费的行悬停可见到账净额）；与「佣金查询」里订单级「已支付」桶口径不同，二者因汇率/时间归属会有差额。
       </Text>
     </Card>
   ) : (
@@ -814,6 +827,7 @@ export default function SettlementPage() {
                 }}
               />
             )}
+            <Text type="secondary" style={{ fontSize: 11 }}>* {TXN_TZ_NOTE}</Text>
           </Card>
         </>
       ) : (

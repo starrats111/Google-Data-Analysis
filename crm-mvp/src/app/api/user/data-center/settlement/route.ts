@@ -3,7 +3,12 @@ import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
-import { parseTxnDateStart, parseTxnDateEndExclusive, txnStartOfMonthUTC } from "@/lib/date-utils";
+import { sqlTxnMonth, sqlTxnRange, nextDayStr } from "@/lib/report-metrics";
+
+/** 当前北京时间自然日 "YYYY-MM-DD"（可回拨 N 天） */
+function cstDateStr(daysAgo = 0): string {
+  return new Date(Date.now() + 8 * 3600 * 1000 - daysAgo * 86400000).toISOString().slice(0, 10);
+}
 
 /**
  * GET /api/user/data-center/settlement
@@ -33,20 +38,20 @@ export async function GET(req: NextRequest) {
   const userId = BigInt(user.userId);
   const isLeader = user.role === "leader" && user.teamId;
 
-  // C-080: affiliate_transactions 按 UTC 切日，边界与联盟平台后台对齐
-  const start = dateStart
-    ? parseTxnDateStart(dateStart)
+  // 切日口径走 report-metrics：按各平台后台显示时间（北京时间钟面）过滤，与平台后台一致
+  const startStr = dateStart
+    ? dateStart
     : (() => {
         switch (range) {
-          case "3m": return new Date(Date.now() - 90 * 86400000);
-          case "6m": return new Date(Date.now() - 180 * 86400000);
-          case "1y": return new Date(Date.now() - 365 * 86400000);
+          case "3m": return cstDateStr(90);
+          case "6m": return cstDateStr(180);
+          case "1y": return cstDateStr(365);
           case "1m":
           default:
-            return txnStartOfMonthUTC();
+            return `${cstDateStr().slice(0, 7)}-01`; // 本月（CST）月初
         }
       })();
-  const end = dateEnd ? parseTxnDateEndExclusive(dateEnd) : new Date();
+  const endExclStr = nextDayStr(dateEnd || cstDateStr());
 
   // 确定查询范围的用户 ID 列表
   let userIds: bigint[] = [];
@@ -82,7 +87,8 @@ export async function GET(req: NextRequest) {
 
   // 构建 WHERE 子句（避免直接拼接，使用参数化占位符）
   const uidPlaceholders = userIds.map(() => "?").join(",");
-  const baseParams: unknown[] = [...userIds, start, end];
+  const txnRange = sqlTxnRange("affiliate_transactions", startStr, endExclStr);
+  const baseParams: unknown[] = [...userIds, ...txnRange.params];
 
   let midClause = "";
   if (mid) { midClause = " AND merchant_id = ?"; baseParams.push(mid); }
@@ -92,7 +98,7 @@ export async function GET(req: NextRequest) {
 
   const txnConnValid = sqlAffiliateTxnValidPlatformConnection("affiliate_transactions");
   const baseWhere = `user_id IN (${uidPlaceholders}) AND is_deleted = 0
-    AND transaction_time >= ? AND transaction_time < ?${midClause}${platformClause}
+    AND ${txnRange.cond}${midClause}${platformClause}
     AND ${txnConnValid}`;
 
   // ── 1. 汇总（单次聚合，不拉原始行） ──────────────────────────────────────
@@ -177,14 +183,14 @@ export async function GET(req: NextRequest) {
     order_amount: fix2(Number(m.order_amount)),
   }));
 
-  // ── 3. 按月聚合（C-084：按 CST 归月，与联盟平台后台本地日期一致；推翻 C-080）─────────
+  // ── 3. 按月聚合（按各平台后台显示时间归月，与平台后台一致；统一走 report-metrics）───
   const monthlyRows = await prisma.$queryRawUnsafe<{
     month: string;
     total: number; approved: number; rejected: number; paid: number; pending: number;
     orders: number;
   }[]>(`
     SELECT
-      DATE_FORMAT(CONVERT_TZ(transaction_time, '+00:00', '+08:00'), '%Y-%m') AS month,
+      ${sqlTxnMonth("affiliate_transactions")} AS month,
       SUM(CAST(commission_amount AS DECIMAL(14,4))) AS total,
       SUM(CASE WHEN status = 'approved' THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END) AS approved,
       SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END) AS rejected,

@@ -12,6 +12,8 @@ import {
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 import AppPageHeader from "@/components/AppPageHeader";
+import { sumReportStat, TXN_TZ_NOTE } from "@/lib/report-metrics";
+import MonthlyReportTab from "./MonthlyReportTab";
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -49,8 +51,8 @@ function monthLabel(m: string): string {
   return m.slice(5).replace(/^0/, "") + "月";
 }
 
-// ────────── 主页面 ─────────────────────────────────────────────────────────────
-export default function TeamReportPage() {
+// ────────── 年度总览 Tab（原主页面） ──────────────────────────────────────────
+function AnnualReportTab() {
   const { message } = App.useApp();
   const [year, setYear] = useState<number>(dayjs().year());
   const [loading, setLoading] = useState(false);
@@ -82,7 +84,7 @@ export default function TeamReportPage() {
 
   useEffect(() => { fetchReport(); }, [fetchReport]);
 
-  // ── 计算汇总值 ──────────────────────────────────────────────────────
+  // ── 计算汇总值（统一走 report-metrics.sumReportStat，与导出 Excel 同源） ──
   const getStat = useCallback((
     metric: MetricKey,
     monthKey: string | null,  // null = 全年
@@ -90,39 +92,9 @@ export default function TeamReportPage() {
     platform: string | null   // null = 全平台
   ): number => {
     if (!report) return 0;
-    if (metric === "net") {
-      // 平台列：只显示有效佣金（广告费无法按平台拆分，不在此扣）
-      // 小计/合计列（platform===null）：有效佣金 - 广告费 = 真实净收益
-      const active = getStat("active", monthKey, userId, platform);
-      const spend  = platform === null ? getStat("adSpend", monthKey, userId, null) : 0;
-      return active - spend;
-    }
-
     const months = monthKey ? [monthKey] : report.months;
     const userIds = userId ? [userId] : report.members.map((m) => m.id);
-    let total = 0;
-
-    for (const m of months) {
-      for (const uid of userIds) {
-        if (metric === "adSpend") {
-          // 广告费无平台维度：只有"全平台汇总"(platform===null)才返回实际值
-          if (platform !== null) return 0;
-          total += report.adSpend[m]?.[uid] || 0;
-          continue;
-        }
-        const userData = report.data[m]?.[uid];
-        if (!userData) continue;
-        const platforms = platform ? [platform] : Object.keys(userData);
-        for (const p of platforms) {
-          const stat = userData[p];
-          if (!stat) continue;
-          if (metric === "total")    total += stat.total;
-          if (metric === "rejected") total += stat.rejected;
-          if (metric === "active")   total += stat.active;
-        }
-      }
-    }
-    return total;
+    return sumReportStat(metric, months, userIds, platform, report.data, report.adSpend);
   }, [report]);
 
   // ── 月度选项卡 ──────────────────────────────────────────────────────
@@ -387,10 +359,10 @@ export default function TeamReportPage() {
           )}
 
           {/* 成员明细折叠区 */}
-          {report && activeMonth !== "annual" && (
+          {report && (
             <div style={{ marginTop: 16 }}>
               <Text type="secondary" style={{ fontSize: 12 }}>
-                * 广告费来源：Google Ads 每日同步数据；佣金来源：各联盟平台 API 实时拉取数据
+                * 广告费来源：Google Ads 每日同步数据；佣金来源：各联盟平台 API 实时拉取数据。{TXN_TZ_NOTE}。
               </Text>
             </div>
           )}
@@ -461,5 +433,22 @@ export default function TeamReportPage() {
         .row-net td { background: #fffbe6 !important; font-weight: 600; }
       `}</style>
     </div>
+  );
+}
+
+// ────────── 主页面：年度总览 / 月度报表 双 Tab ────────────────────────────────
+export default function TeamReportPage() {
+  const [activeTab, setActiveTab] = useState("annual");
+  return (
+    <Tabs
+      activeKey={activeTab}
+      onChange={setActiveTab}
+      destroyOnHidden
+      style={{ padding: "0 8px" }}
+      items={[
+        { key: "annual", label: "年度总览", children: <AnnualReportTab /> },
+        { key: "monthly", label: "月度报表", children: <MonthlyReportTab /> },
+      ]}
+    />
   );
 }

@@ -15,6 +15,7 @@ import {
 import AppPageHeader from "@/components/AppPageHeader";
 import type { ColumnsType } from "antd/es/table";
 import { PLATFORMS } from "@/lib/constants";
+import { TXN_TZ_NOTE } from "@/lib/report-metrics";
 import { POLICY_CATEGORY_MAP, POLICY_CATEGORY_LABELS } from "@/lib/policy-hub/policy-categories";
 import dayjs, { Dayjs } from "dayjs";
 import utc from "dayjs/plugin/utc";
@@ -125,6 +126,8 @@ export default function DataCenterPage() {
     account_name: string; platform: string; total_commission: number;
     approved_commission: number; paid_commission: number;
     rejected_commission: number; pending_commission: number; order_count: number; order_amount: number;
+    /** 连接绑定（创建）日期；bound_after_range_start=true 表示该账号在查询区间中途才绑定，行内仅含绑定后的数据 */
+    connection_created_at?: string | null; bound_after_range_start?: boolean;
   }[]>([]);
   const [commissionByMerchant, setCommissionByMerchant] = useState<{
     user_merchant_id: string; merchant_name: string; platform: string; total_commission: number;
@@ -1053,7 +1056,16 @@ export default function DataCenterPage() {
                 pagination={false}
                 scroll={{ x: 820 }}
                 columns={[
-                  { title: "账号", dataIndex: "account_name", width: 160, ellipsis: true, render: (v: string, r: (typeof commissionByAccount)[0]) => <Tag color="blue">{v} ({r.platform})</Tag> },
+                  { title: "账号", dataIndex: "account_name", width: 200, ellipsis: true, render: (v: string, r: (typeof commissionByAccount)[0]) => (
+                    <Space size={4}>
+                      <Tag color="blue">{v} ({r.platform})</Tag>
+                      {r.bound_after_range_start && r.connection_created_at && (
+                        <Tooltip title={`该账号 ${r.connection_created_at} 起绑定到当前员工，本行仅含绑定后的数据；绑定前同账号的佣金归属原员工（与平台后台全量视角存在差额属正常）`}>
+                          <Tag color="orange" style={{ fontSize: 11, cursor: "help" }}>{r.connection_created_at.slice(5).replace("-", "/")}起绑定</Tag>
+                        </Tooltip>
+                      )}
+                    </Space>
+                  ) },
                   { title: "总佣金", dataIndex: "total_commission", width: 100, align: "right" as const, sorter: (a: typeof commissionByAccount[0], b: typeof commissionByAccount[0]) => a.total_commission - b.total_commission, defaultSortOrder: "descend" as const, render: (v: number) => <Text style={{ color: v > 0 ? "#389e0d" : undefined }}>${v.toFixed(2)}</Text> },
                   { title: "已确认", dataIndex: "approved_commission", width: 100, align: "right" as const, sorter: (a: typeof commissionByAccount[0], b: typeof commissionByAccount[0]) => a.approved_commission - b.approved_commission, render: (v: number) => <Text style={{ color: v > 0 ? "#1890ff" : undefined }}>${v.toFixed(2)}</Text> },
                   { title: "已支付", dataIndex: "paid_commission", width: 100, align: "right" as const, sorter: (a: typeof commissionByAccount[0], b: typeof commissionByAccount[0]) => a.paid_commission - b.paid_commission, render: (v: number) => <Text style={{ color: v > 0 ? "#13c2c2" : undefined }}>${v.toFixed(2)}</Text> },
@@ -1083,6 +1095,7 @@ export default function DataCenterPage() {
             ),
           },
         ]} />
+        <Text type="secondary" style={{ fontSize: 12 }}>* {TXN_TZ_NOTE}</Text>
       </Modal>
 
       <Modal

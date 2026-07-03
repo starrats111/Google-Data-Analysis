@@ -913,6 +913,15 @@ function parseTransactions(platform: string, data: Record<string, unknown>): Pla
     // 对无时区字符串强制按 UTC 解析（line ~857），会导致 CST 字符串被错解为 UTC，
     // 产生 8h 偏移：4/30 16:00-24:00 CST 下单的订单会被错放到 5/1。
     // 必须优先用 ori_order_time（Unix 秒）保证时区正确。
+    //
+    // 2026-07-02 对齐平台重构·时区总结（阶段0逐平台实测，勿轻改）：
+    // - RW/CG/PM/BSH/CF/LB：order_time 为 Unix 秒 → 真 UTC 入库，无漂移。
+    // - MUI/EV：走 ori_order_time（Unix 秒）→ 真 UTC 入库，无漂移。
+    // - LH：交易 API **只有** CST 字符串（无 Unix 字段，report_time 实测为北京时间），
+    //   经本函数强制按 UTC 解析后，库内 transaction_time 实为「CST 钟面」。
+    //   ⚠️ 刻意保持现状不改：全部 LH 历史数据均为此约定，改真 UTC 需回刷全量历史。
+    //   展示层统一由 report-metrics.ts 的 CST_FACE_PLATFORMS 处理（LH 不再 +8）。
+    //   如未来改动此处 LH 解析，必须同步回刷历史 + 更新 CST_FACE_PLATFORMS。
     const txnTime = parseTimestamp(
       // C-087：Unix 秒字段优先（无时区歧义）
       item.ori_order_time || item.oriOrderTime ||

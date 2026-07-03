@@ -52,6 +52,7 @@ const userMenuItems: MenuItem[] = [
     children: [
       { key: "/user/data-center", icon: <TableOutlined />, label: "数据中心" },
       { key: "/user/data-center/settlement", icon: <AccountBookOutlined />, label: "结算查询" },
+      { key: "/user/settlement-report", icon: <BarChartOutlined />, label: "结算月报" },
       { key: "/user/data-center/insights", icon: <BulbOutlined />, label: "AI 浏览" },
     ],
   },
