@@ -72,9 +72,12 @@ export async function runAutoClickForUser(
     details: [],
   }
 
-  // 用户级开关 + 转化率(订单/点击)区间配置
+  // 用户级开关 + 转化率(订单/点击)区间配置。
+  // ★ link_exchange_disabled=1（jy 交垟队等「只同步数据、不参与换链接/刷点击」）一律不补刷：
+  //   此前 auto-click 只查 click_control_enabled，jy 组该开关仍为 1，导致订单同步后仍自动补刷，
+  //   违反「只记录数据」约定（实测 jy06/jy09 RW 仍被刷）。在补刷唯一决策入口堵死。
   const user = await prisma.users.findFirst({
-    where: { id: userId, is_deleted: 0, status: 'active', click_control_enabled: 1 },
+    where: { id: userId, is_deleted: 0, status: 'active', click_control_enabled: 1, link_exchange_disabled: 0 },
     select: { id: true, click_control_ratio_min_pct: true, click_control_ratio_max_pct: true },
   })
   if (!user) return res
