@@ -658,7 +658,10 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
 
 // 领取商家
 export const POST = withUser(async (req: NextRequest, { user }) => {
-  const { merchant_id, target_country, holiday_name, platform_connection_id, mcc_account_id, language } = await req.json();
+  // relaunch=true：对「已领取」商家再上一条独立广告（同一商家多广告），
+  // 不走破坏性的「取消领取→重领取」，不覆盖已有广告依赖的 user_merchants 单值字段，
+  // 只新建一条 campaign 并显式绑定所选连接（见下文 isRelaunch）。
+  const { merchant_id, target_country, holiday_name, platform_connection_id, mcc_account_id, language, relaunch } = await req.json();
   if (!merchant_id) return apiError("缺少商家 ID");
   if (!target_country) return apiError("请选择目标国家");
   if (target_country.length > 8) return apiError("国家代码格式无效");
@@ -711,18 +714,43 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
     selectedCampaignLink = links[String(connId)] || null;
   }
 
-  // 更新商家状态（含选定账号的推广链接）
-  await prisma.user_merchants.update({
-    where: { id: BigInt(merchant_id) },
-    data: {
-      status: "claimed",
-      claimed_at: new Date(),
-      target_country,
-      holiday_name: holiday_name || null,
-      platform_connection_id: connId,
-      ...(selectedCampaignLink ? { campaign_link: selectedCampaignLink, tracking_link: selectedCampaignLink } : {}),
-    },
-  });
+  // relaunch（再投一次）：只允许对「已领取/已暂停」商家再建一条独立广告。
+  const isRelaunch = relaunch === true;
+  if (isRelaunch && merchant.status !== "claimed" && merchant.status !== "paused") {
+    return apiError("该商家尚未领取，请先领取再使用「再投一次」");
+  }
+
+  if (isRelaunch) {
+    // 非破坏性：不覆盖已有广告依赖的 user_merchants 单值字段（status/target_country/campaign_link/platform_connection_id 保持不变），
+    // 仅在选了新连接且其链接已知时，把该连接链接 merge 进 connection_campaign_links（新增键、不动旧键），
+    // 使新广告按自己的连接解析到正确链接（pickCampaignAffiliateLink 按 campaign.platform_connection_id 取键）。
+    if (connId && selectedCampaignLink) {
+      const existing =
+        merchant.connection_campaign_links && typeof merchant.connection_campaign_links === "object" && !Array.isArray(merchant.connection_campaign_links)
+          ? { ...(merchant.connection_campaign_links as Record<string, string>) }
+          : {};
+      if (existing[String(connId)] !== selectedCampaignLink) {
+        existing[String(connId)] = selectedCampaignLink;
+        await prisma.user_merchants.update({
+          where: { id: BigInt(merchant_id) },
+          data: { connection_campaign_links: existing },
+        });
+      }
+    }
+  } else {
+    // 首次领取：更新商家状态（含选定账号的推广链接）
+    await prisma.user_merchants.update({
+      where: { id: BigInt(merchant_id) },
+      data: {
+        status: "claimed",
+        claimed_at: new Date(),
+        target_country,
+        holiday_name: holiday_name || null,
+        platform_connection_id: connId,
+        ...(selectedCampaignLink ? { campaign_link: selectedCampaignLink, tracking_link: selectedCampaignLink } : {}),
+      },
+    });
+  }
 
   // 读取广告默认设置
   const adSettings = await prisma.ad_default_settings.findFirst({
@@ -756,6 +784,9 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
       user_merchant_id: BigInt(merchant_id),
       campaign_name: draftName,
       mcc_id: claimMccId,
+      // 显式绑定所选连接：刷点击/自动补刷按 campaign.platform_connection_id 解析该连接的链接，
+      // 保证同一商家多条广告能「各投各号」（尤其 relaunch 选了不同连接时）。
+      platform_connection_id: connId,
       daily_budget: adSettings?.daily_budget || 2.0,
       bidding_strategy: adSettings?.bidding_strategy || "MAXIMIZE_CLICKS",
       max_cpc_limit: adSettings?.max_cpc || 0.3,
@@ -889,7 +920,7 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
     article_id: article.id,
     policy_status: merchant.policy_status,
     policy_category_code: merchant.policy_category_code,
-  }), "领取成功");
+  }), isRelaunch ? "再投成功，已新增一条独立广告" : "领取成功");
 });
 
 // 批量操作（如批量释放）

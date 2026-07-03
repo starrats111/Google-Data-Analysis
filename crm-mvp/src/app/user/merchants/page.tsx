@@ -567,6 +567,8 @@ export default function MerchantsPage() {
   const [cc, setCc] = useState(""); const [qc, setQc] = useState("");
   const { data: holidays, isLoading: hl } = useApiWithParams<Holiday[]>(qc ? "/api/user/holidays" : null, { country: qc });
   const [claimModal, setClaimModal] = useState(false); const [claimM, setClaimM] = useState<Merchant | null>(null); const [claimForm] = Form.useForm();
+  // 再投一次（同一商家多广告，非破坏性）：复用领取弹窗，提交时带 relaunch=true
+  const [relaunchMode, setRelaunchMode] = useState(false);
   const [platformConns, setPlatformConns] = useState<{ id: string; platform: string; account_name: string }[]>([]);
   const [mccAccounts, setMccAccounts] = useState<{ id: string; mcc_id: string; mcc_name: string }[]>([]);
   const [rModal, setRModal] = useState(false); const [rTitle, setRTitle] = useState(""); const [rContent, setRContent] = useState("");
@@ -667,8 +669,8 @@ export default function MerchantsPage() {
     const ok = await savePersonaProfile(updated);
     if (ok) { setNewPersonaName(""); setNewPersonaTags([]); setNewPersonaDesc(""); setNewPersonaPrompt(""); setPersonaTab("library"); }
   }, [personaProfile, newPersonaName, newPersonaTags, newPersonaDesc, newPersonaPrompt, savePersonaProfile, message]);
-  const openClaimModal = useCallback(async (m: Merchant) => {
-    setClaimM(m); claimForm.resetFields(); setClaimModal(true);
+  const openClaimModal = useCallback(async (m: Merchant, relaunch = false) => {
+    setClaimM(m); setRelaunchMode(relaunch); claimForm.resetFields(); setClaimModal(true);
     try {
       const [platRes, mccRes] = await Promise.all([
         fetch("/api/user/settings/platforms").then((r) => r.json()),
@@ -708,8 +710,23 @@ export default function MerchantsPage() {
       void openClaimModal(m);
     }
   }, [chargebackHitMap, openClaimModal]);
-  const submitClaim = useCallback(async () => { const v = await claimForm.validateFields(); const r = await mutateApi("/api/user/merchants", { method: "POST", body: { merchant_id: claimM?.id, ...v } }, [/\/api\/user\/merchants/]); if (r.code === 0) { message.success("领取成功！正在跳转到广告预览..."); setClaimModal(false); const cid = (r.data as any)?.campaign_id; if (cid) { setTimeout(() => router.push(`/user/ad-preview/${cid}`), 800); } else { setTab("claimed"); } } else message.error(r.message); }, [claimForm, claimM, message, router]);
+  const submitClaim = useCallback(async () => { const v = await claimForm.validateFields(); const r = await mutateApi("/api/user/merchants", { method: "POST", body: { merchant_id: claimM?.id, ...v, ...(relaunchMode ? { relaunch: true } : {}) } }, [/\/api\/user\/merchants/]); if (r.code === 0) { message.success(relaunchMode ? "再投成功！正在跳转到广告预览..." : "领取成功！正在跳转到广告预览..."); setClaimModal(false); const cid = (r.data as any)?.campaign_id; if (cid) { setTimeout(() => router.push(`/user/ad-preview/${cid}`), 800); } else { setTab("claimed"); } } else message.error(r.message); }, [claimForm, claimM, relaunchMode, message, router]);
   const doRelease = useCallback(async (id: string) => { const r = await mutateApi("/api/user/merchants", { method: "PUT", body: { action: "release", ids: [id] } }, [/\/api\/user\/merchants/]); if (r.code === 0) message.success("已取消领取"); else message.error(r.message); }, [message]);
+  // 再投一次：二次确认后打开领取弹窗（relaunch 模式），每次都让用户重新选 MCC/连接/国家
+  const doRelaunch = useCallback((m: Merchant) => {
+    Modal.confirm({
+      title: "再投一次",
+      content: (
+        <div>
+          <div>商家：<b>{m.merchant_name}</b>（{m.platform} / {m.merchant_id}）</div>
+          <div style={{ marginTop: 8, color: "#666" }}>将为该商家<b>新增一条独立广告</b>，不影响已有广告。请在下一步重新选择 MCC / 平台账号 / 目标国家。</div>
+        </div>
+      ),
+      okText: "继续",
+      cancelText: "取消",
+      onOk: () => { void openClaimModal(m, true); },
+    });
+  }, [openClaimModal]);
   const doSearch = useCallback(() => { setSearch(searchInput); setPage(1); }, [searchInput]);
   const handleTableChange = useCallback((_p: any, _f: any, sorter: any, extra: any) => {
     if (extra.action === "sort") {
@@ -867,12 +884,13 @@ export default function MerchantsPage() {
     { title: "ATC竞争度", width: 148, render: renderAtcCompetitionCol },
     { title: "在投人数", dataIndex: "active_advertisers", width: 70, align: "center" as const, render: (v: number, rec: Merchant) => { const n = v || 0; return n > 0 ? <Button size="small" type="link" style={{ padding: 0, fontWeight: 600 }} onClick={() => showActiveAdv(rec)}>{n} 人</Button> : <span style={{ color: "#bfbfbf" }}>0</span>; } },
     { title: "标签", width: 92, render: (_: unknown, rec: any) => { const labels = rec.labels || []; if (labels.length === 0) return <span style={{ color: "#ccc" }}>-</span>; return <Space size={4} wrap>{labels.map((l: any, i: number) => <Tooltip key={i} title={l.detail}><Tag color={l.color} style={{ cursor: "pointer", marginInlineEnd: 0 }}>{l.text}</Tag></Tooltip>)}</Space>; } },
-    { title: "操作", width: 92, render: (_: unknown, rec: Merchant) => (
+    { title: "操作", width: 150, render: (_: unknown, rec: Merchant) => (
       <Space size={4}>
+        <Button size="small" type="link" style={{ padding: 0 }} onClick={() => doRelaunch(rec)}>再投一次</Button>
         <Popconfirm title="确认取消领取？" onConfirm={() => doRelease(rec.id)}><Button size="small" danger>取消领取</Button></Popconfirm>
       </Space>
     ) },
-  ], [doRelease, showActiveAdv, sortField, sortOrder, renderAtcCompetitionCol, renderChargebackRateCol, renderSettlementRateCol]);
+  ], [doRelease, doRelaunch, showActiveAdv, sortField, sortOrder, renderAtcCompetitionCol, renderChargebackRateCol, renderSettlementRateCol]);
   const availCols = useMemo(() => [
     { title: "商家名称", dataIndex: "merchant_name", width: 188, sorter: true, sortOrder: colSortOrder("merchant_name"), render: (_: string, rec: Merchant) => {
       const hitRate = chargebackHitMap.get(`${rec.platform}-${rec.merchant_id}`);
@@ -1277,7 +1295,7 @@ export default function MerchantsPage() {
         ⚠️ 同步为后台异步执行，完成后系统将推送通知，请勿重复点击
       </div>
     </Modal>
-    <Modal title={`领取商家: ${claimM?.merchant_name}`} open={claimModal} onOk={submitClaim} onCancel={() => setClaimModal(false)}>
+    <Modal title={`${relaunchMode ? "再投一次" : "领取商家"}: ${claimM?.merchant_name}`} open={claimModal} onOk={submitClaim} onCancel={() => setClaimModal(false)} okText={relaunchMode ? "再投" : "确定"}>
       {claimM?.policy_status === "restricted" && (<div style={{ marginBottom: 16, padding: "8px 12px", background: "#fff7e6", border: "1px solid #ffd591", borderRadius: 6 }}><WarningOutlined style={{ color: "#fa8c16", marginRight: 6 }} /><Text type="warning" style={{ fontSize: 13 }}>该商家属于受限类别{claimM.policy_category_code ? `（${PN[claimM.policy_category_code] || claimM.policy_category_code}）` : ""}，投放将受限。</Text></div>)}
       <Form form={claimForm} layout="vertical">
         {mccAccounts.length > 1 && (
