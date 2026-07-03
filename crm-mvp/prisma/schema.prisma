@@ -114,7 +114,8 @@ model platform_connections {
   account_name         String    @default("") @db.VarChar(32) // 账号名称，如 RW1, RW2
   api_key              String?   @db.Text
   channel_id           String?   @db.VarChar(64) // 历史遗留（AD 平台已下线），保留不再使用
-  payee                String?   @db.VarChar(64) // D-077：该账号打款的收款人（如 张文俊 / 龚建成）
+  payee                String?   @db.VarChar(64) // D-077：该账号打款的收款人（如 张文俊 / 龚建成）。R-01 起弃用，改用 payment_method_id
+  payment_method_id    BigInt?   @db.UnsignedBigInt // R-01：绑定的收款方式（payment_methods.id），组员在设置页选择
   publish_site_id      BigInt?   @db.UnsignedBigInt // 绑定的发布站点（管理员创建的全局站点）
   // D-026 status 取值：connected | error | unverified | disconnected
   // 默认 unverified（新建未测试），test-connection 成功 → connected，sync 失败 → error
@@ -1324,6 +1325,64 @@ model semrush_health_logs {
 
   @@index([checked_at], map: "idx_checked_at")
   @@index([error_type, checked_at], map: "idx_errtype_time")
+}
+
+// -----------------------------------------------------------
+// R-01. 月度收支报表 — 收款方式清单（组长维护，组员绑定）
+// 替代 platform_connections.payee 文本字段：组长在 team-settings 维护
+// 「收款人姓名 + 卡号」清单，组员为每个联盟账号选一条绑定。
+// -----------------------------------------------------------
+model payment_methods {
+  id         BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  team_id    BigInt   @db.UnsignedBigInt
+  payee_name String   @db.VarChar(64)
+  card_no    String   @db.VarChar(64)
+  is_deleted Int      @default(0) @db.TinyInt
+  created_at DateTime @default(now()) @db.DateTime(0)
+  updated_at DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([team_id, is_deleted], map: "idx_pm_team")
+}
+
+// -----------------------------------------------------------
+// R-02. 月度收支报表 — 手填覆盖值（一表三用，scope_key 区分）
+//   mcc:{mccId}                       组员广告费覆盖（原币，人×MCC×月）
+//   recv:{platform}:{account}:{H1|H2} 组员实收手工纠正（USD，半月桶）
+//   actual_cny                        组长手填实际佣金（CNY，人×月）
+// 报表读取时覆盖值优先；无覆盖回退库内计算值。
+// -----------------------------------------------------------
+model report_overrides {
+  id         BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id    BigInt   @db.UnsignedBigInt
+  month      String   @db.VarChar(7) // YYYY-MM
+  scope_key  String   @db.VarChar(64)
+  value      Decimal  @default(0.00) @db.Decimal(14, 2)
+  remark     String?  @db.VarChar(200)
+  updated_by BigInt?  @db.UnsignedBigInt
+  is_deleted Int      @default(0) @db.TinyInt
+  created_at DateTime @default(now()) @db.DateTime(0)
+  updated_at DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@unique([user_id, month, scope_key], map: "uk_ro_user_month_scope")
+  @@index([month], map: "idx_ro_month")
+}
+
+// -----------------------------------------------------------
+// R-03. 月度收支报表 — 收款方式绑定月度快照（历史月固化）
+// 历史月报表首次生成时把「当时绑定」冗余固化（存文本防清单改名/删除），
+// 之后该月只读快照，组员换绑不影响历史月显示。
+// -----------------------------------------------------------
+model payment_binding_snapshots {
+  id           BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id      BigInt   @db.UnsignedBigInt
+  month        String   @db.VarChar(7) // YYYY-MM
+  platform     String   @db.VarChar(8)
+  account_name String   @db.VarChar(32) // trim 后的账号名（与报表动态列 key 一致）
+  payee_name   String   @default("") @db.VarChar(64)
+  card_no      String   @default("") @db.VarChar(64)
+  created_at   DateTime @default(now()) @db.DateTime(0)
+
+  @@unique([user_id, month, platform, account_name], map: "uk_pbs_user_month_acct")
 }
 
 // -----------------------------------------------------------

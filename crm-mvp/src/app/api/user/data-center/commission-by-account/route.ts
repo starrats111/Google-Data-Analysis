@@ -3,11 +3,17 @@ import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
-import { parseTxnDateStart, parseTxnDateEndExclusive, txnStartOfMonthUTC } from "@/lib/date-utils";
+import { sqlTxnRange, nextDayStr } from "@/lib/report-metrics";
+
+/** 当前北京时间自然日 "YYYY-MM-DD" */
+function cstToday(): string {
+  return new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+}
 
 /**
  * GET /api/user/data-center/commission-by-account
- * 佣金明细：同时返回"按平台账号"和"按商家"两个维度，供审核复核
+ * 佣金明细：同时返回"按平台账号"和"按商家"两个维度，供审核复核。
+ * 切日口径走 report-metrics（按各平台后台显示时间，与平台后台一致）。
  */
 export async function GET(req: NextRequest) {
   const user = getUserFromRequest(req);
@@ -18,9 +24,10 @@ export async function GET(req: NextRequest) {
   const dateEnd = searchParams.get("date_end");
 
   const userId = BigInt(user.userId);
-  // C-080：affiliate_transactions 按 UTC 切日，与平台后台口径一致
-  const startDate = dateStart ? parseTxnDateStart(dateStart) : txnStartOfMonthUTC();
-  const endDate = dateEnd ? parseTxnDateEndExclusive(dateEnd) : new Date();
+  const today = cstToday();
+  const startStr = dateStart || `${today.slice(0, 7)}-01`;
+  const endExclStr = nextDayStr(dateEnd || today);
+  const txnRange = sqlTxnRange("t", startStr, endExclStr);
 
   const txnConnValid = sqlAffiliateTxnValidPlatformConnection("t");
 
@@ -48,41 +55,47 @@ export async function GET(req: NextRequest) {
       SUM(CAST(order_amount AS DECIMAL(12,2))) as order_amount
     FROM affiliate_transactions t
     WHERE t.user_id = ? AND t.is_deleted = 0
-      AND t.transaction_time >= ? AND t.transaction_time < ?
+      AND ${txnRange.cond}
       AND ${txnConnValid}
     GROUP BY t.platform_connection_id, t.platform
     ORDER BY total_commission DESC
-  `, userId, startDate, endDate);
+  `, userId, ...txnRange.params);
 
   const connIds = byAccountRows
     .map((r) => r.platform_connection_id)
     .filter((id): id is bigint => id !== null && id !== BigInt(0));
 
-  const connMap = new Map<string, string>();
+  const connMap = new Map<string, { name: string; createdAt: Date | null }>();
   if (connIds.length > 0) {
     const conns = await prisma.platform_connections.findMany({
       where: { id: { in: connIds } },
-      select: { id: true, account_name: true, platform: true },
+      select: { id: true, account_name: true, platform: true, created_at: true },
     });
     for (const c of conns) {
-      connMap.set(String(c.id), c.account_name || c.platform);
+      connMap.set(String(c.id), { name: c.account_name || c.platform, createdAt: c.created_at });
     }
   }
 
-  const byAccount = byAccountRows.map((r) => ({
-    platform_connection_id: r.platform_connection_id ? String(r.platform_connection_id) : null,
-    platform: r.platform,
-    account_name: r.platform_connection_id
-      ? (connMap.get(String(r.platform_connection_id)) || r.platform)
-      : r.platform,
-    total_commission: Number(r.total_commission || 0),
-    approved_commission: Number(r.approved_commission || 0),
-    paid_commission: Number(r.paid_commission || 0),
-    rejected_commission: Number(r.rejected_commission || 0),
-    pending_commission: Number(r.pending_commission || 0),
-    order_count: Number(r.order_count || 0),
-    order_amount: Number(r.order_amount || 0),
-  }));
+  const byAccount = byAccountRows.map((r) => {
+    const conn = r.platform_connection_id ? connMap.get(String(r.platform_connection_id)) : undefined;
+    const connCreatedAt = conn?.createdAt ? conn.createdAt.toISOString().slice(0, 10) : null;
+    return {
+      platform_connection_id: r.platform_connection_id ? String(r.platform_connection_id) : null,
+      platform: r.platform,
+      account_name: conn?.name || r.platform,
+      // 换绑说明用：连接创建（绑定）日期。若晚于查询起始日，说明该行仅含绑定后的数据，
+      // 绑定前同账号的历史佣金仍归属原员工（口径：保持发生时归属，见 2026-07 拍板）。
+      connection_created_at: connCreatedAt,
+      bound_after_range_start: !!(connCreatedAt && connCreatedAt > startStr),
+      total_commission: Number(r.total_commission || 0),
+      approved_commission: Number(r.approved_commission || 0),
+      paid_commission: Number(r.paid_commission || 0),
+      rejected_commission: Number(r.rejected_commission || 0),
+      pending_commission: Number(r.pending_commission || 0),
+      order_count: Number(r.order_count || 0),
+      order_amount: Number(r.order_amount || 0),
+    };
+  });
 
   // ─── 维度二：按商家聚合（与总览同口径，用于审核复核） ───
   const byMerchantRows = await prisma.$queryRawUnsafe<{
@@ -110,11 +123,11 @@ export async function GET(req: NextRequest) {
       SUM(CAST(order_amount AS DECIMAL(12,2))) as order_amount
     FROM affiliate_transactions t
     WHERE t.user_id = ? AND t.is_deleted = 0
-      AND t.transaction_time >= ? AND t.transaction_time < ?
+      AND ${txnRange.cond}
       AND ${txnConnValid}
     GROUP BY t.user_merchant_id
     ORDER BY total_commission DESC
-  `, userId, startDate, endDate);
+  `, userId, ...txnRange.params);
 
   const byMerchant = byMerchantRows.map((r) => ({
     user_merchant_id: String(r.user_merchant_id),

@@ -441,6 +441,9 @@ export const ModelName = {
   user_atc_alert_log: 'user_atc_alert_log',
   semrush_keyword_cache: 'semrush_keyword_cache',
   semrush_health_logs: 'semrush_health_logs',
+  payment_methods: 'payment_methods',
+  report_overrides: 'report_overrides',
+  payment_binding_snapshots: 'payment_binding_snapshots',
   policy_violations: 'policy_violations'
 } as const
 
@@ -457,7 +460,7 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
     omit: GlobalOmitOptions
   }
   meta: {
-    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "parent_networks" | "platform_blacklist" | "ad_rejection_feedback" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "holiday_calendar" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "ad_generation_jobs" | "ad_submit_jobs" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "google_mcc_accounts" | "affiliate_transactions" | "affiliate_click_daily" | "affiliate_payments" | "notifications" | "notification_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "kyads_click_task_items" | "proxy_exit_ip_usage" | "suffix_alerts" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "user_serpapi_keys" | "user_semrush_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log" | "semrush_keyword_cache" | "semrush_health_logs" | "policy_violations"
+    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "parent_networks" | "platform_blacklist" | "ad_rejection_feedback" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "holiday_calendar" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "ad_generation_jobs" | "ad_submit_jobs" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "google_mcc_accounts" | "affiliate_transactions" | "affiliate_click_daily" | "affiliate_payments" | "notifications" | "notification_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "kyads_click_task_items" | "proxy_exit_ip_usage" | "suffix_alerts" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "user_serpapi_keys" | "user_semrush_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log" | "semrush_keyword_cache" | "semrush_health_logs" | "payment_methods" | "report_overrides" | "payment_binding_snapshots" | "policy_violations"
     txIsolationLevel: TransactionIsolationLevel
   }
   model: {
@@ -4223,6 +4226,204 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         }
       }
     }
+    payment_methods: {
+      payload: Prisma.$payment_methodsPayload<ExtArgs>
+      fields: Prisma.payment_methodsFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.payment_methodsFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$payment_methodsPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.payment_methodsFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$payment_methodsPayload>
+        }
+        findFirst: {
+          args: Prisma.payment_methodsFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$payment_methodsPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.payment_methodsFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$payment_methodsPayload>
+        }
+        findMany: {
+          args: Prisma.payment_methodsFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$payment_methodsPayload>[]
+        }
+        create: {
+          args: Prisma.payment_methodsCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$payment_methodsPayload>
+        }
+        createMany: {
+          args: Prisma.payment_methodsCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.payment_methodsDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$payment_methodsPayload>
+        }
+        update: {
+          args: Prisma.payment_methodsUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$payment_methodsPayload>
+        }
+        deleteMany: {
+          args: Prisma.payment_methodsDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.payment_methodsUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.payment_methodsUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$payment_methodsPayload>
+        }
+        aggregate: {
+          args: Prisma.Payment_methodsAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregatePayment_methods>
+        }
+        groupBy: {
+          args: Prisma.payment_methodsGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Payment_methodsGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.payment_methodsCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Payment_methodsCountAggregateOutputType> | number
+        }
+      }
+    }
+    report_overrides: {
+      payload: Prisma.$report_overridesPayload<ExtArgs>
+      fields: Prisma.report_overridesFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.report_overridesFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$report_overridesPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.report_overridesFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$report_overridesPayload>
+        }
+        findFirst: {
+          args: Prisma.report_overridesFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$report_overridesPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.report_overridesFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$report_overridesPayload>
+        }
+        findMany: {
+          args: Prisma.report_overridesFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$report_overridesPayload>[]
+        }
+        create: {
+          args: Prisma.report_overridesCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$report_overridesPayload>
+        }
+        createMany: {
+          args: Prisma.report_overridesCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.report_overridesDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$report_overridesPayload>
+        }
+        update: {
+          args: Prisma.report_overridesUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$report_overridesPayload>
+        }
+        deleteMany: {
+          args: Prisma.report_overridesDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.report_overridesUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.report_overridesUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$report_overridesPayload>
+        }
+        aggregate: {
+          args: Prisma.Report_overridesAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateReport_overrides>
+        }
+        groupBy: {
+          args: Prisma.report_overridesGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Report_overridesGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.report_overridesCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Report_overridesCountAggregateOutputType> | number
+        }
+      }
+    }
+    payment_binding_snapshots: {
+      payload: Prisma.$payment_binding_snapshotsPayload<ExtArgs>
+      fields: Prisma.payment_binding_snapshotsFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.payment_binding_snapshotsFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$payment_binding_snapshotsPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.payment_binding_snapshotsFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$payment_binding_snapshotsPayload>
+        }
+        findFirst: {
+          args: Prisma.payment_binding_snapshotsFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$payment_binding_snapshotsPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.payment_binding_snapshotsFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$payment_binding_snapshotsPayload>
+        }
+        findMany: {
+          args: Prisma.payment_binding_snapshotsFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$payment_binding_snapshotsPayload>[]
+        }
+        create: {
+          args: Prisma.payment_binding_snapshotsCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$payment_binding_snapshotsPayload>
+        }
+        createMany: {
+          args: Prisma.payment_binding_snapshotsCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.payment_binding_snapshotsDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$payment_binding_snapshotsPayload>
+        }
+        update: {
+          args: Prisma.payment_binding_snapshotsUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$payment_binding_snapshotsPayload>
+        }
+        deleteMany: {
+          args: Prisma.payment_binding_snapshotsDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.payment_binding_snapshotsUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.payment_binding_snapshotsUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$payment_binding_snapshotsPayload>
+        }
+        aggregate: {
+          args: Prisma.Payment_binding_snapshotsAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregatePayment_binding_snapshots>
+        }
+        groupBy: {
+          args: Prisma.payment_binding_snapshotsGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Payment_binding_snapshotsGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.payment_binding_snapshotsCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Payment_binding_snapshotsCountAggregateOutputType> | number
+        }
+      }
+    }
     policy_violations: {
       payload: Prisma.$policy_violationsPayload<ExtArgs>
       fields: Prisma.policy_violationsFieldRefs
@@ -4423,6 +4624,7 @@ export const Platform_connectionsScalarFieldEnum = {
   api_key: 'api_key',
   channel_id: 'channel_id',
   payee: 'payee',
+  payment_method_id: 'payment_method_id',
   publish_site_id: 'publish_site_id',
   status: 'status',
   last_synced_at: 'last_synced_at',
@@ -5409,6 +5611,49 @@ export const Semrush_health_logsScalarFieldEnum = {
 export type Semrush_health_logsScalarFieldEnum = (typeof Semrush_health_logsScalarFieldEnum)[keyof typeof Semrush_health_logsScalarFieldEnum]
 
 
+export const Payment_methodsScalarFieldEnum = {
+  id: 'id',
+  team_id: 'team_id',
+  payee_name: 'payee_name',
+  card_no: 'card_no',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Payment_methodsScalarFieldEnum = (typeof Payment_methodsScalarFieldEnum)[keyof typeof Payment_methodsScalarFieldEnum]
+
+
+export const Report_overridesScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  month: 'month',
+  scope_key: 'scope_key',
+  value: 'value',
+  remark: 'remark',
+  updated_by: 'updated_by',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Report_overridesScalarFieldEnum = (typeof Report_overridesScalarFieldEnum)[keyof typeof Report_overridesScalarFieldEnum]
+
+
+export const Payment_binding_snapshotsScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  month: 'month',
+  platform: 'platform',
+  account_name: 'account_name',
+  payee_name: 'payee_name',
+  card_no: 'card_no',
+  created_at: 'created_at'
+} as const
+
+export type Payment_binding_snapshotsScalarFieldEnum = (typeof Payment_binding_snapshotsScalarFieldEnum)[keyof typeof Payment_binding_snapshotsScalarFieldEnum]
+
+
 export const Policy_violationsScalarFieldEnum = {
   id: 'id',
   campaign_id: 'campaign_id',
@@ -6092,6 +6337,34 @@ export const semrush_health_logsOrderByRelevanceFieldEnum = {
 export type semrush_health_logsOrderByRelevanceFieldEnum = (typeof semrush_health_logsOrderByRelevanceFieldEnum)[keyof typeof semrush_health_logsOrderByRelevanceFieldEnum]
 
 
+export const payment_methodsOrderByRelevanceFieldEnum = {
+  payee_name: 'payee_name',
+  card_no: 'card_no'
+} as const
+
+export type payment_methodsOrderByRelevanceFieldEnum = (typeof payment_methodsOrderByRelevanceFieldEnum)[keyof typeof payment_methodsOrderByRelevanceFieldEnum]
+
+
+export const report_overridesOrderByRelevanceFieldEnum = {
+  month: 'month',
+  scope_key: 'scope_key',
+  remark: 'remark'
+} as const
+
+export type report_overridesOrderByRelevanceFieldEnum = (typeof report_overridesOrderByRelevanceFieldEnum)[keyof typeof report_overridesOrderByRelevanceFieldEnum]
+
+
+export const payment_binding_snapshotsOrderByRelevanceFieldEnum = {
+  month: 'month',
+  platform: 'platform',
+  account_name: 'account_name',
+  payee_name: 'payee_name',
+  card_no: 'card_no'
+} as const
+
+export type payment_binding_snapshotsOrderByRelevanceFieldEnum = (typeof payment_binding_snapshotsOrderByRelevanceFieldEnum)[keyof typeof payment_binding_snapshotsOrderByRelevanceFieldEnum]
+
+
 export const policy_violationsOrderByRelevanceFieldEnum = {
   google_customer_id: 'google_customer_id',
   campaign_name: 'campaign_name',
@@ -6338,6 +6611,9 @@ export type GlobalOmitConfig = {
   user_atc_alert_log?: Prisma.user_atc_alert_logOmit
   semrush_keyword_cache?: Prisma.semrush_keyword_cacheOmit
   semrush_health_logs?: Prisma.semrush_health_logsOmit
+  payment_methods?: Prisma.payment_methodsOmit
+  report_overrides?: Prisma.report_overridesOmit
+  payment_binding_snapshots?: Prisma.payment_binding_snapshotsOmit
   policy_violations?: Prisma.policy_violationsOmit
 }
 

@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { withLeader } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import ExcelJS from "exceljs";
+import {
+  sqlTxnMonth, sqlTxnRange, REPORT_PLATFORM_ORDER, sumReportStat,
+  type MonthData, type SpendData, type ReportMetricKey,
+} from "@/lib/report-metrics";
 
 export const dynamic = "force-dynamic";
 
@@ -39,40 +43,9 @@ const thickBorder: Partial<ExcelJS.Borders> = {
 
 // ────────── 数据类型 ─────────────────────────────────────────────────────────
 interface MemberInfo { id: string; username: string; display_name: string }
-type PlatStat = { total: number; rejected: number; active: number };
-type MonthData = Record<string, Record<string, Record<string, PlatStat>>>;
-type SpendData = Record<string, Record<string, number>>;
 
-// ────────── 汇总计算 ─────────────────────────────────────────────────────────
-function sumStat(
-  key: "total"|"rejected"|"active"|"adSpend"|"net",
-  months: string[], userIds: string[], platform: string|null,
-  data: MonthData, spend: SpendData
-): number {
-  if (key === "net") {
-    return sumStat("active", months, userIds, platform, data, spend)
-         - (platform === null ? sumStat("adSpend", months, userIds, null, data, spend) : 0);
-  }
-  let acc = 0;
-  for (const m of months) {
-    for (const uid of userIds) {
-      if (key === "adSpend") {
-        if (platform !== null) continue; // 广告费无平台维度
-        acc += spend[m]?.[uid] || 0;
-        continue;
-      }
-      const ud = data[m]?.[uid];
-      if (!ud) continue;
-      const plats = platform ? [platform] : Object.keys(ud);
-      for (const p of plats) {
-        if (key === "total")    acc += ud[p]?.total    || 0;
-        if (key === "rejected") acc += ud[p]?.rejected || 0;
-        if (key === "active")   acc += ud[p]?.active   || 0;
-      }
-    }
-  }
-  return acc;
-}
+// 汇总计算统一走 report-metrics.sumReportStat（与前端表格同源，杜绝口径漂移）
+const sumStat = sumReportStat;
 
 // ────────── 样式化单元格写入辅助 ─────────────────────────────────────────────
 function setCell(
@@ -172,7 +145,7 @@ function buildMonthSheet(
 
   const ROWS: {
     label: string;
-    key: "adSpend"|"total"|"rejected"|"active"|"net";
+    key: ReportMetricKey;
     fillHex: string;
     bold: boolean;
   }[] = [
@@ -299,19 +272,20 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   const memberIds = members.map((m) => m.id);
   const yearStart = `${year}-01-01`;
   const yearEnd   = `${year + 1}-01-01`;
+  const txnRange = sqlTxnRange("t", yearStart, yearEnd);
 
   const commRows = await prisma.$queryRawUnsafe<{
     user_id: bigint; month: string; platform: string;
     total_commission: number; rejected_commission: number;
   }[]>(`
-    SELECT user_id, DATE_FORMAT(CONVERT_TZ(transaction_time, '+00:00', '+08:00'),'%Y-%m') AS month, platform,
-      SUM(CAST(commission_amount AS DECIMAL(14,4))) AS total_commission,
-      SUM(CASE WHEN status='rejected' THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END) AS rejected_commission
-    FROM affiliate_transactions
-    WHERE user_id IN (${memberIds.map(() => "?").join(",")})
-      AND is_deleted=0 AND transaction_time>=? AND transaction_time<?
-    GROUP BY user_id, month, platform
-  `, ...memberIds, yearStart, yearEnd);
+    SELECT t.user_id, ${sqlTxnMonth("t")} AS month, t.platform,
+      SUM(CAST(t.commission_amount AS DECIMAL(14,4))) AS total_commission,
+      SUM(CASE WHEN t.status='rejected' THEN CAST(t.commission_amount AS DECIMAL(14,4)) ELSE 0 END) AS rejected_commission
+    FROM affiliate_transactions t
+    WHERE t.user_id IN (${memberIds.map(() => "?").join(",")})
+      AND t.is_deleted=0 AND ${txnRange.cond}
+    GROUP BY t.user_id, month, t.platform
+  `, ...memberIds, ...txnRange.params);
 
   const spendRows = await prisma.$queryRawUnsafe<{
     user_id: bigint; month: string; cost: number;
@@ -322,9 +296,8 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     GROUP BY user_id, month
   `, ...memberIds, yearStart, yearEnd);
 
-  const PLATFORM_ORDER = ["RW","LH","CG","LB","PM","CF","BSH","MUI","EV"];
   const platformSet = new Set(commRows.map((r) => r.platform));
-  const platforms = PLATFORM_ORDER.filter((p) => platformSet.has(p));
+  const platforms = REPORT_PLATFORM_ORDER.filter((p) => platformSet.has(p));
   for (const p of platformSet) { if (!platforms.includes(p)) platforms.push(p); }
 
   const data: MonthData = {};

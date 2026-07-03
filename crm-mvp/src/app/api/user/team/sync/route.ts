@@ -438,8 +438,22 @@ async function updateCommissionForUser(
   );
   if (merchantIds.length === 0) return;
 
+  // C-095 RC-3：排除挂在已删 MCC 下的 campaigns，避免幽灵 stats 双重写入
+  const deletedMccs = await prisma.google_mcc_accounts.findMany({
+    where: { user_id: userId, is_deleted: 1 },
+    select: { id: true },
+  });
+  const deletedMccIds = deletedMccs.map((m) => m.id);
+
   const allCampaigns = await prisma.campaigns.findMany({
-    where: { user_id: userId, user_merchant_id: { in: merchantIds }, is_deleted: 0 },
+    where: {
+      user_id: userId,
+      user_merchant_id: { in: merchantIds },
+      is_deleted: 0,
+      ...(deletedMccIds.length > 0
+        ? { OR: [{ mcc_id: null }, { mcc_id: { notIn: deletedMccIds } }] }
+        : {}),
+    },
     select: { id: true, user_merchant_id: true, google_status: true, updated_at: true },
   });
 

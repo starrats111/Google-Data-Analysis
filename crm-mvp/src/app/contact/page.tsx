@@ -1,6 +1,7 @@
 "use client";
 
-import { Typography, Button } from "antd";
+import { useState } from "react";
+import { Typography, Button, message } from "antd";
 import {
   MailOutlined,
   PhoneOutlined,
@@ -9,6 +10,7 @@ import {
   ClockCircleOutlined,
   ContactsOutlined,
   BankOutlined,
+  CopyOutlined,
 } from "@ant-design/icons";
 import { useLanguage } from "@/contexts/LanguageContext";
 import PageHeader from "@/components/PageHeader";
@@ -19,6 +21,34 @@ const { Title, Paragraph, Text } = Typography;
 
 const COMPANY_PHONE = "+86 13958988973";
 const COMPANY_EMAIL = "connect@fengdu-ads.top";
+
+function buildMailtoHref(lang: "en" | "zh") {
+  const subject = encodeURIComponent(
+    lang === "zh" ? "咨询 — 温州丰度广告传媒有限公司" : "Inquiry — Wenzhou Fengdu Advertising & Media",
+  );
+  const body = encodeURIComponent(
+    lang === "zh"
+      ? "您好，\n\n我想咨询：\n\n（请在此填写您的问题）\n\n谢谢。"
+      : "Hello,\n\nI would like to inquire about:\n\n(Please describe your question here)\n\nThank you.",
+  );
+  return `mailto:${COMPANY_EMAIL}?subject=${subject}&body=${body}`;
+}
+
+function buildGmailComposeHref(lang: "en" | "zh") {
+  const subject = lang === "zh" ? "咨询 — 温州丰度广告传媒有限公司" : "Inquiry — Wenzhou Fengdu Advertising & Media";
+  const body =
+    lang === "zh"
+      ? "您好，\n\n我想咨询：\n\n（请在此填写您的问题）\n\n谢谢。"
+      : "Hello,\n\nI would like to inquire about:\n\n(Please describe your question here)\n\nThank you.";
+  const params = new URLSearchParams({
+    view: "cm",
+    fs: "1",
+    to: COMPANY_EMAIL,
+    su: subject,
+    body,
+  });
+  return `https://mail.google.com/mail/?${params.toString()}`;
+}
 const COMPANY_ADDRESS_EN =
   "Room 1110-2, Building 29, Huahong Xin Plaza, Xincheng Avenue, Luoyang Town, Taishun County, Wenzhou, Zhejiang, China";
 const COMPANY_ADDRESS_ZH = "中国 浙江省 温州市 泰顺县 罗阳镇 新城大道 华鸿心广场 29 幢 1110 室-2";
@@ -45,6 +75,11 @@ const i18n = {
     emailCtaTitle: "Send us an email",
     emailCtaDesc: "Compose a message directly to our team. We reply within one business day.",
     emailCtaBtn: "Email Us Now",
+    gmailCtaBtn: "Open in Gmail (web)",
+    copyEmailBtn: "Copy email address",
+    copyEmailOk: "Email copied to clipboard",
+    mailtoHint:
+      "If nothing opens when you click, your PC may not have a default mail app. Use Gmail (web) or copy the address and send from your mailbox.",
     callCtaTitle: "Call our office",
     callCtaDesc: "Reach us by phone during business hours (GMT+8).",
     callCtaBtn: "Call Us Now",
@@ -69,6 +104,11 @@ const i18n = {
     emailCtaTitle: "发送邮件",
     emailCtaDesc: "点击下方按钮直接给我们发送邮件，1 个工作日内回复。",
     emailCtaBtn: "立即发送邮件",
+    gmailCtaBtn: "在 Gmail 网页版写信",
+    copyEmailBtn: "复制邮箱地址",
+    copyEmailOk: "邮箱已复制到剪贴板",
+    mailtoHint:
+      "若点击后没有弹出邮件程序，说明本机未设置默认邮件客户端。请用「Gmail 网页版写信」或复制邮箱后，在您常用的邮箱里手动发送。",
     callCtaTitle: "电话咨询",
     callCtaDesc: "工作时间内可拨打我们的联系电话（GMT+8）。",
     callCtaBtn: "立即拨打电话",
@@ -133,6 +173,33 @@ function InfoRow({
 export default function ContactPage() {
   const { lang } = useLanguage();
   const t = i18n[lang];
+  const [copying, setCopying] = useState(false);
+  const mailtoHref = buildMailtoHref(lang);
+
+  const copyEmail = async () => {
+    setCopying(true);
+    try {
+      await navigator.clipboard.writeText(COMPANY_EMAIL);
+      message.success(t.copyEmailOk);
+    } catch {
+      message.info(COMPANY_EMAIL);
+    } finally {
+      setCopying(false);
+    }
+  };
+
+  const btnBaseStyle: React.CSSProperties = {
+    width: "100%",
+    height: 42,
+    fontWeight: 600,
+    borderRadius: MK_RADIUS.md,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    textDecoration: "none",
+    boxSizing: "border-box",
+  };
 
   return (
     <div style={{ minHeight: "100vh", background: MARKETING.bgPage, color: MARKETING.text }}>
@@ -232,7 +299,7 @@ export default function ContactPage() {
               </a>
             </InfoRow>
             <InfoRow icon={<MailOutlined />} label={t.emailLabel}>
-              <a href={`mailto:${COMPANY_EMAIL}`} style={{ color: MARKETING.primaryDark, fontWeight: 600 }}>
+              <a href={mailtoHref} style={{ color: MARKETING.primaryDark, fontWeight: 600 }}>
                 {COMPANY_EMAIL}
               </a>
             </InfoRow>
@@ -287,23 +354,48 @@ export default function ContactPage() {
               <Text strong style={{ fontSize: 16, color: MARKETING.text, display: "block", marginBottom: 4 }}>
                 {t.emailCtaTitle}
               </Text>
-              <Paragraph style={{ color: MARKETING.textSub, fontSize: 13.5, marginBottom: 16, lineHeight: 1.65 }}>
+              <Paragraph style={{ color: MARKETING.textSub, fontSize: 13.5, marginBottom: 12, lineHeight: 1.65 }}>
                 {t.emailCtaDesc}
               </Paragraph>
-              <Button
-                type="primary"
-                icon={<MailOutlined />}
-                href={`mailto:${COMPANY_EMAIL}`}
-                style={{
-                  width: "100%",
-                  height: 42,
-                  fontWeight: 600,
-                  borderRadius: MK_RADIUS.md,
-                  boxShadow: "0 4px 14px rgba(26,127,219,0.28)",
-                }}
-              >
-                {t.emailCtaBtn}
-              </Button>
+              <Paragraph style={{ color: MARKETING.textMuted, fontSize: 12.5, marginBottom: 12, lineHeight: 1.6 }}>
+                {t.mailtoHint}
+              </Paragraph>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <a
+                  href={mailtoHref}
+                  style={{
+                    ...btnBaseStyle,
+                    background: MARKETING.primaryDark,
+                    color: "#fff",
+                    boxShadow: "0 4px 14px rgba(26,127,219,0.28)",
+                  }}
+                >
+                  <MailOutlined />
+                  {t.emailCtaBtn}
+                </a>
+                <a
+                  href={buildGmailComposeHref(lang)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    ...btnBaseStyle,
+                    background: "#fff",
+                    color: MARKETING.primaryDark,
+                    border: `1px solid ${MARKETING.border}`,
+                  }}
+                >
+                  <MailOutlined />
+                  {t.gmailCtaBtn}
+                </a>
+                <Button
+                  icon={<CopyOutlined />}
+                  loading={copying}
+                  onClick={copyEmail}
+                  style={{ ...btnBaseStyle, height: 42 }}
+                >
+                  {t.copyEmailBtn}
+                </Button>
+              </div>
             </div>
 
             {/* Phone CTA */}

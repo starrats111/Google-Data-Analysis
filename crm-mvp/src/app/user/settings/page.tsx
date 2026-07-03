@@ -25,10 +25,13 @@ const { Text } = Typography;
 // D-026: 增加测试连接 + 健康状态展示 + 保存前强制测试
 type TestResult = { ok: boolean; msg?: string; error?: string; suggest?: string; sample_count?: number; elapsed_ms?: number };
 
+type PaymentMethod = { id: string; payee_name: string; card_no: string };
+
 function PlatformConnectionsTab() {
   const { message } = App.useApp();
   const [connections, setConnections] = useState<Record<string, unknown>[]>([]);
   const [sites, setSites] = useState<PublishSite[]>([]);
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
   const [modalOpen, setModalOpen] = useState(false);
   const [editConn, setEditConn] = useState<Record<string, unknown> | null>(null);
   const [form] = Form.useForm();
@@ -39,12 +42,14 @@ function PlatformConnectionsTab() {
   const [modalTestPassed, setModalTestPassed] = useState(false);            // 当前表单值是否已测试通过
 
   const fetchData = async () => {
-    const [connRes, siteRes] = await Promise.all([
+    const [connRes, siteRes, pmRes] = await Promise.all([
       fetch("/api/user/settings/platforms").then((r) => r.json()),
       fetch("/api/user/publish-sites").then((r) => r.json()),
+      fetch("/api/user/team/payment-methods").then((r) => r.json()),
     ]);
     if (connRes.code === 0) setConnections(connRes.data);
     if (siteRes.code === 0) setSites(siteRes.data || []);
+    if (pmRes.code === 0) setPaymentMethods(pmRes.data || []);
   };
 
   useEffect(() => { fetchData(); }, []);
@@ -121,6 +126,8 @@ function PlatformConnectionsTab() {
     if (isEditingWithUnchangedKey) {
       delete values.api_key;
     }
+    // R-01：Select 清空后 antd 置 undefined，显式转 null 才能解绑
+    values.payment_method_id = values.payment_method_id ?? null;
     if (editConn) values.id = editConn.id;
     const res = await fetch("/api/user/settings/platforms", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(values),
@@ -146,6 +153,7 @@ function PlatformConnectionsTab() {
       platform: conn.platform,
       account_name: conn.account_name,
       payee: (conn.payee as string) || undefined,
+      payment_method_id: conn.payment_method_id ? String(conn.payment_method_id) : undefined,
       publish_site_id: conn.publish_site_id ? String(conn.publish_site_id) : undefined,
     });
     setModalOpen(true);
@@ -358,6 +366,20 @@ function PlatformConnectionsTab() {
           </Form.Item>
           <Form.Item name="payee" label="收款人" tooltip="该平台账号打款时实际收款的人，用于结算页「支付查询」按收款人汇总">
             <Input placeholder="如 张文俊 / 龚建成" allowClear />
+          </Form.Item>
+          <Form.Item
+            name="payment_method_id"
+            label="收款方式"
+            tooltip="从组长维护的收款方式清单中选择，月度收支报表按此显示收款人/卡号。一次绑定长期生效（历史月报表按当时绑定固化）"
+          >
+            <Select
+              allowClear
+              placeholder={paymentMethods.length === 0 ? "组长尚未维护收款方式清单" : "选择收款方式"}
+              options={paymentMethods.map((m) => ({
+                value: m.id,
+                label: m.card_no ? `${m.payee_name} · ${m.card_no}` : m.payee_name,
+              }))}
+            />
           </Form.Item>
           <Form.Item name="publish_site_id" label="绑定站点" tooltip="选择该账号对应的发布站点，领取商家后文章将自动发布到此站点">
             <PublishSiteSelect sites={sites} placeholder="选择发布站点（可搜索站点名或域名）" />

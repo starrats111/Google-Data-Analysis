@@ -108,6 +108,9 @@ export const ModelName = {
   user_atc_alert_log: 'user_atc_alert_log',
   semrush_keyword_cache: 'semrush_keyword_cache',
   semrush_health_logs: 'semrush_health_logs',
+  payment_methods: 'payment_methods',
+  report_overrides: 'report_overrides',
+  payment_binding_snapshots: 'payment_binding_snapshots',
   policy_violations: 'policy_violations'
 } as const
 
@@ -222,6 +225,7 @@ export const Platform_connectionsScalarFieldEnum = {
   api_key: 'api_key',
   channel_id: 'channel_id',
   payee: 'payee',
+  payment_method_id: 'payment_method_id',
   publish_site_id: 'publish_site_id',
   status: 'status',
   last_synced_at: 'last_synced_at',
@@ -1208,6 +1212,49 @@ export const Semrush_health_logsScalarFieldEnum = {
 export type Semrush_health_logsScalarFieldEnum = (typeof Semrush_health_logsScalarFieldEnum)[keyof typeof Semrush_health_logsScalarFieldEnum]
 
 
+export const Payment_methodsScalarFieldEnum = {
+  id: 'id',
+  team_id: 'team_id',
+  payee_name: 'payee_name',
+  card_no: 'card_no',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Payment_methodsScalarFieldEnum = (typeof Payment_methodsScalarFieldEnum)[keyof typeof Payment_methodsScalarFieldEnum]
+
+
+export const Report_overridesScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  month: 'month',
+  scope_key: 'scope_key',
+  value: 'value',
+  remark: 'remark',
+  updated_by: 'updated_by',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Report_overridesScalarFieldEnum = (typeof Report_overridesScalarFieldEnum)[keyof typeof Report_overridesScalarFieldEnum]
+
+
+export const Payment_binding_snapshotsScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  month: 'month',
+  platform: 'platform',
+  account_name: 'account_name',
+  payee_name: 'payee_name',
+  card_no: 'card_no',
+  created_at: 'created_at'
+} as const
+
+export type Payment_binding_snapshotsScalarFieldEnum = (typeof Payment_binding_snapshotsScalarFieldEnum)[keyof typeof Payment_binding_snapshotsScalarFieldEnum]
+
+
 export const Policy_violationsScalarFieldEnum = {
   id: 'id',
   campaign_id: 'campaign_id',
@@ -1889,6 +1936,34 @@ export const semrush_health_logsOrderByRelevanceFieldEnum = {
 } as const
 
 export type semrush_health_logsOrderByRelevanceFieldEnum = (typeof semrush_health_logsOrderByRelevanceFieldEnum)[keyof typeof semrush_health_logsOrderByRelevanceFieldEnum]
+
+
+export const payment_methodsOrderByRelevanceFieldEnum = {
+  payee_name: 'payee_name',
+  card_no: 'card_no'
+} as const
+
+export type payment_methodsOrderByRelevanceFieldEnum = (typeof payment_methodsOrderByRelevanceFieldEnum)[keyof typeof payment_methodsOrderByRelevanceFieldEnum]
+
+
+export const report_overridesOrderByRelevanceFieldEnum = {
+  month: 'month',
+  scope_key: 'scope_key',
+  remark: 'remark'
+} as const
+
+export type report_overridesOrderByRelevanceFieldEnum = (typeof report_overridesOrderByRelevanceFieldEnum)[keyof typeof report_overridesOrderByRelevanceFieldEnum]
+
+
+export const payment_binding_snapshotsOrderByRelevanceFieldEnum = {
+  month: 'month',
+  platform: 'platform',
+  account_name: 'account_name',
+  payee_name: 'payee_name',
+  card_no: 'card_no'
+} as const
+
+export type payment_binding_snapshotsOrderByRelevanceFieldEnum = (typeof payment_binding_snapshotsOrderByRelevanceFieldEnum)[keyof typeof payment_binding_snapshotsOrderByRelevanceFieldEnum]
 
 
 export const policy_violationsOrderByRelevanceFieldEnum = {
