@@ -25,6 +25,15 @@ import { pickCampaignAffiliateLink } from '@/lib/merchant-connection'
 /** 单次刷点击允许的最大次数（低配生产机保护） */
 export const MAX_BRUSH = 1000
 
+/**
+ * 用户是否为「只同步数据、不参与换链接/刷点击」模式（link_exchange_disabled=1）。
+ * jy 交垟队即此类：CRM 只记录其订单/点击数据，绝不对其刷点击或换链接。
+ */
+async function isLinkExchangeDisabled(userId: bigint): Promise<boolean> {
+  const u = await prisma.users.findUnique({ where: { id: userId }, select: { link_exchange_disabled: true } })
+  return u?.link_exchange_disabled === 1
+}
+
 // ── cron 执行器调参（低配生产机：2 核 / 3.7G） ──
 /** 单次 cron 最多执行多少个到期子项 */
 const MAX_ITEMS_PER_CRON = 20
@@ -68,6 +77,9 @@ export async function startBrushTask(
   count: number,
 ): Promise<BrushStartResult | BrushStartError> {
   const n = Math.min(Math.max(Math.floor(count) || 0, 1), MAX_BRUSH)
+
+  // 「只同步数据、不参与换链接/刷点击」的用户（jy 交垟队，link_exchange_disabled=1）一律拒绝
+  if (await isLinkExchangeDisabled(userId)) return { ok: false, message: '该用户为只记录数据模式，已禁用刷点击' }
 
   const campaign = await prisma.campaigns.findFirst({
     where: { id: campaignId, user_id: userId, is_deleted: 0 },
@@ -144,6 +156,10 @@ export async function startBrushTaskWindowed(
 ): Promise<BrushStartResult | BrushStartError> {
   const n = Math.min(Math.max(Math.floor(count) || 0, 1), MAX_BRUSH)
 
+  // 只记录数据模式（link_exchange_disabled=1，如 jy 组）不补刷。auto-click 已在入口拦截，
+  // 这里作为兜底二次校验，杜绝任何调用路径绕过。
+  if (await isLinkExchangeDisabled(userId)) return { ok: false, message: '该用户为只记录数据模式，已禁用刷点击' }
+
   const campaign = await prisma.campaigns.findFirst({
     where: { id: campaignId, user_id: userId, is_deleted: 0 },
     select: { id: true, user_merchant_id: true, target_country: true, platform_connection_id: true },
@@ -201,6 +217,9 @@ export interface BrushAllResult {
  */
 export async function startBrushAllTasks(userId: bigint, count: number): Promise<BrushAllResult> {
   const n = Math.min(Math.max(Math.floor(count) || 0, 1), MAX_BRUSH)
+
+  // 只记录数据模式（jy 组）：直接返回空结果，不创建任何刷点击任务
+  if (await isLinkExchangeDisabled(userId)) return { queued: 0, skipped: 0, total: 0 }
 
   const campaigns = await prisma.campaigns.findMany({
     where: {
