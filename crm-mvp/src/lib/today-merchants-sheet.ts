@@ -83,26 +83,46 @@ function classifySheetError(msg: string): string {
   return "OTHER";
 }
 
+/** CampaignInfo 单行（近两日 CST 创建的系列） */
+export interface CampaignInfoRow {
+  campaignId: string;
+  campaignName: string;
+  status: string;
+  creationDate: string; // YYYY-MM-DD (CST)
+  customerId: string;
+}
+
 /**
- * 解析 CampaignInfo 表，返回今日（CST）创建的 campaign ID 集合
+ * 解析 CampaignInfo 表，返回「近两日（今日+昨日 CST）创建」的 campaign 行明细。
  * 列结构：CampaignId | CampaignName | Status | CreationDateCST | CustomerId
- * CreationDateCST 由脚本将账户时区的 creation_time 转为 Asia/Shanghai 日期
+ * CreationDateCST 由脚本将账户时区的 creation_time 转为 Asia/Shanghai 日期。
+ * 含昨日：跨午夜/脚本延迟写入的行也能被回填，不会漏在两轮 cron 之间。
  */
-function parseCampaignInfoRows(rows: string[][], todayStr: string): Set<string> {
-  if (rows.length < 2) return new Set();
+function parseCampaignInfoRows(rows: string[][], recentDates: Set<string>): CampaignInfoRow[] {
+  if (rows.length < 2) return [];
 
   const headers = rows[0].map((h) => h.trim());
   const campaignIdIdx = headers.indexOf("CampaignId");
+  const nameIdx = headers.indexOf("CampaignName");
+  const statusIdx = headers.indexOf("Status");
   const creationDateIdx = headers.indexOf("CreationDateCST");
+  const customerIdx = headers.indexOf("CustomerId");
 
-  if (campaignIdIdx < 0 || creationDateIdx < 0) return new Set();
+  if (campaignIdIdx < 0 || creationDateIdx < 0) return [];
 
-  const result = new Set<string>();
+  const result: CampaignInfoRow[] = [];
   for (const row of rows.slice(1)) {
     const creationDate = (row[creationDateIdx] ?? "").trim();
-    if (creationDate !== todayStr) continue;
+    if (!recentDates.has(creationDate)) continue;
     const campaignId = (row[campaignIdIdx] ?? "").trim();
-    if (campaignId) result.add(campaignId);
+    if (!campaignId) continue;
+    result.push({
+      campaignId,
+      campaignName: nameIdx >= 0 ? (row[nameIdx] ?? "").trim() : "",
+      status: statusIdx >= 0 ? (row[statusIdx] ?? "").trim() : "",
+      creationDate,
+      customerId: customerIdx >= 0 ? (row[customerIdx] ?? "").trim() : "",
+    });
   }
   return result;
 }
@@ -110,6 +130,8 @@ function parseCampaignInfoRows(rows: string[][], todayStr: string): Set<string> 
 export interface TodayMerchantsResult {
   /** user_id → 今日投放商家数 */
   byUser: Map<string, number>;
+  /** 近两日新建系列行明细（供快速回填新广告进 campaigns 表），带归属 user/mcc */
+  recentRows: Array<CampaignInfoRow & { userId: string; mccDbId: string }>;
   /** 参与同步的 MCC 数量 */
   mccCount: number;
   /** 有数据的 MCC 数量 */
@@ -124,6 +146,10 @@ export interface TodayMerchantsResult {
  */
 export async function fetchTodayMerchantsFromSheets(): Promise<TodayMerchantsResult> {
   const todayStr = todayCST(); // YYYY-MM-DD
+  const yesterdayStr = new Date(new Date(`${todayStr}T00:00:00Z`).getTime() - 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+  const recentDates = new Set([todayStr, yesterdayStr]);
   const errors: string[] = [];
   let mccCount = 0;
   let mccWithData = 0;
@@ -146,8 +172,9 @@ export async function fetchTodayMerchantsFromSheets(): Promise<TodayMerchantsRes
 
   mccCount = mccs.length;
 
-  // 2. 按 MCC 读取 Sheet，收集今日 Campaign IDs（user_id → Set<campaignId>）
+  // 2. 按 MCC 读取 Sheet，收集近两日新建系列（今日行计数 + 全部行供回填）
   const userCampaignIds = new Map<string, Set<string>>();
+  const recentRows: TodayMerchantsResult["recentRows"] = [];
 
   for (const mcc of mccs) {
     if (!mcc.sheet_url || !mcc.service_account_json) continue;
@@ -180,13 +207,15 @@ export async function fetchTodayMerchantsFromSheets(): Promise<TodayMerchantsRes
 
       // CampaignInfo tab 数据量小（每系列一行，无日期维度），取前 5000 行足够
       const rows = await fetchSheetValues(sheetId, infoTab, token, "A1:E5000");
-      const campaignIds = parseCampaignInfoRows(rows, todayStr);
+      const parsedRows = parseCampaignInfoRows(rows, recentDates);
 
-      if (campaignIds.size > 0) {
+      const todayIds = parsedRows.filter((r) => r.creationDate === todayStr);
+      if (todayIds.length > 0) {
         mccWithData++;
         if (!userCampaignIds.has(userId)) userCampaignIds.set(userId, new Set());
-        for (const cid of campaignIds) userCampaignIds.get(userId)!.add(cid);
+        for (const r of todayIds) userCampaignIds.get(userId)!.add(r.campaignId);
       }
+      for (const r of parsedRows) recentRows.push({ ...r, userId, mccDbId });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       const category = classifySheetError(msg);
@@ -222,5 +251,5 @@ export async function fetchTodayMerchantsFromSheets(): Promise<TodayMerchantsRes
     byUser.set(userId, merchantIds.size);
   }
 
-  return { byUser, mccCount, mccWithData, date: todayStr, errors };
+  return { byUser, recentRows, mccCount, mccWithData, date: todayStr, errors };
 }
