@@ -26,6 +26,14 @@ import { startBrushTaskWindowed } from '@/lib/suffix-engine/click-brush'
 import { pickCampaignAffiliateLink } from '@/lib/merchant-connection'
 
 /** 转化率目标改为按用户配置（click_control_ratio_min/max_pct）运行时计算，默认 5%~10%（每订单 10~20 点击） */
+/**
+ * 无点击 API 但仍需补刷的平台。
+ * RW 的 click API 恒返回 total:0（38c90882 已从 PLATFORM_CLICK_CONFIG 摘除），
+ * 但补刷不依赖平台点击回流：C 用我方 kyads_click_task_items 成功/在途数兜底（见 effectiveC）。
+ * 若这里不放行，RW 会被「无点击 API 跳过」门卫整平台断供补刷——
+ * 7-01~7-03 全站 RW 出现「只有订单没有点击」（yz03 Notino/GameCollection/AEO 等）即此回归。
+ */
+const BRUSHABLE_WITHOUT_CLICK_API = new Set(['RW'])
 /** 基线回看天数 */
 const BASELINE_DAYS = 7
 /** 每小时补点击上限 = 基线日均 / HOURLY_DIVISOR */
@@ -137,7 +145,9 @@ export async function runAutoClickForUser(
     const platform = normalizePlatformCode(merchant.platform || '')
     const mid = merchant.merchant_id || ''
     if (!platform || !mid) continue
-    if (!PLATFORM_CLICK_CONFIG[platform]) continue // 无点击 API 的平台无法控比，跳过
+    // 无点击 API 的平台默认跳过（无法控比）；白名单平台（RW）例外：
+    // C 用我方任务成功/在途数兜底，只是看不到自然点击 → 至多多补一点，方向保守安全。
+    if (!PLATFORM_CLICK_CONFIG[platform] && !BRUSHABLE_WITHOUT_CLICK_API.has(platform)) continue
 
     // 该广告归属的联盟账号（连接）。建广告时写入，是「这条广告用哪个号」的唯一可靠依据。
     // NULL=存量未回填，pickCampaignAffiliateLink 回退旧逻辑（主连接/tracking_link）。
