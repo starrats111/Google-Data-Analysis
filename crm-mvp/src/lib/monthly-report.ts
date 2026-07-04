@@ -463,9 +463,7 @@ export async function buildMemberMonthlyReport(
     col.paidCnyH2Override = ovCnyH2 !== undefined ? r2(ovCnyH2) : null;
     col.paidCnyH1Effective = col.paidCnyH1Override ?? col.paidCnyH1;
     col.paidCnyH2Effective = col.paidCnyH2Override ?? col.paidCnyH2;
-    if (!col.hasPayments && (col.book > 0 || col.rejected > 0)) {
-      warnings.push(`${col.label}/${col.accountName} 当月无打款记录，应收/实收留空`);
-    }
+    // 无打款记录时应收/实收留空，员工可手填——不再生成提示（否则年度页警告刷屏）
   }
 
   // ── 5. 收款方式（当月实时绑定 / 历史月快照懒固化） ─────────────────
@@ -1230,7 +1228,7 @@ export async function buildMemberAnnualReport(
     const rep = await buildMemberMonthlyReport(userId, m);
     username = rep.username;
     displayName = rep.displayName;
-    for (const w of rep.warnings) warnings.push(`${m}: ${w}`);
+    // 年度页不聚合逐月警告（明细提示在月报查看，避免 12 个月叠加刷屏）
     months.push({
       month: m,
       rate: { usdToCny: rep.rate.usdToCny, date: rep.rate.date, locked: rep.rate.locked },
