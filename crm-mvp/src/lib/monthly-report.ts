@@ -976,6 +976,8 @@ export async function buildTeamAnnualReport(
       const [mccId, m] = key.split("|");
       const a = acc.get(m);
       if (!a) continue;
+      // 口径对齐月度表：只计成员活跃 MCC（已删 MCC 的历史花费与月度 buildMccSections 一致地不计入）
+      if (!mccMeta.has(mccId)) continue;
       const rate = rates.get(m)!;
       const isCny = mccMeta.get(mccId) === "CNY";
       const costUsd = c.usd + c.adj;
