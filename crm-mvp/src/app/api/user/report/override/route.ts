@@ -5,8 +5,8 @@ import prisma from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 
-/** 组员可写的 scope：广告费覆盖(mcc:{id}) / 实收纠正(recv:{platform}:{account}:{H1|H2}) */
-const MEMBER_SCOPE_RE = /^(mcc:\d+|recv:[A-Z]{2,8}:[^:]{0,32}:(H1|H2))$/;
+/** 组员可写的 scope：广告费覆盖(mcc:{id}) / 实收纠正 USD(recv:…) / 实收手填 CNY(recvcny:…) */
+const MEMBER_SCOPE_RE = /^(mcc:\d+|(recv|recvcny):[A-Z]{2,8}:[^:]{0,32}:(H1|H2))$/;
 
 /**
  * POST /api/user/report/override

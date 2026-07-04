@@ -65,11 +65,11 @@ function TeamCnyCell({
   return (
     <Space size={4} style={{ cursor: "pointer" }} onClick={() => { setDraft(manual ?? estimated); setEditing(true); }}>
       {manual != null ? (
-        <Tooltip title={`组长手填（预估 ¥${fmt(estimated)}），点击修改`}>
+        <Tooltip title={`组长手填（默认 ¥${fmt(estimated)}），点击修改`}>
           <Text style={{ color: "#1677ff" }}>{fmt(manual)}</Text>
         </Tooltip>
       ) : (
-        <Tooltip title="预估值（实收$×报表汇率），点击手填实际到账">
+        <Tooltip title="默认值（成员实收CNY累计，逐笔按打款日汇率），点击手填实际到账">
           <Text type="secondary">{fmt(estimated)}</Text>
         </Tooltip>
       )}
@@ -149,9 +149,6 @@ export default function MonthlyReportTab() {
     }
   };
 
-  const rate = summary?.rate.usdToCny || 0;
-  const estH = (usd: number) => (rate > 0 ? +(usd * rate).toFixed(2) : 0);
-
   const platformCols = [
     { title: "平台", dataIndex: "platform", key: "platform" },
     { title: "账面佣金($)", dataIndex: "book", key: "book", align: "right" as const, render: (v: number) => `$${fmt(v)}` },
@@ -163,19 +160,19 @@ export default function MonthlyReportTab() {
     { title: "实收·下半月($)", dataIndex: "paidH2", key: "paidH2", align: "right" as const, render: (v: number) => `$${fmt(v)}` },
     { title: "实收合计($)", dataIndex: "paidTotal", key: "paidTotal", align: "right" as const, render: (v: number) => <Text strong>${fmt(v)}</Text> },
     {
-      title: <Tooltip title="实际到账人民币，组长手填；未填按报表汇率预估（灰字）">实收(¥)·上半月</Tooltip>,
+      title: <Tooltip title="实际到账人民币，组长手填；未填默认为成员实收CNY累计（逐笔打款日汇率，灰字）">实收(¥)·上半月</Tooltip>,
       key: "paidCnyH1",
       align: "right" as const,
       render: (_: unknown, p: TeamPlatformAgg) => (
-        <TeamCnyCell manual={p.paidCnyH1} estimated={estH(p.paidH1)} onSave={(v) => savePlatCny(p.platform, "H1", v)} />
+        <TeamCnyCell manual={p.paidCnyH1} estimated={p.memberCnyH1} onSave={(v) => savePlatCny(p.platform, "H1", v)} />
       ),
     },
     {
-      title: <Tooltip title="实际到账人民币，组长手填；未填按报表汇率预估（灰字）">实收(¥)·下半月</Tooltip>,
+      title: <Tooltip title="实际到账人民币，组长手填；未填默认为成员实收CNY累计（逐笔打款日汇率，灰字）">实收(¥)·下半月</Tooltip>,
       key: "paidCnyH2",
       align: "right" as const,
       render: (_: unknown, p: TeamPlatformAgg) => (
-        <TeamCnyCell manual={p.paidCnyH2} estimated={estH(p.paidH2)} onSave={(v) => savePlatCny(p.platform, "H2", v)} />
+        <TeamCnyCell manual={p.paidCnyH2} estimated={p.memberCnyH2} onSave={(v) => savePlatCny(p.platform, "H2", v)} />
       ),
     },
     {
@@ -183,7 +180,7 @@ export default function MonthlyReportTab() {
       key: "paidCnyTotal",
       align: "right" as const,
       render: (_: unknown, p: TeamPlatformAgg) => {
-        const total = (p.paidCnyH1 ?? estH(p.paidH1)) + (p.paidCnyH2 ?? estH(p.paidH2));
+        const total = (p.paidCnyH1 ?? p.memberCnyH1) + (p.paidCnyH2 ?? p.memberCnyH2);
         const hasManual = p.paidCnyH1 != null || p.paidCnyH2 != null;
         return <Text strong style={{ color: hasManual ? "#1677ff" : undefined }}>¥{fmt(total)}</Text>;
       },
@@ -193,8 +190,8 @@ export default function MonthlyReportTab() {
   const cnySummary = summary
     ? summary.platforms.reduce(
         (s, p) => {
-          s.h1 += p.paidCnyH1 ?? estH(p.paidH1);
-          s.h2 += p.paidCnyH2 ?? estH(p.paidH2);
+          s.h1 += p.paidCnyH1 ?? p.memberCnyH1;
+          s.h2 += p.paidCnyH2 ?? p.memberCnyH2;
           return s;
         },
         { h1: 0, h2: 0 },
@@ -259,7 +256,11 @@ export default function MonthlyReportTab() {
                 </Col>
                 <Col xs={12} sm={6}>
                   <Statistic
-                    title={`预估实收(CNY) · 按${summary.rate.locked ? "月末" : "当日"}汇率`}
+                    title={
+                      <Tooltip title="成员实收CNY生效值累计：逐笔按打款日汇率折算，含组员手填">
+                        默认实收(CNY) · 打款日汇率
+                      </Tooltip>
+                    }
                     value={summary.estimatedPaidCny}
                     precision={2}
                     prefix="¥"
@@ -282,7 +283,7 @@ export default function MonthlyReportTab() {
                 </Col>
                 <Col xs={12} sm={6}>
                   <Statistic
-                    title={`可分配利润(CNY) = ${summary.actualPaidCny != null ? "实际佣金" : "预估实收"} − 核算广告费`}
+                    title={`可分配利润(CNY) = ${summary.actualPaidCny != null ? "实际佣金" : "默认实收"} − 核算广告费`}
                     value={summary.profitCny}
                     precision={2}
                     prefix="¥"

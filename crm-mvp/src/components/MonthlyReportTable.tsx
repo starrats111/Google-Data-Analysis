@@ -8,7 +8,7 @@
  *   2. 佣金区：动态账号列（账面/失效/应收/实收/收款方式）+ 合计列 + 可分配利润
  */
 
-import { useState } from "react";
+import React, { useState } from "react";
 import { Typography, InputNumber, Tooltip, Alert, Space, Tag } from "antd";
 import { EditOutlined, UndoOutlined } from "@ant-design/icons";
 import type { MemberMonthlyReport, MccSection, AccountColumn } from "@/lib/monthly-report";
@@ -224,20 +224,20 @@ export default function MonthlyReportTable({
         </tbody>
       </table>
 
-      {/* ── 佣金区（动态账号列） ── */}
+      {/* ── 佣金区（动态账号列，每账号占 2 列；实收区拆 USD/CNY 双列） ── */}
       <table style={{ borderCollapse: "collapse", minWidth: 720 }}>
         <thead>
           <tr>
             <th style={headCell} colSpan={2}>项目</th>
             {accounts.map((a: AccountColumn) => (
-              <th key={`${a.platform}-${a.accountName}`} style={accountHeadCell}>{a.label}</th>
+              <th key={`${a.platform}-${a.accountName}`} style={accountHeadCell} colSpan={2}>{a.label}</th>
             ))}
             <th style={headCell}>佣金合计</th>
           </tr>
           <tr>
             <th style={headCell} colSpan={2}>账号名称</th>
             {accounts.map((a) => (
-              <th key={`${a.platform}-${a.accountName}`} style={{ ...accountHeadCell, fontWeight: 400 }}>{a.accountName || "—"}</th>
+              <th key={`${a.platform}-${a.accountName}`} style={{ ...accountHeadCell, fontWeight: 400 }} colSpan={2}>{a.accountName || "—"}</th>
             ))}
             <th style={headCell}></th>
           </tr>
@@ -245,86 +245,117 @@ export default function MonthlyReportTable({
         <tbody>
           <tr>
             <td style={labelCell} colSpan={2}>账面佣金（美金）</td>
-            {accounts.map((a) => <td key={a.label} style={cellBase}>{fmt(a.book)}</td>)}
+            {accounts.map((a) => <td key={a.label} style={cellBase} colSpan={2}>{fmt(a.book)}</td>)}
             <td style={totalCell}>{fmt(totals.book)}</td>
           </tr>
           <tr>
             <td style={labelCell} colSpan={2}>失效佣金（美金）</td>
-            {accounts.map((a) => <td key={a.label} style={cellBase}>{fmt(a.rejected)}</td>)}
+            {accounts.map((a) => <td key={a.label} style={cellBase} colSpan={2}>{fmt(a.rejected)}</td>)}
             <td style={totalCell}>{fmt(totals.rejected)}</td>
           </tr>
           {/* 应收 */}
           <tr>
             <td style={{ ...labelCell }} rowSpan={3}>应收佣金（美金）</td>
             <td style={labelCell}>5号（上半月）</td>
-            {accounts.map((a) => <td key={a.label} style={cellBase}>{a.hasPayments ? fmt(a.recvH1) : ""}</td>)}
+            {accounts.map((a) => <td key={a.label} style={cellBase} colSpan={2}>{a.hasPayments ? fmt(a.recvH1) : ""}</td>)}
             <td style={totalCell}>{fmt(totals.recvH1)}</td>
           </tr>
           <tr>
             <td style={labelCell}>15号（下半月）</td>
-            {accounts.map((a) => <td key={a.label} style={cellBase}>{a.hasPayments ? fmt(a.recvH2) : ""}</td>)}
+            {accounts.map((a) => <td key={a.label} style={cellBase} colSpan={2}>{a.hasPayments ? fmt(a.recvH2) : ""}</td>)}
             <td style={totalCell}>{fmt(totals.recvH2)}</td>
           </tr>
           <tr>
             <td style={labelCell}>合计</td>
-            {accounts.map((a) => <td key={a.label} style={{ ...cellBase, fontWeight: 600 }}>{a.hasPayments ? fmt(a.recvH1 + a.recvH2) : ""}</td>)}
+            {accounts.map((a) => <td key={a.label} style={{ ...cellBase, fontWeight: 600 }} colSpan={2}>{a.hasPayments ? fmt(a.recvH1 + a.recvH2) : ""}</td>)}
             <td style={totalCell}>{fmt(totals.recvTotal)}</td>
           </tr>
-          {/* 实收（可编辑） */}
+          {/* 实收（USD/CNY 双列，可编辑） */}
           <tr>
-            <td style={labelCell} rowSpan={3}>
-              实收佣金（美金）
+            <td style={labelCell} rowSpan={4}>
+              实收佣金
               {editable && <div><Text type="secondary" style={{ fontSize: 10 }}>点击单元格可手工纠正</Text></div>}
             </td>
+            <td style={labelCell}></td>
+            {accounts.map((a) => (
+              <React.Fragment key={a.label}>
+                <td style={{ ...headCell, fontSize: 11 }}>USD</td>
+                <td style={{ ...headCell, fontSize: 11 }}>
+                  <Tooltip title="默认 = 打款日汇率 × 实收(USD)，逐笔折算；点击可手填实际到账人民币">CNY</Tooltip>
+                </td>
+              </React.Fragment>
+            ))}
+            <td style={{ ...headCell, fontSize: 11 }}>$ / ¥</td>
+          </tr>
+          <tr>
             <td style={labelCell}>10号（上半月）</td>
             {accounts.map((a) => (
-              <EditableCell
-                key={a.label}
-                value={a.paidH1Effective}
-                overridden={a.paidH1Override != null}
-                editable={editable && a.accountName !== "(历史账号)"}
-                systemValue={a.paidH1}
-                onSave={(v) => save(`recv:${a.platform}:${a.accountName}:H1`, v)}
-              />
+              <React.Fragment key={a.label}>
+                <EditableCell
+                  value={a.paidH1Effective}
+                  overridden={a.paidH1Override != null}
+                  editable={editable && a.accountName !== "(历史账号)"}
+                  systemValue={a.paidH1}
+                  onSave={(v) => save(`recv:${a.platform}:${a.accountName}:H1`, v)}
+                />
+                <EditableCell
+                  value={a.paidCnyH1Effective}
+                  overridden={a.paidCnyH1Override != null}
+                  editable={editable && a.accountName !== "(历史账号)"}
+                  systemValue={a.paidCnyH1}
+                  onSave={(v) => save(`recvcny:${a.platform}:${a.accountName}:H1`, v)}
+                />
+              </React.Fragment>
             ))}
-            <td style={totalCell}>{fmt(totals.paidH1)}</td>
+            <td style={totalCell}>{fmt(totals.paidH1)}<br />¥{fmt(totals.paidCnyH1)}</td>
           </tr>
           <tr>
             <td style={labelCell}>20号（下半月）</td>
             {accounts.map((a) => (
-              <EditableCell
-                key={a.label}
-                value={a.paidH2Effective}
-                overridden={a.paidH2Override != null}
-                editable={editable && a.accountName !== "(历史账号)"}
-                systemValue={a.paidH2}
-                onSave={(v) => save(`recv:${a.platform}:${a.accountName}:H2`, v)}
-              />
+              <React.Fragment key={a.label}>
+                <EditableCell
+                  value={a.paidH2Effective}
+                  overridden={a.paidH2Override != null}
+                  editable={editable && a.accountName !== "(历史账号)"}
+                  systemValue={a.paidH2}
+                  onSave={(v) => save(`recv:${a.platform}:${a.accountName}:H2`, v)}
+                />
+                <EditableCell
+                  value={a.paidCnyH2Effective}
+                  overridden={a.paidCnyH2Override != null}
+                  editable={editable && a.accountName !== "(历史账号)"}
+                  systemValue={a.paidCnyH2}
+                  onSave={(v) => save(`recvcny:${a.platform}:${a.accountName}:H2`, v)}
+                />
+              </React.Fragment>
             ))}
-            <td style={totalCell}>{fmt(totals.paidH2)}</td>
+            <td style={totalCell}>{fmt(totals.paidH2)}<br />¥{fmt(totals.paidCnyH2)}</td>
           </tr>
           <tr>
             <td style={labelCell}>合计</td>
             {accounts.map((a) => (
-              <td key={a.label} style={{ ...cellBase, fontWeight: 600 }}>{fmt(a.paidH1Effective + a.paidH2Effective)}</td>
+              <React.Fragment key={a.label}>
+                <td style={{ ...cellBase, fontWeight: 600 }}>{fmt(a.paidH1Effective + a.paidH2Effective)}</td>
+                <td style={{ ...cellBase, fontWeight: 600 }}>{fmt(a.paidCnyH1Effective + a.paidCnyH2Effective)}</td>
+              </React.Fragment>
             ))}
-            <td style={totalCell}>{fmt(totals.paidTotal)}</td>
+            <td style={totalCell}>{fmt(totals.paidTotal)}<br />¥{fmt(totals.paidCnyTotal)}</td>
           </tr>
           {/* 收款方式 */}
           <tr>
             <td style={labelCell} colSpan={2}>收款人</td>
-            {accounts.map((a) => <td key={a.label} style={{ ...cellBase, textAlign: "center" }}>{a.payeeName}</td>)}
+            {accounts.map((a) => <td key={a.label} style={{ ...cellBase, textAlign: "center" }} colSpan={2}>{a.payeeName}</td>)}
             <td style={cellBase}></td>
           </tr>
           <tr>
             <td style={labelCell} colSpan={2}>收款卡号</td>
-            {accounts.map((a) => <td key={a.label} style={{ ...cellBase, textAlign: "center", fontSize: 11 }}>{a.cardNo}</td>)}
+            {accounts.map((a) => <td key={a.label} style={{ ...cellBase, textAlign: "center", fontSize: 11 }} colSpan={2}>{a.cardNo}</td>)}
             <td style={cellBase}></td>
           </tr>
           {/* 可分配利润 */}
           <tr>
             <td style={{ ...totalCell, textAlign: "left" }} colSpan={2}>可分配利润（实收佣金 − 核算广告费）</td>
-            <td style={totalCell} colSpan={Math.max(accounts.length, 1)}>
+            <td style={totalCell} colSpan={Math.max(accounts.length * 2, 1)}>
               $ {fmt(report.profit.usd)}{rate.cnyToUsd > 0 && <> ｜ ¥ {fmt(report.profit.cny)}</>}
             </td>
             <td style={totalCell}></td>

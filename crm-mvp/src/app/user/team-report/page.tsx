@@ -102,14 +102,14 @@ function AnnualReportTab() {
     { title: "失效佣金($)", dataIndex: "rejected", key: "rejected", align: "right", render: (v: number) => <Text type={v > 0 ? "danger" : undefined}>${fmt(v)}</Text> },
     { title: "应收佣金($)", dataIndex: "recvTotal", key: "recvTotal", align: "right", render: (v: number) => `$${fmt(v)}` },
     { title: "实收佣金($)", dataIndex: "paidTotal", key: "paidTotal", align: "right", render: (v: number) => <Text strong>${fmt(v)}</Text> },
-    { title: "预估实收(¥)", dataIndex: "estPaidCny", key: "estPaidCny", align: "right", render: (v: number) => `¥${fmt(v)}` },
+    { title: <Tooltip title="逐笔按打款日汇率折算，含组员手填 CNY">默认实收(¥)</Tooltip>, dataIndex: "estPaidCny", key: "estPaidCny", align: "right", render: (v: number) => `¥${fmt(v)}` },
     {
       title: <Tooltip title="组长在月度报表按平台手填的实际到账汇总；未填月份显示 —">实际佣金(¥)</Tooltip>,
       dataIndex: "actualPaidCny", key: "actualPaidCny", align: "right",
       render: (v: number | null) => (v != null ? <Text style={{ color: "#1677ff" }}>¥{fmt(v)}</Text> : <Text type="secondary">—</Text>),
     },
     {
-      title: <Tooltip title="（实际佣金 ?? 预估实收）− 核算广告费">可分配利润(¥)</Tooltip>,
+      title: <Tooltip title="（实际佣金 ?? 默认实收）− 核算广告费">可分配利润(¥)</Tooltip>,
       dataIndex: "profitCny", key: "profitCny", align: "right",
       render: (v: number) => <Text strong style={{ color: v >= 0 ? "#389e0d" : "#cf1322" }}>¥{fmt(v)}</Text>,
     },
