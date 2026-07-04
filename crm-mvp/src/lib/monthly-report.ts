@@ -19,7 +19,7 @@
  */
 
 import prisma from "@/lib/prisma";
-import { sqlTxnRange, REPORT_PLATFORM_ORDER, paymentDisplayAmount } from "@/lib/report-metrics";
+import { sqlTxnRange, sqlTxnMonth, REPORT_PLATFORM_ORDER, paymentDisplayAmount } from "@/lib/report-metrics";
 import { nowCST, dateColumnStart } from "@/lib/date-utils";
 
 // ─────────────────────────────────────────────────────────────
@@ -116,6 +116,13 @@ export interface TeamPlatformAgg {
   paidH1: number;
   paidH2: number;
   paidTotal: number;
+  /** R-04.4：每平台实收(CNY)组长手填（scope team_paid_cny:{平台}:{H1|H2}），null=未填 */
+  paidCnyH1: number | null;
+  paidCnyH2: number | null;
+  /** 该平台实收(USD)按报表汇率折算的预估 CNY（手填为空时的兜底展示值） */
+  estPaidCny: number;
+  /** R-04.5：该平台涉及的收款人及其卡号（多卡同人合并），供总计表导出 */
+  payees: { name: string; cards: string[] }[];
 }
 
 export interface TeamMonthlySummary {
@@ -592,8 +599,8 @@ async function buildMccSections(
       ? (isCny ? r2(override * rate.cnyToUsd) : override)
       : costUsd;
 
-    // 当月无消耗且无覆盖的 MCC 不出段（保持表干净）
-    if (costUsd === 0 && costOriginal === 0 && override == null) continue;
+    // R-04.1：零消耗 MCC 也出段——早期月份库内无数据时组员可直接手填广告费
+    // （手填只写 report_overrides，不影响任何其他数据）
 
     sections.push({
       mccDbId: dbId,
@@ -645,7 +652,11 @@ export async function buildTeamMonthlySummary(
     for (const col of rep.accounts) {
       let agg = platMap.get(col.platform);
       if (!agg) {
-        agg = { platform: col.platform, book: 0, rejected: 0, recvH1: 0, recvH2: 0, recvTotal: 0, paidH1: 0, paidH2: 0, paidTotal: 0 };
+        agg = {
+          platform: col.platform, book: 0, rejected: 0, recvH1: 0, recvH2: 0, recvTotal: 0,
+          paidH1: 0, paidH2: 0, paidTotal: 0,
+          paidCnyH1: null, paidCnyH2: null, estPaidCny: 0, payees: [],
+        };
         platMap.set(col.platform, agg);
       }
       agg.book += col.book;
@@ -656,13 +667,58 @@ export async function buildTeamMonthlySummary(
       agg.paidH2 += col.paidH2Effective;
     }
   }
+
+  // R-04.4：组长手填的每平台实收(CNY) + 旧版总额 actual_cny（兼容）
+  const leaderOverrides = await prisma.report_overrides.findMany({
+    where: {
+      user_id: leaderUserId, month, is_deleted: 0,
+      OR: [{ scope_key: "actual_cny" }, { scope_key: { startsWith: "team_paid_cny:" } }],
+    },
+  });
+  const platCnyManual = new Map<string, { H1?: number; H2?: number }>();
+  let legacyActualCny: number | null = null;
+  for (const o of leaderOverrides) {
+    if (o.scope_key === "actual_cny") { legacyActualCny = Number(o.value); continue; }
+    const m = o.scope_key.match(/^team_paid_cny:([^:]+):(H1|H2)$/);
+    if (!m) continue;
+    const entry = platCnyManual.get(m[1]) || {};
+    entry[m[2] as "H1" | "H2"] = Number(o.value);
+    platCnyManual.set(m[1], entry);
+  }
+
+  // R-04.5：每平台涉及的收款人→卡号集合（供总计表"收款人分开、多卡同格"展示）
+  const payeeByPlatform = new Map<string, Map<string, Set<string>>>();
+  for (const rep of memberReports) {
+    for (const col of rep.accounts) {
+      if (!col.payeeName) continue;
+      let byName = payeeByPlatform.get(col.platform);
+      if (!byName) { byName = new Map(); payeeByPlatform.set(col.platform, byName); }
+      let cards = byName.get(col.payeeName);
+      if (!cards) { cards = new Set(); byName.set(col.payeeName, cards); }
+      if (col.cardNo) cards.add(col.cardNo);
+    }
+  }
+
   const platforms = [...platMap.values()]
-    .map((a) => ({
-      ...a,
-      book: r2(a.book), rejected: r2(a.rejected),
-      recvH1: r2(a.recvH1), recvH2: r2(a.recvH2), recvTotal: r2(a.recvH1 + a.recvH2),
-      paidH1: r2(a.paidH1), paidH2: r2(a.paidH2), paidTotal: r2(a.paidH1 + a.paidH2),
-    }))
+    .map((a) => {
+      const manual = platCnyManual.get(a.platform) || {};
+      const paidH1 = r2(a.paidH1), paidH2 = r2(a.paidH2);
+      const byName = payeeByPlatform.get(a.platform);
+      return {
+        ...a,
+        book: r2(a.book), rejected: r2(a.rejected),
+        recvH1: r2(a.recvH1), recvH2: r2(a.recvH2), recvTotal: r2(a.recvH1 + a.recvH2),
+        paidH1, paidH2, paidTotal: r2(paidH1 + paidH2),
+        paidCnyH1: manual.H1 != null ? r2(manual.H1) : null,
+        paidCnyH2: manual.H2 != null ? r2(manual.H2) : null,
+        estPaidCny: rate.usdToCny > 0 ? r2((paidH1 + paidH2) * rate.usdToCny) : 0,
+        payees: byName
+          ? [...byName.entries()]
+              .map(([name, cards]) => ({ name, cards: [...cards].sort() }))
+              .sort((x, y) => x.name.localeCompare(y.name, "zh"))
+          : [],
+      };
+    })
     .sort((x, y) => {
       const ix = REPORT_PLATFORM_ORDER.indexOf(x.platform);
       const iy = REPORT_PLATFORM_ORDER.indexOf(y.platform);
@@ -694,11 +750,17 @@ export async function buildTeamMonthlySummary(
   const paidUsdTotal = totals.paidTotal;
   const estimatedPaidCny = rate.usdToCny > 0 ? r2(paidUsdTotal * rate.usdToCny) : 0;
 
-  // 实际佣金(CNY)：组长手填（存组长 user_id × 月，scope=actual_cny）
-  const actualRow = await prisma.report_overrides.findFirst({
-    where: { user_id: leaderUserId, month, scope_key: "actual_cny", is_deleted: 0 },
-  });
-  const actualPaidCny = actualRow ? Number(actualRow.value) : null;
+  // 实际佣金(CNY)：R-04.4 起 = Σ每平台(手填 ?? 该平台预估)；旧版总额 actual_cny 若存在则整体覆盖（兼容）
+  const anyPlatformManual = platforms.some((p) => p.paidCnyH1 != null || p.paidCnyH2 != null);
+  const actualPaidCny = legacyActualCny != null
+    ? legacyActualCny
+    : anyPlatformManual
+      ? r2(platforms.reduce((s, p) => {
+          const estH1 = rate.usdToCny > 0 ? p.paidH1 * rate.usdToCny : 0;
+          const estH2 = rate.usdToCny > 0 ? p.paidH2 * rate.usdToCny : 0;
+          return s + (p.paidCnyH1 ?? estH1) + (p.paidCnyH2 ?? estH2);
+        }, 0))
+      : null;
 
   const profitCny = r2((actualPaidCny ?? estimatedPaidCny) - profitAdCostCny);
 
@@ -725,5 +787,285 @@ export async function buildTeamMonthlySummary(
     profitCny,
     warnings,
     memberReports,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
+// 组长年度报表（R-04.2：整年 × 新口径，替代旧五指标年度视图）
+// 直接按月分组 SQL 聚合（不逐员工构建月报，避免 12×N 次全量查询压垮低配库），
+// 口径与 buildTeamMonthlySummary 一致：账面/失效按平台后台时间归月；
+// 应收/实收按 request_date 归月归半月（实收套用组员手工纠正 recv:*）；
+// 广告费含 MCC 补差额与组员覆盖 mcc:*；实际佣金(¥)套用组长手填。
+// ─────────────────────────────────────────────────────────────
+
+export interface AnnualMonthAgg {
+  month: string;
+  rate: { usdToCny: number; date: string; locked: boolean };
+  adUsd: number;
+  adCny: number;
+  profitAdCostCny: number;
+  book: number;
+  rejected: number;
+  recvTotal: number;
+  paidTotal: number;
+  estPaidCny: number;
+  actualPaidCny: number | null;
+  profitCny: number;
+}
+
+export interface TeamAnnualReport {
+  year: number;
+  teamId: string;
+  generatedAt: string;
+  months: AnnualMonthAgg[];
+  totals: {
+    adUsd: number; adCny: number; profitAdCostCny: number;
+    book: number; rejected: number; recvTotal: number; paidTotal: number;
+    estPaidCny: number;
+    /** Σ每月(实际手填 ?? 预估)，实际佣金年合计口径 */
+    effectiveActualCny: number;
+    profitCny: number;
+  };
+  warnings: string[];
+}
+
+export async function buildTeamAnnualReport(
+  teamId: bigint,
+  leaderUserId: bigint,
+  year: number,
+): Promise<TeamAnnualReport> {
+  const warnings: string[] = [];
+  const members = await prisma.users.findMany({
+    where: { team_id: teamId, is_deleted: 0, role: "user" },
+    select: { id: true },
+  });
+  const memberIds = members.map((m) => m.id);
+  const yearStart = `${year}-01-01`;
+  const yearEndExcl = `${year + 1}-01-01`;
+  const monthsList = Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, "0")}`);
+
+  const rates = new Map<string, { cnyToUsd: number; usdToCny: number; date: string; locked: boolean }>();
+  for (const m of monthsList) rates.set(m, await getReportRate(m));
+
+  type MonthAcc = {
+    adUsd: number; adCny: number; book: number; rejected: number;
+    recvTotal: number; paidTotal: number;
+  };
+  const acc = new Map<string, MonthAcc>(
+    monthsList.map((m) => [m, { adUsd: 0, adCny: 0, book: 0, rejected: 0, recvTotal: 0, paidTotal: 0 }]),
+  );
+  /** 每平台×月×半月的实收(USD)，供组长每平台 CNY 手填的预估兜底 */
+  const paidPlatHalf = new Map<string, number>(); // `${month}|${platform}|${H1|H2}`
+
+  if (memberIds.length > 0) {
+    const uidIn = memberIds.map(() => "?").join(",");
+
+    // ── 1. 账面/失效佣金 ──
+    const txnRange = sqlTxnRange("t", yearStart, yearEndExcl);
+    const txnRows = await prisma.$queryRawUnsafe<{ m: string; book: number; rejected: number }[]>(`
+      SELECT ${sqlTxnMonth("t")} AS m,
+        SUM(CAST(t.commission_amount AS DECIMAL(14,4))) AS book,
+        SUM(CASE WHEN t.status = 'rejected' THEN CAST(t.commission_amount AS DECIMAL(14,4)) ELSE 0 END) AS rejected
+      FROM affiliate_transactions t
+      WHERE t.user_id IN (${uidIn}) AND t.is_deleted = 0 AND ${txnRange.cond}
+      GROUP BY m
+    `, ...memberIds, ...txnRange.params);
+    for (const r of txnRows) {
+      const a = acc.get(r.m);
+      if (a) { a.book = Number(r.book || 0); a.rejected = Number(r.rejected || 0); }
+    }
+
+    // ── 2. 应收/实收（打款按 request_date 归月归半月，只计 paid） ──
+    const payRows = await prisma.$queryRawUnsafe<{
+      uid: bigint; platform: string; acct: string | null; m: string; half: string;
+      recv: number; paid: number;
+    }[]>(`
+      SELECT p.user_id AS uid, p.platform,
+        TRIM(COALESCE(pc.account_name, '')) AS acct,
+        DATE_FORMAT(p.request_date, '%Y-%m') AS m,
+        CASE WHEN DAY(p.request_date) <= 15 THEN 'H1' ELSE 'H2' END AS half,
+        SUM(CAST(p.amount AS DECIMAL(14,4))) AS recv,
+        SUM(CAST(CASE WHEN p.gross_amount IS NOT NULL AND p.gross_amount > 0 THEN p.gross_amount ELSE p.amount END AS DECIMAL(14,4))) AS paid
+      FROM affiliate_payments p
+      LEFT JOIN platform_connections pc ON pc.id = p.platform_connection_id
+      WHERE p.user_id IN (${uidIn}) AND p.is_deleted = 0 AND p.status = 'paid'
+        AND p.request_date >= ? AND p.request_date < ?
+      GROUP BY uid, p.platform, acct, m, half
+    `, ...memberIds, new Date(`${yearStart}T00:00:00Z`), new Date(`${yearEndExcl}T00:00:00Z`));
+
+    // 组员实收手工纠正：格粒度 user×month×platform×账号×半月，覆盖库内计算值
+    const memberOv = await prisma.report_overrides.findMany({
+      where: {
+        user_id: { in: memberIds }, is_deleted: 0,
+        month: { startsWith: `${year}-` }, scope_key: { startsWith: "recv:" },
+      },
+    });
+    const paidCells = new Map<string, number>(); // `${uid}|${m}|${platform}|${acct}|${half}`
+    for (const r of payRows) {
+      const m = String(r.m);
+      const a = acc.get(m);
+      if (!a) continue;
+      a.recvTotal += Number(r.recv || 0);
+      paidCells.set(`${r.uid}|${m}|${r.platform}|${(r.acct || "").trim()}|${r.half}`, Number(r.paid || 0));
+    }
+    for (const o of memberOv) {
+      const mch = o.scope_key.match(/^recv:([^:]+):([^:]*):(H1|H2)$/);
+      if (!mch) continue;
+      paidCells.set(`${o.user_id}|${o.month}|${mch[1]}|${mch[2].trim()}|${mch[3]}`, Number(o.value));
+    }
+    for (const [key, val] of paidCells) {
+      const [, m, platform, , half] = key.split("|");
+      const a = acc.get(m);
+      if (!a) continue;
+      a.paidTotal += val;
+      const phKey = `${m}|${platform}|${half}`;
+      paidPlatHalf.set(phKey, (paidPlatHalf.get(phKey) || 0) + val);
+    }
+
+    // ── 3. 广告费（MCC×月，含补差额与组员覆盖） ──
+    const costRows = await prisma.$queryRawUnsafe<{ mcc_id: bigint | null; m: string; usd: number; cny: number }[]>(`
+      SELECT c.mcc_id, DATE_FORMAT(s.date, '%Y-%m') AS m,
+        SUM(CAST(s.cost AS DECIMAL(16,6))) AS usd,
+        SUM(CASE WHEN e.rate_to_usd IS NOT NULL AND e.rate_to_usd > 0
+                 THEN CAST(s.cost AS DECIMAL(16,6)) / e.rate_to_usd ELSE 0 END) AS cny
+      FROM ads_daily_stats s
+      JOIN campaigns c ON c.id = s.campaign_id
+      LEFT JOIN exchange_rate_snapshots e ON e.currency = 'CNY' AND e.date = s.date
+      WHERE s.user_id IN (${uidIn}) AND s.is_deleted = 0 AND s.date >= ? AND s.date < ?
+      GROUP BY c.mcc_id, m
+    `, ...memberIds, dateColumnStart(yearStart), dateColumnStart(yearEndExcl));
+
+    const mccMeta = new Map(
+      (await prisma.google_mcc_accounts.findMany({
+        where: { user_id: { in: memberIds }, is_deleted: 0 },
+        select: { id: true, currency: true },
+      })).map((m) => [String(m.id), m.currency]),
+    );
+    const adjustRows = await prisma.mcc_cost_adjustments.findMany({
+      where: { user_id: { in: memberIds }, is_deleted: 0, month: { startsWith: `${year}-` } },
+    });
+    const mccOvRows = await prisma.report_overrides.findMany({
+      where: {
+        user_id: { in: memberIds }, is_deleted: 0,
+        month: { startsWith: `${year}-` }, scope_key: { startsWith: "mcc:" },
+      },
+    });
+
+    type MccMonth = { usd: number; cny: number; adj: number; ov: number | null };
+    const mccMonth = new Map<string, MccMonth>(); // `${mccDbId}|${month}`
+    const cell = (k: string): MccMonth => {
+      let c = mccMonth.get(k);
+      if (!c) { c = { usd: 0, cny: 0, adj: 0, ov: null }; mccMonth.set(k, c); }
+      return c;
+    };
+    for (const r of costRows) {
+      if (r.mcc_id == null) {
+        if (Number(r.usd || 0) > 0) warnings.push(`${r.m} 有 $${r2(Number(r.usd))} 广告费未关联 MCC，未计入`);
+        continue;
+      }
+      const c = cell(`${r.mcc_id}|${r.m}`);
+      c.usd = Number(r.usd || 0);
+      c.cny = Number(r.cny || 0);
+    }
+    for (const a of adjustRows) cell(`${a.mcc_account_id}|${a.month}`).adj = Number(a.amount);
+    for (const o of mccOvRows) {
+      const id = o.scope_key.slice(4);
+      if (mccMeta.has(id)) cell(`${id}|${o.month}`).ov = Number(o.value);
+    }
+    for (const [key, c] of mccMonth) {
+      const [mccId, m] = key.split("|");
+      const a = acc.get(m);
+      if (!a) continue;
+      const rate = rates.get(m)!;
+      const isCny = mccMeta.get(mccId) === "CNY";
+      const costUsd = c.usd + c.adj;
+      const costOriginal = isCny ? c.cny + (rate.cnyToUsd > 0 ? c.adj / rate.cnyToUsd : 0) : costUsd;
+      const effOriginal = c.ov ?? costOriginal;
+      const effUsd = c.ov != null ? (isCny ? c.ov * rate.cnyToUsd : c.ov) : costUsd;
+      if (isCny) a.adCny += effOriginal;
+      else a.adUsd += effUsd;
+    }
+  }
+
+  // ── 4. 组长手填（每平台 CNY + 旧版总额），按月套用 ──
+  const leadOv = await prisma.report_overrides.findMany({
+    where: {
+      user_id: leaderUserId, is_deleted: 0, month: { startsWith: `${year}-` },
+      OR: [{ scope_key: "actual_cny" }, { scope_key: { startsWith: "team_paid_cny:" } }],
+    },
+  });
+  const legacyByMonth = new Map<string, number>();
+  const platManualByMonth = new Map<string, Map<string, { H1?: number; H2?: number }>>();
+  for (const o of leadOv) {
+    if (o.scope_key === "actual_cny") { legacyByMonth.set(o.month, Number(o.value)); continue; }
+    const mch = o.scope_key.match(/^team_paid_cny:([^:]+):(H1|H2)$/);
+    if (!mch) continue;
+    let byPlat = platManualByMonth.get(o.month);
+    if (!byPlat) { byPlat = new Map(); platManualByMonth.set(o.month, byPlat); }
+    const entry = byPlat.get(mch[1]) || {};
+    entry[mch[2] as "H1" | "H2"] = Number(o.value);
+    byPlat.set(mch[1], entry);
+  }
+
+  // ── 5. 汇总每月 ──
+  const months: AnnualMonthAgg[] = monthsList.map((m) => {
+    const a = acc.get(m)!;
+    const rate = rates.get(m)!;
+    const adUsd = r2(a.adUsd);
+    const adCny = r2(a.adCny);
+    const profitAdCostCny = rate.usdToCny > 0 ? r2(adUsd * rate.usdToCny + adCny) : adCny;
+    const paidTotal = r2(a.paidTotal);
+    const estPaidCny = rate.usdToCny > 0 ? r2(paidTotal * rate.usdToCny) : 0;
+
+    const byPlat = platManualByMonth.get(m);
+    let actualPaidCny: number | null = legacyByMonth.get(m) ?? null;
+    if (actualPaidCny == null && byPlat && byPlat.size > 0) {
+      // 参与平台 = 有实收的平台 ∪ 有手填的平台
+      const plats = new Set<string>([...byPlat.keys()]);
+      for (const key of paidPlatHalf.keys()) {
+        const [pm, plat] = key.split("|");
+        if (pm === m) plats.add(plat);
+      }
+      let sum = 0;
+      for (const plat of plats) {
+        const manual = byPlat.get(plat) || {};
+        const estH1 = (paidPlatHalf.get(`${m}|${plat}|H1`) || 0) * rate.usdToCny;
+        const estH2 = (paidPlatHalf.get(`${m}|${plat}|H2`) || 0) * rate.usdToCny;
+        sum += (manual.H1 ?? estH1) + (manual.H2 ?? estH2);
+      }
+      actualPaidCny = r2(sum);
+    }
+
+    const profitCny = r2((actualPaidCny ?? estPaidCny) - profitAdCostCny);
+    return {
+      month: m,
+      rate: { usdToCny: rate.usdToCny, date: rate.date, locked: rate.locked },
+      adUsd, adCny, profitAdCostCny,
+      book: r2(a.book), rejected: r2(a.rejected),
+      recvTotal: r2(a.recvTotal), paidTotal,
+      estPaidCny, actualPaidCny, profitCny,
+    };
+  });
+
+  const totals = {
+    adUsd: r2(months.reduce((s, m) => s + m.adUsd, 0)),
+    adCny: r2(months.reduce((s, m) => s + m.adCny, 0)),
+    profitAdCostCny: r2(months.reduce((s, m) => s + m.profitAdCostCny, 0)),
+    book: r2(months.reduce((s, m) => s + m.book, 0)),
+    rejected: r2(months.reduce((s, m) => s + m.rejected, 0)),
+    recvTotal: r2(months.reduce((s, m) => s + m.recvTotal, 0)),
+    paidTotal: r2(months.reduce((s, m) => s + m.paidTotal, 0)),
+    estPaidCny: r2(months.reduce((s, m) => s + m.estPaidCny, 0)),
+    effectiveActualCny: r2(months.reduce((s, m) => s + (m.actualPaidCny ?? m.estPaidCny), 0)),
+    profitCny: r2(months.reduce((s, m) => s + m.profitCny, 0)),
+  };
+
+  return {
+    year,
+    teamId: String(teamId),
+    generatedAt: nowCST().format("YYYY-MM-DD HH:mm:ss"),
+    months,
+    totals,
+    warnings,
   };
 }

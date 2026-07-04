@@ -1,80 +1,55 @@
-﻿"use client";
+"use client";
+
+/**
+ * 组长收支报表 — 年度总览（R-04.2 新口径整年视图）/ 月度报表 双 Tab
+ *
+ * 年度总览：整年 12 个月 × 新样式指标（账面/失效/应收/实收/广告费$¥/核算¥/实际¥/利润¥），
+ * 数据走 /api/user/team/report/annual-v2（与月度报表同口径，含手工纠正与手填）。
+ */
 
 import { useState, useEffect, useMemo, useCallback } from "react";
 import {
   Card, Select, Button, Table, Typography, Space, Tabs, Spin, Empty,
-  Statistic, Row, Col, Tag, Tooltip, App,
+  Statistic, Row, Col, Tooltip, App,
 } from "antd";
 import {
   FileExcelOutlined, ReloadOutlined, BarChartOutlined,
-  DollarOutlined, MinusCircleOutlined, CheckCircleOutlined,
 } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 import AppPageHeader from "@/components/AppPageHeader";
-import { sumReportStat, TXN_TZ_NOTE } from "@/lib/report-metrics";
 import MonthlyReportTab from "./MonthlyReportTab";
+import type { TeamAnnualReport, AnnualMonthAgg } from "@/lib/monthly-report";
 
 const { Text } = Typography;
 const { Option } = Select;
 
-// ────────── 类型定义 ──────────────────────────────────────────────────────────
-interface Member { id: string; username: string; display_name: string }
-interface PlatformStat { total: number; rejected: number; active: number }
-interface ReportData {
-  year: number;
-  members: Member[];
-  platforms: string[];
-  months: string[];
-  data: Record<string, Record<string, Record<string, PlatformStat>>>;
-  adSpend: Record<string, Record<string, number>>;
-}
-
-// 指标行定义
-const METRICS = [
-  { key: "adSpend",  label: "广告费",   color: "#595959" },
-  { key: "total",    label: "总佣金收入", color: "#1677ff" },
-  { key: "rejected", label: "拒付佣金",  color: "#cf1322" },
-  { key: "active",   label: "有效佣金",  color: "#389e0d" },
-  { key: "net",      label: "净收益",    color: "#fa8c16" },
-] as const;
-
-type MetricKey = typeof METRICS[number]["key"];
-
-// ────────── 工具函数 ──────────────────────────────────────────────────────────
-function fmt(n: number): string {
-  if (!n) return "$0.00";
-  return (n < 0 ? "-$" : "$") + Math.abs(n).toFixed(2);
-}
+const fmt = (n: number | null | undefined) =>
+  n == null ? "—" : n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 function monthLabel(m: string): string {
   return m.slice(5).replace(/^0/, "") + "月";
 }
 
-// ────────── 年度总览 Tab（原主页面） ──────────────────────────────────────────
+// ────────── 年度总览 Tab（R-04.2 新样式） ──────────────────────────────────────
 function AnnualReportTab() {
   const { message } = App.useApp();
   const [year, setYear] = useState<number>(dayjs().year());
   const [loading, setLoading] = useState(false);
-  const [report, setReport] = useState<ReportData | null>(null);
-  const [activeMonth, setActiveMonth] = useState<string>("annual");
+  const [report, setReport] = useState<TeamAnnualReport | null>(null);
+  const [exporting, setExporting] = useState(false);
 
-  // 年份选项（近5年）
   const yearOptions = useMemo(() => {
     const cur = dayjs().year();
     return Array.from({ length: 5 }, (_, i) => cur - i);
   }, []);
 
-  // ── 拉取数据 ────────────────────────────────────────────────────────
   const fetchReport = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/user/team/report?year=${year}`).then((r) => r.json());
-      if (res.code === 0) {
-        setReport(res.data);
-      } else {
-        message.error(res.message || "获取报表失败");
-      }
+      const res = await fetch(`/api/user/team/report/annual-v2?year=${year}`).then((r) => r.json());
+      if (res.code === 0) setReport(res.data);
+      else message.error(res.message || "获取报表失败");
     } catch {
       message.error("网络错误");
     } finally {
@@ -84,196 +59,68 @@ function AnnualReportTab() {
 
   useEffect(() => { fetchReport(); }, [fetchReport]);
 
-  // ── 计算汇总值（统一走 report-metrics.sumReportStat，与导出 Excel 同源） ──
-  const getStat = useCallback((
-    metric: MetricKey,
-    monthKey: string | null,  // null = 全年
-    userId: string | null,    // null = 全组
-    platform: string | null   // null = 全平台
-  ): number => {
-    if (!report) return 0;
-    const months = monthKey ? [monthKey] : report.months;
-    const userIds = userId ? [userId] : report.members.map((m) => m.id);
-    return sumReportStat(metric, months, userIds, platform, report.data, report.adSpend);
-  }, [report]);
-
-  // ── 月度选项卡 ──────────────────────────────────────────────────────
-  const tabItems = useMemo(() => {
-    if (!report) return [];
-    return [
-      { key: "annual", label: "全年汇总" },
-      ...report.months.map((m) => ({ key: m, label: monthLabel(m) })),
-    ];
-  }, [report]);
-
-  // ── 生成月度表格（按指标×用户 pivot） ──────────────────────────────
-  const monthlyTableData = useMemo(() => {
-    if (!report) return { columns: [], dataSource: [] };
-    const isAnnual = activeMonth === "annual";
-    const months = isAnnual ? report.months : [activeMonth];
-
-    // 列：指标 | 合计[平台...+小计] | 成员1[平台...+小计] | ...
-    const fixedCol: ColumnsType<Record<string, number | string>> = [
-      {
-        title: "指标",
-        dataIndex: "metric",
-        key: "metric",
-        fixed: "left" as const,
-        width: 110,
-        render: (v: string) => {
-          const m = METRICS.find((x) => x.key === v);
-          return m ? <Text strong style={{ color: m.color }}>{m.label}</Text> : v;
-        },
-      },
-    ];
-
-    // 动态列：全年汇总时列是每月；单月时列是平台
-    let dynamicCols: ColumnsType<Record<string, number | string>>;
-
-    if (isAnnual) {
-      // 全年视图：列 = 每月 + 年合计
-      dynamicCols = [
-        ...report.months.map((m) => ({
-          title: monthLabel(m),
-          dataIndex: m,
-          key: m,
-          width: 90,
-          align: "right" as const,
-          render: (v: number) => (
-            <Text style={{ fontSize: 12, color: v < 0 ? "#cf1322" : undefined }}>
-              {fmt(v)}
-            </Text>
-          ),
-        })),
-        {
-          title: "年合计",
-          dataIndex: "_year",
-          key: "_year",
-          width: 110,
-          fixed: "right" as const,
-          align: "right" as const,
-          render: (v: number) => (
-            <Text strong style={{ color: v < 0 ? "#cf1322" : "#1677ff" }}>{fmt(v)}</Text>
-          ),
-        },
-      ];
-
-      const dataSource = METRICS.map(({ key }) => {
-        const row: Record<string, number | string> = { metric: key, _key: key };
-        let yearTotal = 0;
-        for (const m of report.months) {
-          const val = getStat(key as MetricKey, m, null, null);
-          row[m] = val;
-          yearTotal += key === "net" ? val : val;
-        }
-        // net 是 active - adSpend，已在 getStat 中计算，不能累加
-        if (key === "net") {
-          row["_year"] = getStat("net", null, null, null);
-        } else {
-          row["_year"] = yearTotal;
-        }
-        return row;
-      });
-
-      return { columns: [...fixedCol, ...dynamicCols], dataSource };
-    }
-
-    // 单月视图：列 = 合计列组 | 成员列组...
-    const buildMemberCols = (uid: string | null, labelPrefix: string): ColumnsType<Record<string, number | string>> => {
-      const platformCols = report.platforms.map((p) => ({
-        title: p,
-        dataIndex: `${uid ?? "_all"}_${p}`,
-        key: `${uid ?? "_all"}_${p}`,
-        width: 80,
-        align: "right" as const,
-        render: (v: number) => v ? <Text style={{ fontSize: 12 }}>{fmt(v)}</Text> : <Text type="secondary" style={{ fontSize: 11 }}>—</Text>,
-      }));
-      const subtotalCol = {
-        title: "小计",
-        dataIndex: `${uid ?? "_all"}_sub`,
-        key: `${uid ?? "_all"}_sub`,
-        width: 95,
-        align: "right" as const,
-        render: (v: number) => (
-          <Text strong style={{ color: v < 0 ? "#cf1322" : undefined }}>{fmt(v)}</Text>
-        ),
-      };
-      return [{
-        title: labelPrefix,
-        children: [...platformCols, subtotalCol],
-      } as ColumnsType<Record<string, number | string>>[number]];
-    };
-
-    dynamicCols = [
-      ...buildMemberCols(null, "合计"),
-      ...report.members.map((mem) => buildMemberCols(mem.id, mem.display_name)),
-    ].flat();
-
-    const dataSource = METRICS.map(({ key }) => {
-      const row: Record<string, number | string> = { metric: key, _key: key };
-      // 合计列
-      for (const p of report.platforms) {
-        const val = getStat(key as MetricKey, activeMonth, null, p);
-        row[`_all_${p}`] = val;
-      }
-      row["_all_sub"] = getStat(key as MetricKey, activeMonth, null, null);
-
-      // 各成员列
-      for (const mem of report.members) {
-        for (const p of report.platforms) {
-          const val = getStat(key as MetricKey, activeMonth, mem.id, p);
-          row[`${mem.id}_${p}`] = val;
-        }
-        row[`${mem.id}_sub`] = getStat(key as MetricKey, activeMonth, mem.id, null);
-      }
-      return row;
-    });
-
-    return { columns: [...fixedCol, ...dynamicCols], dataSource };
-  }, [report, activeMonth, getStat]);
-
-  // ── Excel 导出（调用服务端，保留完整格式） ──────────────────────────
   const handleExport = useCallback(async () => {
     if (!report) return;
-    const hide = message.loading("正在生成 Excel，请稍候...", 0);
+    setExporting(true);
     try {
-      const res = await fetch(`/api/user/team/report/export?year=${year}`);
-      if (!res.ok) throw new Error(await res.text());
-      const blob = await res.blob();
+      const resp = await fetch(`/api/user/team/report/annual-v2/export?year=${year}`);
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => null);
+        message.error(err?.message || "导出失败");
+        return;
+      }
+      const blob = await resp.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
       a.download = `${year}年度收支报表.xlsx`;
       a.click();
       URL.revokeObjectURL(url);
-      hide();
       message.success("Excel 已导出");
-    } catch (e) {
-      hide();
-      message.error("导出失败：" + String(e));
+    } finally {
+      setExporting(false);
     }
   }, [report, year, message]);
 
-  // ── 顶部汇总卡片 ────────────────────────────────────────────────────
-  const summaryStats = useMemo(() => {
-    if (!report) return null;
-    const mKey = activeMonth === "annual" ? null : activeMonth;
-    return {
-      adSpend:  getStat("adSpend",  mKey, null, null),
-      total:    getStat("total",    mKey, null, null),
-      rejected: getStat("rejected", mKey, null, null),
-      active:   getStat("active",   mKey, null, null),
-      net:      getStat("net",      mKey, null, null),
-    };
-  }, [report, activeMonth, getStat]);
+  const columns: ColumnsType<AnnualMonthAgg> = [
+    {
+      title: "月份", dataIndex: "month", key: "month", fixed: "left", width: 70,
+      render: (m: string, row) => (
+        <Tooltip title={`汇率 1USD=${row.rate.usdToCny.toFixed(4)}CNY（${row.rate.date}${row.rate.locked ? " 月末锁定" : " 实时"}）`}>
+          <Text strong>{monthLabel(m)}</Text>
+        </Tooltip>
+      ),
+    },
+    { title: "广告费($)", dataIndex: "adUsd", key: "adUsd", align: "right", render: (v: number) => `$${fmt(v)}` },
+    { title: "广告费(¥)", dataIndex: "adCny", key: "adCny", align: "right", render: (v: number) => `¥${fmt(v)}` },
+    {
+      title: <Tooltip title="美金广告费按当月报表汇率折人民币 + 人民币广告费累计">核算广告费(¥)</Tooltip>,
+      dataIndex: "profitAdCostCny", key: "profitAdCostCny", align: "right",
+      render: (v: number) => `¥${fmt(v)}`,
+    },
+    { title: "账面佣金($)", dataIndex: "book", key: "book", align: "right", render: (v: number) => <Text style={{ color: "#1677ff" }}>${fmt(v)}</Text> },
+    { title: "失效佣金($)", dataIndex: "rejected", key: "rejected", align: "right", render: (v: number) => <Text type={v > 0 ? "danger" : undefined}>${fmt(v)}</Text> },
+    { title: "应收佣金($)", dataIndex: "recvTotal", key: "recvTotal", align: "right", render: (v: number) => `$${fmt(v)}` },
+    { title: "实收佣金($)", dataIndex: "paidTotal", key: "paidTotal", align: "right", render: (v: number) => <Text strong>${fmt(v)}</Text> },
+    { title: "预估实收(¥)", dataIndex: "estPaidCny", key: "estPaidCny", align: "right", render: (v: number) => `¥${fmt(v)}` },
+    {
+      title: <Tooltip title="组长在月度报表按平台手填的实际到账汇总；未填月份显示 —">实际佣金(¥)</Tooltip>,
+      dataIndex: "actualPaidCny", key: "actualPaidCny", align: "right",
+      render: (v: number | null) => (v != null ? <Text style={{ color: "#1677ff" }}>¥{fmt(v)}</Text> : <Text type="secondary">—</Text>),
+    },
+    {
+      title: <Tooltip title="（实际佣金 ?? 预估实收）− 核算广告费">可分配利润(¥)</Tooltip>,
+      dataIndex: "profitCny", key: "profitCny", align: "right",
+      render: (v: number) => <Text strong style={{ color: v >= 0 ? "#389e0d" : "#cf1322" }}>¥{fmt(v)}</Text>,
+    },
+  ];
 
-  // ── 渲染 ────────────────────────────────────────────────────────────
   return (
     <div style={{ padding: "16px 24px" }}>
       <Space direction="vertical" style={{ width: "100%" }} size={16}>
         <AppPageHeader
           icon={<BarChartOutlined />}
-          title="团队收支报表"
+          title="团队收支报表（整年）"
           marginBottom={0}
           extra={
             <Space>
@@ -286,6 +133,7 @@ function AnnualReportTab() {
                 icon={<FileExcelOutlined />}
                 onClick={handleExport}
                 disabled={!report}
+                loading={exporting}
                 style={{ background: "#217346", borderColor: "#217346" }}
               >
                 导出 Excel
@@ -294,24 +142,23 @@ function AnnualReportTab() {
           }
         />
 
-        {/* 汇总卡片 */}
-        {summaryStats && (
+        {/* 年度汇总卡片 */}
+        {report && (
           <Row gutter={[12, 12]}>
             {[
-              { label: "广告费", value: summaryStats.adSpend, icon: <DollarOutlined />, color: "#595959" },
-              { label: "总佣金", value: summaryStats.total,   icon: <BarChartOutlined />, color: "#1677ff" },
-              { label: "拒付佣金", value: summaryStats.rejected, icon: <MinusCircleOutlined />, color: "#cf1322" },
-              { label: "有效佣金", value: summaryStats.active,  icon: <CheckCircleOutlined />, color: "#389e0d" },
-              { label: "净收益",  value: summaryStats.net,   icon: <DollarOutlined />, color: summaryStats.net >= 0 ? "#fa8c16" : "#cf1322" },
-            ].map(({ label, value, icon, color }) => (
-              <Col key={label} xs={12} sm={8} md={4} lg={4}>
+              { label: "广告费($)", value: `$${fmt(report.totals.adUsd)}`, color: "#595959" },
+              { label: "广告费(¥)", value: `¥${fmt(report.totals.adCny)}`, color: "#595959" },
+              { label: "核算广告费(¥)", value: `¥${fmt(report.totals.profitAdCostCny)}`, color: "#595959" },
+              { label: "账面佣金($)", value: `$${fmt(report.totals.book)}`, color: "#1677ff" },
+              { label: "实收佣金($)", value: `$${fmt(report.totals.paidTotal)}`, color: "#389e0d" },
+              { label: "可分配利润(¥)", value: `¥${fmt(report.totals.profitCny)}`, color: report.totals.profitCny >= 0 ? "#fa8c16" : "#cf1322" },
+            ].map(({ label, value, color }) => (
+              <Col key={label} xs={12} sm={8} md={4}>
                 <Card size="small" styles={{ body: { padding: "10px 14px" } }}>
                   <Statistic
-                    title={<Text style={{ fontSize: 12 }}>{icon} {label}</Text>}
-                    value={Math.abs(value)}
-                    prefix={value < 0 ? "-$" : "$"}
-                    precision={2}
-                    valueStyle={{ fontSize: 18, color }}
+                    title={<Text style={{ fontSize: 12 }}>{label}</Text>}
+                    value={value}
+                    valueStyle={{ fontSize: 16, color }}
                   />
                 </Card>
               </Col>
@@ -319,119 +166,49 @@ function AnnualReportTab() {
           </Row>
         )}
 
-        {/* 月份选项卡 + 表格 */}
-        <Card
-          size="small"
-          styles={{ body: { padding: "12px 8px" } }}
-          title={
-            <Tabs
-              activeKey={activeMonth}
-              onChange={setActiveMonth}
-              size="small"
-              items={tabItems}
-              tabBarStyle={{ marginBottom: 0 }}
-              style={{ marginBottom: -4 }}
-            />
-          }
-        >
+        {/* 整年 12 个月新样式表 */}
+        <Card size="small">
           {loading ? (
             <div style={{ textAlign: "center", padding: 40 }}><Spin /></div>
           ) : !report ? (
             <Empty description="暂无数据" />
           ) : (
-            <Table
-              columns={monthlyTableData.columns}
-              dataSource={monthlyTableData.dataSource}
-              rowKey="_key"
+            <Table<AnnualMonthAgg>
+              columns={columns}
+              dataSource={report.months}
+              rowKey="month"
               pagination={false}
               size="small"
               scroll={{ x: "max-content" }}
               bordered
-              rowClassName={(row) => {
-                const k = row._key as string;
-                if (k === "adSpend") return "row-adspend";
-                if (k === "rejected") return "row-rejected";
-                if (k === "net") return "row-net";
-                return "";
-              }}
-              summary={() => null}
+              summary={() => (
+                <Table.Summary.Row style={{ background: "#f6ffed", fontWeight: 600 }}>
+                  <Table.Summary.Cell index={0}>年合计</Table.Summary.Cell>
+                  <Table.Summary.Cell index={1} align="right">${fmt(report.totals.adUsd)}</Table.Summary.Cell>
+                  <Table.Summary.Cell index={2} align="right">¥{fmt(report.totals.adCny)}</Table.Summary.Cell>
+                  <Table.Summary.Cell index={3} align="right">¥{fmt(report.totals.profitAdCostCny)}</Table.Summary.Cell>
+                  <Table.Summary.Cell index={4} align="right">${fmt(report.totals.book)}</Table.Summary.Cell>
+                  <Table.Summary.Cell index={5} align="right">${fmt(report.totals.rejected)}</Table.Summary.Cell>
+                  <Table.Summary.Cell index={6} align="right">${fmt(report.totals.recvTotal)}</Table.Summary.Cell>
+                  <Table.Summary.Cell index={7} align="right">${fmt(report.totals.paidTotal)}</Table.Summary.Cell>
+                  <Table.Summary.Cell index={8} align="right">¥{fmt(report.totals.estPaidCny)}</Table.Summary.Cell>
+                  <Table.Summary.Cell index={9} align="right">¥{fmt(report.totals.effectiveActualCny)}</Table.Summary.Cell>
+                  <Table.Summary.Cell index={10} align="right">¥{fmt(report.totals.profitCny)}</Table.Summary.Cell>
+                </Table.Summary.Row>
+              )}
             />
           )}
-
-          {/* 成员明细折叠区 */}
           {report && (
-            <div style={{ marginTop: 16 }}>
+            <div style={{ marginTop: 12 }}>
               <Text type="secondary" style={{ fontSize: 12 }}>
-                * 广告费来源：Google Ads 每日同步数据；佣金来源：各联盟平台 API 实时拉取数据。{TXN_TZ_NOTE}。
+                * 全部取 CRM 库内数据（绝不调联盟平台 API）。账面/失效按交易发生月（平台后台时间）归月；
+                应收/实收按打款申请日归月归半月；历史月汇率按当月最后一日锁定；
+                实际佣金(¥)在「月度报表」Tab 按平台手填后此处自动汇总。
               </Text>
             </div>
           )}
         </Card>
-
-        {/* 成员分平台明细（单月视图） */}
-        {report && activeMonth !== "annual" && (
-          <Card title="成员明细" size="small">
-            <Row gutter={[12, 12]}>
-              {report.members.map((mem) => {
-                const totalComm = getStat("total",    activeMonth, mem.id, null);
-                const rejected  = getStat("rejected", activeMonth, mem.id, null);
-                const active    = getStat("active",   activeMonth, mem.id, null);
-                const spend     = getStat("adSpend",  activeMonth, mem.id, null);
-                const net       = active - spend;
-                return (
-                  <Col key={mem.id} xs={24} sm={12} md={8} lg={6}>
-                    <Card
-                      size="small"
-                      title={
-                        <Space>
-                          <Text strong>{mem.display_name}</Text>
-                          <Tag color="blue" style={{ fontSize: 11 }}>{mem.username}</Tag>
-                        </Space>
-                      }
-                      styles={{ body: { padding: "8px 12px" } }}
-                    >
-                      <div style={{ fontSize: 12, lineHeight: 2 }}>
-                        <div><Text type="secondary">广告费：</Text><Text>${spend.toFixed(2)}</Text></div>
-                        <div><Text type="secondary">总佣金：</Text><Text style={{ color: "#1677ff" }}>${totalComm.toFixed(2)}</Text></div>
-                        <div><Text type="secondary">拒付：</Text><Text type="danger">${rejected.toFixed(2)}</Text></div>
-                        <div><Text type="secondary">有效佣金：</Text><Text style={{ color: "#389e0d" }}>${active.toFixed(2)}</Text></div>
-                        <div>
-                          <Text type="secondary">净收益：</Text>
-                          <Text strong style={{ color: net >= 0 ? "#fa8c16" : "#cf1322" }}>
-                            {net < 0 ? "-" : ""}${Math.abs(net).toFixed(2)}
-                          </Text>
-                        </div>
-                      </div>
-                      {/* 各平台明细 */}
-                      <div style={{ marginTop: 8, borderTop: "1px solid #f0f0f0", paddingTop: 6 }}>
-                        {report.platforms.map((p) => {
-                          const stat = report.data[activeMonth]?.[mem.id]?.[p];
-                          if (!stat || stat.total === 0) return null;
-                          return (
-                            <div key={p} style={{ fontSize: 11, display: "flex", justifyContent: "space-between" }}>
-                              <Tag style={{ fontSize: 10, margin: "1px 0" }}>{p}</Tag>
-                              <Tooltip title={`拒付 $${stat.rejected.toFixed(2)}`}>
-                                <Text style={{ color: "#389e0d" }}>${stat.active.toFixed(2)}</Text>
-                                {stat.rejected > 0 && <Text type="danger" style={{ marginLeft: 4, fontSize: 10 }}>-${stat.rejected.toFixed(2)}</Text>}
-                              </Tooltip>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </Card>
-                  </Col>
-                );
-              })}
-            </Row>
-          </Card>
-        )}
       </Space>
-
-      <style>{`
-        .row-adspend td { background: #fafafa !important; }
-        .row-rejected td { background: #fff1f0 !important; }
-        .row-net td { background: #fffbe6 !important; font-weight: 600; }
-      `}</style>
     </div>
   );
 }
