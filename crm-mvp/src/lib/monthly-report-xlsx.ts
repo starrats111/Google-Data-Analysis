@@ -130,19 +130,35 @@ export function buildMemberSheet(wb: ExcelJS.Workbook, rep: MemberMonthlyReport,
   setCell(ws, acctStart + 1, totalCol, "", {});
   r = acctStart + 2;
 
-  // 账面/失效/应收（账号 2 列合并）
+  // 账面/失效/应收（账号 2 列合并；手工纠正值蓝底）
+  type Acct = MemberMonthlyReport["accounts"][number];
   type RowSpec = {
     label: string;
     sub?: string;
-    get: (a: MemberMonthlyReport["accounts"][number]) => number | string;
+    get: (a: Acct) => number | string;
+    manual?: (a: Acct) => boolean;
     total: number;
   };
   const mergedRows: RowSpec[] = [
-    { label: "账面佣金（美金）", get: (a) => nv(a.book), total: rep.totals.book },
-    { label: "失效佣金（美金）", get: (a) => nv(a.rejected), total: rep.totals.rejected },
-    { label: "应收佣金（美金）", sub: "5号", get: (a) => (a.hasPayments ? nv(a.recvH1) : ""), total: rep.totals.recvH1 },
-    { label: "", sub: "15号", get: (a) => (a.hasPayments ? nv(a.recvH2) : ""), total: rep.totals.recvH2 },
-    { label: "", sub: "合计", get: (a) => (a.hasPayments ? nv(a.recvH1 + a.recvH2) : ""), total: rep.totals.recvTotal },
+    { label: "账面佣金（美金）", get: (a) => nv(a.bookEffective), manual: (a) => a.bookOverride != null, total: rep.totals.book },
+    { label: "失效佣金（美金）", get: (a) => nv(a.rejectedEffective), manual: (a) => a.rejectedOverride != null, total: rep.totals.rejected },
+    {
+      label: "应收佣金（美金）", sub: "5号",
+      get: (a) => (a.hasPayments || a.recvH1Override != null ? nv(a.recvH1Effective) : ""),
+      manual: (a) => a.recvH1Override != null,
+      total: rep.totals.recvH1,
+    },
+    {
+      label: "", sub: "15号",
+      get: (a) => (a.hasPayments || a.recvH2Override != null ? nv(a.recvH2Effective) : ""),
+      manual: (a) => a.recvH2Override != null,
+      total: rep.totals.recvH2,
+    },
+    {
+      label: "", sub: "合计",
+      get: (a) => (a.hasPayments || a.recvH1Override != null || a.recvH2Override != null ? nv(a.recvH1Effective + a.recvH2Effective) : ""),
+      total: rep.totals.recvTotal,
+    },
   ];
   for (const spec of mergedRows) {
     const isTotal = spec.sub === "合计";
@@ -151,7 +167,11 @@ export function buildMemberSheet(wb: ExcelJS.Workbook, rep: MemberMonthlyReport,
     rep.accounts.forEach((a, i) => {
       const v = spec.get(a);
       ws.mergeCells(r, acctCol(i), r, acctCol(i) + 1);
-      setCell(ws, r, acctCol(i), v, { num: typeof v === "number", bold: isTotal });
+      setCell(ws, r, acctCol(i), v, {
+        num: typeof v === "number",
+        bold: isTotal,
+        fill: spec.manual?.(a) ? CLR.BLUE_LIGHT : undefined,
+      });
     });
     setCell(ws, r, totalCol, nv(spec.total), { fill: CLR.GREEN, bold: true, num: true });
     r++;
@@ -169,31 +189,34 @@ export function buildMemberSheet(wb: ExcelJS.Workbook, rep: MemberMonthlyReport,
 
   const paidSpecs: {
     sub: string;
-    usd: (a: MemberMonthlyReport["accounts"][number]) => number | string;
-    cny: (a: MemberMonthlyReport["accounts"][number]) => { v: number | string; manual: boolean };
+    usd: (a: Acct) => { v: number | string; manual: boolean };
+    cny: (a: Acct) => { v: number | string; manual: boolean };
     totalUsd: number;
     totalCny: number;
   }[] = [
     {
       sub: "10号",
-      usd: (a) => (a.hasPayments || a.paidH1Override != null ? nv(a.paidH1Effective) : ""),
+      usd: (a) => ({ v: a.hasPayments || a.paidH1Override != null ? nv(a.paidH1Effective) : "", manual: a.paidH1Override != null }),
       cny: (a) => ({ v: a.hasPayments || a.paidCnyH1Override != null ? nv(a.paidCnyH1Effective) : "", manual: a.paidCnyH1Override != null }),
       totalUsd: rep.totals.paidH1,
       totalCny: rep.totals.paidCnyH1,
     },
     {
       sub: "20号",
-      usd: (a) => (a.hasPayments || a.paidH2Override != null ? nv(a.paidH2Effective) : ""),
+      usd: (a) => ({ v: a.hasPayments || a.paidH2Override != null ? nv(a.paidH2Effective) : "", manual: a.paidH2Override != null }),
       cny: (a) => ({ v: a.hasPayments || a.paidCnyH2Override != null ? nv(a.paidCnyH2Effective) : "", manual: a.paidCnyH2Override != null }),
       totalUsd: rep.totals.paidH2,
       totalCny: rep.totals.paidCnyH2,
     },
     {
       sub: "合计",
-      usd: (a) => (a.hasPayments || a.paidH1Override != null || a.paidH2Override != null ? nv(a.paidH1Effective + a.paidH2Effective) : ""),
+      usd: (a) => ({
+        v: a.hasPayments || a.paidH1Override != null || a.paidH2Override != null ? nv(a.paidH1Effective + a.paidH2Effective) : "",
+        manual: false,
+      }),
       cny: (a) => ({
         v: a.hasPayments || a.paidCnyH1Override != null || a.paidCnyH2Override != null ? nv(a.paidCnyH1Effective + a.paidCnyH2Effective) : "",
-        manual: a.paidCnyH1Override != null || a.paidCnyH2Override != null,
+        manual: false,
       }),
       totalUsd: rep.totals.paidTotal,
       totalCny: rep.totals.paidCnyTotal,
@@ -206,7 +229,11 @@ export function buildMemberSheet(wb: ExcelJS.Workbook, rep: MemberMonthlyReport,
     rep.accounts.forEach((a, i) => {
       const usd = spec.usd(a);
       const cny = spec.cny(a);
-      setCell(ws, r, acctCol(i), usd, { numFmt: typeof usd === "number" ? USD_FMT : undefined, bold: isTotal });
+      setCell(ws, r, acctCol(i), usd.v, {
+        numFmt: typeof usd.v === "number" ? USD_FMT : undefined,
+        bold: isTotal,
+        fill: usd.manual ? CLR.BLUE_LIGHT : undefined,
+      });
       setCell(ws, r, acctCol(i) + 1, cny.v, {
         numFmt: typeof cny.v === "number" ? CNY_FMT : undefined,
         bold: isTotal,

@@ -115,6 +115,9 @@ function EditableCell({
   onSave,
   systemValue,
   bg,
+  colSpan,
+  blankZero,
+  valueColor,
 }: {
   value: number;
   overridden: boolean;
@@ -122,28 +125,35 @@ function EditableCell({
   onSave: (v: number | null) => Promise<void>;
   systemValue: number;
   bg?: string;
+  colSpan?: number;
+  /** true 时值为 0 且无手工纠正显示为空白（如当月无打款记录） */
+  blankZero?: boolean;
+  /** 无纠正时数值颜色（如失效佣金红色） */
+  valueColor?: string;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<number | null>(value);
   const [saving, setSaving] = useState(false);
 
   const baseBg = overridden ? C.overrideBg : bg;
+  const blank = !!blankZero && value === 0 && !overridden;
+  const shown = blank ? "" : fmt(value);
 
   if (!editable) {
     return (
-      <td style={{ ...cellBase, background: baseBg }}>
+      <td style={{ ...cellBase, background: baseBg }} colSpan={colSpan}>
         {overridden ? (
           <Tooltip title={`手工纠正值（系统计算 ${fmt(systemValue)}）`}>
             <span style={{ color: "#1677ff", fontWeight: 500 }}>{fmt(value)}</span>
           </Tooltip>
-        ) : fmt(value)}
+        ) : <span style={{ color: valueColor }}>{shown}</span>}
       </td>
     );
   }
 
   if (editing) {
     return (
-      <td style={{ ...cellBase, padding: 0, background: baseBg }}>
+      <td style={{ ...cellBase, padding: 0, background: baseBg }} colSpan={colSpan}>
         <InputNumber
           autoFocus
           size="small"
@@ -173,6 +183,7 @@ function EditableCell({
     <td
       className="mrt-edit"
       style={{ ...cellBase, cursor: "pointer", background: baseBg }}
+      colSpan={colSpan}
       onClick={() => { setDraft(value); setEditing(true); }}
     >
       <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
@@ -181,7 +192,7 @@ function EditableCell({
             <span style={{ color: "#1677ff", fontWeight: 500 }}>{fmt(value)}</span>
           </Tooltip>
         ) : (
-          <span>{fmt(value)}</span>
+          <span style={{ color: valueColor }}>{shown}</span>
         )}
         <EditOutlined className="mrt-edit-ic" style={{ fontSize: 11, color: "#94a3b8" }} />
         {overridden && (
@@ -313,7 +324,7 @@ export default function MonthlyReportTable({
       </TableShell>
 
       {/* ── 佣金区（动态账号列，每账号占 2 列；实收区拆 USD/CNY 双列） ── */}
-      <TableShell title="佣金明细" hint={editable ? "实收佣金 USD / CNY 均可点击手工纠正" : undefined}>
+      <TableShell title="佣金明细" hint={editable ? "所有数值均可点击手工纠正（蓝底为已纠正，↺ 恢复系统值）" : undefined}>
         <table style={tableStyle}>
           <thead>
             <tr>
@@ -334,29 +345,78 @@ export default function MonthlyReportTable({
           <tbody>
             <tr>
               <td style={labelCell} colSpan={2}>账面佣金（美金）</td>
-              {accounts.map((a) => <td key={a.label} style={cellBase} colSpan={2}>{fmt(a.book)}</td>)}
+              {accounts.map((a) => (
+                <EditableCell
+                  key={a.label}
+                  colSpan={2}
+                  value={a.bookEffective}
+                  overridden={a.bookOverride != null}
+                  editable={editable && a.accountName !== "(历史账号)"}
+                  systemValue={a.book}
+                  onSave={(v) => save(`book:${a.platform}:${a.accountName}`, v)}
+                />
+              ))}
               <td style={totalCell}>{fmt(totals.book)}</td>
             </tr>
             <tr>
               <td style={labelCell} colSpan={2}>失效佣金（美金）</td>
-              {accounts.map((a) => <td key={a.label} style={{ ...cellBase, color: a.rejected > 0 ? "#cf1322" : undefined }} colSpan={2}>{fmt(a.rejected)}</td>)}
+              {accounts.map((a) => (
+                <EditableCell
+                  key={a.label}
+                  colSpan={2}
+                  value={a.rejectedEffective}
+                  overridden={a.rejectedOverride != null}
+                  editable={editable && a.accountName !== "(历史账号)"}
+                  systemValue={a.rejected}
+                  valueColor={a.rejectedEffective > 0 ? "#cf1322" : undefined}
+                  onSave={(v) => save(`rejected:${a.platform}:${a.accountName}`, v)}
+                />
+              ))}
               <td style={{ ...totalCell, color: totals.rejected > 0 ? "#cf1322" : undefined }}>{fmt(totals.rejected)}</td>
             </tr>
             {/* 应收 */}
             <tr>
               <td style={labelCell} rowSpan={3}>应收佣金（美金）</td>
               <td style={subLabelCell}>5号 · 上半月</td>
-              {accounts.map((a) => <td key={a.label} style={{ ...cellBase, background: C.recvBg }} colSpan={2}>{a.hasPayments ? fmt(a.recvH1) : ""}</td>)}
+              {accounts.map((a) => (
+                <EditableCell
+                  key={a.label}
+                  colSpan={2}
+                  value={a.recvH1Effective}
+                  overridden={a.recvH1Override != null}
+                  editable={editable && a.accountName !== "(历史账号)"}
+                  systemValue={a.recvH1}
+                  bg={C.recvBg}
+                  blankZero={!a.hasPayments}
+                  onSave={(v) => save(`due:${a.platform}:${a.accountName}:H1`, v)}
+                />
+              ))}
               <td style={totalCell}>{fmt(totals.recvH1)}</td>
             </tr>
             <tr>
               <td style={subLabelCell}>15号 · 下半月</td>
-              {accounts.map((a) => <td key={a.label} style={{ ...cellBase, background: C.recvBg }} colSpan={2}>{a.hasPayments ? fmt(a.recvH2) : ""}</td>)}
+              {accounts.map((a) => (
+                <EditableCell
+                  key={a.label}
+                  colSpan={2}
+                  value={a.recvH2Effective}
+                  overridden={a.recvH2Override != null}
+                  editable={editable && a.accountName !== "(历史账号)"}
+                  systemValue={a.recvH2}
+                  bg={C.recvBg}
+                  blankZero={!a.hasPayments}
+                  onSave={(v) => save(`due:${a.platform}:${a.accountName}:H2`, v)}
+                />
+              ))}
               <td style={totalCell}>{fmt(totals.recvH2)}</td>
             </tr>
             <tr>
               <td style={{ ...subLabelCell, fontWeight: 600 }}>合计</td>
-              {accounts.map((a) => <td key={a.label} style={{ ...cellBase, background: C.recvBg, fontWeight: 600 }} colSpan={2}>{a.hasPayments ? fmt(a.recvH1 + a.recvH2) : ""}</td>)}
+              {accounts.map((a) => (
+                <td key={a.label} style={{ ...cellBase, background: C.recvBg, fontWeight: 600 }} colSpan={2}>
+                  {a.hasPayments || a.recvH1Override != null || a.recvH2Override != null ? fmt(a.recvH1Effective + a.recvH2Effective) : ""}
+                </td>
+              ))}
               <td style={totalCell}>{fmt(totals.recvTotal)}</td>
             </tr>
             {/* 实收（USD/CNY 双列，可编辑） */}
@@ -386,6 +446,7 @@ export default function MonthlyReportTable({
                     editable={editable && a.accountName !== "(历史账号)"}
                     systemValue={a.paidH1}
                     bg={C.paidBg}
+                    blankZero={!a.hasPayments}
                     onSave={(v) => save(`recv:${a.platform}:${a.accountName}:H1`, v)}
                   />
                   <EditableCell
@@ -394,6 +455,7 @@ export default function MonthlyReportTable({
                     editable={editable && a.accountName !== "(历史账号)"}
                     systemValue={a.paidCnyH1}
                     bg={C.paidBg}
+                    blankZero={!a.hasPayments}
                     onSave={(v) => save(`recvcny:${a.platform}:${a.accountName}:H1`, v)}
                   />
                 </React.Fragment>
@@ -413,6 +475,7 @@ export default function MonthlyReportTable({
                     editable={editable && a.accountName !== "(历史账号)"}
                     systemValue={a.paidH2}
                     bg={C.paidBg}
+                    blankZero={!a.hasPayments}
                     onSave={(v) => save(`recv:${a.platform}:${a.accountName}:H2`, v)}
                   />
                   <EditableCell
@@ -421,6 +484,7 @@ export default function MonthlyReportTable({
                     editable={editable && a.accountName !== "(历史账号)"}
                     systemValue={a.paidCnyH2}
                     bg={C.paidBg}
+                    blankZero={!a.hasPayments}
                     onSave={(v) => save(`recvcny:${a.platform}:${a.accountName}:H2`, v)}
                   />
                 </React.Fragment>
@@ -432,12 +496,16 @@ export default function MonthlyReportTable({
             </tr>
             <tr>
               <td style={{ ...subLabelCell, fontWeight: 600 }}>合计</td>
-              {accounts.map((a) => (
-                <React.Fragment key={a.label}>
-                  <td style={{ ...cellBase, background: C.paidBg, fontWeight: 600 }}>{fmt(a.paidH1Effective + a.paidH2Effective)}</td>
-                  <td style={{ ...cellBase, background: C.paidBg, fontWeight: 600, color: "#d46b08" }}>{fmt(a.paidCnyH1Effective + a.paidCnyH2Effective)}</td>
-                </React.Fragment>
-              ))}
+              {accounts.map((a) => {
+                const hasPaid = a.hasPayments || a.paidH1Override != null || a.paidH2Override != null
+                  || a.paidCnyH1Override != null || a.paidCnyH2Override != null;
+                return (
+                  <React.Fragment key={a.label}>
+                    <td style={{ ...cellBase, background: C.paidBg, fontWeight: 600 }}>{hasPaid ? fmt(a.paidH1Effective + a.paidH2Effective) : ""}</td>
+                    <td style={{ ...cellBase, background: C.paidBg, fontWeight: 600, color: "#d46b08" }}>{hasPaid ? fmt(a.paidCnyH1Effective + a.paidCnyH2Effective) : ""}</td>
+                  </React.Fragment>
+                );
+              })}
               <td style={totalCell}>
                 <div>{fmt(totals.paidTotal)}</div>
                 <div style={{ color: "#d46b08", fontWeight: 500 }}>¥{fmt(totals.paidCnyTotal)}</div>

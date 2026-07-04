@@ -52,11 +52,22 @@ export interface AccountColumn {
   connectionIds: string[];
   /** 账面佣金（USD，当月全部 status） */
   book: number;
+  /** 账面佣金手工纠正（scope book:{platform}:{account}，null = 无） */
+  bookOverride: number | null;
+  bookEffective: number;
   /** 失效佣金（USD，rejected） */
   rejected: number;
+  /** 失效佣金手工纠正（scope rejected:{platform}:{account}） */
+  rejectedOverride: number | null;
+  rejectedEffective: number;
   /** 应收上/下半月（平台显示金额 amount） */
   recvH1: number;
   recvH2: number;
+  /** 应收手工纠正（scope due:{platform}:{account}:{H1|H2}） */
+  recvH1Override: number | null;
+  recvH2Override: number | null;
+  recvH1Effective: number;
+  recvH2Effective: number;
   /** 实收上/下半月（毛额优先回退净额，库内计算值） */
   paidH1: number;
   paidH2: number;
@@ -292,8 +303,11 @@ export async function buildMemberMonthlyReport(
         accountName: name,
         label: "", // 后面统一编号
         connectionIds: [],
-        book: 0, rejected: 0,
+        book: 0, bookOverride: null, bookEffective: 0,
+        rejected: 0, rejectedOverride: null, rejectedEffective: 0,
         recvH1: 0, recvH2: 0,
+        recvH1Override: null, recvH2Override: null,
+        recvH1Effective: 0, recvH2Effective: 0,
         paidH1: 0, paidH2: 0,
         paidH1Override: null, paidH2Override: null,
         paidH1Effective: 0, paidH2Effective: 0,
@@ -372,8 +386,12 @@ export async function buildMemberMonthlyReport(
     const key = `${platform}\u0000(历史账号)`;
     colByKey.set(key, {
       platform, accountName: "(历史账号)", label: "", connectionIds: [],
-      book: o.book, rejected: o.rejected,
-      recvH1: 0, recvH2: 0, paidH1: 0, paidH2: 0,
+      book: o.book, bookOverride: null, bookEffective: o.book,
+      rejected: o.rejected, rejectedOverride: null, rejectedEffective: o.rejected,
+      recvH1: 0, recvH2: 0,
+      recvH1Override: null, recvH2Override: null,
+      recvH1Effective: 0, recvH2Effective: 0,
+      paidH1: 0, paidH2: 0,
       paidH1Override: null, paidH2Override: null,
       paidH1Effective: 0, paidH2Effective: 0,
       paidCnyH1: 0, paidCnyH2: 0,
@@ -448,6 +466,19 @@ export async function buildMemberMonthlyReport(
     col.recvH2 = r2(col.recvH2);
     col.paidH1 = r2(col.paidH1);
     col.paidH2 = r2(col.paidH2);
+    // 账面/失效/应收手工纠正
+    const ovBook = overrides.get(`book:${col.platform}:${col.accountName}`);
+    col.bookOverride = ovBook !== undefined ? r2(ovBook) : null;
+    col.bookEffective = col.bookOverride ?? col.book;
+    const ovRej = overrides.get(`rejected:${col.platform}:${col.accountName}`);
+    col.rejectedOverride = ovRej !== undefined ? r2(ovRej) : null;
+    col.rejectedEffective = col.rejectedOverride ?? col.rejected;
+    const ovDueH1 = overrides.get(`due:${col.platform}:${col.accountName}:H1`);
+    const ovDueH2 = overrides.get(`due:${col.platform}:${col.accountName}:H2`);
+    col.recvH1Override = ovDueH1 !== undefined ? r2(ovDueH1) : null;
+    col.recvH2Override = ovDueH2 !== undefined ? r2(ovDueH2) : null;
+    col.recvH1Effective = col.recvH1Override ?? col.recvH1;
+    col.recvH2Effective = col.recvH2Override ?? col.recvH2;
     const ovH1 = overrides.get(`recv:${col.platform}:${col.accountName}:H1`);
     const ovH2 = overrides.get(`recv:${col.platform}:${col.accountName}:H2`);
     col.paidH1Override = ovH1 !== undefined ? r2(ovH1) : null;
@@ -479,10 +510,10 @@ export async function buildMemberMonthlyReport(
 
   // ── 8. 合计 & 利润 ────────────────────────────────────────────────
   const totals = {
-    book: r2(accounts.reduce((s, c) => s + c.book, 0)),
-    rejected: r2(accounts.reduce((s, c) => s + c.rejected, 0)),
-    recvH1: r2(accounts.reduce((s, c) => s + c.recvH1, 0)),
-    recvH2: r2(accounts.reduce((s, c) => s + c.recvH2, 0)),
+    book: r2(accounts.reduce((s, c) => s + c.bookEffective, 0)),
+    rejected: r2(accounts.reduce((s, c) => s + c.rejectedEffective, 0)),
+    recvH1: r2(accounts.reduce((s, c) => s + c.recvH1Effective, 0)),
+    recvH2: r2(accounts.reduce((s, c) => s + c.recvH2Effective, 0)),
     recvTotal: 0,
     paidH1: r2(accounts.reduce((s, c) => s + c.paidH1Effective, 0)),
     paidH2: r2(accounts.reduce((s, c) => s + c.paidH2Effective, 0)),
@@ -723,10 +754,10 @@ export async function buildTeamMonthlySummary(
         };
         platMap.set(col.platform, agg);
       }
-      agg.book += col.book;
-      agg.rejected += col.rejected;
-      agg.recvH1 += col.recvH1;
-      agg.recvH2 += col.recvH2;
+      agg.book += col.bookEffective;
+      agg.rejected += col.rejectedEffective;
+      agg.recvH1 += col.recvH1Effective;
+      agg.recvH2 += col.recvH2Effective;
       agg.paidH1 += col.paidH1Effective;
       agg.paidH2 += col.paidH2Effective;
       agg.memberCnyH1 += col.paidCnyH1Effective;
@@ -929,19 +960,28 @@ export async function buildTeamAnnualReport(
   if (memberIds.length > 0) {
     const uidIn = memberIds.map(() => "?").join(",");
 
-    // ── 1. 账面/失效佣金 ──
+    // ── 1. 账面/失效佣金（格粒度 user×month×platform×账号，套用 book:/rejected: 手工纠正） ──
     const txnRange = sqlTxnRange("t", yearStart, yearEndExcl);
-    const txnRows = await prisma.$queryRawUnsafe<{ m: string; book: number; rejected: number }[]>(`
-      SELECT ${sqlTxnMonth("t")} AS m,
+    const txnRows = await prisma.$queryRawUnsafe<{
+      uid: bigint; platform: string; acct: string | null; m: string; book: number; rejected: number;
+    }[]>(`
+      SELECT t.user_id AS uid, t.platform,
+        TRIM(COALESCE(pc.account_name, '')) AS acct,
+        ${sqlTxnMonth("t")} AS m,
         SUM(CAST(t.commission_amount AS DECIMAL(14,4))) AS book,
         SUM(CASE WHEN t.status = 'rejected' THEN CAST(t.commission_amount AS DECIMAL(14,4)) ELSE 0 END) AS rejected
       FROM affiliate_transactions t
+      LEFT JOIN platform_connections pc ON pc.id = t.platform_connection_id
       WHERE t.user_id IN (${uidIn}) AND t.is_deleted = 0 AND ${txnRange.cond}
-      GROUP BY m
+      GROUP BY uid, t.platform, acct, m
     `, ...memberIds, ...txnRange.params);
+    const bookCells = new Map<string, { book: number; rejected: number }>(); // `${uid}|${m}|${platform}|${acct}`
     for (const r of txnRows) {
-      const a = acc.get(r.m);
-      if (a) { a.book = Number(r.book || 0); a.rejected = Number(r.rejected || 0); }
+      const key = `${r.uid}|${r.m}|${r.platform}|${(r.acct || "").trim()}`;
+      const c = bookCells.get(key) || { book: 0, rejected: 0 };
+      c.book += Number(r.book || 0);
+      c.rejected += Number(r.rejected || 0);
+      bookCells.set(key, c);
     }
 
     // ── 2. 应收/实收（打款按 request_date 归月归半月，只计 paid；按日分组以便逐笔折 CNY） ──
@@ -965,40 +1005,79 @@ export async function buildTeamAnnualReport(
 
     const dailyUsdToCny = await buildDailyUsdToCnyLookup(yearEndExcl, 440);
 
-    // 组员实收手工纠正：格粒度 user×month×platform×账号×半月，覆盖库内计算值
-    // recv:* 纠正 USD（CNY 默认随之改为 纠正值×当月报表汇率）；recvcny:* 手填 CNY
+    // 组员手工纠正：格粒度 user×month×platform×账号(×半月)，覆盖库内计算值
+    // book:/rejected: 纠正账面/失效；due:* 纠正应收；
+    // recv:* 纠正实收 USD（CNY 默认随之改为 纠正值×当月报表汇率）；recvcny:* 手填实收 CNY
     const memberOv = await prisma.report_overrides.findMany({
       where: {
         user_id: { in: memberIds }, is_deleted: 0,
         month: { startsWith: `${year}-` },
-        OR: [{ scope_key: { startsWith: "recv:" } }, { scope_key: { startsWith: "recvcny:" } }],
+        OR: [
+          { scope_key: { startsWith: "recv:" } },
+          { scope_key: { startsWith: "recvcny:" } },
+          { scope_key: { startsWith: "due:" } },
+          { scope_key: { startsWith: "book:" } },
+          { scope_key: { startsWith: "rejected:" } },
+        ],
       },
     });
-    const paidCells = new Map<string, number>(); // `${uid}|${m}|${platform}|${acct}|${half}`
+    const recvCells = new Map<string, number>(); // `${uid}|${m}|${platform}|${acct}|${half}`
+    const paidCells = new Map<string, number>();
     const paidCnyCells = new Map<string, number>();
     for (const r of payRows) {
       const m = String(r.m);
-      const a = acc.get(m);
-      if (!a) continue;
-      a.recvTotal += Number(r.recv || 0);
+      if (!acc.has(m)) continue;
       const key = `${r.uid}|${m}|${r.platform}|${(r.acct || "").trim()}|${r.half}`;
+      recvCells.set(key, (recvCells.get(key) || 0) + Number(r.recv || 0));
       const paid = Number(r.paid || 0);
       paidCells.set(key, (paidCells.get(key) || 0) + paid);
       const cny = paid * dailyUsdToCny(new Date(`${r.d}T00:00:00Z`));
       paidCnyCells.set(key, (paidCnyCells.get(key) || 0) + cny);
     }
     for (const o of memberOv) {
-      const mch = o.scope_key.match(/^recv:([^:]+):([^:]*):(H1|H2)$/);
-      if (!mch) continue;
-      const key = `${o.user_id}|${o.month}|${mch[1]}|${mch[2].trim()}|${mch[3]}`;
-      paidCells.set(key, Number(o.value));
-      const rate = rates.get(o.month);
-      paidCnyCells.set(key, Number(o.value) * (rate?.usdToCny || 0));
+      const cellKey = (p: string, a: string, h?: string) =>
+        `${o.user_id}|${o.month}|${p}|${a.trim()}${h ? `|${h}` : ""}`;
+      let mch = o.scope_key.match(/^recv:([^:]+):([^:]*):(H1|H2)$/);
+      if (mch) {
+        const key = cellKey(mch[1], mch[2], mch[3]);
+        paidCells.set(key, Number(o.value));
+        const rate = rates.get(o.month);
+        paidCnyCells.set(key, Number(o.value) * (rate?.usdToCny || 0));
+        continue;
+      }
+      mch = o.scope_key.match(/^due:([^:]+):([^:]*):(H1|H2)$/);
+      if (mch) { recvCells.set(cellKey(mch[1], mch[2], mch[3]), Number(o.value)); continue; }
+      mch = o.scope_key.match(/^book:([^:]+):([^:]*)$/);
+      if (mch) {
+        const key = cellKey(mch[1], mch[2]);
+        const c = bookCells.get(key) || { book: 0, rejected: 0 };
+        c.book = Number(o.value);
+        bookCells.set(key, c);
+        continue;
+      }
+      mch = o.scope_key.match(/^rejected:([^:]+):([^:]*)$/);
+      if (mch) {
+        const key = cellKey(mch[1], mch[2]);
+        const c = bookCells.get(key) || { book: 0, rejected: 0 };
+        c.rejected = Number(o.value);
+        bookCells.set(key, c);
+      }
     }
+    // recvcny:* 后套（覆盖 recv:* 推导的默认 CNY）
     for (const o of memberOv) {
       const mch = o.scope_key.match(/^recvcny:([^:]+):([^:]*):(H1|H2)$/);
       if (!mch) continue;
       paidCnyCells.set(`${o.user_id}|${o.month}|${mch[1]}|${mch[2].trim()}|${mch[3]}`, Number(o.value));
+    }
+    for (const [key, c] of bookCells) {
+      const m = key.split("|")[1];
+      const a = acc.get(m);
+      if (a) { a.book += c.book; a.rejected += c.rejected; }
+    }
+    for (const [key, val] of recvCells) {
+      const m = key.split("|")[1];
+      const a = acc.get(m);
+      if (a) a.recvTotal += val;
     }
     for (const [key, val] of paidCells) {
       const m = key.split("|")[1];
