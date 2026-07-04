@@ -7,7 +7,7 @@ import {
 } from "antd";
 import {
   TeamOutlined, UserOutlined, TrophyOutlined, ReloadOutlined, SyncOutlined,
-  CloudSyncOutlined, ShopOutlined, ClockCircleOutlined,
+  CloudSyncOutlined, ShopOutlined, ClockCircleOutlined, RocketOutlined,
 } from "@ant-design/icons";
 import dayjs, { Dayjs } from "dayjs";
 import utc from "dayjs/plugin/utc";
@@ -31,6 +31,7 @@ interface MemberRanking {
   display_name: string | null;
   status: string;
   today_merchants: number | null;
+  today_ads: number | null;
   active_merchants: number;
   cost: number;
   commission: number;
@@ -43,6 +44,7 @@ interface MemberRanking {
 interface TeamStats {
   member_count: number;
   active_merchants: number;
+  today_ads: number;
   total_cost: number;
   total_commission: number;
   rejected_commission: number;
@@ -54,6 +56,7 @@ export default function TeamOverviewPage() {
   const [memberRanking, setMemberRanking] = useState<MemberRanking[]>([]);
   const [memberCount, setMemberCount] = useState(0);
   const [teamActiveMerchants, setTeamActiveMerchants] = useState(0);
+  const [teamTodayAds, setTeamTodayAds] = useState(0);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Dayjs | null>(null);
@@ -79,13 +82,14 @@ export default function TeamOverviewPage() {
     return {
       member_count: memberCount,
       active_merchants: teamActiveMerchants,
+      today_ads: teamTodayAds,
       total_cost: Math.round(total_cost * 100) / 100,
       total_commission: Math.round(total_commission * 100) / 100,
       rejected_commission: Math.round(rejected_commission * 100) / 100,
       net_commission: Math.round(net_commission * 100) / 100,
       avg_roi: Math.round(avg_roi * 10) / 10,
     };
-  }, [memberRanking, memberCount, teamActiveMerchants]);
+  }, [memberRanking, memberCount, teamActiveMerchants, teamTodayAds]);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -99,6 +103,7 @@ export default function TeamOverviewPage() {
         setMemberRanking(res.data.member_ranking);
         setMemberCount(res.data.team_stats?.member_count ?? res.data.member_ranking.length);
         setTeamActiveMerchants(res.data.team_stats?.active_merchants ?? 0);
+        setTeamTodayAds(res.data.team_stats?.today_ads ?? 0);
         setLastUpdated(dayjs().tz(TZ));
         setCountdown(AUTO_REFRESH_INTERVAL / 1000);
       }
@@ -200,6 +205,25 @@ export default function TeamOverviewPage() {
           </Space>
         </Button>
       ),
+    },
+    {
+      title: (
+        <Tooltip title="每 30 分钟从 Google Sheet 同步，统计今日新建（CST）且历史没出现过同名系列的广告数量">
+          今日投放广告
+        </Tooltip>
+      ),
+      dataIndex: "today_ads",
+      key: "today_ads",
+      align: "center" as const,
+      width: 120,
+      sorter: (a: MemberRanking, b: MemberRanking) =>
+        (a.today_ads ?? -1) - (b.today_ads ?? -1),
+      render: (v: number | null) => {
+        if (v === null) return <Text type="secondary" style={{ fontSize: 11 }}>未配置</Text>;
+        return v > 0
+          ? <Badge count={v} color="#1677ff" overflowCount={999} style={{ fontSize: 12 }} />
+          : <Text type="secondary">—</Text>;
+      },
     },
     {
       title: (
@@ -329,6 +353,16 @@ export default function TeamOverviewPage() {
             <Row gutter={16}>
               <Col xs={12} sm={8} md={4}>
                 <Statistic title="小组成员" value={teamStats.member_count} suffix="人" prefix={<TeamOutlined />} />
+              </Col>
+              <Col xs={12} sm={8} md={4}>
+                <Tooltip title="全组今日新建（CST）且历史没出现过同名系列的广告数量，每 30 分钟同步">
+                  <Statistic
+                    title={<Space><RocketOutlined />今日投放广告</Space>}
+                    value={teamStats.today_ads}
+                    suffix="条"
+                    styles={{ content: { color: teamStats.today_ads > 0 ? "#1677ff" : "#8c8c8c" } }}
+                  />
+                </Tooltip>
               </Col>
               <Col xs={12} sm={8} md={4}>
                 <Tooltip title="全组正在跑广告的商家数（跨成员去重）">

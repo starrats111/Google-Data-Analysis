@@ -129,6 +129,59 @@ async function backfillNewCampaigns(
   return out;
 }
 
+/**
+ * 今日投放广告数：今日（CST）创建、且历史（今日之前）没出现过同名系列的广告数，按 gcid 去重。
+ * 「历史同名」以 campaigns 表为准（含软删行）：同 user、同 campaign_name、
+ * created_at 早于今日 CST 零点即视为历史已有，复用旧名字重开的系列不计入。
+ */
+async function countTodayNewAds(
+  rows: Array<CampaignInfoRow & { userId: string; mccDbId: string }>,
+  todayStr: string,
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  const todayStartCST = new Date(`${todayStr}T00:00:00+08:00`);
+
+  // userId → (gcid → campaignName)，仅今日创建的行
+  const byUser = new Map<string, Map<string, string>>();
+  for (const r of rows) {
+    if (r.creationDate !== todayStr) continue;
+    if (!byUser.has(r.userId)) byUser.set(r.userId, new Map());
+    const m = byUser.get(r.userId)!;
+    if (!m.has(r.campaignId)) m.set(r.campaignId, r.campaignName || "");
+  }
+
+  for (const [userId, gcidToName] of byUser) {
+    const names = [...new Set([...gcidToName.values()].filter(Boolean))];
+    const historicalNames = new Set<string>();
+    try {
+      const BATCH = 300;
+      for (let i = 0; i < names.length; i += BATCH) {
+        const batch = names.slice(i, i + BATCH);
+        const hist = await prisma.campaigns.findMany({
+          where: {
+            user_id: BigInt(userId),
+            campaign_name: { in: batch },
+            created_at: { lt: todayStartCST },
+          },
+          select: { campaign_name: true },
+        });
+        for (const h of hist) if (h.campaign_name) historicalNames.add(h.campaign_name);
+      }
+    } catch (e) {
+      log(`今日投放广告 名称去重查询失败 (user ${userId}): ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`);
+    }
+
+    let count = 0;
+    for (const [, name] of gcidToName) {
+      if (name && historicalNames.has(name)) continue;
+      count++;
+    }
+    out.set(userId, count);
+  }
+
+  return out;
+}
+
 export async function GET(req: NextRequest) {
   if (!verifyCron(req)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -142,11 +195,16 @@ export async function GET(req: NextRequest) {
 
     const syncedAt = new Date().toISOString();
 
+    // 今日投放广告数（今日创建 + 历史无同名，按 gcid 去重）
+    const adsByUser = await countTodayNewAds(result.recentRows, result.date);
+
     // 将结果写入 system_configs，每个 user_id 一条记录
     const writeOps: Promise<unknown>[] = [];
-    for (const [userId, count] of result.byUser) {
+    const cachedUserIds = new Set([...result.byUser.keys(), ...adsByUser.keys()]);
+    for (const userId of cachedUserIds) {
+      const count = result.byUser.get(userId) ?? 0;
       const key = `today_merchants_${userId}`;
-      const value = JSON.stringify({ count, date: result.date, synced_at: syncedAt });
+      const value = JSON.stringify({ count, ads_count: adsByUser.get(userId) ?? 0, date: result.date, synced_at: syncedAt });
       writeOps.push(
         prisma.system_configs.upsert({
           where: { config_key: key },
@@ -168,9 +226,9 @@ export async function GET(req: NextRequest) {
     });
     const allUserIds = new Set(allMccUsers.map((m) => String(m.user_id)));
     for (const userId of allUserIds) {
-      if (!result.byUser.has(userId)) {
+      if (!cachedUserIds.has(userId)) {
         const key = `today_merchants_${userId}`;
-        const value = JSON.stringify({ count: 0, date: result.date, synced_at: syncedAt });
+        const value = JSON.stringify({ count: 0, ads_count: 0, date: result.date, synced_at: syncedAt });
         writeOps.push(
           prisma.system_configs.upsert({
             where: { config_key: key },
@@ -212,8 +270,9 @@ export async function GET(req: NextRequest) {
       elapsed_s: parseFloat(elapsed),
       mcc_total: result.mccCount,
       mcc_with_data: result.mccWithData,
-      users_updated: result.byUser.size,
+      users_updated: cachedUserIds.size,
       by_user: Object.fromEntries(result.byUser),
+      today_ads_by_user: Object.fromEntries(adsByUser),
       backfill: {
         created: backfill.created,
         resurrected: backfill.resurrected,

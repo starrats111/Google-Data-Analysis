@@ -199,6 +199,8 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   // 适用于 CRM 建系列和直接在 Google Ads 建系列的成员
   const todayStr = todayCST();
   const todayMerchantsMap = new Map<string, number>();
+  // 今日投放广告数（今日创建且历史无同名，cron 同步时一并写入缓存 ads_count）
+  const todayAdsMap = new Map<string, number>();
   try {
     const cacheRows = await prisma.system_configs.findMany({
       where: {
@@ -211,9 +213,12 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       const uid = row.config_key.replace("today_merchants_", "");
       if (!memberIds.map(String).includes(uid)) continue;
       try {
-        const parsed = JSON.parse(row.config_value ?? "{}") as { count?: number; date?: string };
+        const parsed = JSON.parse(row.config_value ?? "{}") as { count?: number; ads_count?: number; date?: string };
         if (parsed.date === todayStr && typeof parsed.count === "number") {
           todayMerchantsMap.set(uid, parsed.count);
+        }
+        if (parsed.date === todayStr && typeof parsed.ads_count === "number") {
+          todayAdsMap.set(uid, parsed.ads_count);
         }
       } catch { /* 忽略解析错误 */ }
     }
@@ -246,6 +251,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       display_name: member.display_name,
       status: member.status,
       today_merchants: todayMerchantsMap.get(uid) ?? null,
+      today_ads: todayAdsMap.get(uid) ?? null,
       active_merchants: activeMerchantsByUser.get(uid) || 0,
       cost: Math.round(cost * 100) / 100,
       commission: Math.round(commission * 100) / 100,
@@ -265,6 +271,8 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     team_stats: {
       member_count: members.length,
       active_merchants: teamActiveMerchantCount,
+      // 团队今日投放广告总数（成员求和；成员级已按 gcid 去重，跨成员不会重复）
+      today_ads: [...todayAdsMap.values()].reduce((s, v) => s + v, 0),
     },
     member_ranking: memberStats,
   }));
