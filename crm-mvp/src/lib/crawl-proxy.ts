@@ -13,14 +13,23 @@ import * as https from "https";
 import * as http from "http";
 
 /**
- * 取国家级代理 URL。优先级：换链接代理供应商(kyads_proxies) → system_config 模板 → env。
- * @param opts.userId 传入时优先取分配给该用户的代理供应商（换链接 suffix 路径）
+ * 取国家级 SOCKS5 代理 URL。
+ *
+ * ⚠️ 代理出口按用途隔离（2026-07-04）：
+ *   - 换链接（补货/跟链/suffix，**传 userId**）：只走换链接供应商池(kyads_proxies=kookeey)，
+ *     取不到即返回 null，**绝不兜底到 system_config 模板(arxlabs=AI 出口)**，避免两条线串代理。
+ *   - AI 爬取/分类/素材等（**不传 userId**）：走 system_config 模板(crawl_proxy_template=arxlabs) → env。
+ *
+ * @param opts.exchange true=换链接路径（仅 kookeey，无 arxlabs 兜底）
+ * @param opts.userId 换链接路径下用于选该用户分配的供应商；传 userId 亦隐含 exchange
  */
 export async function getProxyUrlForCountry(
   country: string,
-  opts: { userId?: bigint | null } = {},
+  opts: { userId?: bigint | null; exchange?: boolean } = {},
 ): Promise<string | null> {
   if (!country) return null;
+
+  const isExchange = opts.exchange === true || (opts.userId != null && opts.userId > BigInt(0));
 
   // 1) 换链接代理供应商（动态导入避免与 proxy-provider 循环依赖）
   try {
@@ -31,8 +40,11 @@ export async function getProxyUrlForCountry(
     // 供应商不可用时继续兜底
   }
 
+  // 换链接路径到此为止：宁可无代理（上层重试/降级），也不串用 AI 的 arxlabs 出口。
+  if (isExchange) return null;
+
   try {
-    // 2) 从 DB 读取模板（管理台可配置），兜底读 env var
+    // 2) 从 DB 读取模板（管理台可配置），兜底读 env var —— 仅 AI 路径
     const { getCrawlProxyTemplate } = await import("@/lib/system-config");
     const template = await getCrawlProxyTemplate();
 
@@ -52,10 +64,32 @@ export async function getProxyUrlForCountry(
 /**
  * 获取 HTTP 代理 URL（专供 Puppeteer/Chrome 使用）。
  * Chrome 不支持 SOCKS5 代理认证，必须使用 HTTP/HTTPS 代理并配合 page.authenticate()。
- * 优先读 crawl_proxy_http_template；若未配置则返回 null（调用方应降级到直连）。
+ *
+ * ⚠️ 出口隔离（2026-07-04）：
+ *   - 换链接浏览器兜底（**传 userId**）：从换链接供应商池(kookeey，1000 端口 http)取，
+ *     取不到即返回 null，**绝不读 crawl_proxy_http_template(arxlabs=AI 出口)**。
+ *   - AI 路径（**不传 userId**）：读 crawl_proxy_http_template(arxlabs) → env。
+ *
+ * @param opts.exchange true=换链接路径（仅 kookeey http，无 arxlabs 兜底）
+ * @param opts.userId 换链接路径下用于选该用户分配的供应商；传 userId 亦隐含 exchange
  */
-export async function getHttpProxyUrlForCountry(country: string): Promise<string | null> {
+export async function getHttpProxyUrlForCountry(
+  country: string,
+  opts: { userId?: bigint | null; exchange?: boolean } = {},
+): Promise<string | null> {
   if (!country) return null;
+
+  const isExchange = opts.exchange === true || (opts.userId != null && opts.userId > BigInt(0));
+
+  // 换链接路径：走 kookeey 供应商池的 HTTP 代理（动态导入避免循环依赖），取不到即 null（不串 arxlabs）。
+  if (isExchange) {
+    try {
+      const { getProviderHttpProxyUrl } = await import("@/lib/suffix-engine/proxy-provider");
+      return await getProviderHttpProxyUrl(country, { userId: opts.userId });
+    } catch {
+      return null;
+    }
+  }
 
   try {
     const { getCrawlHttpProxyTemplate } = await import("@/lib/system-config");
@@ -158,7 +192,7 @@ async function checkProxyEgress(proxyUrl: string, timeoutMs = 5000): Promise<{ i
  */
 export async function ensureCountryEgressHttpProxy(
   country: string,
-  options: { maxRetries?: number; checkTimeoutMs?: number } = {},
+  options: { maxRetries?: number; checkTimeoutMs?: number; userId?: bigint | null; exchange?: boolean } = {},
 ): Promise<string | null> {
   if (!country) return null;
   const maxRetries = options.maxRetries ?? 3;
@@ -167,7 +201,8 @@ export async function ensureCountryEgressHttpProxy(
 
   let lastProxyUrl: string | null = null;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    const proxyUrl = await getHttpProxyUrlForCountry(country).catch(() => null);
+    // exchange=换链接路径（kookeey http，每次新会话换出口 IP）；否则=AI 路径（arxlabs http 模板）
+    const proxyUrl = await getHttpProxyUrlForCountry(country, { userId: options.userId, exchange: options.exchange }).catch(() => null);
     if (!proxyUrl) {
       console.warn(`[CrawlProxy] getHttpProxyUrlForCountry(${country}) 返回 null，放弃代理`);
       return null;

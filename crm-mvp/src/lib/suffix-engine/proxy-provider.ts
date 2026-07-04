@@ -145,6 +145,40 @@ export function buildProviderProxyUrl(provider: ProviderRow, country: string): s
   return `${proto}://${auth}${provider.host}:${provider.port}`
 }
 
+/**
+ * 用供应商 + 国家组装 **HTTP** 代理 URL（强制 http 协议，复用同一 host/port/用户名模板/密码）。
+ *
+ * 供换链接「浏览器兜底」路径专用：Chrome/Puppeteer 只支持带认证的 HTTP 代理、不支持 SOCKS5 认证。
+ * kookeey 网关 gate.kookeey.info:1000 同端口双协议（socks5 + http 均可，2026-07-04 服务器实测），
+ * 故直接把 socks5 供应商行按 http 协议组装即可，让浏览器兜底也走 kookeey，而非借用 AI 出口(arxlabs)。
+ */
+export function buildProviderHttpProxyUrl(provider: ProviderRow, country: string): string {
+  const map = (provider.country_code_map || null) as CountryCodeMap
+  const username = processUsernameTemplate(provider.username_template || '', country, map)
+  const password = decryptPassword(provider.password || '')
+  const auth = username || password ? `${encodeURIComponent(username)}:${encodeURIComponent(password)}@` : ''
+  return `http://${auth}${provider.host}:${provider.port}`
+}
+
+/**
+ * 取一个供应商 **HTTP** 代理 URL（换链接浏览器兜底用）。无可用供应商返回 null。
+ * 与 getProviderProxyUrl 同选路（pickProvider：优先该用户分配的健康供应商，跳过熔断），仅协议改 http。
+ */
+export async function getProviderHttpProxyUrl(
+  country: string,
+  opts: { userId?: bigint | null } = {},
+): Promise<string | null> {
+  if (!country) return null
+  try {
+    const provider = await pickProvider(opts.userId)
+    if (!provider) return null
+    return buildProviderHttpProxyUrl(provider, country)
+  } catch (e) {
+    console.warn('[proxy-provider] getProviderHttpProxyUrl error:', e instanceof Error ? e.message : e)
+    return null
+  }
+}
+
 export interface ProviderSelection {
   url: string
   /** 选中的供应商 id（字符串，供 proxy-circuit 熔断上报按供应商归因） */

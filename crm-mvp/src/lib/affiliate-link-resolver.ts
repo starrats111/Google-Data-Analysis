@@ -514,13 +514,19 @@ interface BrowserChainResult {
   error?: string;
 }
 
-async function resolveViaBrowser(startUrl: string, country: string): Promise<BrowserChainResult> {
+async function resolveViaBrowser(
+  startUrl: string,
+  country: string,
+  userId?: bigint | null,
+): Promise<BrowserChainResult> {
   const chain: string[] = [];
   const browserPath = findBrowserPath();
   if (!browserPath) return { finalUrl: "", chain, error: "no_browser" };
 
-  // Chrome 只支持 http 代理 + 账号认证，用按出口国校验的 http 代理
-  const httpProxy = await ensureCountryEgressHttpProxy(country).catch(() => null);
+  // Chrome 只支持 http 代理 + 账号认证，用按出口国校验的 http 代理。
+  // 本函数只服务换链接（resolveAffiliateLink 的所有调用方均为换链接场景）→ 强制 exchange:true，
+  // 一律走 kookeey 的 http 代理（1000 端口双协议），绝不借用 AI 出口(arxlabs)；userId 仅用于选该用户分配的供应商。
+  const httpProxy = await ensureCountryEgressHttpProxy(country, { userId, exchange: true }).catch(() => null);
   let proxyAuth: { server: string; username: string; password: string } | null = null;
   if (httpProxy) {
     try {
@@ -825,8 +831,9 @@ export async function resolveAffiliateLink(
   };
 
   // 取代理：调用方预取了粘性会话（出口 IP 去重）则直接复用，否则内部按国取。
+  // exchange:true —— 换链接引擎一律只用换链接供应商池(kookeey)，绝不兜底到 AI 出口(arxlabs)。
   const acquireProxy = async (): Promise<string | null> =>
-    opts.proxyUrl != null ? opts.proxyUrl : await getProxyUrlForCountry(cc, { userId: opts.userId }).catch(() => null);
+    opts.proxyUrl != null ? opts.proxyUrl : await getProxyUrlForCountry(cc, { userId: opts.userId, exchange: true }).catch(() => null);
 
   // ── 第一遍抓取 ──
   // 记录「胜出结果」实际使用的代理出口，供末尾回填 result.exitIp（让上层准确记录真实点击出口 IP）：
@@ -835,7 +842,7 @@ export async function resolveAffiliateLink(
   let httpProxyUsed: string | null = null;
   let browserExitIp: string | null = null;
   if (opts.useBrowser) {
-    const br = await resolveViaBrowser(affiliateUrl, cc);
+    const br = await resolveViaBrowser(affiliateUrl, cc, opts.userId);
     if (br.finalUrl) {
       browserExitIp = br.exitIp ?? null;
       result = await evaluate(br, false, true);
@@ -865,7 +872,7 @@ export async function resolveAffiliateLink(
         !!result.error &&
         (result.error.startsWith("停在跳板域名") || result.error.startsWith("停在联盟点击中转域名"))))
   ) {
-    const br = await resolveViaBrowser(affiliateUrl, cc).catch(
+    const br = await resolveViaBrowser(affiliateUrl, cc, opts.userId).catch(
       () => ({ finalUrl: "", chain: [] as string[], exitIp: null }) as BrowserChainResult,
     );
     if (br.finalUrl) {
