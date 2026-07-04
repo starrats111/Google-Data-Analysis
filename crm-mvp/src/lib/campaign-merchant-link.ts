@@ -29,18 +29,30 @@ export interface ParsedCampaignName {
 /**
  * 从广告系列名中提取 平台+MID
  * 格式：序号-平台-商家名-国家-日期-MID （破折号或空格分隔）
+ *
+ * 优先按破折号切分：商家名可含空格（如「zero water」「Hair Care」），若按空格一起切，
+ * 国家段会错位（曾把 target_country 存成 "water"/"Care"，导致按国家取代理必失败）。
+ * 国家取「倒数第 3 段」（…-国家-日期-MID）而非固定 parts[3]，商家名含破折号时同样成立；
+ * 且必须是 2 位字母才采信，否则回退 US。
  */
 export function parseCampaignNameFull(name: string): ParsedCampaignName | null {
   if (!name) return null;
-  const parts = name.split(/[-\s]+/);
+  let parts = name.split(/-+/).map((p) => p.trim()).filter(Boolean);
+  if (parts.length < 4) parts = name.split(/[-\s]+/).filter(Boolean);
   if (parts.length < 4) return null;
 
   const rawPlatform = parts[1]?.trim();
   const mid = parts[parts.length - 1]?.trim();
   if (!rawPlatform || !mid || !/^\d+$/.test(mid)) return null;
 
-  const merchantName = parts[2]?.trim() || "";
-  const country = parts.length >= 6 ? (parts[3]?.trim() || "US") : "US";
+  let country = "US";
+  let merchantName = parts[2]?.trim() || "";
+  if (parts.length >= 6) {
+    const candidate = parts[parts.length - 3]?.trim() || "";
+    if (/^[A-Za-z]{2}$/.test(candidate)) country = candidate.toUpperCase();
+    // 商家名 = 平台之后、国家段之前的所有段（含破折号商家名，如 coca-cola）
+    merchantName = parts.slice(2, parts.length - 3).join("-").trim() || merchantName;
+  }
 
   return {
     platform: normalizePlatformCode(rawPlatform),
