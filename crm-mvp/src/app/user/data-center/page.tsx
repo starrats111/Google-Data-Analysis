@@ -221,7 +221,7 @@ export default function DataCenterPage() {
   const costByMcc = campaignData?.costByMcc || [];
   const rowMeta = campaignData?.rowMeta;
 
-  // 页面加载时自动从 Google Ads 同步最新状态（每 5 分钟最多一次）
+  // 页面加载时自动从 Google Sheet（CampaignInfo）同步最新状态，零 Google Ads API 消耗
   const syncedRef = useRef(false);
   useEffect(() => {
     if (syncedRef.current) return;
