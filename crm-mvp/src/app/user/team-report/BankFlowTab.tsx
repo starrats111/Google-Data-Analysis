@@ -14,9 +14,11 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import {
   Card, DatePicker, Button, Space, Spin, Empty, Typography, Table, Modal, Form,
   Select, InputNumber, Input, Popconfirm, Statistic, Row, Col, App, Tag, Tooltip,
+  Descriptions,
 } from "antd";
 import {
-  PlusOutlined, ReloadOutlined, FileExcelOutlined, DeleteOutlined, EditOutlined, ThunderboltOutlined,
+  PlusOutlined, ReloadOutlined, FileExcelOutlined, DeleteOutlined, EditOutlined,
+  ThunderboltOutlined, EyeOutlined,
 } from "@ant-design/icons";
 import dayjs, { type Dayjs } from "dayjs";
 import type { ColumnsType } from "antd/es/table";
@@ -77,6 +79,8 @@ export default function BankFlowTab() {
   // 新增/编辑弹窗
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<FlowEntry | null>(null);
+  // 只读明细弹窗
+  const [viewing, setViewing] = useState<FlowEntry | null>(null);
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
   const [breakdown, setBreakdown] = useState<BreakdownItem[]>([]);
@@ -295,13 +299,13 @@ export default function BankFlowTab() {
       render: (v: number) => <Text strong>¥{fmt(v)}</Text>,
     },
     {
-      title: <Tooltip title="该笔打款覆盖的员工收款明细合计（可在编辑里逐人修改）">员工明细合计(¥)</Tooltip>,
+      title: <Tooltip title="该笔打款覆盖的员工收款明细合计，点击查看逐人明细">员工明细合计(¥)</Tooltip>,
       dataIndex: "expectedAmount", width: 140, align: "right",
       render: (v: number, e) => (
-        <Tooltip
-          title={e.breakdown.length ? e.breakdown.map((b) => `${b.displayName || b.username}｜${b.account}｜¥${fmt(b.amount)}`).join("；") : "无明细"}
-        >
-          <Text>¥{fmt(v)}</Text>
+        <Tooltip title="点击查看逐人明细">
+          <Button type="link" size="small" style={{ padding: 0 }} onClick={(ev) => { ev.stopPropagation(); setViewing(e); }}>
+            ¥{fmt(v)}{e.breakdown.length > 0 && <Text type="secondary" style={{ fontSize: 12 }}>（{e.breakdown.length}人）</Text>}
+          </Button>
         </Tooltip>
       ),
     },
@@ -321,12 +325,13 @@ export default function BankFlowTab() {
     { title: "摘要", dataIndex: "summary", width: 110, ellipsis: true },
     { title: "备注", dataIndex: "remark", ellipsis: true, render: (v: string) => v || <Text type="secondary">—</Text> },
     {
-      title: "操作", key: "op", width: 110, fixed: "right",
+      title: "操作", key: "op", width: 150, fixed: "right",
       render: (_, e) => (
         <Space size={4}>
-          <Button size="small" type="link" icon={<EditOutlined />} onClick={() => openEdit(e)}>编辑</Button>
+          <Button size="small" type="link" icon={<EyeOutlined />} onClick={(ev) => { ev.stopPropagation(); setViewing(e); }}>明细</Button>
+          <Button size="small" type="link" icon={<EditOutlined />} onClick={(ev) => { ev.stopPropagation(); openEdit(e); }}>编辑</Button>
           <Popconfirm title="删除这笔打款登记？" onConfirm={() => handleDelete(e.id)}>
-            <Button size="small" type="link" danger icon={<DeleteOutlined />} />
+            <Button size="small" type="link" danger icon={<DeleteOutlined />} onClick={(ev) => ev.stopPropagation()} />
           </Popconfirm>
         </Space>
       ),
@@ -467,6 +472,7 @@ export default function BankFlowTab() {
               pagination={false}
               scroll={{ x: "max-content" }}
               bordered
+              onRow={(e) => ({ onClick: () => setViewing(e), style: { cursor: "pointer" } })}
               locale={{ emptyText: <Empty description="本月尚未登记打款，点击「登记平台打款」开始" /> }}
             />
             <div style={{ marginTop: 12 }}>
@@ -478,6 +484,66 @@ export default function BankFlowTab() {
           </Card>
         </Space>
       )}
+
+      {/* 只读明细弹窗 */}
+      <Modal
+        title="打款明细"
+        open={!!viewing}
+        onCancel={() => setViewing(null)}
+        width={640}
+        footer={[
+          <Button key="edit" icon={<EditOutlined />} onClick={() => { if (viewing) { const e = viewing; setViewing(null); openEdit(e); } }}>
+            去编辑
+          </Button>,
+          <Button key="close" type="primary" onClick={() => setViewing(null)}>关闭</Button>,
+        ]}
+      >
+        {viewing && (() => {
+          const m = methodById.get(viewing.paymentMethodId);
+          const rate = viewing.expectedAmount > 0 ? `${((viewing.fee / viewing.expectedAmount) * 100).toFixed(2)}%` : "—";
+          return (
+            <Space direction="vertical" size={12} style={{ width: "100%" }}>
+              <Descriptions size="small" bordered column={2} styles={{ label: { width: 110 } }}>
+                <Descriptions.Item label="收款方式" span={2}>
+                  <Text strong>{m?.payeeName || "已删除的收款方式"}</Text>
+                  {m?.cardNo && <Text type="secondary" style={{ marginLeft: 8 }}>{m.cardNo}</Text>}
+                </Descriptions.Item>
+                <Descriptions.Item label="平台"><Tag color="green">{viewing.platform}</Tag></Descriptions.Item>
+                <Descriptions.Item label="到账时间">{dayjs(viewing.txnAt).format("YYYY-MM-DD HH:mm")}</Descriptions.Item>
+                <Descriptions.Item label="实际到账"><Text strong>¥{fmt(viewing.amount)}</Text></Descriptions.Item>
+                <Descriptions.Item label="员工明细合计">¥{fmt(viewing.expectedAmount)}</Descriptions.Item>
+                <Descriptions.Item label="手续费">
+                  <Text strong style={{ color: viewing.fee > 0 ? "#cf1322" : viewing.fee < 0 ? "#fa8c16" : undefined }}>
+                    {viewing.fee >= 0 ? `¥${fmt(viewing.fee)}` : `-¥${fmt(-viewing.fee)}`}
+                  </Text>
+                  <Text type="secondary" style={{ marginLeft: 8 }}>费率 {rate}</Text>
+                </Descriptions.Item>
+                <Descriptions.Item label="摘要">{viewing.summary || "—"}</Descriptions.Item>
+                {viewing.remark && <Descriptions.Item label="备注" span={2}>{viewing.remark}</Descriptions.Item>}
+              </Descriptions>
+              <Table<BreakdownItem>
+                columns={[
+                  { title: "组员", key: "member", width: 120, render: (_, b) => b.displayName || b.username },
+                  { title: "平台账号", dataIndex: "account", ellipsis: true },
+                  { title: "金额(¥)", dataIndex: "amount", width: 130, align: "right", render: (v: number) => `¥${fmt(v)}` },
+                ]}
+                dataSource={viewing.breakdown}
+                rowKey={(b, i) => `${b.userId}-${b.account}-${i}`}
+                size="small"
+                pagination={false}
+                bordered
+                locale={{ emptyText: "该笔打款没有员工明细" }}
+                summary={() => (
+                  <Table.Summary.Row style={{ background: "#fafafa", fontWeight: 600 }}>
+                    <Table.Summary.Cell index={0} colSpan={2}>合计（{viewing.breakdown.length} 人）</Table.Summary.Cell>
+                    <Table.Summary.Cell index={1} align="right">¥{fmt(viewing.expectedAmount)}</Table.Summary.Cell>
+                  </Table.Summary.Row>
+                )}
+              />
+            </Space>
+          );
+        })()}
+      </Modal>
 
       {/* 新增/编辑弹窗 */}
       <Modal
