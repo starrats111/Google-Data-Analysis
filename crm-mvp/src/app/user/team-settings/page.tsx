@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Card, Switch, Typography, Alert, App, Table, Button, Space, Popconfirm, Modal, Form, Input, InputNumber, Tag, Tabs, Progress, Tooltip } from "antd";
-import { TeamOutlined, SettingOutlined, PlusOutlined, EditOutlined, DeleteOutlined, CreditCardOutlined, KeyOutlined } from "@ant-design/icons";
+import { Card, Switch, Typography, Alert, App, Table, Button, Space, Popconfirm, Modal, Form, Input, InputNumber, Tag, Tabs, Progress, Tooltip, Upload } from "antd";
+import { TeamOutlined, SettingOutlined, PlusOutlined, EditOutlined, DeleteOutlined, CreditCardOutlined, KeyOutlined, CheckCircleOutlined, FileTextOutlined, InboxOutlined } from "@ant-design/icons";
 import AppPageHeader from "@/components/AppPageHeader";
 
 const { Text } = Typography;
@@ -140,6 +140,7 @@ function TokenPoolCard() {
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [editItem, setEditItem] = useState<PoolToken | null>(null);
+  const [jsonFileName, setJsonFileName] = useState("");
   const [form] = Form.useForm();
 
   const fetchData = () =>
@@ -207,6 +208,7 @@ function TokenPoolCard() {
             setEditItem(null);
             form.resetFields();
             form.setFieldsValue({ daily_quota: 15000 });
+            setJsonFileName("");
             setModalOpen(true);
           }}>添加</Button>
         </Space>
@@ -270,7 +272,8 @@ function TokenPoolCard() {
               <Space size={4}>
                 <Button size="small" icon={<EditOutlined />} onClick={() => {
                   setEditItem(rec);
-                  form.setFieldsValue({ token: rec.token, label: rec.label, daily_quota: rec.daily_quota, service_account_json: "" });
+                  form.setFieldsValue({ token: rec.token, label: rec.label, daily_quota: rec.daily_quota, service_account_json: undefined });
+                  setJsonFileName(rec.has_sa_json ? `已有凭证（${rec.sa_email || "已配置"}）` : "");
                   setModalOpen(true);
                 }} />
                 <Popconfirm title="确认从池中移除此 Token？" onConfirm={() => handleDelete(rec.id)}>
@@ -301,13 +304,47 @@ function TokenPoolCard() {
           </Form.Item>
           <Form.Item
             name="service_account_json"
-            label={editItem ? "配对 Service Account JSON（留空 = 保留原有）" : "配对 Service Account JSON"}
-            rules={editItem ? [] : [{ required: true, message: "请粘贴该 Token 配对的 Service Account JSON" }]}
+            label="配对服务账号凭证 JSON"
+            rules={editItem ? [] : [{ required: true, message: "请上传该 Token 配对的服务账号 JSON 文件" }]}
           >
-            <Input.TextArea
-              rows={5}
-              placeholder='粘贴完整密钥 JSON，形如 {"type":"service_account","client_email":"...","private_key":"..."}'
-            />
+            {jsonFileName ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", background: "#f6ffed", border: "1px solid #b7eb8f", borderRadius: 6 }}>
+                <CheckCircleOutlined style={{ color: "#52c41a" }} />
+                <FileTextOutlined />
+                <span style={{ flex: 1 }}>{jsonFileName}</span>
+                <Button size="small" type="link" danger onClick={() => { setJsonFileName(""); form.setFieldValue("service_account_json", undefined); }}>移除</Button>
+              </div>
+            ) : (
+              <Upload.Dragger
+                accept=".json"
+                showUploadList={false}
+                beforeUpload={(file) => {
+                  const reader = new FileReader();
+                  reader.onload = (e) => {
+                    try {
+                      const text = e.target?.result as string;
+                      const sa = JSON.parse(text); // 验证是合法 JSON
+                      if (!sa.client_email || !sa.private_key) {
+                        message.error("JSON 缺少 client_email 或 private_key，请上传完整的服务账号密钥文件");
+                        return;
+                      }
+                      form.setFieldValue("service_account_json", text);
+                      setJsonFileName(file.name);
+                      message.success(`已读取 ${file.name}`);
+                    } catch {
+                      message.error("文件不是有效的 JSON 格式");
+                    }
+                  };
+                  reader.readAsText(file);
+                  return false; // 阻止自动上传
+                }}
+                style={{ padding: "12px 0" }}
+              >
+                <p style={{ marginBottom: 8 }}><InboxOutlined style={{ fontSize: 28, color: "#4DA6FF" }} /></p>
+                <p style={{ fontSize: 13, color: "#666" }}>拖拽 JSON 文件到此处，或点击选择文件</p>
+                <p style={{ fontSize: 12, color: "#999" }}>{editItem ? "不上传则保留已有凭证；仅支持 .json 格式" : "仅支持 .json 格式"}</p>
+              </Upload.Dragger>
+            )}
           </Form.Item>
           <Form.Item name="daily_quota" label="每日额度（operations/天）" tooltip="Basic 级默认 15000；仅用于用量展示与预警，不影响轮询">
             <InputNumber min={1000} max={10000000} step={1000} style={{ width: 200 }} />
