@@ -1437,3 +1437,20 @@ model policy_violations {
   @@index([severity, resolved_at], map: "idx_severity_resolved")
   @@index([submitted_at], map: "idx_submitted_at")
 }
+
+// -----------------------------------------------------------
+// 38. 团队 Developer Token 池（组长配置，Google Ads API 429 轮询用）
+// -----------------------------------------------------------
+model team_developer_tokens {
+  id         BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  team_id    BigInt   @db.UnsignedBigInt
+  token      String   @db.VarChar(64)
+  label      String?  @db.VarChar(64) // 备注，如"MCC 468-xxx 的 token"
+  is_active  Int      @default(1) @db.TinyInt
+  created_by BigInt?  @db.UnsignedBigInt
+  is_deleted Int      @default(0) @db.TinyInt
+  created_at DateTime @default(now()) @db.DateTime(0)
+  updated_at DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([team_id, is_deleted], map: "idx_tdt_team")
+}

@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Card, Switch, Typography, Alert, App, Table, Button, Space, Popconfirm, Modal, Form, Input } from "antd";
-import { TeamOutlined, SettingOutlined, PlusOutlined, EditOutlined, DeleteOutlined, CreditCardOutlined } from "@ant-design/icons";
+import { Card, Switch, Typography, Alert, App, Table, Button, Space, Popconfirm, Modal, Form, Input, Tag } from "antd";
+import { TeamOutlined, SettingOutlined, PlusOutlined, EditOutlined, DeleteOutlined, CreditCardOutlined, KeyOutlined } from "@ant-design/icons";
 import AppPageHeader from "@/components/AppPageHeader";
 
 const { Text } = Typography;
@@ -119,6 +119,156 @@ function PaymentMethodsCard() {
   );
 }
 
+// ==================== Developer Token 池管理（组长） ====================
+type PoolToken = {
+  id: string;
+  token: string;
+  token_masked: string;
+  label: string | null;
+  is_active: number;
+  cooling_until: string | null;
+};
+
+function TokenPoolCard() {
+  const { message } = App.useApp();
+  const [rows, setRows] = useState<PoolToken[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editItem, setEditItem] = useState<PoolToken | null>(null);
+  const [form] = Form.useForm();
+
+  const fetchData = () =>
+    fetch("/api/user/team/token-pool")
+      .then((r) => r.json())
+      .then((res) => { if (res?.code === 0) setRows(res.data || []); })
+      .catch(() => undefined)
+      .finally(() => setLoading(false));
+
+  useEffect(() => { fetchData(); }, []);
+
+  const handleSave = async () => {
+    const values = await form.validateFields();
+    const body = editItem ? { id: editItem.id, ...values } : values;
+    const res = await fetch("/api/user/team/token-pool", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then((r) => r.json());
+    if (res.code === 0) {
+      message.success(res.message || "保存成功");
+      setModalOpen(false);
+      setEditItem(null);
+      fetchData();
+    } else {
+      message.error(res.message);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    const res = await fetch("/api/user/team/token-pool", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    }).then((r) => r.json());
+    if (res.code === 0) { message.success("已移除"); fetchData(); }
+    else message.error(res.message);
+  };
+
+  const handleToggleActive = async (rec: PoolToken, checked: boolean) => {
+    const res = await fetch("/api/user/team/token-pool", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: rec.id, token: rec.token, label: rec.label, is_active: checked ? 1 : 0 }),
+    }).then((r) => r.json());
+    if (res.code === 0) fetchData();
+    else message.error(res.message);
+  };
+
+  return (
+    <Card
+      title={<><KeyOutlined /> Google Ads Developer Token 池</>}
+      size="small"
+      loading={loading}
+      style={{ maxWidth: 680, marginTop: 16 }}
+      extra={
+        <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => {
+          setEditItem(null);
+          form.resetFields();
+          setModalOpen(true);
+        }}>添加</Button>
+      }
+    >
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 12 }}
+        message="本组所有 Google Ads API 请求（提交广告、拉当日费用等）在这些 Token 间自动轮询，配额互相分摊；某个 Token 触发限流会自动冷却几分钟并切换到下一个"
+        description="Token 在 Google Ads MCC 后台「工具 → API 中心」获取。添加后 1 分钟内生效；未配置时使用各 MCC 自己填写的 Token（无轮询）。"
+      />
+      <Table
+        dataSource={rows}
+        rowKey="id"
+        size="small"
+        pagination={false}
+        columns={[
+          { title: "Token", dataIndex: "token_masked", render: (v: string) => <Text code>{v}</Text> },
+          { title: "备注", dataIndex: "label", render: (v: string | null) => v || <Text type="secondary">—</Text> },
+          {
+            title: "状态", width: 110,
+            render: (_: unknown, rec: PoolToken) =>
+              rec.is_active !== 1 ? <Tag>已停用</Tag>
+                : rec.cooling_until ? <Tag color="orange">限流冷却中</Tag>
+                : <Tag color="green">可用</Tag>,
+          },
+          {
+            title: "启用", width: 70,
+            render: (_: unknown, rec: PoolToken) => (
+              <Switch size="small" checked={rec.is_active === 1} onChange={(c) => handleToggleActive(rec, c)} />
+            ),
+          },
+          {
+            title: "操作", width: 120,
+            render: (_: unknown, rec: PoolToken) => (
+              <Space size={4}>
+                <Button size="small" icon={<EditOutlined />} onClick={() => {
+                  setEditItem(rec);
+                  form.setFieldsValue({ token: rec.token, label: rec.label });
+                  setModalOpen(true);
+                }} />
+                <Popconfirm title="确认从池中移除此 Token？" onConfirm={() => handleDelete(rec.id)}>
+                  <Button size="small" danger icon={<DeleteOutlined />} />
+                </Popconfirm>
+              </Space>
+            ),
+          },
+        ]}
+      />
+      <Modal
+        title={editItem ? "编辑 Token" : "添加 Developer Token"}
+        open={modalOpen}
+        onOk={handleSave}
+        onCancel={() => { setModalOpen(false); setEditItem(null); }}
+      >
+        <Form form={form} layout="vertical">
+          <Form.Item
+            name="token"
+            label="Developer Token"
+            rules={[
+              { required: true, message: "请输入 Developer Token" },
+              { min: 15, message: "Token 长度异常，Google Ads Developer Token 一般为 22 位" },
+            ]}
+          >
+            <Input placeholder="如 rYAXtRxxxxxxxxxxxxxxxx（22 位）" maxLength={64} />
+          </Form.Item>
+          <Form.Item name="label" label="备注（选填）">
+            <Input placeholder="如：MCC 468-317-xxxx 的 Token" maxLength={64} />
+          </Form.Item>
+        </Form>
+      </Modal>
+    </Card>
+  );
+}
+
 export default function TeamSettingsPage() {
   const { message } = App.useApp();
   const [loading, setLoading] = useState(true);
@@ -190,6 +340,7 @@ export default function TeamSettingsPage() {
         </div>
       </Card>
       <PaymentMethodsCard />
+      <TokenPoolCard />
     </div>
   );
 }
