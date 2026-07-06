@@ -210,10 +210,17 @@ async function doReplenish(
 
   let generated = 0
   let failed = 0
+  // 与现有库存/本轮已产出内容完全相同而被去重的条数。
+  // 全是重复 = 该商家落地页参数不随会话变化（静态后缀，无 per-click token），
+  // 库存天然无法超过「不同内容数」，不是补货故障。
+  let duplicates = 0
   const failures: GenFailure[] = []
 
   const persist = async (suffix: string, exitIp: string | null): Promise<boolean> => {
-    if (existingSuffixes.has(suffix)) return false
+    if (existingSuffixes.has(suffix)) {
+      duplicates++
+      return false
+    }
     existingSuffixes.add(suffix)
     await prisma.suffix_pool.create({
       data: {
@@ -266,6 +273,14 @@ async function doReplenish(
 
   const after = before + generated
 
+  if (generated === 0 && failed === 0 && duplicates > 0) {
+    // 静态后缀商家：生成全部成功但内容与库存完全重复（xcaret 类，落地页无 per-click 参数）。
+    // 不是故障——现有库存即是全部可能内容，消费后 lease 会触发按需重生成。
+    // 清掉此前误报的告警，并交由调用方长冷却，停止每轮空烧 20 次生成。
+    await resolveAlertsByType(campaign.user_id, campaignId, ['low_stock', 'replenish_failed', 'invalid_link', 'merchant_not_found'])
+    return { campaignId: cid, skipped: false, reason: 'static_suffix', before, generated: 0, after: before, failed: 0 }
+  }
+
   if (generated === 0) {
     // 批量全失败
     const sample = failures[0]
@@ -285,8 +300,10 @@ async function doReplenish(
   } else {
     // 有产出：解决该系列旧的库存类告警
     await resolveAlertsByType(campaign.user_id, campaignId, ['low_stock', 'replenish_failed', 'invalid_link', 'merchant_not_found'])
-    // 若产出仍不足低水位，记一条 low_stock（warning）
-    if (after <= STOCK_CONFIG.LOW_WATERMARK) {
+    // 若产出仍不足低水位，记一条 low_stock（warning）。
+    // 例外：缺口是「内容重复」造成的（静态后缀商家补 1 条后其余全是重复）——
+    // 库存不可能超过不同内容数，报 low_stock 只会每轮刷屏。
+    if (after <= STOCK_CONFIG.LOW_WATERMARK && duplicates === 0) {
       await raiseAlert(campaign.user_id, {
         type: 'low_stock',
         campaignId,
@@ -405,6 +422,10 @@ export async function replenishLowStock(
     } else if (r.reason === 'merchant_missing' || r.reason === 'merchant_no_tracking_link' || r.reason === 'merchant_not_linked') {
       // 商家断链（孤儿 / 缺链接 / 未关联）：长冷却，避免每轮重复扫描；
       // 是否需人工处理由 /api/cron/merchant-link-health 按「有无交易」分流判定。
+      failCooldown.set(key, Date.now() + MERCHANT_COOLDOWN_MS)
+    } else if (r.reason === 'static_suffix') {
+      // 静态后缀商家：内容不随会话变化，cron 补货无意义（消费后由 lease 触发按需重生成）。
+      // 长冷却让出预算；属数据特征而非故障，随时可被 lease force 路径绕过。
       failCooldown.set(key, Date.now() + MERCHANT_COOLDOWN_MS)
     } else if (r.skipped !== true || r.reason === 'probe_failed') {
       // probe_failed / 批量全失败（skipped=false, generated=0）→ 失败冷却
