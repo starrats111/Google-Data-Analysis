@@ -25,6 +25,9 @@ import prisma from "@/lib/prisma";
 const POOL_CACHE_TTL_MS = 60_000;
 const RATE_LIMIT_COOLDOWN_MS = 3 * 60_000;
 const INVALID_COOLDOWN_MS = 24 * 3600_000;
+// 真实 Developer Token 为 22 位；过滤 MCC 配置里的占位假 token（如 "123456"），
+// 避免它们进池后白白吃掉轮换次数
+const MIN_TOKEN_LENGTH = 15;
 
 let poolCache: { tokens: string[]; loadedAt: number } | null = null;
 const cooldownUntil = new Map<string, number>();
@@ -47,7 +50,7 @@ async function loadPool(): Promise<string[]> {
     });
     for (const r of rows) {
       const t = (r.developer_token || "").trim();
-      if (t) tokens.add(t);
+      if (t.length >= MIN_TOKEN_LENGTH) tokens.add(t);
     }
   } catch (e) {
     console.error("[TokenPool] 加载 MCC token 失败（将退回调用方自带 token）:", e instanceof Error ? e.message : e);
