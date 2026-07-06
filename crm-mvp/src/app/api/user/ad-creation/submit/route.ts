@@ -189,8 +189,13 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
   });
   if (!adCreative) return apiError("广告素材不存在");
 
-  if (!mccAccount.service_account_json) return apiError("MCC 未配置服务账号凭证");
-  if (!mccAccount.developer_token) return apiError(`MCC「${(mccAccount as { mcc_name?: string; mcc_id: string }).mcc_name || (mccAccount as { mcc_id: string }).mcc_id}」未配置 developer_token，请在「个人设置 → MCC 管理」中编辑该 MCC 填写 Developer Token`);
+  // 员工 MCC 的 token/JSON 已降级为兜底：组 Token 池有配对凭证即可提交，无需员工配置
+  {
+    const { poolHasCredentialFor } = await import("@/lib/google-ads/token-pool");
+    if (!mccAccount.service_account_json && !(await poolHasCredentialFor(mccAccount.mcc_id))) {
+      return apiError("MCC 未配置服务账号凭证，且组 Token 池中无配对的 Service Account JSON（请组长在「团队设置 → Token 池」配置）");
+    }
+  }
 
   let finalUrl = adCreative.final_url?.trim() || "";
   if (!finalUrl || !finalUrl.startsWith("http")) {
@@ -537,8 +542,8 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
 
   const credentials = {
     mcc_id: mccAccount.mcc_id,
-    developer_token: mccAccount.developer_token,
-    service_account_json: mccAccount.service_account_json,
+    developer_token: mccAccount.developer_token || "",
+    service_account_json: mccAccount.service_account_json || "",
   };
 
   let customerId = bodyCustomerId || campaign.customer_id;

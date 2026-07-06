@@ -1473,17 +1473,39 @@ model policy_violations {
 
 // -----------------------------------------------------------
 // 38. 团队 Developer Token 池（组长配置，Google Ads API 429 轮询用）
+// 每条 = Developer Token + 对应 Service Account JSON 的配对凭证；
+// 员工 MCC 里的 token/JSON 降级为兜底，不再要求员工配置。
 // -----------------------------------------------------------
 model team_developer_tokens {
+  id                   BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  team_id              BigInt   @db.UnsignedBigInt
+  token                String   @db.VarChar(64)
+  service_account_json String?  @db.Text // 与该 token 配对的 Service Account JSON（一起轮换）
+  daily_quota          Int      @default(15000) @db.UnsignedInt // 该 token 的每日操作配额（Basic 级默认 15000）
+  label                String?  @db.VarChar(64) // 备注，如"MCC 468-xxx 的 token"
+  is_active            Int      @default(1) @db.TinyInt
+  created_by           BigInt?  @db.UnsignedBigInt
+  is_deleted           Int      @default(0) @db.TinyInt
+  created_at           DateTime @default(now()) @db.DateTime(0)
+  updated_at           DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([team_id, is_deleted], map: "idx_tdt_team")
+}
+
+// -----------------------------------------------------------
+// 38.1 Token 每日用量（token 池诊断：今日已用/使用方）
+// requests 按 API 请求数累计（≈ Google 的 operations 口径下限）；
+// mcc_ids 存当日经此 token 发请求的 MCC 客户号集合（JSON 数组），
+// 展示「使用人数」时由 MCC → 持有用户反查。
+// -----------------------------------------------------------
+model token_usage_daily {
   id         BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
-  team_id    BigInt   @db.UnsignedBigInt
   token      String   @db.VarChar(64)
-  label      String?  @db.VarChar(64) // 备注，如"MCC 468-xxx 的 token"
-  is_active  Int      @default(1) @db.TinyInt
-  created_by BigInt?  @db.UnsignedBigInt
-  is_deleted Int      @default(0) @db.TinyInt
+  date       DateTime @db.Date
+  requests   Int      @default(0) @db.UnsignedInt
+  mcc_ids    String?  @db.Text
   created_at DateTime @default(now()) @db.DateTime(0)
   updated_at DateTime @default(now()) @updatedAt @db.DateTime(0)
 
-  @@index([team_id, is_deleted], map: "idx_tdt_team")
+  @@unique([token, date], map: "uk_tud_token_date")
 }

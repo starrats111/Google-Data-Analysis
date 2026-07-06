@@ -47,7 +47,14 @@ async function findServiceAccountJson(): Promise<string | null> {
       where: { is_deleted: 0, is_active: 1, service_account_json: { not: null } },
       select: { service_account_json: true },
     });
-    return mcc?.service_account_json || null;
+    if (mcc?.service_account_json) return mcc.service_account_json;
+
+    // 4. 团队 Token 池的配对 JSON（员工 MCC 不再强制存 SA 后的兜底）
+    const poolRow = await prisma.team_developer_tokens.findFirst({
+      where: { is_deleted: 0, is_active: 1, service_account_json: { not: null } },
+      select: { service_account_json: true },
+    });
+    return poolRow?.service_account_json || null;
   } catch {
     return null;
   }

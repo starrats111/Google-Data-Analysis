@@ -26,14 +26,18 @@ export async function POST(req: NextRequest) {
     where: { id: campaign.mcc_id, is_deleted: 0 },
   });
   if (!mcc) return apiError("MCC 账户不存在");
-  if (!mcc.service_account_json) return apiError("MCC 未配置凭证");
-  if (!mcc.developer_token) return apiError(`MCC「${mcc.mcc_name || mcc.mcc_id}」未配置 developer_token，请在「个人设置 → MCC 管理」中编辑该 MCC 填写 Developer Token`);
+  {
+    const { poolHasCredentialFor } = await import("@/lib/google-ads/token-pool");
+    if (!mcc.service_account_json && !(await poolHasCredentialFor(mcc.mcc_id))) {
+      return apiError("MCC 未配置服务账号凭证，且组 Token 池中无配对的 Service Account JSON（请组长在「团队设置 → Token 池」配置）");
+    }
+  }
 
   try {
     const { updateCampaignStatus } = await import("@/lib/google-ads");
     const newStatus = action === "enable" ? "ENABLED" as const : "PAUSED" as const;
     const result = await updateCampaignStatus(
-      { mcc_id: mcc.mcc_id, developer_token: mcc.developer_token, service_account_json: mcc.service_account_json },
+      { mcc_id: mcc.mcc_id, developer_token: mcc.developer_token || "", service_account_json: mcc.service_account_json || "" },
       campaign.customer_id || "",
       campaign.google_campaign_id,
       newStatus,
@@ -59,7 +63,7 @@ export async function POST(req: NextRequest) {
     let verifyError: string | null = null;
     try {
       const { queryGoogleAds } = await import("@/lib/google-ads/client");
-      const credentials = { mcc_id: mcc.mcc_id, developer_token: mcc.developer_token, service_account_json: mcc.service_account_json };
+      const credentials = { mcc_id: mcc.mcc_id, developer_token: mcc.developer_token || "", service_account_json: mcc.service_account_json || "" };
       const rows = await queryGoogleAds(credentials, (campaign.customer_id || "").replace(/-/g, ""), `
         SELECT campaign.id, campaign.status
         FROM campaign

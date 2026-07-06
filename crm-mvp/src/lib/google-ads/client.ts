@@ -5,11 +5,13 @@
  */
 import { JWT } from "google-auth-library";
 import {
-  pickDeveloperToken,
+  pickCredential,
   hasAlternativeToken,
   reportTokenRateLimited,
   reportTokenInvalid,
+  recordTokenUse,
   maskToken,
+  type TokenCredential,
 } from "./token-pool";
 
 const GOOGLE_ADS_SCOPE = "https://www.googleapis.com/auth/adwords";
@@ -217,6 +219,7 @@ function sleep(ms: number): Promise<void> {
 export interface MccCredentials {
   mcc_id: string;
   developer_token: string;
+  /** MCC 自己配置的 Service Account JSON；可为空——组 Token 池配了配对 JSON 时无需员工配置 */
   service_account_json: string;
 }
 
@@ -225,6 +228,26 @@ export interface MccCredentials {
  */
 function resolveDevToken(dbToken: string): string {
   return (dbToken || process.env.GOOGLE_ADS_DEVELOPER_TOKEN || "").trim();
+}
+
+/** MCC 自带凭证对（token 池的兜底候选） */
+function ownCredential(credentials: MccCredentials): TokenCredential {
+  return {
+    token: resolveDevToken(credentials.developer_token),
+    saJson: (credentials.service_account_json || "").trim() || null,
+  };
+}
+
+/** 解析本次请求实际使用的 Service Account JSON：配对 JSON 优先，MCC 自带兜底 */
+function resolveSaJson(cred: TokenCredential, own: TokenCredential): string {
+  const saJson = cred.saJson || own.saJson;
+  if (!saJson) {
+    throw new Error(
+      "该 MCC 未配置服务账号，且组 Token 池中无配对的 Service Account JSON。" +
+      "请让组长在「团队设置 → Token 池」为 Token 配上 JSON，或在 MCC 管理中填写服务账号。",
+    );
+  }
+  return saJson;
 }
 
 /**
@@ -264,17 +287,19 @@ export async function queryGoogleAds(
   query: string,
 ): Promise<Record<string, unknown>[]> {
   const cid = customerId.replace(/-/g, "");
-  const ownToken = resolveDevToken(credentials.developer_token);
+  const own = ownCredential(credentials);
   const triedTokens = new Set<string>();
   let rotations = 0;
   let waits429 = 0;
   const HARD_CAP = MAX_TOKEN_ROTATIONS + MAX_429_RETRIES + 1;
 
   for (let attempt = 0; attempt <= HARD_CAP; attempt++) {
-    const devToken = await pickDeveloperToken(ownToken, credentials.mcc_id, triedTokens);
-    const token = await getAccessToken(credentials.service_account_json);
+    const cred = (await pickCredential(own, credentials.mcc_id, triedTokens)) || own;
+    const devToken = cred.token;
+    const token = await getAccessToken(resolveSaJson(cred, own));
     const headers = buildHeaders(token, devToken, credentials.mcc_id);
     const apiUrl = `${ADS_BASE_URL}/customers/${cid}/googleAds:searchStream`;
+    recordTokenUse(devToken, credentials.mcc_id);
     const resp = await fetch(apiUrl, {
       method: "POST",
       headers,
@@ -302,7 +327,7 @@ export async function queryGoogleAds(
       reportTokenRateLimited(devToken, delaySec);
       triedTokens.add(devToken);
       // 优先立即换池中另一个 token 重试（不等待）
-      if (rotations < MAX_TOKEN_ROTATIONS && await hasAlternativeToken(ownToken, credentials.mcc_id, triedTokens)) {
+      if (rotations < MAX_TOKEN_ROTATIONS && await hasAlternativeToken(own, credentials.mcc_id, triedTokens)) {
         rotations++;
         console.warn(`[GoogleAds] 查询 429，token ${maskToken(devToken)} 冷却，换池中下一个 token 重试 (${rotations}/${MAX_TOKEN_ROTATIONS})`);
         continue;
@@ -321,7 +346,7 @@ export async function queryGoogleAds(
     if (errBody.includes("DEVELOPER_TOKEN_NOT_APPROVED")) {
       reportTokenInvalid(devToken);
       triedTokens.add(devToken);
-      if (await hasAlternativeToken(ownToken, credentials.mcc_id, triedTokens)) {
+      if (await hasAlternativeToken(own, credentials.mcc_id, triedTokens)) {
         console.warn(`[GoogleAds] token ${maskToken(devToken)} 未获批，换池中下一个 token 重试`);
         continue;
       }
@@ -353,7 +378,7 @@ export async function mutateGoogleAds(
   operations: Record<string, unknown>[],
 ): Promise<Record<string, unknown>> {
   const cid = customerId.replace(/-/g, "");
-  const ownToken = resolveDevToken(credentials.developer_token);
+  const own = ownCredential(credentials);
   const triedTokens = new Set<string>();
 
   let rotations = 0;
@@ -363,10 +388,12 @@ export async function mutateGoogleAds(
   const HARD_CAP = MAX_TOKEN_ROTATIONS + MAX_429_RETRIES + MAX_TRANSIENT_RETRIES + 2;
 
   for (let iteration = 0; iteration <= HARD_CAP; iteration++) {
-    const devToken = await pickDeveloperToken(ownToken, credentials.mcc_id, triedTokens);
-    const token = await getAccessToken(credentials.service_account_json);
+    const cred = (await pickCredential(own, credentials.mcc_id, triedTokens)) || own;
+    const devToken = cred.token;
+    const token = await getAccessToken(resolveSaJson(cred, own));
     const headers = buildHeaders(token, devToken, credentials.mcc_id);
     const apiUrl = `${ADS_BASE_URL}/customers/${cid}/googleAds:mutate`;
+    recordTokenUse(devToken, credentials.mcc_id);
     const resp = await fetch(apiUrl, {
       method: "POST",
       headers,
@@ -385,7 +412,7 @@ export async function mutateGoogleAds(
       reportTokenRateLimited(devToken, delaySec);
       triedTokens.add(devToken);
       // 429 时 Google 未执行任何变更（RESOURCE_EXHAUSTED 在配额检查阶段拒绝），换 token 重试安全
-      if (rotations < MAX_TOKEN_ROTATIONS && await hasAlternativeToken(ownToken, credentials.mcc_id, triedTokens)) {
+      if (rotations < MAX_TOKEN_ROTATIONS && await hasAlternativeToken(own, credentials.mcc_id, triedTokens)) {
         rotations++;
         console.warn(`[GoogleAds] Mutate 429，token ${maskToken(devToken)} 冷却，换池中下一个 token 重试 (${rotations}/${MAX_TOKEN_ROTATIONS})`);
         continue;
@@ -429,7 +456,7 @@ export async function mutateGoogleAds(
     if (errBody.includes("DEVELOPER_TOKEN_NOT_APPROVED")) {
       reportTokenInvalid(devToken);
       triedTokens.add(devToken);
-      if (await hasAlternativeToken(ownToken, credentials.mcc_id, triedTokens)) {
+      if (await hasAlternativeToken(own, credentials.mcc_id, triedTokens)) {
         console.warn(`[GoogleAds] token ${maskToken(devToken)} 未获批，换池中下一个 token 重试`);
         continue;
       }
@@ -514,9 +541,11 @@ export async function unlinkCidFromMcc(
   }
 
   // 2) 置 INACTIVE（专用端点 customerClientLinks:mutate，单 operation）
-  const devToken = await pickDeveloperToken(resolveDevToken(credentials.developer_token), credentials.mcc_id);
-  const token = await getAccessToken(credentials.service_account_json);
-  const headers = buildHeaders(token, devToken, credentials.mcc_id);
+  const own = ownCredential(credentials);
+  const cred = (await pickCredential(own, credentials.mcc_id)) || own;
+  const token = await getAccessToken(resolveSaJson(cred, own));
+  const headers = buildHeaders(token, cred.token, credentials.mcc_id);
+  recordTokenUse(cred.token, credentials.mcc_id);
   const apiUrl = `${ADS_BASE_URL}/customers/${mcc}/customerClientLinks:mutate`;
   const resp = await fetch(apiUrl, {
     method: "POST",
@@ -576,7 +605,9 @@ export async function createServiceAccountCustomer(
   credentials: MccCredentials,
   customerId: string,
 ) {
-  const sa = JSON.parse(credentials.service_account_json);
+  const own = ownCredential(credentials);
+  const cred = (await pickCredential(own, credentials.mcc_id)) || own;
+  const sa = JSON.parse(resolveSaJson(cred, own));
   const jwt = new JWT({
     email: sa.client_email,
     key: sa.private_key,
@@ -585,12 +616,13 @@ export async function createServiceAccountCustomer(
   });
   const { token } = await jwt.getAccessToken();
   if (!token) throw new Error("无法从 Service Account 获取 access_token");
+  recordTokenUse(cred.token, credentials.mcc_id);
 
   const { GoogleAdsApi } = await import("google-ads-api");
   const client = new GoogleAdsApi({
     client_id: sa.client_id || sa.client_email || "service-account",
     client_secret: sa.client_secret || "not-used-for-sa",
-    developer_token: await pickDeveloperToken(resolveDevToken(credentials.developer_token), credentials.mcc_id),
+    developer_token: cred.token,
   });
 
   const customer = client.Customer({

@@ -580,12 +580,12 @@ async function syncAllCampaignStatuses(): Promise<unknown> {
 
       log(`  MCC ${mcc.mcc_name || mcc.mcc_id}: syncing ${sheetMap.size} campaign statuses from Sheet...`);
 
-      // D-034 漂移重暂停需要 mutate API，仅在凭据齐全时可用
-      const credentials = mcc.service_account_json && mcc.developer_token ? {
+      // D-034 漂移重暂停需要 mutate API；MCC 凭据缺失时由组 Token 池配对凭证兜底
+      const credentials = {
         mcc_id: mcc.mcc_id,
-        developer_token: mcc.developer_token,
-        service_account_json: mcc.service_account_json,
-      } : null;
+        developer_token: mcc.developer_token || "",
+        service_account_json: mcc.service_account_json || "",
+      };
 
       // 与旧版 fetchAllCampaignStatuses 返回结构对齐，下游逻辑（D-034/复活闸门/CID可用性）原样保留
       const statuses = [...sheetMap.entries()].map(([gcid, cs]) => ({
@@ -612,26 +612,22 @@ async function syncAllCampaignStatuses(): Promise<unknown> {
           log(`  [D-034] 检测到 PAUSED→ENABLED 漂移 campaign_id=${existing.id} gcid=${s.campaign_id}，尝试自动重新暂停...`);
 
           let rePauseOk = false;
-          if (!credentials) {
-            log(`  [D-034] MCC 未配置服务账号/Token，无法自动重新暂停 campaign_id=${existing.id}`);
-          } else {
-            try {
-              const { updateCampaignStatus } = await import("@/lib/google-ads");
-              const rp = await updateCampaignStatus(
-                credentials,
-                (existing.customer_id || "").replace(/-/g, ""),
-                s.campaign_id,
-                "PAUSED",
-              );
-              if (rp.success) {
-                rePauseOk = true;
-                log(`  [D-034] 自动重新暂停成功 campaign_id=${existing.id} gcid=${s.campaign_id}`);
-              } else {
-                log(`  [D-034] 自动重新暂停失败（API返回失败）campaign_id=${existing.id}: ${rp.message}`);
-              }
-            } catch (err) {
-              log(`  [D-034] 自动重新暂停异常 campaign_id=${existing.id}: ${err instanceof Error ? err.message.slice(0, 120) : String(err)}`);
+          try {
+            const { updateCampaignStatus } = await import("@/lib/google-ads");
+            const rp = await updateCampaignStatus(
+              credentials,
+              (existing.customer_id || "").replace(/-/g, ""),
+              s.campaign_id,
+              "PAUSED",
+            );
+            if (rp.success) {
+              rePauseOk = true;
+              log(`  [D-034] 自动重新暂停成功 campaign_id=${existing.id} gcid=${s.campaign_id}`);
+            } else {
+              log(`  [D-034] 自动重新暂停失败（API返回失败）campaign_id=${existing.id}: ${rp.message}`);
             }
+          } catch (err) {
+            log(`  [D-034] 自动重新暂停异常 campaign_id=${existing.id}: ${err instanceof Error ? err.message.slice(0, 120) : String(err)}`);
           }
 
           if (rePauseOk) {

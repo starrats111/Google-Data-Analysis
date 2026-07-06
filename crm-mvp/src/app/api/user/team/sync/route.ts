@@ -100,14 +100,18 @@ async function syncTodayAdsForUser(userId: bigint): Promise<{ synced: number; me
   const errors: string[] = [];
 
   for (const mcc of mccAccounts) {
-    if (!mcc.service_account_json) continue;
+    // 员工 MCC 未配 SA 时，组 Token 池有配对 JSON 也可跑
+    if (!mcc.service_account_json) {
+      const { poolHasCredentialFor } = await import("@/lib/google-ads/token-pool");
+      if (!(await poolHasCredentialFor(mcc.mcc_id))) continue;
+    }
 
     try {
       const { fetchTodayCampaignData } = await import("@/lib/google-ads");
       const credentials = {
         mcc_id: mcc.mcc_id,
         developer_token: mcc.developer_token || "",
-        service_account_json: mcc.service_account_json,
+        service_account_json: mcc.service_account_json || "",
       };
 
       const cids = await prisma.mcc_cid_accounts.findMany({

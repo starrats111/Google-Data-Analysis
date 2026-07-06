@@ -159,14 +159,15 @@ async function syncAdsData(
     sheetResult.message = "未配置 Sheet URL";
   }
 
-  // 2. Google Ads API 同步
-  if (mcc.service_account_json) {
+  // 2. Google Ads API 同步（员工 MCC 未配 SA 时，组 Token 池有配对 JSON 也可跑）
+  const { poolHasCredentialFor } = await import("@/lib/google-ads/token-pool");
+  if (mcc.service_account_json || (await poolHasCredentialFor(mcc.mcc_id))) {
     try {
       const { fetchTodayCampaignData, fetchCampaignDataByDateRange, listMccChildAccounts } = await import("@/lib/google-ads");
       const credentials = {
         mcc_id: mcc.mcc_id,
         developer_token: mcc.developer_token || "",
-        service_account_json: mcc.service_account_json,
+        service_account_json: mcc.service_account_json || "",
       };
 
       const cids = await prisma.mcc_cid_accounts.findMany({
@@ -501,7 +502,7 @@ async function syncAdsData(
       apiResult.message = `API 同步失败: ${err instanceof Error ? err.message : String(err)}`;
     }
   } else {
-    apiResult.message = "未配置服务账号";
+    apiResult.message = "未配置服务账号（组 Token 池也无配对 JSON）";
   }
 
   return { sheet: sheetResult, api: apiResult };

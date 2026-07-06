@@ -29,12 +29,16 @@ export async function POST(req: NextRequest) {
     where: { id: campaign.mcc_id, user_id: userId, is_deleted: 0 },
   });
   if (!mcc) return apiError("广告系列关联的 MCC 账户不存在", 404);
-  if (!mcc.service_account_json) return apiError("MCC 未配置服务账号凭证", 400);
-  if (!mcc.developer_token) return apiError(`MCC「${mcc.mcc_name || mcc.mcc_id}」未配置 developer_token，请在「个人设置 → MCC 管理」中编辑该 MCC 填写 Developer Token`, 400);
+  {
+    const { poolHasCredentialFor } = await import("@/lib/google-ads/token-pool");
+    if (!mcc.service_account_json && !(await poolHasCredentialFor(mcc.mcc_id))) {
+      return apiError("MCC 未配置服务账号凭证，且组 Token 池中无配对的 Service Account JSON（请组长在「团队设置 → Token 池」配置）", 400);
+    }
+  }
 
   try {
     const { updateCampaignBudget, updateCampaignMaxCpc } = await import("@/lib/google-ads");
-    const credentials = { mcc_id: mcc.mcc_id, developer_token: mcc.developer_token, service_account_json: mcc.service_account_json };
+    const credentials = { mcc_id: mcc.mcc_id, developer_token: mcc.developer_token || "", service_account_json: mcc.service_account_json || "" };
 
     let result: { success: boolean; message: string };
 
