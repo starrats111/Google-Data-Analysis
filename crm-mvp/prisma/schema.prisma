@@ -1489,6 +1489,15 @@ model team_developer_tokens {
   created_at           DateTime @default(now()) @db.DateTime(0)
   updated_at           DateTime @default(now()) @updatedAt @db.DateTime(0)
 
+  // ── 系统自动标记（真实流量 + 主动探测学习，无需人工维护）──
+  health_status     String?   @default("unknown") @db.VarChar(16) // ok | invalid | limited | unknown
+  health_note       String?   @db.VarChar(255) // 最近一次异常/探测结论（人话）
+  last_ok_at        DateTime? @db.DateTime(0) // 最近一次成功请求/探测通过
+  last_error_at     DateTime? @db.DateTime(0) // 最近一次失效/限额时间
+  detected_quota    Int?      @db.UnsignedInt // 触顶反推出的真实每日额度（未触顶为 null）
+  quota_detected_at DateTime? @db.DateTime(0)
+  mcc_access        String?   @db.Text // JSON {"<mcc客户号>":"ok"|"denied"}——该凭证对各 MCC 的实测可用性
+
   @@index([team_id, is_deleted], map: "idx_tdt_team")
 }
 

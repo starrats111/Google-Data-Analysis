@@ -56,6 +56,14 @@ async function doDailySync() {
     log("Step 1: Syncing violation & recommendation merchants...");
     await syncMerchantSheet();
 
+    log("Step 1.5: Probing team developer token pools (auto health check)...");
+    try {
+      const { probeAllTeamTokens } = await import("@/lib/google-ads/token-probe");
+      await probeAllTeamTokens();
+    } catch (e) {
+      log(`Token pool probe failed (non-fatal): ${e instanceof Error ? e.message : e}`);
+    }
+
     log("Step 2: Syncing MCC ad data for all users...");
     await syncAllUsersMcc();
 

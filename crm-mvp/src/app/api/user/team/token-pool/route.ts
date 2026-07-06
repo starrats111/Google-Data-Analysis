@@ -86,6 +86,10 @@ export const GET = withLeader(async (_req: NextRequest, { user }) => {
       userCount = users.size;
     }
     const cooldown = getTokenCooldown(r.token);
+    let mccAccess: Record<string, string> = {};
+    try { mccAccess = JSON.parse(r.mcc_access || "{}"); } catch {}
+    const deniedMccs = Object.entries(mccAccess).filter(([, v]) => v === "denied").map(([k]) => k);
+    const okMccs = Object.entries(mccAccess).filter(([, v]) => v === "ok").map(([k]) => k);
     return {
       id: r.id,
       token: r.token,
@@ -95,12 +99,19 @@ export const GET = withLeader(async (_req: NextRequest, { user }) => {
         try { return r.service_account_json ? JSON.parse(r.service_account_json).client_email || null : null; } catch { return null; }
       })(),
       daily_quota: r.daily_quota,
+      detected_quota: r.detected_quota,
       today_requests: usage?.requests ?? 0,
       today_users: userCount,
       label: r.label,
       is_active: r.is_active,
       created_at: r.created_at,
       cooling_until: cooldown ? cooldown.toISOString() : null,
+      // 系统自动标记
+      health_status: r.health_status || "unknown",
+      health_note: r.health_note,
+      last_ok_at: r.last_ok_at,
+      ok_mccs: okMccs,
+      denied_mccs: deniedMccs,
     };
   });
   return apiSuccess(serializeData(data));
@@ -143,6 +154,8 @@ export const POST = withLeader(async (req: NextRequest, { user }) => {
       where: { team_id: teamId, token, is_deleted: 0, id: { not: existing.id } },
     });
     if (dup) return apiError("该 Token 已存在于本组池中");
+    // token 值或配对 JSON 变了 → 之前学到的标记不再可信，重置为 unknown 待重新探测
+    const credentialChanged = token !== existing.token || !!rawSaJson;
     await prisma.team_developer_tokens.update({
       where: { id: existing.id },
       data: {
@@ -151,6 +164,10 @@ export const POST = withLeader(async (req: NextRequest, { user }) => {
         is_active: isActive,
         daily_quota: dailyQuota,
         ...(rawSaJson ? { service_account_json: rawSaJson } : {}),
+        ...(credentialChanged ? {
+          health_status: "unknown", health_note: null, mcc_access: null,
+          detected_quota: null, quota_detected_at: null,
+        } : {}),
       },
     });
     return apiSuccess(null, "保存成功");

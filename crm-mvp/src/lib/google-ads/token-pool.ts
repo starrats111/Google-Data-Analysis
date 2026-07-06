@@ -22,6 +22,14 @@
  * 落到 token_usage_daily（token + 日期唯一），供组长查看「今日已用/使用人数」。
  *
  * 冷却/轮询状态存于模块内存：生产是 PM2 单进程 Next.js，天然全局。
+ *
+ * 自动体检（系统自行判断谁能用、额度多少，无需人工标记）：
+ * - 每次真实请求的结果都会回流：成功 → health_status=ok + mcc_access[mcc]=ok；
+ *   token 失效 → health_status=invalid（踢出轮询，待每日探测复活）；
+ *   对某 MCC 无权限 → mcc_access[mcc]=denied（该 MCC 的请求跳过此凭证）；
+ *   每日额度触顶 → 用当天实际请求数反推 detected_quota，写回并冷却到太平洋时区次日。
+ * - 探测额度：detected_quota（实测）优先于组长手填的 daily_quota；
+ *   当日用量 ≥ 实测额度的 token 直接跳过，不再撞墙。
  */
 import prisma from "@/lib/prisma";
 
@@ -30,6 +38,8 @@ const RATE_LIMIT_COOLDOWN_MS = 3 * 60_000;
 const INVALID_COOLDOWN_MS = 24 * 3600_000;
 // 真实 Developer Token 为 22 位；过滤占位假 token（如 "123456"）
 const MIN_TOKEN_LENGTH = 15;
+// 成功标记落库的节流间隔（避免每个请求都写库）
+const OK_PERSIST_INTERVAL_MS = 5 * 60_000;
 
 export interface TokenCredential {
   token: string;
@@ -37,9 +47,28 @@ export interface TokenCredential {
   saJson: string | null;
 }
 
+/** 池内 token 的自动体检元数据（随凭证列表一起 60s 缓存） */
+interface TokenMeta {
+  healthStatus: string;
+  /** {"<mcc客户号>": "ok" | "denied"} */
+  mccAccess: Record<string, string>;
+  /** 实测额度（触顶反推）；null = 未触顶过 */
+  detectedQuota: number | null;
+  /** 组长手填额度 */
+  dailyQuota: number;
+  /** 今日已用（DB 口径，不含内存缓冲） */
+  todayRequests: number;
+}
+
 /** mcc_id（Google MCC 客户号）→ 团队凭证对列表缓存 */
 const poolCacheByMcc = new Map<string, { creds: TokenCredential[]; loadedAt: number }>();
+/** token → 体检元数据（loadTeamCredentials 时一并刷新） */
+const tokenMetaCache = new Map<string, TokenMeta>();
 const cooldownUntil = new Map<string, number>();
+/** 实时学到的「token|mcc 无权限」对（DB 缓存有 60s 延迟，这里立即生效） */
+const deniedPairs = new Set<string>();
+/** token → 上次成功标记落库时间（节流） */
+const lastOkPersist = new Map<string, number>();
 let rr = 0;
 
 /** 日志用：只露 token 末 6 位 */
@@ -56,7 +85,7 @@ function envCredentials(): TokenCredential[] {
   return out;
 }
 
-/** 该 MCC 所属团队组长配置的活跃凭证对（60s 缓存） */
+/** 该 MCC 所属团队组长配置的活跃凭证对（60s 缓存），并同步刷新体检元数据 */
 async function loadTeamCredentials(mccId: string): Promise<TokenCredential[]> {
   const key = mccId.replace(/-/g, "");
   const now = Date.now();
@@ -80,14 +109,33 @@ async function loadTeamCredentials(mccId: string): Promise<TokenCredential[]> {
       if (teamIds.length > 0) {
         const rows = await prisma.team_developer_tokens.findMany({
           where: { team_id: { in: teamIds }, is_deleted: 0, is_active: 1 },
-          select: { token: true, service_account_json: true },
+          select: {
+            token: true, service_account_json: true,
+            health_status: true, mcc_access: true, detected_quota: true, daily_quota: true,
+          },
         });
+        // 今日已用（用于「实测额度已耗尽」的预判跳过）
+        const usage = rows.length > 0 ? await prisma.token_usage_daily.findMany({
+          where: { token: { in: rows.map((r) => r.token.trim()) }, date: cstToday() },
+          select: { token: true, requests: true },
+        }) : [];
+        const usageByToken = new Map(usage.map((u) => [u.token, u.requests]));
+
         const seen = new Set<string>();
         for (const r of rows) {
           const t = r.token.trim();
           if (t.length < MIN_TOKEN_LENGTH || seen.has(t)) continue;
           seen.add(t);
           creds.push({ token: t, saJson: r.service_account_json?.trim() || null });
+          let mccAccess: Record<string, string> = {};
+          try { mccAccess = JSON.parse(r.mcc_access || "{}"); } catch {}
+          tokenMetaCache.set(t, {
+            healthStatus: r.health_status || "unknown",
+            mccAccess,
+            detectedQuota: r.detected_quota ?? null,
+            dailyQuota: r.daily_quota,
+            todayRequests: usageByToken.get(t) ?? 0,
+          });
         }
       }
     }
@@ -97,6 +145,18 @@ async function loadTeamCredentials(mccId: string): Promise<TokenCredential[]> {
 
   poolCacheByMcc.set(key, { creds, loadedAt: now });
   return creds;
+}
+
+/** 该凭证对此 MCC 是否可用（自动标记学习结果；unknown 视为可用，让真实流量去探明） */
+function isUsableFor(token: string, mccKey: string): boolean {
+  if (deniedPairs.has(`${token}|${mccKey}`)) return false;
+  const meta = tokenMetaCache.get(token);
+  if (!meta) return true; // 环境变量/MCC 自带凭证无元数据，不设限
+  if (meta.healthStatus === "invalid") return false;
+  if (meta.mccAccess[mccKey] === "denied") return false;
+  // 实测出真实额度后，当日用量触顶的 token 直接跳过，不再撞墙
+  if (meta.detectedQuota != null && meta.todayRequests >= meta.detectedQuota) return false;
+  return true;
 }
 
 /** 单次请求的全部候选凭证对：团队池 + 环境变量全局池 + MCC 自带凭证 */
@@ -127,7 +187,12 @@ export async function pickCredential(
   if (candidates.length === 0) return preferred;
 
   const now = Date.now();
-  const available = candidates.filter((c) => (cooldownUntil.get(c.token) ?? 0) <= now && !exclude?.has(c.token));
+  const mccKey = mccId.replace(/-/g, "");
+  const available = candidates.filter((c) =>
+    (cooldownUntil.get(c.token) ?? 0) <= now
+    && !exclude?.has(c.token)
+    && isUsableFor(c.token, mccKey),
+  );
   if (available.length > 0) {
     return available[rr++ % available.length];
   }
@@ -150,7 +215,10 @@ export async function hasAlternativeToken(
 ): Promise<boolean> {
   const candidates = await getCandidates(preferred, mccId);
   const now = Date.now();
-  return candidates.some((c) => !exclude.has(c.token) && (cooldownUntil.get(c.token) ?? 0) <= now);
+  const mccKey = mccId.replace(/-/g, "");
+  return candidates.some((c) =>
+    !exclude.has(c.token) && (cooldownUntil.get(c.token) ?? 0) <= now && isUsableFor(c.token, mccKey),
+  );
 }
 
 /** 团队池中是否存在带配对 JSON 的可用凭证（用于放宽「MCC 未配置服务账号」的硬拦截） */
@@ -159,23 +227,137 @@ export async function poolHasCredentialFor(mccId: string): Promise<boolean> {
   return creds.some((c) => !!c.saJson);
 }
 
-/** 上报某 token 触发 429：冷却 3 分钟或 Google 建议的 retryDelay（取大者） */
-export function reportTokenRateLimited(token: string, retryDelaySec?: number): void {
+// ─────────────────────── 自动标记（真实流量回流 → 持久化） ───────────────────────
+
+/** 把标记写回 team_developer_tokens（同一 token 可能被多个组配置，全部更新）；失败仅打日志 */
+function persistMark(token: string, data: Record<string, unknown>): void {
+  void prisma.team_developer_tokens.updateMany({
+    where: { token, is_deleted: 0 },
+    data,
+  }).catch((e) => console.error("[TokenPool] 标记落库失败:", e instanceof Error ? e.message : e));
+}
+
+/** 合并写 mcc_access JSON（读-改-写；并发丢失个别标记可接受，下次流量会再学到） */
+async function persistMccAccess(token: string, mccKey: string, status: "ok" | "denied"): Promise<void> {
+  try {
+    const rows = await prisma.team_developer_tokens.findMany({
+      where: { token, is_deleted: 0 },
+      select: { id: true, mcc_access: true },
+    });
+    for (const r of rows) {
+      let acc: Record<string, string> = {};
+      try { acc = JSON.parse(r.mcc_access || "{}"); } catch {}
+      if (acc[mccKey] === status) continue;
+      acc[mccKey] = status;
+      await prisma.team_developer_tokens.update({
+        where: { id: r.id },
+        data: { mcc_access: JSON.stringify(acc) },
+      });
+    }
+  } catch (e) {
+    console.error("[TokenPool] mcc_access 落库失败:", e instanceof Error ? e.message : e);
+  }
+}
+
+/** 距太平洋时区（Google 配额重置口径）下一个午夜的毫秒数 */
+function msUntilPacificMidnight(): number {
+  const now = new Date();
+  const pacific = new Date(now.toLocaleString("en-US", { timeZone: "America/Los_Angeles" }));
+  const secsToday = pacific.getHours() * 3600 + pacific.getMinutes() * 60 + pacific.getSeconds();
+  return Math.max(60_000, (24 * 3600 - secsToday) * 1000);
+}
+
+/** 上报某 token 请求成功：更新 ok 标记 + 该 MCC 可用（5 分钟节流落库） */
+export function reportTokenOk(token: string, mccId: string): void {
+  const mccKey = mccId.replace(/-/g, "");
+  deniedPairs.delete(`${token}|${mccKey}`);
+  const meta = tokenMetaCache.get(token);
+  if (!meta) return; // 非池内 token（环境变量/MCC 自带）无落库对象
+  const now = Date.now();
+  const needMccMark = meta.mccAccess[mccKey] !== "ok";
+  const throttled = now - (lastOkPersist.get(token) ?? 0) < OK_PERSIST_INTERVAL_MS;
+  if (!needMccMark && throttled) return;
+  lastOkPersist.set(token, now);
+  meta.mccAccess[mccKey] = "ok";
+  meta.healthStatus = "ok";
+  persistMark(token, { health_status: "ok", health_note: null, last_ok_at: new Date() });
+  if (needMccMark) void persistMccAccess(token, mccKey, "ok");
+}
+
+/**
+ * 上报某 token 触发 429。
+ * - QPS 类（RESOURCE_TEMPORARILY_EXHAUSTED / retryDelay 短）：冷却几分钟
+ * - 每日额度耗尽（RESOURCE_EXHAUSTED 长冷却）：用当天实际请求数反推真实额度写回
+ *   detected_quota，并冷却到太平洋时区次日（Google 配额重置点）
+ */
+export function reportTokenRateLimited(token: string, retryDelaySec?: number, errBody?: string): void {
+  const isDailyExhausted =
+    !!errBody
+    && errBody.includes("RESOURCE_EXHAUSTED")
+    && !errBody.includes("RESOURCE_TEMPORARILY_EXHAUSTED")
+    && ((retryDelaySec ?? 0) > 600 || /daily|per day|quota/i.test(errBody));
+
+  if (isDailyExhausted) {
+    const ms = msUntilPacificMidnight();
+    cooldownUntil.set(token, Date.now() + ms);
+    const meta = tokenMetaCache.get(token);
+    if (meta) {
+      // 今日实际打出的请求数 ≈ 该 token 的真实每日额度（取历史探测值的较大者，防止低估）
+      const observed = Math.max(meta.todayRequests, meta.detectedQuota ?? 0);
+      meta.detectedQuota = observed > 0 ? observed : meta.detectedQuota;
+      meta.healthStatus = "limited";
+      persistMark(token, {
+        health_status: "limited",
+        health_note: `每日额度耗尽（实测约 ${observed.toLocaleString()} 次/天），太平洋时区次日自动恢复`,
+        last_error_at: new Date(),
+        ...(observed > 0 ? { detected_quota: observed, quota_detected_at: new Date() } : {}),
+      });
+      console.warn(`[TokenPool] token ${maskToken(token)} 每日额度耗尽，实测额度≈${observed}，冷却至太平洋次日（${Math.round(ms / 60000)} 分钟后）`);
+      return;
+    }
+    console.warn(`[TokenPool] token ${maskToken(token)} 每日额度耗尽，冷却至太平洋次日`);
+    return;
+  }
+
   const ms = Math.max(RATE_LIMIT_COOLDOWN_MS, (retryDelaySec ?? 0) * 1000);
   cooldownUntil.set(token, Date.now() + ms);
   console.warn(`[TokenPool] token ${maskToken(token)} 触发限流，冷却 ${Math.round(ms / 1000)}s`);
 }
 
-/** 上报某 token 不可用（未获批/被禁）：冷却 24 小时 */
-export function reportTokenInvalid(token: string): void {
+/** 上报某 token 不可用（未获批/被禁）：冷却 24 小时 + 持久化失效标记（每日探测自动复检） */
+export function reportTokenInvalid(token: string, note?: string): void {
   cooldownUntil.set(token, Date.now() + INVALID_COOLDOWN_MS);
-  console.warn(`[TokenPool] token ${maskToken(token)} 不可用（未获批/被禁），24h 内不再使用`);
+  const meta = tokenMetaCache.get(token);
+  if (meta) meta.healthStatus = "invalid";
+  persistMark(token, {
+    health_status: "invalid",
+    health_note: note || "Developer Token 未获批准或已被禁用",
+    last_error_at: new Date(),
+  });
+  console.warn(`[TokenPool] token ${maskToken(token)} 不可用（未获批/被禁），已标记 invalid，24h 内不再使用`);
+}
+
+/** 上报某凭证对指定 MCC 无权限（SA 未被加入该 MCC 等）：该 MCC 的后续请求跳过此凭证 */
+export function reportTokenDeniedForMcc(token: string, mccId: string): void {
+  const mccKey = mccId.replace(/-/g, "");
+  deniedPairs.add(`${token}|${mccKey}`);
+  const meta = tokenMetaCache.get(token);
+  if (meta) meta.mccAccess[mccKey] = "denied";
+  void persistMccAccess(token, mccKey, "denied");
+  console.warn(`[TokenPool] 凭证 ${maskToken(token)} 对 MCC ${mccKey} 无权限，已标记跳过`);
 }
 
 /** 某 token 当前冷却截止时间（未冷却返回 null）；供管理/组长界面展示 */
 export function getTokenCooldown(token: string): Date | null {
   const until = cooldownUntil.get(token) ?? 0;
   return until > Date.now() ? new Date(until) : null;
+}
+
+/** 探测确认 token 恢复可用后，清掉内存冷却与体检缓存（下次加载重读 DB 最新标记） */
+export function clearTokenCooldown(token: string): void {
+  cooldownUntil.delete(token);
+  tokenMetaCache.delete(token);
+  poolCacheByMcc.clear();
 }
 
 // ─────────────────────── 用量统计（内存缓冲 → token_usage_daily） ───────────────────────
@@ -198,6 +380,10 @@ export function recordTokenUse(token: string, mccId: string): void {
   slot.count++;
   slot.mccs.add(mccId.replace(/-/g, ""));
   usageBuffer.set(token, slot);
+
+  // 同步累加体检缓存中的今日用量，让「实测额度触顶预判」在缓存窗口内也准确
+  const meta = tokenMetaCache.get(token);
+  if (meta) meta.todayRequests++;
 
   const total = [...usageBuffer.values()].reduce((s, v) => s + v.count, 0);
   if (total >= FLUSH_COUNT_THRESHOLD || Date.now() - lastFlushAt >= FLUSH_INTERVAL_MS) {

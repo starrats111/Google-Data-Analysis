@@ -9,6 +9,8 @@ import {
   hasAlternativeToken,
   reportTokenRateLimited,
   reportTokenInvalid,
+  reportTokenOk,
+  reportTokenDeniedForMcc,
   recordTokenUse,
   maskToken,
   type TokenCredential,
@@ -35,6 +37,19 @@ function parseRetryDelay(errBody: string): number {
     if (match) return parseInt(match[1], 10);
   } catch {}
   return 0;
+}
+
+/** Developer Token 本身不可用（未获批/被禁/无效）——与账号权限问题区分开 */
+function isDevTokenError(errBody: string): boolean {
+  return errBody.includes("DEVELOPER_TOKEN_NOT_APPROVED")
+    || errBody.includes("DEVELOPER_TOKEN_PROHIBITED")
+    || errBody.includes("DEVELOPER_TOKEN_INVALID");
+}
+
+/** 该凭证对当前 login-customer-id（MCC）无访问权限（SA 未被加入该 MCC）——换池中下一个凭证可解 */
+function isMccPermissionError(errBody: string): boolean {
+  return errBody.includes("USER_PERMISSION_DENIED")
+    || (errBody.includes("PERMISSION_DENIED") && errBody.includes("authorizationError"));
 }
 
 /** Google Ads API 错误中单个违规项 */
@@ -308,6 +323,7 @@ export async function queryGoogleAds(
     });
 
     if (resp.ok) {
+      reportTokenOk(devToken, credentials.mcc_id);
       const data = await resp.json();
       const results: Record<string, unknown>[] = [];
       if (Array.isArray(data)) {
@@ -324,7 +340,7 @@ export async function queryGoogleAds(
 
     if (resp.status === 429 || errBody.includes("RESOURCE_EXHAUSTED")) {
       const delaySec = parseRetryDelay(errBody) || 10;
-      reportTokenRateLimited(devToken, delaySec);
+      reportTokenRateLimited(devToken, delaySec, errBody);
       triedTokens.add(devToken);
       // 优先立即换池中另一个 token 重试（不等待）
       if (rotations < MAX_TOKEN_ROTATIONS && await hasAlternativeToken(own, credentials.mcc_id, triedTokens)) {
@@ -343,7 +359,7 @@ export async function queryGoogleAds(
       throw new Error(`Google Ads API 请求频率超限（token 池全部触发限流）。请等待几分钟后再重试，或在池中补充更多 Developer Token。`);
     }
 
-    if (errBody.includes("DEVELOPER_TOKEN_NOT_APPROVED")) {
+    if (isDevTokenError(errBody)) {
       reportTokenInvalid(devToken);
       triedTokens.add(devToken);
       if (await hasAlternativeToken(own, credentials.mcc_id, triedTokens)) {
@@ -351,6 +367,15 @@ export async function queryGoogleAds(
         continue;
       }
       throw new Error("Google Ads API 权限错误：Developer Token 仅被批准用于测试账号，无法访问正式广告账号。请在 Google Ads API Center 申请标准访问权限。");
+    }
+    if (isMccPermissionError(errBody)) {
+      reportTokenDeniedForMcc(devToken, credentials.mcc_id);
+      triedTokens.add(devToken);
+      if (await hasAlternativeToken(own, credentials.mcc_id, triedTokens)) {
+        console.warn(`[GoogleAds] 凭证 ${maskToken(devToken)} 对 MCC ${credentials.mcc_id} 无权限，换池中下一个凭证重试`);
+        continue;
+      }
+      throw new Error(`Google Ads API 权限错误：池中凭证对 MCC ${credentials.mcc_id} 均无访问权限。请确认服务账号已被加入该 MCC（USER_PERMISSION_DENIED）。`);
     }
     if (resp.status === 401 || errBody.includes("UNAUTHENTICATED")) {
       throw new Error("Google Ads API 认证失败：Service Account 凭证无效或已过期，请检查 MCC 配置中的服务账号 JSON。");
@@ -402,6 +427,7 @@ export async function mutateGoogleAds(
     });
 
     if (resp.ok) {
+      reportTokenOk(devToken, credentials.mcc_id);
       return await resp.json();
     }
 
@@ -409,7 +435,7 @@ export async function mutateGoogleAds(
 
     if (resp.status === 429 || errBody.includes("RESOURCE_EXHAUSTED")) {
       const delaySec = parseRetryDelay(errBody) || 10;
-      reportTokenRateLimited(devToken, delaySec);
+      reportTokenRateLimited(devToken, delaySec, errBody);
       triedTokens.add(devToken);
       // 429 时 Google 未执行任何变更（RESOURCE_EXHAUSTED 在配额检查阶段拒绝），换 token 重试安全
       if (rotations < MAX_TOKEN_ROTATIONS && await hasAlternativeToken(own, credentials.mcc_id, triedTokens)) {
@@ -453,7 +479,7 @@ export async function mutateGoogleAds(
       );
     }
 
-    if (errBody.includes("DEVELOPER_TOKEN_NOT_APPROVED")) {
+    if (isDevTokenError(errBody)) {
       reportTokenInvalid(devToken);
       triedTokens.add(devToken);
       if (await hasAlternativeToken(own, credentials.mcc_id, triedTokens)) {
@@ -461,6 +487,16 @@ export async function mutateGoogleAds(
         continue;
       }
       throw new Error("Google Ads API 权限错误：Developer Token 仅被批准用于测试账号，无法访问正式广告账号。请在 Google Ads API Center 申请标准访问权限。");
+    }
+    if (isMccPermissionError(errBody)) {
+      reportTokenDeniedForMcc(devToken, credentials.mcc_id);
+      triedTokens.add(devToken);
+      // mutate 在权限校验阶段被拒，Google 未执行任何变更，换凭证重试安全
+      if (await hasAlternativeToken(own, credentials.mcc_id, triedTokens)) {
+        console.warn(`[GoogleAds] 凭证 ${maskToken(devToken)} 对 MCC ${credentials.mcc_id} 无权限，换池中下一个凭证重试`);
+        continue;
+      }
+      throw new Error(`Google Ads API 权限错误：池中凭证对 MCC ${credentials.mcc_id} 均无访问权限。请确认服务账号已被加入该 MCC（USER_PERMISSION_DENIED）。`);
     }
     if (resp.status === 401 || errBody.includes("UNAUTHENTICATED")) {
       throw new Error("Google Ads API 认证失败：Service Account 凭证无效或已过期，请检查 MCC 配置中的服务账号 JSON。");

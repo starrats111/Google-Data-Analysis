@@ -127,11 +127,17 @@ type PoolToken = {
   has_sa_json: boolean;
   sa_email: string | null;
   daily_quota: number;
+  detected_quota: number | null;
   today_requests: number;
   today_users: number;
   label: string | null;
   is_active: number;
   cooling_until: string | null;
+  health_status: string;
+  health_note: string | null;
+  last_ok_at: string | null;
+  ok_mccs: string[];
+  denied_mccs: string[];
 };
 
 function TokenPoolCard() {
@@ -141,6 +147,7 @@ function TokenPoolCard() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editItem, setEditItem] = useState<PoolToken | null>(null);
   const [jsonFileName, setJsonFileName] = useState("");
+  const [probing, setProbing] = useState<string | null>(null); // "all" 或单个 token id
   const [form] = Form.useForm();
 
   const fetchData = () =>
@@ -180,6 +187,23 @@ function TokenPoolCard() {
     else message.error(res.message);
   };
 
+  const handleProbe = async (id: string | null) => {
+    setProbing(id || "all");
+    try {
+      const res = await fetch("/api/user/team/token-pool/probe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(id ? { id } : {}),
+      }).then((r) => r.json());
+      if (res.code === 0) { message.success("检测完成，标记已更新"); fetchData(); }
+      else message.error(res.message);
+    } catch {
+      message.error("检测请求失败");
+    } finally {
+      setProbing(null);
+    }
+  };
+
   const handleToggleActive = async (rec: PoolToken, checked: boolean) => {
     const res = await fetch("/api/user/team/token-pool", {
       method: "POST",
@@ -190,7 +214,9 @@ function TokenPoolCard() {
     else message.error(res.message);
   };
 
-  const totalQuota = rows.filter((r) => r.is_active === 1).reduce((s, r) => s + r.daily_quota, 0);
+  // 实测额度（触顶反推）优先于手填额度
+  const effectiveQuota = (r: PoolToken) => r.detected_quota ?? r.daily_quota;
+  const totalQuota = rows.filter((r) => r.is_active === 1).reduce((s, r) => s + effectiveQuota(r), 0);
   const totalUsed = rows.reduce((s, r) => s + r.today_requests, 0);
 
   return (
@@ -204,6 +230,7 @@ function TokenPoolCard() {
           <Text type="secondary" style={{ fontSize: 13 }}>
             池总额度 <Text strong>{totalQuota.toLocaleString()}</Text> / 今日已用 <Text strong>{totalUsed.toLocaleString()}</Text>
           </Text>
+          <Button size="small" loading={probing === "all"} onClick={() => handleProbe(null)}>全部检测</Button>
           <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => {
             setEditItem(null);
             form.resetFields();
@@ -218,8 +245,8 @@ function TokenPoolCard() {
         type="info"
         showIcon
         style={{ marginBottom: 12 }}
-        message="每条 = Developer Token + 配对的 Service Account JSON，两者一起存储、一起轮换。本组所有 Google Ads API 请求在池内自动轮询，配额互相分摊；触发限流的 Token 自动冷却几分钟并切换下一个。"
-        description="配置后组员的 MCC 无需再填服务账号/Token（已填的作为兜底继续有效）。Token 在 MCC 后台「工具 → API 中心」获取；JSON 为该项目服务账号密钥，且服务账号需被加入本组各 MCC。"
+        message="每条 = Developer Token + 配对的 Service Account JSON，两者一起存储、一起轮换。系统自动体检：根据真实请求与每日探测自动标记「谁能用、对哪些 MCC 能用」，失效/无权限的凭证自动跳过；每日额度触顶时自动反推实测额度（带 ✓），次日自动恢复。"
+        description="配置后组员的 MCC 无需再填服务账号/Token（已填的作为兜底继续有效）。新加 Token 后可点「检测」立即体检；标记无需人工维护，凭证修复后次日体检自动复活。"
       />
       <Table
         dataSource={rows}
@@ -239,14 +266,18 @@ function TokenPoolCard() {
           {
             title: "今日用量", width: 160,
             render: (_: unknown, rec: PoolToken) => {
-              const pct = rec.daily_quota > 0 ? Math.min(100, Math.round((rec.today_requests / rec.daily_quota) * 100)) : 0;
+              const quota = effectiveQuota(rec);
+              const pct = quota > 0 ? Math.min(100, Math.round((rec.today_requests / quota) * 100)) : 0;
+              const quotaLabel = rec.detected_quota != null
+                ? `实测额度 ${rec.detected_quota.toLocaleString()}（触顶自动探得）`
+                : `预设额度 ${rec.daily_quota.toLocaleString()}（未触顶，实际额度待系统探测）`;
               return (
-                <Tooltip title={`今日 ${rec.today_requests.toLocaleString()} / 额度 ${rec.daily_quota.toLocaleString()}`}>
+                <Tooltip title={`今日 ${rec.today_requests.toLocaleString()} / ${quotaLabel}`}>
                   <Progress
                     percent={pct}
                     size="small"
                     status={pct >= 90 ? "exception" : "normal"}
-                    format={() => `${rec.today_requests.toLocaleString()}/${(rec.daily_quota / 1000).toFixed(0)}k`}
+                    format={() => `${rec.today_requests.toLocaleString()}/${(quota / 1000).toFixed(0)}k${rec.detected_quota != null ? "✓" : ""}`}
                   />
                 </Tooltip>
               );
@@ -254,11 +285,24 @@ function TokenPoolCard() {
           },
           { title: "使用人数", dataIndex: "today_users", width: 80, align: "center" as const },
           {
-            title: "状态", width: 100,
-            render: (_: unknown, rec: PoolToken) =>
-              rec.is_active !== 1 ? <Tag>已停用</Tag>
-                : rec.cooling_until ? <Tag color="orange">限流冷却中</Tag>
-                : <Tag color="green">可用</Tag>,
+            title: "状态", width: 130,
+            render: (_: unknown, rec: PoolToken) => {
+              if (rec.is_active !== 1) return <Tag>已停用</Tag>;
+              const denied = rec.denied_mccs.length;
+              const tip = [
+                rec.health_note,
+                rec.ok_mccs.length > 0 ? `可用 MCC：${rec.ok_mccs.join(", ")}` : null,
+                denied > 0 ? `无权限 MCC：${rec.denied_mccs.join(", ")}` : null,
+                rec.last_ok_at ? `最近成功：${new Date(rec.last_ok_at).toLocaleString("zh-CN")}` : null,
+              ].filter(Boolean).join("\n");
+              const tag =
+                rec.cooling_until ? <Tag color="orange">限流冷却中</Tag>
+                : rec.health_status === "invalid" ? <Tag color="red">已失效</Tag>
+                : rec.health_status === "limited" ? <Tag color="volcano">额度触顶</Tag>
+                : rec.health_status === "ok" ? (denied > 0 ? <Tag color="gold">部分可用</Tag> : <Tag color="green">可用</Tag>)
+                : <Tag color="default">待检测</Tag>;
+              return <Tooltip title={<span style={{ whiteSpace: "pre-line" }}>{tip || "系统将根据真实请求与每日体检自动标记"}</span>}>{tag}</Tooltip>;
+            },
           },
           {
             title: "启用", width: 60,
@@ -267,9 +311,12 @@ function TokenPoolCard() {
             ),
           },
           {
-            title: "操作", width: 90,
+            title: "操作", width: 130,
             render: (_: unknown, rec: PoolToken) => (
               <Space size={4}>
+                <Tooltip title="立即检测：用此凭证对本组各 MCC 发一条最小查询，自动更新可用性标记">
+                  <Button size="small" loading={probing === rec.id} onClick={() => handleProbe(rec.id)}>检测</Button>
+                </Tooltip>
                 <Button size="small" icon={<EditOutlined />} onClick={() => {
                   setEditItem(rec);
                   form.setFieldsValue({ token: rec.token, label: rec.label, daily_quota: rec.daily_quota, service_account_json: undefined });
