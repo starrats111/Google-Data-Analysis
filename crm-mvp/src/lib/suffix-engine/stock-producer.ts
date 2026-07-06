@@ -273,8 +273,9 @@ async function doReplenish(
 
   const after = before + generated
 
-  if (generated === 0 && failed === 0 && duplicates > 0) {
-    // 静态后缀商家：生成全部成功但内容与库存完全重复（xcaret 类，落地页无 per-click 参数）。
+  if (generated === 0 && duplicates > 0) {
+    // 静态后缀商家：产出内容与库存完全重复（xcaret 类，落地页无 per-click 参数）。
+    // 只要出现过重复即证明内容静态、库存无法超过不同内容数，本轮零星代理失败不改变结论。
     // 不是故障——现有库存即是全部可能内容，消费后 lease 会触发按需重生成。
     // 清掉此前误报的告警，并交由调用方长冷却，停止每轮空烧 20 次生成。
     await resolveAlertsByType(campaign.user_id, campaignId, ['low_stock', 'replenish_failed', 'invalid_link', 'merchant_not_found'])
