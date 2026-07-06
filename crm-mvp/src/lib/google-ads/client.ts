@@ -4,12 +4,21 @@
  * 然后直接调用 Google Ads REST API
  */
 import { JWT } from "google-auth-library";
+import {
+  pickDeveloperToken,
+  hasAlternativeToken,
+  reportTokenRateLimited,
+  reportTokenInvalid,
+  maskToken,
+} from "./token-pool";
 
 const GOOGLE_ADS_SCOPE = "https://www.googleapis.com/auth/adwords";
 const ADS_API_VERSION = "v23";
 const ADS_BASE_URL = `https://googleads.googleapis.com/${ADS_API_VERSION}`;
 
 const MAX_429_RETRIES = 1;
+// 单次请求内最多轮换几个不同的 Developer Token（429 时立即换 token 重试，不等待）
+const MAX_TOKEN_ROTATIONS = 3;
 const MAX_429_WAIT_MS = 15_000;
 const QUERY_TIMEOUT_MS = 30_000;
 const MUTATE_TIMEOUT_MS = 60_000;
@@ -255,9 +264,14 @@ export async function queryGoogleAds(
   query: string,
 ): Promise<Record<string, unknown>[]> {
   const cid = customerId.replace(/-/g, "");
-  const devToken = resolveDevToken(credentials.developer_token);
+  const ownToken = resolveDevToken(credentials.developer_token);
+  const triedTokens = new Set<string>();
+  let rotations = 0;
+  let waits429 = 0;
+  const HARD_CAP = MAX_TOKEN_ROTATIONS + MAX_429_RETRIES + 1;
 
-  for (let attempt = 0; attempt <= MAX_429_RETRIES; attempt++) {
+  for (let attempt = 0; attempt <= HARD_CAP; attempt++) {
+    const devToken = await pickDeveloperToken(ownToken, triedTokens);
     const token = await getAccessToken(credentials.service_account_json);
     const headers = buildHeaders(token, devToken, credentials.mcc_id);
     const apiUrl = `${ADS_BASE_URL}/customers/${cid}/googleAds:searchStream`;
@@ -284,17 +298,33 @@ export async function queryGoogleAds(
     const errBody = await resp.text().catch(() => "");
 
     if (resp.status === 429 || errBody.includes("RESOURCE_EXHAUSTED")) {
-      if (attempt < MAX_429_RETRIES) {
-        const delaySec = parseRetryDelay(errBody) || 10;
+      const delaySec = parseRetryDelay(errBody) || 10;
+      reportTokenRateLimited(devToken, delaySec);
+      triedTokens.add(devToken);
+      // 优先立即换池中另一个 token 重试（不等待）
+      if (rotations < MAX_TOKEN_ROTATIONS && await hasAlternativeToken(triedTokens)) {
+        rotations++;
+        console.warn(`[GoogleAds] 查询 429，token ${maskToken(devToken)} 冷却，换池中下一个 token 重试 (${rotations}/${MAX_TOKEN_ROTATIONS})`);
+        continue;
+      }
+      // 池已耗尽：退回等待重试
+      if (waits429 < MAX_429_RETRIES) {
+        waits429++;
         const delayMs = Math.min(delaySec * 1000, MAX_429_WAIT_MS);
-        console.warn(`[GoogleAds] 查询触发 429 限流，等待 ${delaySec}s 后重试 (${attempt + 1}/${MAX_429_RETRIES})`);
+        console.warn(`[GoogleAds] 查询触发 429 限流且 token 池已耗尽，等待 ${delaySec}s 后重试 (${waits429}/${MAX_429_RETRIES})`);
         await sleep(delayMs);
         continue;
       }
-      throw new Error(`Google Ads API 请求频率超限（explorer access 配额较低）。请等待几分钟后再重试，或在 Google Ads API Center 申请更高级别的 API 访问权限。`);
+      throw new Error(`Google Ads API 请求频率超限（token 池全部触发限流）。请等待几分钟后再重试，或在池中补充更多 Developer Token。`);
     }
 
     if (errBody.includes("DEVELOPER_TOKEN_NOT_APPROVED")) {
+      reportTokenInvalid(devToken);
+      triedTokens.add(devToken);
+      if (await hasAlternativeToken(triedTokens)) {
+        console.warn(`[GoogleAds] token ${maskToken(devToken)} 未获批，换池中下一个 token 重试`);
+        continue;
+      }
       throw new Error("Google Ads API 权限错误：Developer Token 仅被批准用于测试账号，无法访问正式广告账号。请在 Google Ads API Center 申请标准访问权限。");
     }
     if (resp.status === 401 || errBody.includes("UNAUTHENTICATED")) {
@@ -323,14 +353,17 @@ export async function mutateGoogleAds(
   operations: Record<string, unknown>[],
 ): Promise<Record<string, unknown>> {
   const cid = customerId.replace(/-/g, "");
-  const devToken = resolveDevToken(credentials.developer_token);
+  const ownToken = resolveDevToken(credentials.developer_token);
+  const triedTokens = new Set<string>();
 
+  let rotations = 0;
   let rateLimitRetries = 0;
   let transientRetries = 0;
   // 硬上限：避免任何意外导致死循环
-  const HARD_CAP = MAX_429_RETRIES + MAX_TRANSIENT_RETRIES + 2;
+  const HARD_CAP = MAX_TOKEN_ROTATIONS + MAX_429_RETRIES + MAX_TRANSIENT_RETRIES + 2;
 
   for (let iteration = 0; iteration <= HARD_CAP; iteration++) {
+    const devToken = await pickDeveloperToken(ownToken, triedTokens);
     const token = await getAccessToken(credentials.service_account_json);
     const headers = buildHeaders(token, devToken, credentials.mcc_id);
     const apiUrl = `${ADS_BASE_URL}/customers/${cid}/googleAds:mutate`;
@@ -348,15 +381,23 @@ export async function mutateGoogleAds(
     const errBody = await resp.text().catch(() => "");
 
     if (resp.status === 429 || errBody.includes("RESOURCE_EXHAUSTED")) {
+      const delaySec = parseRetryDelay(errBody) || 10;
+      reportTokenRateLimited(devToken, delaySec);
+      triedTokens.add(devToken);
+      // 429 时 Google 未执行任何变更（RESOURCE_EXHAUSTED 在配额检查阶段拒绝），换 token 重试安全
+      if (rotations < MAX_TOKEN_ROTATIONS && await hasAlternativeToken(triedTokens)) {
+        rotations++;
+        console.warn(`[GoogleAds] Mutate 429，token ${maskToken(devToken)} 冷却，换池中下一个 token 重试 (${rotations}/${MAX_TOKEN_ROTATIONS})`);
+        continue;
+      }
       if (rateLimitRetries < MAX_429_RETRIES) {
         rateLimitRetries++;
-        const delaySec = parseRetryDelay(errBody) || 10;
         const delayMs = Math.min(delaySec * 1000, MAX_429_WAIT_MS);
-        console.warn(`[GoogleAds] Mutate 触发 429 限流，等待 ${delaySec}s 后重试 (${rateLimitRetries}/${MAX_429_RETRIES})`);
+        console.warn(`[GoogleAds] Mutate 触发 429 限流且 token 池已耗尽，等待 ${delaySec}s 后重试 (${rateLimitRetries}/${MAX_429_RETRIES})`);
         await sleep(delayMs);
         continue;
       }
-      throw new Error(`Google Ads API 请求频率超限（explorer access 配额较低）。请等待几分钟后再重试，或在 Google Ads API Center 申请更高级别的 API 访问权限。`);
+      throw new Error(`Google Ads API 请求频率超限（token 池全部触发限流）。请等待几分钟后再重试，或在池中补充更多 Developer Token。`);
     }
 
     // D-065：瞬时错误（Google 侧 INTERNAL_ERROR / DEADLINE_EXCEEDED / 5xx）→ 指数退避重试。
@@ -386,6 +427,12 @@ export async function mutateGoogleAds(
     }
 
     if (errBody.includes("DEVELOPER_TOKEN_NOT_APPROVED")) {
+      reportTokenInvalid(devToken);
+      triedTokens.add(devToken);
+      if (await hasAlternativeToken(triedTokens)) {
+        console.warn(`[GoogleAds] token ${maskToken(devToken)} 未获批，换池中下一个 token 重试`);
+        continue;
+      }
       throw new Error("Google Ads API 权限错误：Developer Token 仅被批准用于测试账号，无法访问正式广告账号。请在 Google Ads API Center 申请标准访问权限。");
     }
     if (resp.status === 401 || errBody.includes("UNAUTHENTICATED")) {
@@ -467,7 +514,7 @@ export async function unlinkCidFromMcc(
   }
 
   // 2) 置 INACTIVE（专用端点 customerClientLinks:mutate，单 operation）
-  const devToken = resolveDevToken(credentials.developer_token);
+  const devToken = await pickDeveloperToken(resolveDevToken(credentials.developer_token));
   const token = await getAccessToken(credentials.service_account_json);
   const headers = buildHeaders(token, devToken, credentials.mcc_id);
   const apiUrl = `${ADS_BASE_URL}/customers/${mcc}/customerClientLinks:mutate`;
@@ -543,7 +590,7 @@ export async function createServiceAccountCustomer(
   const client = new GoogleAdsApi({
     client_id: sa.client_id || sa.client_email || "service-account",
     client_secret: sa.client_secret || "not-used-for-sa",
-    developer_token: resolveDevToken(credentials.developer_token),
+    developer_token: await pickDeveloperToken(resolveDevToken(credentials.developer_token)),
   });
 
   const customer = client.Customer({
