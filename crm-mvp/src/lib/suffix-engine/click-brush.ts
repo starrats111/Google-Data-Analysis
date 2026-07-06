@@ -260,6 +260,8 @@ interface TaskRuntime {
   platform: string | null
   sourceMerchantId: bigint | null
   existingSuffixes: Set<string>
+  /** 本任务是否已顺带清过库存类告警（刷点击也在产出库存，成功一次即清一次，避免高消耗系列告警常驻） */
+  alertsResolved?: boolean
 }
 
 /** 回收长时间卡在 executing 的子项，避免任务永久占坑 */
@@ -355,6 +357,13 @@ async function executeItem(rt: TaskRuntime, itemId: bigint): Promise<{ ok: boole
       .update({ where: { id: itemId }, data: { status: 'success', exit_ip: r.exitIp, duration_ms: duration } })
       .catch(() => {})
     await prisma.kyads_click_tasks.update({ where: { id: rt.taskId }, data: { done_count: { increment: 1 } } }).catch(() => {})
+    // 刷点击成功产出 suffix 同样意味着库存在恢复：与 cron 补货同口径，顺带清掉该系列库存类告警。
+    // 只清一次（rt.alertsResolved 守卫），避免高消耗系列每条成功都打一次 DB。解决「刷点击一直在补、
+    // 但 low_stock/replenish_failed/invalid_link 告警因只有 cron 补货成功才清而常驻」的问题。
+    if (!rt.alertsResolved) {
+      rt.alertsResolved = true
+      await resolveAlertsByType(rt.userId, rt.campaignId, ['low_stock', 'replenish_failed', 'invalid_link']).catch(() => {})
+    }
     return { ok: true }
   }
 

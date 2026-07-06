@@ -98,6 +98,29 @@ export async function resolveAlertsByType(
   }
 }
 
+/**
+ * 收敛「僵尸告警」：系列已非 ENABLED（暂停/删除/CRM 已删）却仍挂着 open 告警。
+ *
+ * 背景：补货/巡检只处理 ENABLED 系列，不会去清这些已停投系列的旧告警。告警中心 UI 虽已按
+ * ENABLED 过滤不展示它们（见 visibilityFilter），但它们会在 suffix_alerts 表里无限累积。
+ * 由 5 分钟一轮的 suffix-replenish cron 顺带调用，从源头防止堆积。返回被解决的条数。
+ */
+export async function resolveAlertsForInactiveCampaigns(): Promise<number> {
+  try {
+    const affected = await prisma.$executeRaw`
+      UPDATE suffix_alerts a
+      JOIN campaigns c ON c.id = a.campaign_id
+      SET a.status = 'resolved', a.resolved_at = NOW(), a.updated_at = NOW()
+      WHERE a.status = 'open' AND a.is_deleted = 0 AND a.campaign_id IS NOT NULL
+        AND (c.is_deleted = 1 OR c.status <> 'active' OR c.google_status IS NULL OR c.google_status <> 'ENABLED')
+    `
+    return typeof affected === 'number' ? affected : 0
+  } catch (err) {
+    console.error('[suffix-alerts] resolveAlertsForInactiveCampaigns failed:', err instanceof Error ? err.message : err)
+    return 0
+  }
+}
+
 /** 手动解决指定告警 */
 export async function resolveAlerts(userId: bigint, ids: bigint[]): Promise<number> {
   if (ids.length === 0) return 0
