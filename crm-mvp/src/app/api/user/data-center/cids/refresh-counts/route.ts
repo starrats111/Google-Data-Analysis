@@ -8,9 +8,9 @@ import prisma from "@/lib/prisma";
  * body: { mcc_account_id }
  *
  * D-007（2026-05-16）：轻量"刷新广告数量"接口
- * 与 syncUserCampaignStatuses 区别：
+ * 数据源为 Google Sheet CampaignInfo（统一脚本维护），零 Google Ads API 消耗。
  *  - 作用域仅本 MCC（不跨 MCC，不跨用户）
- *  - 只更新 campaigns.google_status / last_google_sync_at（同 disabled 时 PAUSED 联动）
+ *  - 只更新 campaigns.google_status / last_google_sync_at
  *  - 不创建新发现的 campaign（避免触发商家联动）
  *  - 写回后重新 groupBy 三段计数，返回与 GET 相同结构
  */
@@ -26,10 +26,9 @@ export async function POST(req: NextRequest) {
     where: { id: BigInt(mccAccountId), user_id: BigInt(user.userId), is_deleted: 0 },
   });
   if (!mcc) return apiError("MCC 账户不存在", 404);
-  if (!mcc.service_account_json) return apiError("MCC 未配置服务账号凭证", 400);
-  if (!mcc.developer_token) {
+  if (!mcc.sheet_url) {
     return apiError(
-      `MCC「${mcc.mcc_name || mcc.mcc_id}」未配置 developer_token，请在「个人设置 → MCC 管理」中编辑该 MCC 填写 Developer Token`,
+      `MCC「${mcc.mcc_name || mcc.mcc_id}」未配置 Google Sheet，请在「个人设置 → MCC 管理」中填写 Sheet 链接`,
       400,
     );
   }
@@ -49,39 +48,18 @@ export async function POST(req: NextRequest) {
   const customerIds = cids.map((c) => c.customer_id);
 
   try {
-    const { fetchAllCampaignStatuses } = await import("@/lib/google-ads");
-    const credentials = {
-      mcc_id: mcc.mcc_id,
-      developer_token: mcc.developer_token,
-      service_account_json: mcc.service_account_json,
-    };
-
-    const { statuses, disabledCids } = await fetchAllCampaignStatuses(credentials, customerIds);
-    let dbUpdated = 0;
-
-    // 1. 停用/中止的 CID → campaigns 强制 PAUSED + mcc_cid_accounts.is_available='D'
-    if (disabledCids.length > 0) {
-      const r = await prisma.campaigns.updateMany({
-        where: {
-          customer_id: { in: disabledCids },
-          mcc_id: BigInt(mccAccountId),
-          is_deleted: 0,
-          google_status: { not: "PAUSED" },
-        },
-        data: {
-          google_status: "PAUSED",
-          status: "paused",
-          last_google_sync_at: new Date(),
-        },
-      });
-      dbUpdated += r.count;
-      await prisma.mcc_cid_accounts.updateMany({
-        where: { mcc_account_id: BigInt(mccAccountId), customer_id: { in: disabledCids } },
-        data: { is_available: "D", last_synced_at: new Date() },
-      });
+    const { readCampaignInfoStatuses } = await import("@/lib/sheet-status-sync");
+    const sheetMap = await readCampaignInfoStatuses(mcc.sheet_url);
+    if (!sheetMap) {
+      return apiError(
+        "刷新广告数量失败：该 MCC 的 Sheet 缺少 CampaignInfo 数据（需 Google Ads 统一脚本生成），请确认脚本已在运行且 Sheet 已设为「知道链接的任何人都可以查看」",
+        500,
+      );
     }
 
-    // 2. 拉到的 statuses → 更新已有 campaigns.google_status（不创建新行，避免联动）
+    let dbUpdated = 0;
+
+    // 1. Sheet 状态 → 更新已有 campaigns.google_status（不创建新行，避免联动）
     const existingCampaigns = await prisma.campaigns.findMany({
       where: { mcc_id: BigInt(mccAccountId), is_deleted: 0 },
       select: { id: true, google_campaign_id: true, google_status: true, customer_id: true },
@@ -89,12 +67,12 @@ export async function POST(req: NextRequest) {
     const existingMap = new Map(existingCampaigns.map((c) => [c.google_campaign_id, c]));
 
     const liveCampaignIds = new Set<string>();
-    for (const s of statuses) {
-      liveCampaignIds.add(s.campaign_id);
-      const existing = existingMap.get(s.campaign_id);
+    for (const [gcid, s] of sheetMap) {
+      liveCampaignIds.add(gcid);
+      const existing = existingMap.get(gcid);
       if (!existing) continue;
       const statusChanged = existing.google_status !== s.status;
-      const cidFilling = !existing.customer_id && s.customer_id;
+      const cidFilling = !existing.customer_id && s.customerId;
       if (!statusChanged && !cidFilling) {
         await prisma.campaigns.update({
           where: { id: existing.id },
@@ -104,15 +82,15 @@ export async function POST(req: NextRequest) {
       }
       const updateData: Record<string, unknown> = { last_google_sync_at: new Date() };
       if (statusChanged) updateData.google_status = s.status;
-      if (cidFilling) updateData.customer_id = s.customer_id;
+      if (cidFilling) updateData.customer_id = s.customerId;
       await prisma.campaigns.update({ where: { id: existing.id }, data: updateData });
       dbUpdated++;
     }
 
-    // 3. 本地 ENABLED 但 Google Ads 已不返回 → 极可能被删除，标 REMOVED
-    // 仅作用于本次 statuses 覆盖到的 CID（避免误标 disabledCids 已经 PAUSED 的）
+    // 2. 本地 ENABLED 但 Sheet 已不含 → 极可能被删除，标 REMOVED
+    // 仅作用于本次 Sheet 覆盖到的 CID（脚本没扫到的 CID 不动，避免误标）
     const cidsCoveredByStatuses = new Set<string>();
-    for (const s of statuses) if (s.customer_id) cidsCoveredByStatuses.add(s.customer_id);
+    for (const [, s] of sheetMap) if (s.customerId) cidsCoveredByStatuses.add(s.customerId);
     if (cidsCoveredByStatuses.size > 0) {
       const ghosts = existingCampaigns.filter(
         (c) =>
@@ -131,22 +109,21 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 4. 写回 mcc_cid_accounts.is_available（按本次 statuses 真实情况）
+    // 3. 写回 mcc_cid_accounts.is_available（按 Sheet 真实情况；缺 CustomerId 的行跳过）
     const cidEnabledFlag = new Map<string, boolean>();
-    for (const s of statuses) {
-      if (!s.customer_id) continue;
-      if (s.status === "ENABLED") cidEnabledFlag.set(s.customer_id, true);
-      else if (!cidEnabledFlag.has(s.customer_id)) cidEnabledFlag.set(s.customer_id, false);
+    for (const [, s] of sheetMap) {
+      if (!s.customerId) continue;
+      if (s.status === "ENABLED") cidEnabledFlag.set(s.customerId, true);
+      else if (!cidEnabledFlag.has(s.customerId)) cidEnabledFlag.set(s.customerId, false);
     }
     for (const [customerId, hasEnabled] of cidEnabledFlag) {
-      if (disabledCids.includes(customerId)) continue;
       await prisma.mcc_cid_accounts.updateMany({
         where: { mcc_account_id: BigInt(mccAccountId), customer_id: customerId },
         data: { is_available: hasEnabled ? "N" : "Y", last_synced_at: new Date() },
       });
     }
 
-    // 5. 重新 groupBy 三段计数，返回与 GET 相同结构
+    // 4. 重新 groupBy 三段计数，返回与 GET 相同结构
     const refreshedCids = await prisma.mcc_cid_accounts.findMany({
       where: { mcc_account_id: BigInt(mccAccountId), is_deleted: 0, status: "active" },
       orderBy: { customer_id: "asc" },
@@ -190,38 +167,14 @@ export async function POST(req: NextRequest) {
       cids: cidsWithCounts,
       refreshed: {
         customer_ids: customerIds.length,
-        statuses_pulled: statuses.length,
+        statuses_pulled: sheetMap.size,
         db_updated: dbUpdated,
-        disabled_cids: disabledCids.length,
+        disabled_cids: 0,
       },
     }));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[CID RefreshCounts] 失败:", message);
-
-    if (message.includes("PERMISSION_DENIED") && message.includes("has not been used in project")) {
-      const projectMatch = message.match(/project (\d+)/);
-      const projectId = projectMatch?.[1] || "未知";
-      return apiError(
-        `刷新广告数量失败：Service Account 所属的 Google Cloud 项目（${projectId}）未启用 Google Ads API。请联系管理员在 Google Cloud Console 中启用该 API 后重试。`,
-        500,
-      );
-    }
-    if (message.includes("DEVELOPER_TOKEN_NOT_APPROVED")) {
-      return apiError(
-        "刷新广告数量失败：Developer Token 仅被批准用于测试账号，无法访问正式广告账号。",
-        500,
-      );
-    }
-    if (message.includes("UNAUTHENTICATED") || message.includes("missing required authentication credential")) {
-      return apiError(
-        "刷新广告数量失败：认证失败，Service Account 凭证无效或已过期。请检查 MCC 配置中的服务账号 JSON。",
-        500,
-      );
-    }
-    if (message.includes("PERMISSION_DENIED")) {
-      return apiError("刷新广告数量失败：权限不足，请检查 Service Account 是否有 Google Ads API 访问权限", 500);
-    }
     return apiError(`刷新广告数量失败: ${message.slice(0, 200)}`, 500);
   }
 }

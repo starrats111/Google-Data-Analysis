@@ -557,59 +557,44 @@ async function syncAllUsersMcc(): Promise<unknown> {
   return results;
 }
 
-// ── 同步所有用户的广告系列状态（从 Google Ads API） ──
+// ── 同步所有用户的广告系列状态（数据源：Google Sheet CampaignInfo，零 API 配额消耗） ──
+// 旧版对每个 MCC 的全部 CID 逐个发 GAQL（fetchAllCampaignStatuses），
+// 是共享 Developer Token explorer 配额被打爆的主因之一。状态统一改读
+// Google Ads 统一脚本维护的 Sheet；仅 D-034 漂移重暂停仍需 API mutate（量极小）。
 
 async function syncAllCampaignStatuses(): Promise<unknown> {
   const allMcc = await prisma.google_mcc_accounts.findMany({
-    where: { is_deleted: 0, is_active: 1, service_account_json: { not: null } },
+    where: { is_deleted: 0, is_active: 1 },
   });
 
+  const { readCampaignInfoStatuses } = await import("@/lib/sheet-status-sync");
   const results: Record<string, unknown> = {};
 
   for (const mcc of allMcc) {
     try {
-      if (!mcc.service_account_json) continue;
+      const sheetMap = await readCampaignInfoStatuses(mcc.sheet_url);
+      if (!sheetMap) {
+        results[`mcc_${mcc.mcc_id}`] = { skipped: true, reason: "无可用 CampaignInfo Sheet" };
+        continue;
+      }
 
-      const { fetchAllCampaignStatuses } = await import("@/lib/google-ads");
-      const credentials = {
+      log(`  MCC ${mcc.mcc_name || mcc.mcc_id}: syncing ${sheetMap.size} campaign statuses from Sheet...`);
+
+      // D-034 漂移重暂停需要 mutate API，仅在凭据齐全时可用
+      const credentials = mcc.service_account_json && mcc.developer_token ? {
         mcc_id: mcc.mcc_id,
-        developer_token: mcc.developer_token || "",
+        developer_token: mcc.developer_token,
         service_account_json: mcc.service_account_json,
-      };
+      } : null;
 
-      const cids = await prisma.mcc_cid_accounts.findMany({
-        where: { mcc_account_id: mcc.id, is_deleted: 0, status: "active" },
-      });
-
-      // 当 mcc_cid_accounts 为空时，从已有 campaigns 的 customer_id 字段推导 CID 列表
-      // 避免因 CID 表未注册而跳过整个 MCC，导致 campaigns 状态永久无法更新
-      let customerIds = cids.map((c) => c.customer_id);
-      if (customerIds.length === 0) {
-        const campaignCids = await prisma.campaigns.findMany({
-          where: { mcc_id: mcc.id, is_deleted: 0, customer_id: { not: null } },
-          select: { customer_id: true },
-          distinct: ["customer_id"],
-        });
-        customerIds = campaignCids.map((c) => c.customer_id!).filter(Boolean);
-        if (customerIds.length > 0) {
-          log(`  MCC ${mcc.mcc_name || mcc.mcc_id}: no active CIDs in table, derived ${customerIds.length} CIDs from campaigns`);
-        }
-      }
-      if (customerIds.length === 0) continue;
-
-      log(`  MCC ${mcc.mcc_name || mcc.mcc_id}: syncing statuses for ${customerIds.length} CIDs...`);
-
-      const { statuses, disabledCids } = await fetchAllCampaignStatuses(credentials, customerIds);
+      // 与旧版 fetchAllCampaignStatuses 返回结构对齐，下游逻辑（D-034/复活闸门/CID可用性）原样保留
+      const statuses = [...sheetMap.entries()].map(([gcid, cs]) => ({
+        campaign_id: gcid,
+        status: cs.status,
+        name: cs.name,
+        customer_id: cs.customerId,
+      }));
       let updated = 0;
-
-      // 对于被停用的 CID，将其下所有 campaign 标记为 PAUSED
-      if (disabledCids.length > 0) {
-        const r = await prisma.campaigns.updateMany({
-          where: { user_id: mcc.user_id, customer_id: { in: disabledCids }, is_deleted: 0, google_status: { not: "PAUSED" } },
-          data: { google_status: "PAUSED", last_google_sync_at: new Date() },
-        });
-        updated += r.count;
-      }
 
       // D-034：预加载该 MCC 下所有「CRM 已暂停」的 campaign
       // 目的：在 Google Ads 返回 ENABLED 时，检测 PAUSED→ENABLED 漂移，自动重试暂停，
@@ -627,22 +612,26 @@ async function syncAllCampaignStatuses(): Promise<unknown> {
           log(`  [D-034] 检测到 PAUSED→ENABLED 漂移 campaign_id=${existing.id} gcid=${s.campaign_id}，尝试自动重新暂停...`);
 
           let rePauseOk = false;
-          try {
-            const { updateCampaignStatus } = await import("@/lib/google-ads");
-            const rp = await updateCampaignStatus(
-              credentials,
-              (existing.customer_id || "").replace(/-/g, ""),
-              s.campaign_id,
-              "PAUSED",
-            );
-            if (rp.success) {
-              rePauseOk = true;
-              log(`  [D-034] 自动重新暂停成功 campaign_id=${existing.id} gcid=${s.campaign_id}`);
-            } else {
-              log(`  [D-034] 自动重新暂停失败（API返回失败）campaign_id=${existing.id}: ${rp.message}`);
+          if (!credentials) {
+            log(`  [D-034] MCC 未配置服务账号/Token，无法自动重新暂停 campaign_id=${existing.id}`);
+          } else {
+            try {
+              const { updateCampaignStatus } = await import("@/lib/google-ads");
+              const rp = await updateCampaignStatus(
+                credentials,
+                (existing.customer_id || "").replace(/-/g, ""),
+                s.campaign_id,
+                "PAUSED",
+              );
+              if (rp.success) {
+                rePauseOk = true;
+                log(`  [D-034] 自动重新暂停成功 campaign_id=${existing.id} gcid=${s.campaign_id}`);
+              } else {
+                log(`  [D-034] 自动重新暂停失败（API返回失败）campaign_id=${existing.id}: ${rp.message}`);
+              }
+            } catch (err) {
+              log(`  [D-034] 自动重新暂停异常 campaign_id=${existing.id}: ${err instanceof Error ? err.message.slice(0, 120) : String(err)}`);
             }
-          } catch (err) {
-            log(`  [D-034] 自动重新暂停异常 campaign_id=${existing.id}: ${err instanceof Error ? err.message.slice(0, 120) : String(err)}`);
           }
 
           if (rePauseOk) {
@@ -743,9 +732,10 @@ async function syncAllCampaignStatuses(): Promise<unknown> {
         }
       }
 
-      // 更新 CID 可用状态
+      // 更新 CID 可用状态（Sheet 行缺 CustomerId 时跳过，避免误改）
       const cidHasEnabled = new Map<string, boolean>();
       for (const s of statuses) {
+        if (!s.customer_id) continue;
         if (s.status === "ENABLED") {
           cidHasEnabled.set(s.customer_id, true);
         } else if (!cidHasEnabled.has(s.customer_id)) {

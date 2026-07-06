@@ -26,20 +26,22 @@ interface SheetSyncResult {
   error?: string;
 }
 
-interface SheetCampaignStatus {
+export interface SheetCampaignStatus {
   status: string;
+  name: string;
   customerId: string;
 }
 
 const VALID_STATUSES = new Set(["ENABLED", "PAUSED", "REMOVED"]);
 
-/** 解析 CampaignInfo 全部行：gcid → { status, customerId } */
+/** 解析 CampaignInfo 全部行：gcid → { status, name, customerId } */
 function parseAllCampaignInfoRows(rows: string[][]): Map<string, SheetCampaignStatus> {
   const map = new Map<string, SheetCampaignStatus>();
   if (rows.length < 2) return map;
 
   const headers = rows[0].map((h) => h.trim());
   const idIdx = headers.indexOf("CampaignId");
+  const nameIdx = headers.indexOf("CampaignName");
   const statusIdx = headers.indexOf("Status");
   const customerIdx = headers.indexOf("CustomerId");
   if (idIdx < 0 || statusIdx < 0) return map;
@@ -51,10 +53,27 @@ function parseAllCampaignInfoRows(rows: string[][]): Map<string, SheetCampaignSt
     if (!VALID_STATUSES.has(status)) continue;
     map.set(gcid, {
       status,
+      name: nameIdx >= 0 ? (row[nameIdx] ?? "").trim() : "",
       customerId: customerIdx >= 0 ? (row[customerIdx] ?? "").trim().replace(/-/g, "") : "",
     });
   }
   return map;
+}
+
+/**
+ * 读取某 MCC Sheet 的 CampaignInfo 全量状态。
+ * 返回 null 表示「无法取得数据」（未配 sheet_url / 缺 CampaignInfo tab / 无有效行），
+ * 调用方应跳过该 MCC 的状态同步（宁可不改，不能当作"全部系列已消失"）。
+ */
+export async function readCampaignInfoStatuses(
+  sheetUrl: string | null,
+): Promise<Map<string, SheetCampaignStatus> | null> {
+  const sheetId = sheetUrl ? extractSheetId(sheetUrl) : null;
+  if (!sheetId) return null;
+  const rows = await readSheetCsv(sheetId, "CampaignInfo");
+  if (rows.length === 0) return null;
+  const map = parseAllCampaignInfoRows(rows);
+  return map.size > 0 ? map : null;
 }
 
 /**
@@ -72,24 +91,16 @@ export async function syncUserCampaignStatusesFromSheet(userId: bigint): Promise
 
   for (const mcc of mccs) {
     const label = mcc.mcc_name || mcc.mcc_id;
-    const sheetId = mcc.sheet_url ? extractSheetId(mcc.sheet_url) : null;
-    if (!sheetId) {
-      results.push({ mcc: label, campaigns: 0, updated: 0, new_campaigns: 0, error: "未配置 Google Sheet" });
-      continue;
-    }
 
     try {
-      const rows = await readSheetCsv(sheetId, "CampaignInfo");
-      if (rows.length === 0) {
+      const sheetMap = await readCampaignInfoStatuses(mcc.sheet_url);
+      if (!sheetMap) {
         results.push({
           mcc: label, campaigns: 0, updated: 0, new_campaigns: 0,
-          error: "Sheet 缺 CampaignInfo tab（需 Google Ads 统一脚本生成）",
+          error: mcc.sheet_url
+            ? "Sheet 缺 CampaignInfo tab 或无有效数据（需 Google Ads 统一脚本生成）"
+            : "未配置 Google Sheet",
         });
-        continue;
-      }
-      const sheetMap = parseAllCampaignInfoRows(rows);
-      if (sheetMap.size === 0) {
-        results.push({ mcc: label, campaigns: 0, updated: 0, new_campaigns: 0, error: "CampaignInfo 无有效数据行" });
         continue;
       }
 

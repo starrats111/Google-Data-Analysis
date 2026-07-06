@@ -371,78 +371,70 @@ async function syncAdsData(
         }
       }
 
-      // ─── 全量同步所有广告系列状态 ───
+      // ─── 全量同步所有广告系列状态（数据源：Google Sheet CampaignInfo，零 API 消耗） ───
+      // 旧版此处用 fetchAllCampaignStatuses 对全部 CID 逐个发 GAQL，是共享 Developer Token
+      // 配额被打爆的主因之一；状态统一从统一脚本维护的 Sheet 读取。
       try {
-        const { fetchAllCampaignStatuses } = await import("@/lib/google-ads");
-        const cidSet = new Set([
-          ...cids.map((c) => c.customer_id),
-          ...apiDiscoveredCids,
-          ...[...campaignMap.values()].map((c) => c.customer_id).filter(Boolean) as string[],
-        ]);
-        const allCidIds = [...cidSet];
-        console.log(`[Sync] 全量同步 CID 列表: ${allCidIds.length} 个`);
-        const { statuses: allStatuses, disabledCids } = await fetchAllCampaignStatuses(credentials, allCidIds);
+        const { readCampaignInfoStatuses } = await import("@/lib/sheet-status-sync");
+        const sheetStatusMap = await readCampaignInfoStatuses(mcc.sheet_url);
+        if (!sheetStatusMap) {
+          console.warn(`[Sync] MCC ${mcc.mcc_id} 无可用 CampaignInfo Sheet，跳过全量状态同步`);
+        } else {
+          console.log(`[Sync] 全量状态同步（Sheet）: ${sheetStatusMap.size} 个系列`);
+          const statusUpdateOps: (() => Promise<unknown>)[] = [];
+          const statusCreateOps: Array<{ gcid: string; cs: { status: string; name: string; customerId: string }; merchantId: bigint }> = [];
 
-        // 对于被停用的 CID，将其下所有 campaign 标记为 PAUSED
-        if (disabledCids.length > 0) {
-          console.log(`[Sync] 停用的 CID: ${disabledCids.join(", ")}，将其 campaign 标记为 PAUSED`);
-          await prisma.campaigns.updateMany({
-            where: { user_id: userId, customer_id: { in: disabledCids }, is_deleted: 0, google_status: { not: "PAUSED" } },
-            data: { google_status: "PAUSED", last_google_sync_at: new Date() },
-          });
-        }
-
-        const statusUpdateOps: (() => Promise<unknown>)[] = [];
-        const statusCreateOps: Array<{ cs: typeof allStatuses[0]; merchantId: bigint }> = [];
-
-        for (const cs of allStatuses) {
-          const existing = campaignMap.get(cs.campaign_id);
-          if (existing) {
-            // D-040 BUG-1：反向同步内部 status 字段，避免 CRM 暂停后被 cron 覆盖
-            const expectedInternalStatus = cs.status === "PAUSED" || cs.status === "REMOVED" ? "paused" : "active";
-            const needsUpdate = existing.google_status !== cs.status || existing.campaign_name !== cs.name || (!existing.customer_id && cs.customer_id) || existing.status !== expectedInternalStatus;
-            if (needsUpdate) {
-              const updateData: Record<string, unknown> = {
-                google_status: cs.status,
-                status: expectedInternalStatus,
-                campaign_name: cs.name,
-                daily_budget: cs.budget_dollars,
-                last_google_sync_at: new Date(),
-              };
-              if (!existing.customer_id && cs.customer_id) {
-                updateData.customer_id = cs.customer_id;
+          for (const [gcid, cs] of sheetStatusMap) {
+            const existing = campaignMap.get(gcid);
+            if (existing) {
+              // D-040 BUG-1：反向同步内部 status 字段，避免 CRM 暂停后被 cron 覆盖
+              const expectedInternalStatus = cs.status === "PAUSED" || cs.status === "REMOVED" ? "paused" : "active";
+              const needsUpdate = existing.google_status !== cs.status
+                || (cs.name && existing.campaign_name !== cs.name)
+                || (!existing.customer_id && cs.customerId)
+                || existing.status !== expectedInternalStatus;
+              if (needsUpdate) {
+                const updateData: Record<string, unknown> = {
+                  google_status: cs.status,
+                  status: expectedInternalStatus,
+                  last_google_sync_at: new Date(),
+                };
+                if (cs.name) updateData.campaign_name = cs.name;
+                if (!existing.customer_id && cs.customerId) {
+                  updateData.customer_id = cs.customerId;
+                }
+                statusUpdateOps.push(() => prisma.campaigns.update({
+                  where: { id: existing.id },
+                  data: updateData,
+                }));
               }
-              statusUpdateOps.push(() => prisma.campaigns.update({
-                where: { id: existing.id },
-                data: updateData,
-              }));
+            } else {
+              const parsed = parseCampaignNameFull(cs.name);
+              const merchantId = parsed ? (apiMerchantIndex.get(`${parsed.platform}_${parsed.mid}`) || BigInt(0)) : BigInt(0);
+              statusCreateOps.push({ gcid, cs, merchantId });
             }
-          } else {
-            const parsed = parseCampaignNameFull(cs.name);
-            const merchantId = parsed ? (apiMerchantIndex.get(`${parsed.platform}_${parsed.mid}`) || BigInt(0)) : BigInt(0);
-            statusCreateOps.push({ cs, merchantId });
           }
-        }
 
-        for (let i = 0; i < statusUpdateOps.length; i += 50) {
-          await Promise.all(statusUpdateOps.slice(i, i + 50).map(fn => fn()));
-        }
+          for (let i = 0; i < statusUpdateOps.length; i += 50) {
+            await Promise.all(statusUpdateOps.slice(i, i + 50).map(fn => fn()));
+          }
 
-        for (let i = 0; i < statusCreateOps.length; i += 30) {
-          const batch = statusCreateOps.slice(i, i + 30);
-          const results = await Promise.all(batch.map(({ cs, merchantId }) =>
-            createCampaignDedup({
-              user_id: userId, user_merchant_id: merchantId,
-              google_campaign_id: cs.campaign_id, mcc_id: mcc.id,
-              customer_id: cs.customer_id, campaign_name: cs.name,
-              daily_budget: cs.budget_dollars, target_country: "US",
-              google_status: cs.status, last_google_sync_at: new Date(),
-            }, { userId, mccId: mcc.id, gcid: cs.campaign_id, softDeletedGcids })
-          ));
-          for (const newCampaign of results) {
-            if (!newCampaign || !newCampaign.google_campaign_id) continue; // 被清洗过的 gcid 跳过
-            campaignMap.set(newCampaign.google_campaign_id, newCampaign);
-            totalInserted++;
+          for (let i = 0; i < statusCreateOps.length; i += 30) {
+            const batch = statusCreateOps.slice(i, i + 30);
+            const results = await Promise.all(batch.map(({ gcid, cs, merchantId }) =>
+              createCampaignDedup({
+                user_id: userId, user_merchant_id: merchantId,
+                google_campaign_id: gcid, mcc_id: mcc.id,
+                customer_id: cs.customerId || null, campaign_name: cs.name || gcid,
+                target_country: "US",
+                google_status: cs.status, last_google_sync_at: new Date(),
+              }, { userId, mccId: mcc.id, gcid, softDeletedGcids })
+            ));
+            for (const newCampaign of results) {
+              if (!newCampaign || !newCampaign.google_campaign_id) continue; // 被清洗过的 gcid 跳过
+              campaignMap.set(newCampaign.google_campaign_id, newCampaign);
+              totalInserted++;
+            }
           }
         }
       } catch (err) {
