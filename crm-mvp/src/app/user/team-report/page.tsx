@@ -19,6 +19,7 @@ import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 import AppPageHeader from "@/components/AppPageHeader";
 import MonthlyReportTab from "./MonthlyReportTab";
+import BankFlowTab from "./BankFlowTab";
 import type { TeamAnnualReport, AnnualMonthAgg } from "@/lib/monthly-report";
 
 const { Text } = Typography;
@@ -225,6 +226,7 @@ export default function TeamReportPage() {
       items={[
         { key: "annual", label: "年度总览", children: <AnnualReportTab /> },
         { key: "monthly", label: "月度报表", children: <MonthlyReportTab /> },
+        { key: "bankflow", label: "银行流水", children: <BankFlowTab /> },
       ]}
     />
   );

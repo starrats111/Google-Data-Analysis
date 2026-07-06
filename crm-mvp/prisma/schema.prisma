@@ -1386,6 +1386,39 @@ model payment_binding_snapshots {
 }
 
 // -----------------------------------------------------------
+// R-07. 银行流水 — 平台总打款入账登记（组长核对每个收款方式的收款）
+// 平台打款是打给收款卡的「总打款」；组长录入 到账时间+实际总金额，
+// 系统按该卡该平台该半月的员工实收(CNY)生效值自动预填明细，
+// 手续费 = 员工明细合计(expected_amount) − 实际入账(amount) 自动计算。
+// 明细可改（breakdown JSON），改后 expected/fee 同步重算。
+// 期初余额存 report_overrides scope=`bank_open:{paymentMethodId}`（组长 user_id），
+// 导出正规银行流水单时用于逐笔滚动余额。
+// -----------------------------------------------------------
+model bank_flow_entries {
+  id                BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  team_id           BigInt   @db.UnsignedBigInt
+  month             String   @db.VarChar(7) // YYYY-MM（归属报表月）
+  payment_method_id BigInt   @db.UnsignedBigInt // payment_methods.id（收款方式=收款卡）
+  txn_at            DateTime @db.DateTime(0) // 到账日期时间（组长输入 xx号xx时间）
+  platform          String   @db.VarChar(8) // 打款平台（对账维度）
+  counterparty      String   @default("") @db.VarChar(128) // 对方户名（默认平台打款主体，可改）
+  summary           String   @default("佣金结算") @db.VarChar(128) // 交易摘要
+  amount            Decimal  @default(0.00) @db.Decimal(14, 2) // 实际总打款入账金额
+  currency          String   @default("CNY") @db.VarChar(8)
+  expected_amount   Decimal  @default(0.00) @db.Decimal(14, 2) // 员工明细合计（自动）
+  fee               Decimal  @default(0.00) @db.Decimal(14, 2) // 手续费 = expected − amount（自动）
+  breakdown         String?  @db.Text // 员工明细 JSON [{userId,username,displayName,platform,account,amount}]
+  remark            String?  @db.VarChar(255)
+  created_by        BigInt?  @db.UnsignedBigInt
+  is_deleted        Int      @default(0) @db.TinyInt
+  created_at        DateTime @default(now()) @db.DateTime(0)
+  updated_at        DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([team_id, month, is_deleted], map: "idx_bfe_team_month")
+  @@index([payment_method_id], map: "idx_bfe_method")
+}
+
+// -----------------------------------------------------------
 // 37. D-041 / Policy Hub — Google Ads 政策违规事实表
 // 数据源：Google Ads API mutate 返回的 PolicyViolationDetails（深度解析见 src/lib/policy-hub/error-parser.ts）
 // 用途：①拒登可统计/分析（admin 后台看板）；②top 违规规则反向优化 prompt；③商家政策画像数据源
