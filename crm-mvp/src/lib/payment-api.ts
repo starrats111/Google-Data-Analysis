@@ -12,6 +12,14 @@
  *   3. merchant_commission（按商家已付佣金）：LB
  *      GET  mod=settlement&op=merchant_commission（begin_date/end_date ≤ 62 天）
  *      → data[]: {payment_id, paid_date, sale_comm, mcid, merchant_name, settlement_uuid}
+ *      ⚠ 三个坑（2026-07-06 实测 payment_id=17520）：
+ *        a) 无任何状态字段——paid_date 只是打款单生成/计划打款日，单子可能仍在平台审核，
+ *           不能直接视为已到账 → 打款单日 + LB_PAYMENT_CONFIRM_DAYS 天后才归一化为 paid，
+ *           之前为 processing（进报表「应收」，不进「实收」）
+ *        b) 行按 settlement_date（商家结算日）过滤，同一打款单可覆盖横跨数月的结算行
+ *           （17520 实测跨 2~6 月共 58 行）→ 窗口不满会聚合出偏小金额并被 upsert 覆盖，
+ *           必须全历史窗口拉取，忽略调用方传入的窗口
+ *        c) settlement_date 跨多月，无归月意义 → request_date 用 paid_date（打款单日）
  *
  * 说明：RW/LH 提现级金额无法拆到商家/交易月，仅平台级统计（结算率分子）。
  */
@@ -326,15 +334,21 @@ function chunkDateRange(startDate: string, endDate: string, maxDays: number): Ar
   return out;
 }
 
+/** LB 打款单生成后的审核确认期：paid_date 距今不足 N 天视为 processing（审核中） */
+const LB_PAYMENT_CONFIRM_DAYS = 7;
+/** LB 全历史起点：接口按 settlement_date 过滤而打款单跨多月，必须整段拉取防止部分聚合 */
+const LB_HISTORY_START = "2025-01-01";
+
 async function fetchLinkbuxMerchantCommission(
   token: string,
-  startDate: string,
+  _startDate: string,
   endDate: string,
 ): Promise<PlatformPayment[]> {
   // 按 payment_id 聚合（同一笔打款可能跨多商家行）
-  const agg = new Map<string, { amount: number; paid_date: string | null; settlement_date: string | null; rows: number }>();
+  const agg = new Map<string, { amount: number; paid_date: string | null; rows: number }>();
 
-  const chunks = chunkDateRange(startDate, endDate, 60);
+  // 忽略调用方窗口：同一打款单的结算行跨多月，窗口不满会把 amount 聚合偏小并覆盖库内值
+  const chunks = chunkDateRange(LB_HISTORY_START, endDate, 60);
   for (const { s, e } of chunks) {
     const params = new URLSearchParams({ token, begin_date: s, end_date: e, type: "json" });
     let data: Record<string, unknown>;
@@ -355,9 +369,9 @@ async function fetchLinkbuxMerchantCommission(
     for (const it of list) {
       const paidDate = toISO(it.paid_date);
       const paymentId = String(it.payment_id ?? "").trim();
-      // 仅统计已付（paid_date 非空且 payment_id 有效）
+      // 仅统计已生成打款单的行（paid_date 非空且 payment_id 有效）
       if (!paidDate || !paymentId || paymentId === "0") continue;
-      const cur = agg.get(paymentId) ?? { amount: 0, paid_date: paidDate, settlement_date: toISO(it.settlement_date), rows: 0 };
+      const cur = agg.get(paymentId) ?? { amount: 0, paid_date: paidDate, rows: 0 };
       cur.amount += parseAmount(it.sale_comm);
       cur.paid_date = cur.paid_date || paidDate;
       cur.rows++;
@@ -368,16 +382,20 @@ async function fetchLinkbuxMerchantCommission(
 
   const out: PlatformPayment[] = [];
   for (const [paymentId, v] of agg) {
+    // 打款单日 + 审核确认期后才视为已到账；每日同步会自动把到期的单转正为 paid
+    const paidTs = v.paid_date ? new Date(v.paid_date).getTime() : 0;
+    const confirmed = paidTs > 0 && Date.now() - paidTs >= LB_PAYMENT_CONFIRM_DAYS * 86400000;
     out.push({
       payment_no: paymentId,
       source_kind: "merchant_commission",
       paid_date: v.paid_date,
-      request_date: v.settlement_date,
+      // settlement_date 跨多月无归属意义，归月一律按打款单日
+      request_date: v.paid_date,
       amount: +v.amount.toFixed(2),
       gross_amount: null,
       currency: "USD",
-      status: "paid",
-      raw_status: "paid",
+      status: confirmed ? "paid" : "processing",
+      raw_status: confirmed ? "paid" : "pending_review",
       payment_type: null,
       raw_json: JSON.stringify({ payment_id: paymentId, merchant_rows: v.rows }),
     });

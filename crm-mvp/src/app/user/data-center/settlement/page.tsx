@@ -101,6 +101,8 @@ interface PaymentRow {
   gross_amount: number | null;
   currency: string;
   payment_type: string | null;
+  /** paid=已到账 | processing=审核中（如 LB 打款单确认期） */
+  status?: string;
   raw_status: string | null;
 }
 
@@ -386,6 +388,17 @@ export default function SettlementPage() {
       render: (v: string | null) => v ? <Tag color="purple">{v}</Tag> : <Text type="secondary">—</Text>,
     },
     { title: "打款日", dataIndex: "paid_date", width: 110, sorter: (a, b) => (a.paid_date || "").localeCompare(b.paid_date || ""), defaultSortOrder: "descend" },
+    {
+      title: "状态", dataIndex: "status", width: 86, align: "center",
+      filters: [{ text: "已到账", value: "paid" }, { text: "审核中", value: "processing" }],
+      onFilter: (v, r) => (r.status || "paid") === v,
+      render: (v: string | undefined) =>
+        v === "processing" ? (
+          <Tooltip title="平台已生成打款单但仍在审核/在途，未计入实付合计与报表实收（计入应收）">
+            <Tag color="orange">审核中</Tag>
+          </Tooltip>
+        ) : <Tag color="green">已到账</Tag>,
+    },
     {
       title: "实付佣金($)", dataIndex: "amount", width: 120, align: "right",
       sorter: (a, b) => a.amount - b.amount,

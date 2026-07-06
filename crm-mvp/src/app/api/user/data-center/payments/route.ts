@@ -55,13 +55,14 @@ export async function GET(req: NextRequest) {
     return apiSuccess(serializeData({ payments: [], byPlatform: [], total_paid: 0 }));
   }
 
+  // 审核中(processing，如 LB 打款单确认期)也展示，便于核对；合计仅计已到账 paid
   const where = {
     user_id: { in: userIds },
     is_deleted: 0,
-    status: "paid",
+    status: { in: ["paid", "processing"] },
     paid_date: { gte: start, lt: end },
     ...(platform ? { platform } : {}),
-  } as const;
+  };
 
   // 取原始行：同一总帐号下若配置了多个渠道(连接)，重复行会显著放大行数，
   // 适当放宽上限，避免重复行把真实明细挤出截断窗口（去重后再分页展示）。
@@ -72,7 +73,7 @@ export async function GET(req: NextRequest) {
     select: {
       id: true, platform: true, payment_no: true, source_kind: true,
       paid_date: true, amount: true, gross_amount: true, currency: true,
-      payment_type: true, raw_status: true,
+      payment_type: true, status: true, raw_status: true,
       platform_connection_id: true, user_id: true,
     },
   });
@@ -149,14 +150,16 @@ export async function GET(req: NextRequest) {
       gross_amount: r.gross_amount != null ? +Number(r.gross_amount).toFixed(2) : null,
       currency: r.currency,
       payment_type: r.payment_type,
+      status: r.status,
       raw_status: r.raw_status,
     };
   });
 
-  // 按平台汇总
+  // 按平台汇总（合计只计已到账 paid；审核中单仅在明细展示）
   const platMap = new Map<string, { platform: string; count: number; amount: number }>();
   let totalPaid = 0;
   for (const p of payments) {
+    if (p.status !== "paid") continue;
     totalPaid += p.amount;
     const cur = platMap.get(p.platform) ?? { platform: p.platform, count: 0, amount: 0 };
     cur.count++;

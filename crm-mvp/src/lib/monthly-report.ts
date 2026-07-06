@@ -8,7 +8,8 @@
  * - 账面佣金 = 当月全部 status 交易佣金；失效 = rejected；按交易发生月归
  *   （复用 report-metrics 的平台后台时间口径）
  * - 应收/实收都按 affiliate_payments.request_date 归月归半月（1-15 上半月 / 16-月末 下半月），
- *   只计 status='paid'（processing 不计入，rejected 忽略）
+ *   应收计 status IN ('paid','processing')（打款单已生成即应收，含审核中），
+ *   实收只计 status='paid'（rejected 忽略）——LB 商家佣金单审核期内为 processing
  * - 应收 = 平台显示金额 amount；实收 = 毛额优先回退净额（paymentDisplayAmount），可手工纠正
  * - 广告费 = ads_daily_stats.cost(USD) 按 campaigns.mcc_id×月归集；
  *   覆盖值优先，无覆盖用 库内cost + mcc_cost_adjustments 补差额；
@@ -401,16 +402,16 @@ export async function buildMemberMonthlyReport(
     });
   }
 
-  // ── 3. 应收/实收（打款记录按 request_date 归半月，只计 paid） ──────
+  // ── 3. 应收/实收（打款记录按 request_date 归半月；应收含审核中，实收只计 paid） ──────
   const payments = await prisma.affiliate_payments.findMany({
     where: {
       user_id: userId,
       is_deleted: 0,
-      status: "paid",
+      status: { in: ["paid", "processing"] },
       request_date: { gte: new Date(`${monthStart}T00:00:00Z`), lt: new Date(`${monthEnd}T00:00:00Z`) },
     },
     select: {
-      platform: true, platform_connection_id: true,
+      platform: true, platform_connection_id: true, status: true,
       request_date: true, amount: true, gross_amount: true,
     },
   });
@@ -430,9 +431,12 @@ export async function buildMemberMonthlyReport(
     col.hasPayments = true;
     const day = p.request_date!.getUTCDate();
     const recv = Number(p.amount || 0);
-    const paid = paymentDisplayAmount(Number(p.amount || 0), p.gross_amount == null ? null : Number(p.gross_amount));
+    const isPaid = p.status === "paid";
+    const paid = isPaid
+      ? paymentDisplayAmount(Number(p.amount || 0), p.gross_amount == null ? null : Number(p.gross_amount))
+      : 0;
     // 实收 CNY 默认值：逐笔按打款日（当日或其前最近快照）汇率折算
-    const paidCny = paid * dailyUsdToCny(p.request_date!);
+    const paidCny = isPaid ? paid * dailyUsdToCny(p.request_date!) : 0;
     if (day <= 15) {
       col.recvH1 += recv;
       col.paidH1 += paid;
@@ -984,7 +988,7 @@ export async function buildTeamAnnualReport(
       bookCells.set(key, c);
     }
 
-    // ── 2. 应收/实收（打款按 request_date 归月归半月，只计 paid；按日分组以便逐笔折 CNY） ──
+    // ── 2. 应收/实收（打款按 request_date 归月归半月；应收含审核中 processing，实收只计 paid；按日分组以便逐笔折 CNY） ──
     const payRows = await prisma.$queryRawUnsafe<{
       uid: bigint; platform: string; acct: string | null; d: string; m: string; half: string;
       recv: number; paid: number;
@@ -995,10 +999,12 @@ export async function buildTeamAnnualReport(
         DATE_FORMAT(p.request_date, '%Y-%m') AS m,
         CASE WHEN DAY(p.request_date) <= 15 THEN 'H1' ELSE 'H2' END AS half,
         SUM(CAST(p.amount AS DECIMAL(14,4))) AS recv,
-        SUM(CAST(CASE WHEN p.gross_amount IS NOT NULL AND p.gross_amount > 0 THEN p.gross_amount ELSE p.amount END AS DECIMAL(14,4))) AS paid
+        SUM(CAST(CASE WHEN p.status = 'paid'
+                 THEN (CASE WHEN p.gross_amount IS NOT NULL AND p.gross_amount > 0 THEN p.gross_amount ELSE p.amount END)
+                 ELSE 0 END AS DECIMAL(14,4))) AS paid
       FROM affiliate_payments p
       LEFT JOIN platform_connections pc ON pc.id = p.platform_connection_id
-      WHERE p.user_id IN (${uidIn}) AND p.is_deleted = 0 AND p.status = 'paid'
+      WHERE p.user_id IN (${uidIn}) AND p.is_deleted = 0 AND p.status IN ('paid','processing')
         AND p.request_date >= ? AND p.request_date < ?
       GROUP BY uid, p.platform, acct, d, m, half
     `, ...memberIds, new Date(`${yearStart}T00:00:00Z`), new Date(`${yearEndExcl}T00:00:00Z`));
