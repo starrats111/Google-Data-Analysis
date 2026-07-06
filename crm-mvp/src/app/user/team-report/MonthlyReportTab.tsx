@@ -9,12 +9,12 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   Card, DatePicker, Button, Space, Spin, Empty, Tabs, Typography,
-  InputNumber, Statistic, Row, Col, App, Table, Tooltip,
+  Statistic, Row, Col, App, Tooltip,
 } from "antd";
-import { DownloadOutlined, ReloadOutlined, EditOutlined, UndoOutlined } from "@ant-design/icons";
+import { DownloadOutlined, ReloadOutlined } from "@ant-design/icons";
 import dayjs, { type Dayjs } from "dayjs";
-import MonthlyReportTable from "@/components/MonthlyReportTable";
-import type { MemberMonthlyReport, TeamMonthlySummary, TeamPlatformAgg } from "@/lib/monthly-report";
+import MonthlyReportTable, { TeamSummaryTable } from "@/components/MonthlyReportTable";
+import type { MemberMonthlyReport, TeamMonthlySummary } from "@/lib/monthly-report";
 
 const { Text } = Typography;
 
@@ -22,69 +22,6 @@ type SummaryWithMembers = TeamMonthlySummary & { memberReports: MemberMonthlyRep
 
 const fmt = (n: number | null | undefined) =>
   n == null ? "—" : n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-/** 每平台实收(CNY)可编辑格：手填优先，空则显示预估（灰）；点击编辑，↺ 恢复预估 */
-function TeamCnyCell({
-  manual,
-  estimated,
-  onSave,
-}: {
-  manual: number | null;
-  estimated: number;
-  onSave: (v: number | null) => Promise<void>;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState<number | null>(manual ?? estimated);
-  const [saving, setSaving] = useState(false);
-
-  if (editing) {
-    return (
-      <InputNumber
-        autoFocus
-        size="small"
-        min={0}
-        value={draft}
-        disabled={saving}
-        style={{ width: "100%" }}
-        onChange={(v) => setDraft(v)}
-        onPressEnter={async () => {
-          setSaving(true);
-          await onSave(draft ?? 0);
-          setSaving(false);
-          setEditing(false);
-        }}
-        onBlur={async () => {
-          setSaving(true);
-          await onSave(draft ?? 0);
-          setSaving(false);
-          setEditing(false);
-        }}
-      />
-    );
-  }
-  return (
-    <Space size={4} style={{ cursor: "pointer" }} onClick={() => { setDraft(manual ?? estimated); setEditing(true); }}>
-      {manual != null ? (
-        <Tooltip title={`组长手填（默认 ¥${fmt(estimated)}），点击修改`}>
-          <Text style={{ color: "#1677ff" }}>{fmt(manual)}</Text>
-        </Tooltip>
-      ) : (
-        <Tooltip title="默认值（成员实收CNY累计，逐笔按打款日汇率），点击手填实际到账">
-          <Text type="secondary">{fmt(estimated)}</Text>
-        </Tooltip>
-      )}
-      <EditOutlined style={{ fontSize: 10, color: "#bbb" }} />
-      {manual != null && (
-        <Tooltip title="清除手填，恢复预估">
-          <UndoOutlined
-            style={{ fontSize: 10, color: "#faad14" }}
-            onClick={async (e) => { e.stopPropagation(); await onSave(null); }}
-          />
-        </Tooltip>
-      )}
-    </Space>
-  );
-}
 
 export default function MonthlyReportTab() {
   const { message } = App.useApp();
@@ -148,55 +85,6 @@ export default function MonthlyReportTab() {
       setExporting(false);
     }
   };
-
-  const platformCols = [
-    { title: "平台", dataIndex: "platform", key: "platform" },
-    { title: "账面佣金($)", dataIndex: "book", key: "book", align: "right" as const, render: (v: number) => `$${fmt(v)}` },
-    { title: "失效佣金($)", dataIndex: "rejected", key: "rejected", align: "right" as const, render: (v: number) => `$${fmt(v)}` },
-    { title: "应收·上半月($)", dataIndex: "recvH1", key: "recvH1", align: "right" as const, render: (v: number) => `$${fmt(v)}` },
-    { title: "应收·下半月($)", dataIndex: "recvH2", key: "recvH2", align: "right" as const, render: (v: number) => `$${fmt(v)}` },
-    { title: "应收合计($)", dataIndex: "recvTotal", key: "recvTotal", align: "right" as const, render: (v: number) => <Text strong>${fmt(v)}</Text> },
-    { title: "实收·上半月($)", dataIndex: "paidH1", key: "paidH1", align: "right" as const, render: (v: number) => `$${fmt(v)}` },
-    { title: "实收·下半月($)", dataIndex: "paidH2", key: "paidH2", align: "right" as const, render: (v: number) => `$${fmt(v)}` },
-    { title: "实收合计($)", dataIndex: "paidTotal", key: "paidTotal", align: "right" as const, render: (v: number) => <Text strong>${fmt(v)}</Text> },
-    {
-      title: <Tooltip title="实际到账人民币，组长手填；未填默认为成员实收CNY累计（逐笔打款日汇率，灰字）">实收(¥)·上半月</Tooltip>,
-      key: "paidCnyH1",
-      align: "right" as const,
-      render: (_: unknown, p: TeamPlatformAgg) => (
-        <TeamCnyCell manual={p.paidCnyH1} estimated={p.memberCnyH1} onSave={(v) => savePlatCny(p.platform, "H1", v)} />
-      ),
-    },
-    {
-      title: <Tooltip title="实际到账人民币，组长手填；未填默认为成员实收CNY累计（逐笔打款日汇率，灰字）">实收(¥)·下半月</Tooltip>,
-      key: "paidCnyH2",
-      align: "right" as const,
-      render: (_: unknown, p: TeamPlatformAgg) => (
-        <TeamCnyCell manual={p.paidCnyH2} estimated={p.memberCnyH2} onSave={(v) => savePlatCny(p.platform, "H2", v)} />
-      ),
-    },
-    {
-      title: "实收(¥)合计",
-      key: "paidCnyTotal",
-      align: "right" as const,
-      render: (_: unknown, p: TeamPlatformAgg) => {
-        const total = (p.paidCnyH1 ?? p.memberCnyH1) + (p.paidCnyH2 ?? p.memberCnyH2);
-        const hasManual = p.paidCnyH1 != null || p.paidCnyH2 != null;
-        return <Text strong style={{ color: hasManual ? "#1677ff" : undefined }}>¥{fmt(total)}</Text>;
-      },
-    },
-  ];
-
-  const cnySummary = summary
-    ? summary.platforms.reduce(
-        (s, p) => {
-          s.h1 += p.paidCnyH1 ?? p.memberCnyH1;
-          s.h2 += p.paidCnyH2 ?? p.memberCnyH2;
-          return s;
-        },
-        { h1: 0, h2: 0 },
-      )
-    : { h1: 0, h2: 0 };
 
   return (
     <div>
@@ -293,29 +181,8 @@ export default function MonthlyReportTab() {
               </Row>
             </Card>
 
-            {/* ── 平台聚合表 ── */}
-            <Card size="small" title="总计表 · 按平台聚合（全员累计）— 实收(¥)列可点击手填">
-              <Table<TeamPlatformAgg>
-                columns={platformCols}
-                dataSource={summary.platforms}
-                rowKey="platform"
-                size="small"
-                pagination={false}
-                bordered
-                scroll={{ x: "max-content" }}
-                summary={() => (
-                  <Table.Summary.Row style={{ background: "#f6ffed", fontWeight: 600 }}>
-                    <Table.Summary.Cell index={0}>合计</Table.Summary.Cell>
-                    {(["book", "rejected", "recvH1", "recvH2", "recvTotal", "paidH1", "paidH2", "paidTotal"] as const).map((k, i) => (
-                      <Table.Summary.Cell key={k} index={i + 1} align="right">${fmt(summary.totals[k])}</Table.Summary.Cell>
-                    ))}
-                    <Table.Summary.Cell index={9} align="right">¥{fmt(cnySummary.h1)}</Table.Summary.Cell>
-                    <Table.Summary.Cell index={10} align="right">¥{fmt(cnySummary.h2)}</Table.Summary.Cell>
-                    <Table.Summary.Cell index={11} align="right">¥{fmt(cnySummary.h1 + cnySummary.h2)}</Table.Summary.Cell>
-                  </Table.Summary.Row>
-                )}
-              />
-            </Card>
+            {/* ── 总计表（与导出 Excel 同构：平台做列、指标做行） ── */}
+            <TeamSummaryTable summary={summary} onSavePlatCny={savePlatCny} />
 
             {/* ── 各组员单表（只读） ── */}
             <Card size="small" title="组员单月表">

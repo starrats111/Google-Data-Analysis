@@ -17,7 +17,7 @@
 import React, { useState } from "react";
 import { Typography, InputNumber, Tooltip, Alert, Tag } from "antd";
 import { EditOutlined, UndoOutlined } from "@ant-design/icons";
-import type { MemberMonthlyReport, MccSection, AccountColumn } from "@/lib/monthly-report";
+import type { MemberMonthlyReport, MccSection, AccountColumn, TeamMonthlySummary, TeamPlatformAgg } from "@/lib/monthly-report";
 
 const { Text } = Typography;
 
@@ -145,6 +145,8 @@ function EditableCell({
   colSpan,
   blankZero,
   valueColor,
+  manualLabel = "手工纠正值",
+  systemLabel = "系统计算",
 }: {
   value: number;
   overridden: boolean;
@@ -157,6 +159,9 @@ function EditableCell({
   blankZero?: boolean;
   /** 无纠正时数值颜色（如失效佣金红色） */
   valueColor?: string;
+  /** 手填值 / 系统值在 Tooltip 中的叫法（总计表用「组长手填 / 默认打款日汇率折算」） */
+  manualLabel?: string;
+  systemLabel?: string;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<number | null>(value);
@@ -170,7 +175,7 @@ function EditableCell({
     return (
       <td style={{ ...cellBase, background: baseBg ?? cellBase.background }} colSpan={colSpan}>
         {overridden ? (
-          <Tooltip title={`手工纠正值（系统计算 ${fmt(systemValue)}）`}>
+          <Tooltip title={`${manualLabel}（${systemLabel} ${fmt(systemValue)}）`}>
             <span style={{ color: "#1677ff", fontWeight: 500 }}>{fmt(value)}</span>
           </Tooltip>
         ) : <span style={{ color: valueColor }}>{shown}</span>}
@@ -215,7 +220,7 @@ function EditableCell({
     >
       <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
         {overridden ? (
-          <Tooltip title={`手工纠正值（系统计算 ${fmt(systemValue)}），点击修改`}>
+          <Tooltip title={`${manualLabel}（${systemLabel} ${fmt(systemValue)}），点击修改`}>
             <span style={{ color: "#1677ff", fontWeight: 500 }}>{fmt(value)}</span>
           </Tooltip>
         ) : (
@@ -223,7 +228,7 @@ function EditableCell({
         )}
         <EditOutlined className="mrt-edit-ic" style={{ fontSize: 11, color: "#94a3b8" }} />
         {overridden && (
-          <Tooltip title="恢复系统计算值">
+          <Tooltip title={`清除手填，恢复${systemLabel}值`}>
             <UndoOutlined
               style={{ fontSize: 11, color: "#faad14" }}
               onClick={async (e) => {
@@ -237,6 +242,22 @@ function EditableCell({
     </td>
   );
 }
+
+const MRT_CSS = `
+  .mrt-edit .mrt-edit-ic { opacity: 0; transition: opacity .15s; }
+  .mrt-edit:hover .mrt-edit-ic { opacity: 1; }
+  .mrt-edit:hover { box-shadow: inset 0 0 0 1px #91caff; }
+  /* 冻结列：左侧行标签 / 右侧合计 */
+  .${FX0} { position: sticky; left: 0; z-index: 3; }
+  .${FX1} { position: sticky; left: ${LABEL_W}px; z-index: 3; box-shadow: 2px 0 4px -2px rgba(15,40,80,.12); }
+  .${FX0}[colspan] { box-shadow: 2px 0 4px -2px rgba(15,40,80,.12); }
+  .${FXR} { position: sticky; right: 0; z-index: 3; box-shadow: -2px 0 4px -2px rgba(15,40,80,.12); }
+  /* 区块分隔线（账面→应收→实收→收款→利润） */
+  tr.mrt-sec > td, tr.mrt-sec > th { border-top: 2px solid ${C.borderStrong} !important; }
+`;
+
+/** 0 值弱化色（大表里大量 0.00 是主要视觉噪音） */
+const muted = (v: number, strong?: string): string | undefined => (Math.abs(v) < 0.005 ? "#c3cad4" : strong);
 
 export default function MonthlyReportTable({
   report,
@@ -259,18 +280,7 @@ export default function MonthlyReportTable({
 
   return (
     <div>
-      <style>{`
-        .mrt-edit .mrt-edit-ic { opacity: 0; transition: opacity .15s; }
-        .mrt-edit:hover .mrt-edit-ic { opacity: 1; }
-        .mrt-edit:hover { box-shadow: inset 0 0 0 1px #91caff; }
-        /* 冻结列：左侧行标签 / 右侧合计 */
-        .${FX0} { position: sticky; left: 0; z-index: 3; }
-        .${FX1} { position: sticky; left: ${LABEL_W}px; z-index: 3; box-shadow: 2px 0 4px -2px rgba(15,40,80,.12); }
-        .${FX0}[colspan] { box-shadow: 2px 0 4px -2px rgba(15,40,80,.12); }
-        .${FXR} { position: sticky; right: 0; z-index: 3; box-shadow: -2px 0 4px -2px rgba(15,40,80,.12); }
-        /* 区块分隔线（账面→应收→实收→收款→利润） */
-        tr.mrt-sec > td, tr.mrt-sec > th { border-top: 2px solid ${C.borderStrong} !important; }
-      `}</style>
+      <style>{MRT_CSS}</style>
 
       {/* 汇率提示条 */}
       <div style={{
@@ -572,6 +582,203 @@ export default function MonthlyReportTable({
                 $ {fmt(report.profit.usd)}{rate.cnyToUsd > 0 && <span style={{ marginLeft: 16 }}>¥ {fmt(report.profit.cny)}</span>}
               </td>
               <td className={FXR} style={{ ...totalCell, background: C.profitBg }}></td>
+            </tr>
+          </tbody>
+        </table>
+      </TableShell>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// 组长端总计表（R-04.6）：与导出 Excel「总计表」同构 —— 平台做列（每平台
+// 占 $ / ¥ 两列），指标做行；沿用成员表的冻结列 / 斑马纹 / 语义色体系。
+// 仅实收区的 ¥ 列可编辑（组长手填实际到账，未填默认成员实收CNY累计）。
+// ─────────────────────────────────────────────────────────────
+
+export function TeamSummaryTable({
+  summary,
+  onSavePlatCny,
+}: {
+  summary: TeamMonthlySummary;
+  /** 保存某平台上/下半月实收(¥)手填，value=null 清除恢复默认 */
+  onSavePlatCny?: (platform: string, half: "H1" | "H2", value: number | null) => Promise<void>;
+}) {
+  const plats = summary.platforms;
+  const { totals } = summary;
+  const zebra = (i: number): string | undefined => (i % 2 === 1 ? C.zebra : undefined);
+  const editable = !!onSavePlatCny;
+
+  /** 账面/失效/应收：平台占 2 列合并的只读数值行 */
+  const mergedRow = (
+    key: string,
+    get: (p: TeamPlatformAgg) => number,
+    total: number,
+    opts?: { bold?: boolean; red?: boolean },
+  ) => (
+    <>
+      {plats.map((p, i) => {
+        const v = get(p);
+        return (
+          <td key={`${key}-${p.platform}`} colSpan={2} style={{
+            ...cellBase,
+            background: zebra(i) ?? "#fff",
+            fontWeight: opts?.bold ? 600 : undefined,
+            color: muted(v, opts?.red && v > 0 ? "#cf1322" : undefined),
+          }}>
+            {fmt(v)}
+          </td>
+        );
+      })}
+      <td className={FXR} style={{ ...totalCell, color: opts?.red && total > 0 ? "#cf1322" : undefined }}>{fmt(total)}</td>
+    </>
+  );
+
+  /** 实收行：平台拆 $（支付数据，只读）/ ¥（组长手填，默认成员CNY累计）两列 */
+  const paidRow = (
+    half: "H1" | "H2",
+    getUsd: (p: TeamPlatformAgg) => number,
+    getCnyManual: (p: TeamPlatformAgg) => number | null,
+    getCnyDefault: (p: TeamPlatformAgg) => number,
+    totalUsd: number,
+  ) => {
+    const totalCny = plats.reduce((s, p) => s + (getCnyManual(p) ?? getCnyDefault(p)), 0);
+    return (
+      <>
+        {plats.map((p, i) => {
+          const usd = getUsd(p);
+          const manual = getCnyManual(p);
+          return (
+            <React.Fragment key={`paid-${half}-${p.platform}`}>
+              <td style={{ ...cellBase, background: zebra(i) ?? "#fff", color: muted(usd) }}>{fmt(usd)}</td>
+              <EditableCell
+                value={manual ?? getCnyDefault(p)}
+                overridden={manual != null}
+                editable={editable}
+                systemValue={getCnyDefault(p)}
+                bg={zebra(i)}
+                valueColor={muted(getCnyDefault(p), "#8a94a3")}
+                manualLabel="组长手填实际到账(¥)"
+                systemLabel="默认值·成员实收CNY累计(打款日汇率)"
+                onSave={(v) => onSavePlatCny!(p.platform, half, v)}
+              />
+            </React.Fragment>
+          );
+        })}
+        <td className={FXR} style={totalCell}>
+          <div>{fmt(totalUsd)}</div>
+          <div style={{ color: "#d46b08", fontWeight: 500 }}>¥{fmt(totalCny)}</div>
+        </td>
+      </>
+    );
+  };
+
+  const cnyTotal = (half: "H1" | "H2") =>
+    plats.reduce((s, p) => s + ((half === "H1" ? p.paidCnyH1 ?? p.memberCnyH1 : p.paidCnyH2 ?? p.memberCnyH2)), 0);
+
+  return (
+    <div>
+      <style>{MRT_CSS}</style>
+      <TableShell
+        title="总计表 · 按平台聚合（全员累计）"
+        hint={editable ? "实收 ¥ 列可点击手填实际到账（蓝字为已手填，↺ 恢复默认）；左右两侧列已冻结" : "左右两侧列已冻结，可横向滚动"}
+      >
+        <table style={tableStyle}>
+          <thead>
+            <tr>
+              <th className={FX0} style={{ ...headCell, textAlign: "left", width: LABEL_W + SUB_W, minWidth: LABEL_W + SUB_W }} colSpan={2}>广告联盟</th>
+              {plats.map((p, i) => (
+                <th key={p.platform} style={{ ...platHeadCell, background: i % 2 === 1 ? "#d8ecd9" : C.platBg }} colSpan={2}>{p.platform}</th>
+              ))}
+              <th className={FXR} style={{ ...headCell, borderLeft: `2px solid ${C.totalBorder}` }}>佣金合计</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td className={FX0} style={labelCell} colSpan={2}>账面佣金（美金）</td>
+              {mergedRow("book", (p) => p.book, totals.book)}
+            </tr>
+            <tr>
+              <td className={FX0} style={labelCell} colSpan={2}>失效佣金（美金）</td>
+              {mergedRow("rejected", (p) => p.rejected, totals.rejected, { red: true })}
+            </tr>
+            {/* 应收 */}
+            <tr className="mrt-sec">
+              <td className={FX0} rowSpan={3} style={{ ...labelCell, width: LABEL_W, minWidth: LABEL_W, maxWidth: LABEL_W }}>应收佣金（美金）</td>
+              <td className={FX1} style={subLabelCell}>5号 · 上半月</td>
+              {mergedRow("recvH1", (p) => p.recvH1, totals.recvH1)}
+            </tr>
+            <tr>
+              <td className={FX1} style={subLabelCell}>15号 · 下半月</td>
+              {mergedRow("recvH2", (p) => p.recvH2, totals.recvH2)}
+            </tr>
+            <tr>
+              <td className={FX1} style={{ ...subLabelCell, fontWeight: 600 }}>合计</td>
+              {mergedRow("recvTotal", (p) => p.recvH1 + p.recvH2, totals.recvTotal, { bold: true })}
+            </tr>
+            {/* 实收（$ 只读 / ¥ 可手填） */}
+            <tr className="mrt-sec">
+              <td className={FX0} rowSpan={4} style={{ ...labelCell, width: LABEL_W, minWidth: LABEL_W, maxWidth: LABEL_W }}>
+                实收佣金
+                {editable && <div><Text type="secondary" style={{ fontSize: 10.5 }}>¥ 列可点击手填</Text></div>}
+              </td>
+              <td className={FX1} style={{ ...subLabelCell, background: C.subHeadBg }}></td>
+              {plats.map((p) => (
+                <React.Fragment key={`head-${p.platform}`}>
+                  <td style={{ ...cellBase, background: C.subHeadBg, textAlign: "center", fontSize: 11, fontWeight: 600, color: "#0958d9" }}>
+                    <Tooltip title="支付数据累计（USD），只读">USD</Tooltip>
+                  </td>
+                  <td style={{ ...cellBase, background: C.subHeadBg, textAlign: "center", fontSize: 11, fontWeight: 600, color: "#d46b08" }}>
+                    <Tooltip title="实际到账人民币，组长手填；未填默认为成员实收CNY累计（逐笔打款日汇率）">CNY</Tooltip>
+                  </td>
+                </React.Fragment>
+              ))}
+              <td className={FXR} style={{ ...totalCell, background: C.subHeadBg, textAlign: "center", fontSize: 11 }}>$ / ¥</td>
+            </tr>
+            <tr>
+              <td className={FX1} style={subLabelCell}>10号 · 上半月</td>
+              {paidRow("H1", (p) => p.paidH1, (p) => p.paidCnyH1, (p) => p.memberCnyH1, totals.paidH1)}
+            </tr>
+            <tr>
+              <td className={FX1} style={subLabelCell}>20号 · 下半月</td>
+              {paidRow("H2", (p) => p.paidH2, (p) => p.paidCnyH2, (p) => p.memberCnyH2, totals.paidH2)}
+            </tr>
+            <tr>
+              <td className={FX1} style={{ ...subLabelCell, fontWeight: 600 }}>合计</td>
+              {plats.map((p, i) => {
+                const usd = p.paidH1 + p.paidH2;
+                const cny = (p.paidCnyH1 ?? p.memberCnyH1) + (p.paidCnyH2 ?? p.memberCnyH2);
+                const hasManual = p.paidCnyH1 != null || p.paidCnyH2 != null;
+                return (
+                  <React.Fragment key={`paid-sum-${p.platform}`}>
+                    <td style={{ ...cellBase, background: zebra(i) ?? "#fff", fontWeight: 600, color: muted(usd) }}>{fmt(usd)}</td>
+                    <td style={{ ...cellBase, background: zebra(i) ?? "#fff", fontWeight: 600, color: muted(cny, hasManual ? "#1677ff" : "#d46b08") }}>{fmt(cny)}</td>
+                  </React.Fragment>
+                );
+              })}
+              <td className={FXR} style={totalCell}>
+                <div>{fmt(totals.paidTotal)}</div>
+                <div style={{ color: "#d46b08", fontWeight: 500 }}>¥{fmt(cnyTotal("H1") + cnyTotal("H2"))}</div>
+              </td>
+            </tr>
+            {/* 收款人 / 收款卡号 */}
+            <tr className="mrt-sec">
+              <td className={FX0} style={labelCell} colSpan={2}>收款人</td>
+              {plats.map((p, i) => (
+                <td key={`payee-${p.platform}`} colSpan={2} style={{ ...cellBase, background: zebra(i) ?? "#fff", textAlign: "center", whiteSpace: "normal", fontSize: 11.5, lineHeight: 1.7 }}>
+                  {p.payees.length === 0 ? <span style={{ color: "#c3cad4" }}>—</span> : p.payees.map((pe) => <div key={pe.name}>{pe.name}</div>)}
+                </td>
+              ))}
+              <td className={FXR} style={totalCell}></td>
+            </tr>
+            <tr>
+              <td className={FX0} style={labelCell} colSpan={2}>收款卡号</td>
+              {plats.map((p, i) => (
+                <td key={`card-${p.platform}`} colSpan={2} style={{ ...cellBase, background: zebra(i) ?? "#fff", textAlign: "center", whiteSpace: "normal", fontSize: 11, color: "#6b7686", lineHeight: 1.7 }}>
+                  {p.payees.length === 0 ? <span style={{ color: "#c3cad4" }}>—</span> : p.payees.map((pe) => <div key={pe.name}>{pe.cards.join("、") || "—"}</div>)}
+                </td>
+              ))}
+              <td className={FXR} style={totalCell}></td>
             </tr>
           </tbody>
         </table>
