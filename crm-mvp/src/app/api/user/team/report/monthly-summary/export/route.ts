@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { withLeader } from "@/lib/api-handler";
 import ExcelJS from "exceljs";
 import { buildTeamMonthlySummary } from "@/lib/monthly-report";
-import { buildMemberSheet, buildSummarySheet } from "@/lib/monthly-report-xlsx";
+import { buildFengduMonthSheet } from "@/lib/monthly-report-xlsx";
 
 export const dynamic = "force-dynamic";
 
@@ -24,16 +24,8 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   const wb = new ExcelJS.Workbook();
   wb.creator = "CRM System";
   wb.created = new Date();
-  buildSummarySheet(wb, summary);
-  // sheet 名去重（display_name 可能重复）
-  const usedNames = new Set<string>(["总计表"]);
-  for (const rep of summary.memberReports) {
-    let name = rep.displayName.slice(0, 25);
-    let i = 2;
-    while (usedNames.has(name)) name = `${rep.displayName.slice(0, 22)}(${i++})`;
-    usedNames.add(name);
-    buildMemberSheet(wb, rep, name);
-  }
+  // R-06：单 sheet，与「丰度收支统计表」月份 sheet 完全同版式（合计公式块 + 每成员一个 12 列块）
+  buildFengduMonthSheet(wb, summary.memberReports, `${parseInt(month.slice(5), 10)}月份`);
 
   const buffer = await wb.xlsx.writeBuffer();
   const filename = encodeURIComponent(`团队收支月报-${month}.xlsx`);

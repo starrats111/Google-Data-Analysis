@@ -1,15 +1,15 @@
 /**
  * R-02/R-04 月度收支报表 — xlsx 生成（复用 monthly-report 视图模型）
  *
- * buildMemberSheet：组员单月表（R-04.3：MCC 段竖排，一行一 MCC，与网页一致）
- * buildSummarySheet：组长总计表（R-04.5：对齐「总收支统计」模板——平台占2列，
- *   账面/失效/应收行合并；实收3行拆左$（支付数据）右¥（组长手填）；
- *   收款人按人分开、多卡同格）
+ * buildFengduMonthSheet：月度收支表（R-06：1:1 复刻「新2026年度丰度收支统计表」
+ *   月份 sheet 的版式——A/B 标签列 + C..M 合计块(SUMIF 公式) + 每成员 12 列块，
+ *   宋体12、模板同款配色/边框/数字格式/行高列宽；组长导出=全员，组员导出=单人块）
  * buildAnnualSheet：年度报表（R-04.2 新口径整年 12 个月）
  */
 
 import ExcelJS from "exceljs";
-import type { MemberMonthlyReport, TeamMonthlySummary, TeamAnnualReport, MemberAnnualReport } from "@/lib/monthly-report";
+import type { MemberMonthlyReport, TeamAnnualReport, MemberAnnualReport } from "@/lib/monthly-report";
+import { REPORT_PLATFORM_ORDER } from "@/lib/report-metrics";
 
 const CLR = {
   YELLOW: "FFFF00",
@@ -56,385 +56,280 @@ function setCell(
 
 const nv = (n: number): number | string => (n !== 0 ? +n.toFixed(2) : 0);
 
-/** 组员单月表 sheet（R-04.3：MCC 竖排；R-05：账号占 2 列，实收拆 USD/CNY 双列） */
-export function buildMemberSheet(wb: ExcelJS.Workbook, rep: MemberMonthlyReport, sheetName?: string) {
-  const ws = wb.addWorksheet(sheetName || `${rep.displayName}`);
-  const monthNum = parseInt(rep.month.slice(5), 10);
+// ════════════════════════════════════════════════════════════════════════════
+// R-06：丰度收支统计表模板 1:1 复刻
+// 版式、配色、边框、数字格式、行高列宽全部取自
+// 「新2026年度丰度1-12月份收支统计表」月份 sheet 的实测样式。
+// ════════════════════════════════════════════════════════════════════════════
 
-  const acctCols = rep.accounts.length;
-  const C0 = 3; // 佣金区数据列起点（A=标签 B=子标签），每账号占 2 列
-  const acctCol = (i: number) => C0 + i * 2;
-  const totalCol = C0 + Math.max(acctCols, 1) * 2; // 佣金合计列
-  const lastCol = Math.max(totalCol, 6);
+const FD = {
+  YELLOW: "FFFF00", // 行1 标题条
+  GREEN: "92D050",  // 币种/平台表头、合计行
+  G4: "ACD78E",     // 主题绿 tint40%（5号/10号 行）——模板 theme7+0.4 的实际渲染色
+  G6: "C8E5B3",     // 主题绿 tint60%（15号/20号 行）——模板 theme7+0.6 的实际渲染色
+};
+// 模板数字格式
+const FD_NUM_AD = "0.00_ ";                    // 广告费行
+const FD_NUM_RED = "0.00_);[Red]\\(0.00\\)";   // 成员数值区（负数红括号）
+const FD_NUM_PROFIT = "0.00_ ;[Red]\\-0.00\\ "; // 利润行 D..M
 
-  ws.getColumn(1).width = 24;
-  ws.getColumn(2).width = 12;
-  for (let c = C0; c <= lastCol; c++) ws.getColumn(c).width = 12;
-  ws.getColumn(totalCol).width = 16;
+const fdFont = (bold = false): Partial<ExcelJS.Font> => ({ name: "宋体", size: 12, bold });
+const fdThin: Partial<ExcelJS.Border> = { style: "thin", color: { argb: "FF000000" } };
+const fdBorderAll: Partial<ExcelJS.Borders> = { top: fdThin, left: fdThin, bottom: fdThin, right: fdThin };
+const fdBorderTB: Partial<ExcelJS.Borders> = { top: fdThin, bottom: fdThin }; // 行1 黄条：仅上下框线
 
-  // ── Row1 月份 + 汇率 ──
-  setCell(ws, 1, 1, "月份", { fill: CLR.GRAY, bold: true });
-  ws.mergeCells(1, 2, 1, 3);
-  setCell(ws, 1, 2, `${monthNum}月（${rep.displayName} / ${rep.username}）`, { fill: CLR.YELLOW, bold: true });
-  ws.mergeCells(1, 4, 1, lastCol);
-  setCell(ws, 1, 4, `汇率 1USD=${rep.rate.usdToCny.toFixed(4)}CNY（${rep.rate.date}${rep.rate.locked ? " 月末锁定" : " 实时"}）· 生成 ${rep.generatedAt}`, { fill: CLR.YELLOW });
-
-  // ── MCC 段（竖排：一行一 MCC） ──
-  let r = 2;
-  const mccHeaders = ["MCC", "币种", "库内广告费(原币)", "补差额($)", "广告费(原币)", "折美金($)"];
-  mccHeaders.forEach((h, i) => setCell(ws, r, 1 + i, h, { fill: CLR.GRAY, bold: true, wrap: true }));
-  for (let c = mccHeaders.length + 1; c <= lastCol; c++) setCell(ws, r, c, "", {});
-  r++;
-
-  if (rep.mccs.length === 0) {
-    ws.mergeCells(r, 1, r, mccHeaders.length);
-    setCell(ws, r, 1, "本月无 MCC 账户", { h: "center" });
-    for (let c = mccHeaders.length + 1; c <= lastCol; c++) setCell(ws, r, c, "", {});
-    r++;
-  } else {
-    for (const m of rep.mccs) {
-      setCell(ws, r, 1, `${m.mccName} (${m.mccId})`, { fill: CLR.ORANGE, h: "left", wrap: true });
-      setCell(ws, r, 2, m.currency === "CNY" ? "人民币" : "美金", {});
-      setCell(ws, r, 3, nv(m.costOriginal), { num: true });
-      setCell(ws, r, 4, m.adjustment !== 0 ? nv(m.adjustment) : "", { num: m.adjustment !== 0 });
-      setCell(ws, r, 5, nv(m.effectiveOriginal), { num: true, fill: m.override != null ? CLR.BLUE_LIGHT : undefined });
-      setCell(ws, r, 6, nv(m.effectiveUsd), { num: true });
-      for (let c = mccHeaders.length + 1; c <= lastCol; c++) setCell(ws, r, c, "", {});
-      r++;
-    }
+/** 列号 → 字母（1=A） */
+function fdColL(c: number): string {
+  let s = "";
+  while (c > 0) {
+    const m = (c - 1) % 26;
+    s = String.fromCharCode(65 + m) + s;
+    c = (c - 1 - m) / 26;
   }
-
-  // 广告费合计行
-  ws.mergeCells(r, 1, r, 2);
-  setCell(ws, r, 1, "广告费合计", { fill: CLR.GREEN_DARK, bold: true, h: "left" });
-  ws.mergeCells(r, 3, r, 4);
-  setCell(ws, r, 3, `$${rep.adCostTotalUsd.toFixed(2)}${rep.adCostTotalCny > 0 ? ` ｜ ¥${rep.adCostTotalCny.toFixed(2)}` : ""}`, { fill: CLR.GREEN, bold: true });
-  setCell(ws, r, 5, `核算广告费 $${rep.profitAdCostUsd.toFixed(2)}`, { fill: CLR.GREEN, bold: true, wrap: true });
-  setCell(ws, r, 6, `在投广告数 ${rep.enabledCampaigns}`, { fill: CLR.GREEN, bold: true, wrap: true });
-  for (let c = 7; c <= lastCol; c++) setCell(ws, r, c, "", {});
-  r += 2; // 空一行
-
-  // ── 佣金区（动态账号列，每账号占 2 列） ──
-  const acctStart = r;
-  setCell(ws, r, 1, "广告联盟", { fill: CLR.GRAY, bold: true });
-  setCell(ws, r, 2, "", { fill: CLR.GRAY });
-  setCell(ws, r + 1, 1, "账号名称", { fill: CLR.GRAY, bold: true });
-  setCell(ws, r + 1, 2, "", { fill: CLR.GRAY });
-  rep.accounts.forEach((a, i) => {
-    ws.mergeCells(acctStart, acctCol(i), acctStart, acctCol(i) + 1);
-    setCell(ws, acctStart, acctCol(i), a.label, { fill: CLR.ORANGE, bold: true });
-    ws.mergeCells(acctStart + 1, acctCol(i), acctStart + 1, acctCol(i) + 1);
-    setCell(ws, acctStart + 1, acctCol(i), a.accountName, {});
-  });
-  setCell(ws, acctStart, totalCol, "佣金合计", { fill: CLR.GRAY, bold: true });
-  setCell(ws, acctStart + 1, totalCol, "", {});
-  r = acctStart + 2;
-
-  // 账面/失效/应收（账号 2 列合并；手工纠正值蓝底）
-  type Acct = MemberMonthlyReport["accounts"][number];
-  type RowSpec = {
-    label: string;
-    sub?: string;
-    get: (a: Acct) => number | string;
-    manual?: (a: Acct) => boolean;
-    total: number;
-  };
-  const mergedRows: RowSpec[] = [
-    { label: "账面佣金（美金）", get: (a) => nv(a.bookEffective), manual: (a) => a.bookOverride != null, total: rep.totals.book },
-    { label: "失效佣金（美金）", get: (a) => nv(a.rejectedEffective), manual: (a) => a.rejectedOverride != null, total: rep.totals.rejected },
-    {
-      label: "应收佣金（美金）", sub: "5号",
-      get: (a) => (a.hasPayments || a.recvH1Override != null ? nv(a.recvH1Effective) : ""),
-      manual: (a) => a.recvH1Override != null,
-      total: rep.totals.recvH1,
-    },
-    {
-      label: "", sub: "15号",
-      get: (a) => (a.hasPayments || a.recvH2Override != null ? nv(a.recvH2Effective) : ""),
-      manual: (a) => a.recvH2Override != null,
-      total: rep.totals.recvH2,
-    },
-    {
-      label: "", sub: "合计",
-      get: (a) => (a.hasPayments || a.recvH1Override != null || a.recvH2Override != null ? nv(a.recvH1Effective + a.recvH2Effective) : ""),
-      total: rep.totals.recvTotal,
-    },
-  ];
-  for (const spec of mergedRows) {
-    const isTotal = spec.sub === "合计";
-    setCell(ws, r, 1, spec.label, { fill: CLR.GRAY, bold: !!spec.label, h: "left" });
-    setCell(ws, r, 2, spec.sub || "", { fill: CLR.GRAY });
-    rep.accounts.forEach((a, i) => {
-      const v = spec.get(a);
-      ws.mergeCells(r, acctCol(i), r, acctCol(i) + 1);
-      setCell(ws, r, acctCol(i), v, {
-        num: typeof v === "number",
-        bold: isTotal,
-        fill: spec.manual?.(a) ? CLR.BLUE_LIGHT : undefined,
-      });
-    });
-    setCell(ws, r, totalCol, nv(spec.total), { fill: CLR.GREEN, bold: true, num: true });
-    r++;
-  }
-
-  // 实收佣金：每账号拆 USD/CNY 双列（CNY 默认逐笔按打款日汇率，手填蓝底）
-  setCell(ws, r, 1, "实收佣金", { fill: CLR.GRAY, bold: true, h: "left" });
-  setCell(ws, r, 2, "", { fill: CLR.GRAY });
-  rep.accounts.forEach((_, i) => {
-    setCell(ws, r, acctCol(i), "实收佣金(USD)", { fill: CLR.GRAY, bold: true, wrap: true });
-    setCell(ws, r, acctCol(i) + 1, "实收佣金(CNY)", { fill: CLR.GRAY, bold: true, wrap: true });
-  });
-  setCell(ws, r, totalCol, "$ / ¥", { fill: CLR.GRAY, bold: true });
-  r++;
-
-  const paidSpecs: {
-    sub: string;
-    usd: (a: Acct) => { v: number | string; manual: boolean };
-    cny: (a: Acct) => { v: number | string; manual: boolean };
-    totalUsd: number;
-    totalCny: number;
-  }[] = [
-    {
-      sub: "10号",
-      usd: (a) => ({ v: a.hasPayments || a.paidH1Override != null ? nv(a.paidH1Effective) : "", manual: a.paidH1Override != null }),
-      cny: (a) => ({ v: a.hasPayments || a.paidCnyH1Override != null ? nv(a.paidCnyH1Effective) : "", manual: a.paidCnyH1Override != null }),
-      totalUsd: rep.totals.paidH1,
-      totalCny: rep.totals.paidCnyH1,
-    },
-    {
-      sub: "20号",
-      usd: (a) => ({ v: a.hasPayments || a.paidH2Override != null ? nv(a.paidH2Effective) : "", manual: a.paidH2Override != null }),
-      cny: (a) => ({ v: a.hasPayments || a.paidCnyH2Override != null ? nv(a.paidCnyH2Effective) : "", manual: a.paidCnyH2Override != null }),
-      totalUsd: rep.totals.paidH2,
-      totalCny: rep.totals.paidCnyH2,
-    },
-    {
-      sub: "合计",
-      usd: (a) => ({
-        v: a.hasPayments || a.paidH1Override != null || a.paidH2Override != null ? nv(a.paidH1Effective + a.paidH2Effective) : "",
-        manual: false,
-      }),
-      cny: (a) => ({
-        v: a.hasPayments || a.paidCnyH1Override != null || a.paidCnyH2Override != null ? nv(a.paidCnyH1Effective + a.paidCnyH2Effective) : "",
-        manual: false,
-      }),
-      totalUsd: rep.totals.paidTotal,
-      totalCny: rep.totals.paidCnyTotal,
-    },
-  ];
-  for (const spec of paidSpecs) {
-    const isTotal = spec.sub === "合计";
-    setCell(ws, r, 1, "", { fill: CLR.GRAY });
-    setCell(ws, r, 2, spec.sub, { fill: CLR.GRAY });
-    rep.accounts.forEach((a, i) => {
-      const usd = spec.usd(a);
-      const cny = spec.cny(a);
-      setCell(ws, r, acctCol(i), usd.v, {
-        numFmt: typeof usd.v === "number" ? USD_FMT : undefined,
-        bold: isTotal,
-        fill: usd.manual ? CLR.BLUE_LIGHT : undefined,
-      });
-      setCell(ws, r, acctCol(i) + 1, cny.v, {
-        numFmt: typeof cny.v === "number" ? CNY_FMT : undefined,
-        bold: isTotal,
-        fill: cny.manual ? CLR.BLUE_LIGHT : undefined,
-      });
-    });
-    setCell(ws, r, totalCol, `$${spec.totalUsd.toFixed(2)} / ¥${spec.totalCny.toFixed(2)}`, { fill: CLR.GREEN, bold: true, wrap: true });
-    r++;
-  }
-
-  // ── 收款人 / 收款卡号 ──
-  for (const [label, get] of [
-    ["收款人", (a: MemberMonthlyReport["accounts"][number]) => a.payeeName] as const,
-    ["收款卡号", (a: MemberMonthlyReport["accounts"][number]) => a.cardNo] as const,
-  ]) {
-    setCell(ws, r, 1, label, { fill: CLR.GRAY, bold: true, h: "left" });
-    setCell(ws, r, 2, "", { fill: CLR.GRAY });
-    rep.accounts.forEach((a, i) => {
-      ws.mergeCells(r, acctCol(i), r, acctCol(i) + 1);
-      setCell(ws, r, acctCol(i), get(a), {});
-    });
-    setCell(ws, r, totalCol, "", {});
-    r++;
-  }
-
-  // ── 可分配利润 ──
-  ws.mergeCells(r, 1, r, 2);
-  setCell(ws, r, 1, "可分配利润（实收佣金-广告费）", { fill: CLR.GREEN_DARK, bold: true, h: "left" });
-  ws.mergeCells(r, C0, r, totalCol);
-  setCell(ws, r, C0, `$${rep.profit.usd.toFixed(2)} / ¥${rep.profit.cny.toFixed(2)}`, { fill: CLR.GREEN, bold: true });
-
-  ws.views = [{ state: "frozen", xSplit: 2, ySplit: 0 }];
+  return s;
 }
 
-/** 组长总计表 sheet（R-04.5：对齐「总收支统计」模板） */
-export function buildSummarySheet(wb: ExcelJS.Workbook, sum: TeamMonthlySummary) {
-  const ws = wb.addWorksheet("总计表");
-  const monthNum = parseInt(sum.month.slice(5), 10);
+function fdCell(
+  ws: ExcelJS.Worksheet,
+  r: number,
+  c: number,
+  value: ExcelJS.CellValue,
+  opts: { fill?: string; bold?: boolean; numFmt?: string; tbOnly?: boolean; hDefault?: boolean } = {},
+) {
+  const cell = ws.getCell(r, c);
+  cell.value = value;
+  cell.font = fdFont(opts.bold);
+  cell.alignment = opts.hDefault ? { vertical: "middle" } : { horizontal: "center", vertical: "middle" };
+  cell.border = opts.tbOnly ? fdBorderTB : fdBorderAll;
+  if (opts.fill) cell.fill = fill(opts.fill);
+  if (opts.numFmt) cell.numFmt = opts.numFmt;
+}
 
-  const plats = sum.platforms;
-  const C0 = 3; // 平台列起点（A=标签 B=子标签），每平台占 2 列
-  const platCol = (i: number) => C0 + i * 2;
-  const totalCol = C0 + plats.length * 2; // 佣金合计
-  const adUsdCol = totalCol + 1;
-  const adCnyCol = totalCol + 2;
-  const profitAdCol = totalCol + 3;
-  const enabledCol = totalCol + 4;
+/** 每成员块内按平台聚合出的一列数据 */
+interface FdPlatCol {
+  accountNames: string;
+  book: number;
+  rejected: number;
+  recvH1: number;
+  recvH2: number;
+  paidCnyH1: number;
+  paidCnyH2: number;
+  payees: string;
+  cards: string;
+}
 
-  ws.getColumn(1).width = 22;
-  ws.getColumn(2).width = 8;
-  for (let c = C0; c < totalCol; c++) ws.getColumn(c).width = 11;
-  for (const c of [totalCol, adUsdCol, adCnyCol, profitAdCol, enabledCol]) ws.getColumn(c).width = 14;
-
-  // ── Row1 月份 ──
-  setCell(ws, 1, 1, "月份", { fill: CLR.GRAY, bold: true });
-  ws.mergeCells(1, 2, 1, enabledCol);
-  setCell(ws, 1, 2, `${monthNum}月 团队收支总计（全员累计）· 汇率 1USD=${sum.rate.usdToCny.toFixed(4)}CNY（${sum.rate.date}${sum.rate.locked ? " 月末锁定" : " 实时"}）`, { fill: CLR.YELLOW, bold: true });
-  ws.getRow(1).height = 22;
-
-  // ── Row2 广告联盟表头（平台占2列合并） + 右侧广告费头 ──
-  setCell(ws, 2, 1, "广告联盟", { fill: CLR.GRAY, bold: true });
-  setCell(ws, 2, 2, "", { fill: CLR.GRAY });
-  plats.forEach((p, i) => {
-    ws.mergeCells(2, platCol(i), 2, platCol(i) + 1);
-    setCell(ws, 2, platCol(i), p.platform, { fill: CLR.ORANGE, bold: true });
-  });
-  setCell(ws, 2, totalCol, "佣金合计", { fill: CLR.GRAY, bold: true });
-  setCell(ws, 2, adUsdCol, "广告费合计($)", { fill: CLR.GRAY, bold: true, wrap: true });
-  setCell(ws, 2, adCnyCol, "广告费合计(¥)", { fill: CLR.GRAY, bold: true, wrap: true });
-  setCell(ws, 2, profitAdCol, "用于核算利润的广告费(¥)", { fill: CLR.GRAY, bold: true, wrap: true });
-  setCell(ws, 2, enabledCol, "在投广告数", { fill: CLR.GRAY, bold: true, wrap: true });
-  ws.getRow(2).height = 28;
-
-  // ── Row3 广告费行 ──
-  setCell(ws, 3, 1, "广告费", { fill: CLR.BLUE_LIGHT, bold: true });
-  setCell(ws, 3, 2, "", { fill: CLR.BLUE_LIGHT });
-  plats.forEach((_, i) => {
-    ws.mergeCells(3, platCol(i), 3, platCol(i) + 1);
-    setCell(ws, 3, platCol(i), "", {});
-  });
-  setCell(ws, 3, totalCol, "", {});
-  setCell(ws, 3, adUsdCol, nv(sum.adCostTotalUsd), { numFmt: USD_FMT, bold: true });
-  setCell(ws, 3, adCnyCol, nv(sum.adCostTotalCny), { numFmt: CNY_FMT, bold: true });
-  setCell(ws, 3, profitAdCol, nv(sum.profitAdCostCny), { numFmt: CNY_FMT, bold: true });
-  setCell(ws, 3, enabledCol, sum.enabledCampaigns, {});
-
-  // ── 数值行：账面/失效/应收（平台2列合并）──
-  let r = 4;
-  type MergedRow = { label: string; sub?: string; get: (p: TeamMonthlySummary["platforms"][number]) => number; total: number };
-  const mergedRows: MergedRow[] = [
-    { label: "账面佣金（美金）", get: (p) => p.book, total: sum.totals.book },
-    { label: "失效佣金（美金）", get: (p) => p.rejected, total: sum.totals.rejected },
-    { label: "应收佣金（美金）", sub: "5号", get: (p) => p.recvH1, total: sum.totals.recvH1 },
-    { label: "", sub: "15号", get: (p) => p.recvH2, total: sum.totals.recvH2 },
-    { label: "", sub: "合计", get: (p) => p.recvTotal, total: sum.totals.recvTotal },
-  ];
-  for (const spec of mergedRows) {
-    const isTotal = spec.sub === "合计";
-    setCell(ws, r, 1, spec.label, { fill: CLR.GRAY, bold: !!spec.label, h: "left" });
-    setCell(ws, r, 2, spec.sub || "", { fill: CLR.GRAY });
-    plats.forEach((p, i) => {
-      ws.mergeCells(r, platCol(i), r, platCol(i) + 1);
-      setCell(ws, r, platCol(i), nv(spec.get(p)), { numFmt: USD_FMT, bold: isTotal });
-    });
-    setCell(ws, r, totalCol, nv(spec.total), { fill: CLR.GREEN, bold: true, numFmt: USD_FMT });
-    for (const c of [adUsdCol, adCnyCol, profitAdCol, enabledCol]) setCell(ws, r, c, "", {});
-    r++;
+function fdAggregate(rep: MemberMonthlyReport): Map<string, FdPlatCol> {
+  const map = new Map<string, FdPlatCol>();
+  for (const a of rep.accounts) {
+    let col = map.get(a.platform);
+    if (!col) {
+      col = { accountNames: "", book: 0, rejected: 0, recvH1: 0, recvH2: 0, paidCnyH1: 0, paidCnyH2: 0, payees: "", cards: "" };
+      map.set(a.platform, col);
+    }
+    col.accountNames = [col.accountNames, a.accountName].filter(Boolean).join("/");
+    col.book += a.bookEffective;
+    col.rejected += a.rejectedEffective;
+    col.recvH1 += a.recvH1Effective;
+    col.recvH2 += a.recvH2Effective;
+    col.paidCnyH1 += a.paidCnyH1Effective;
+    col.paidCnyH2 += a.paidCnyH2Effective;
+    if (a.payeeName && !col.payees.split("/").includes(a.payeeName)) {
+      col.payees = [col.payees, a.payeeName].filter(Boolean).join("/");
+    }
+    if (a.cardNo && !col.cards.split("/").includes(a.cardNo)) {
+      col.cards = [col.cards, a.cardNo].filter(Boolean).join("/");
+    }
   }
+  return map;
+}
 
-  // ── 实收佣金 3 行：平台拆 左$（支付数据）右¥（组长手填，未填=成员实收CNY默认值）──
-  const paidRows: {
-    sub: string;
-    usd: (p: TeamMonthlySummary["platforms"][number]) => number;
-    cny: (p: TeamMonthlySummary["platforms"][number]) => { v: number; manual: boolean };
-    totalUsd: number;
-  }[] = [
-    {
-      sub: "10号",
-      usd: (p) => p.paidH1,
-      cny: (p) => (p.paidCnyH1 != null ? { v: p.paidCnyH1, manual: true } : { v: p.memberCnyH1, manual: false }),
-      totalUsd: sum.totals.paidH1,
-    },
-    {
-      sub: "20号",
-      usd: (p) => p.paidH2,
-      cny: (p) => (p.paidCnyH2 != null ? { v: p.paidCnyH2, manual: true } : { v: p.memberCnyH2, manual: false }),
-      totalUsd: sum.totals.paidH2,
-    },
-    {
-      sub: "合计",
-      usd: (p) => p.paidTotal,
-      cny: (p) => {
-        const v = (p.paidCnyH1 ?? p.memberCnyH1) + (p.paidCnyH2 ?? p.memberCnyH2);
-        return { v: +v.toFixed(2), manual: p.paidCnyH1 != null || p.paidCnyH2 != null };
-      },
-      totalUsd: sum.totals.paidTotal,
-    },
-  ];
-  const paidLabel = ["实收佣金", "左$=支付数据", "右¥=手填(默认打款日汇率折算)"];
-  paidRows.forEach((spec, idx) => {
-    const isTotal = spec.sub === "合计";
-    setCell(ws, r, 1, idx === 0 ? paidLabel.join("\n") : "", { fill: CLR.GRAY, bold: idx === 0, h: "left", wrap: true });
-    setCell(ws, r, 2, spec.sub, { fill: CLR.GRAY });
-    plats.forEach((p, i) => {
-      const cny = spec.cny(p);
-      setCell(ws, r, platCol(i), nv(spec.usd(p)), { numFmt: USD_FMT, bold: isTotal });
-      setCell(ws, r, platCol(i) + 1, cny.v !== 0 || cny.manual ? +cny.v.toFixed(2) : "", {
-        numFmt: CNY_FMT,
-        bold: isTotal,
-        fill: cny.manual ? CLR.BLUE_LIGHT : undefined,
+/** 数值单元格：0 与模板一致留空 */
+const fdNv = (n: number): number | string => (Math.abs(n) >= 0.005 ? +n.toFixed(2) : "");
+
+/**
+ * 月度收支表 sheet（丰度模板 1:1）：
+ * A/B 标签列 + C..M 合计块（SUMIF/SUM 公式，随成员数动态定界）+ 每成员 12 列块。
+ * 组长导出传全员 memberReports；组员导出传 [自己的报表]。
+ */
+export function buildFengduMonthSheet(wb: ExcelJS.Workbook, reports: MemberMonthlyReport[], sheetName?: string) {
+  const month = reports[0]?.month || "";
+  const monthNum = parseInt(month.slice(5), 10) || 0;
+  const ws = wb.addWorksheet(sheetName || `${monthNum}月份`);
+
+  const P = REPORT_PLATFORM_ORDER; // 10 平台，与模板列序一致
+  const NP = P.length;
+  const BLOCK = NP + 2; // 每成员 12 列：10 平台 + 人民币 + 在跑广告量
+  const FIRST = 14; // N 列：首个成员块起点
+  const lastCol = FIRST - 1 + BLOCK * Math.max(reports.length, 1);
+  const lastL = fdColL(lastCol);
+
+  // ── 行高 / 列宽（模板实测） ──
+  ws.getRow(1).height = 28;
+  ws.getRow(2).height = 33;
+  for (let r = 3; r <= 17; r++) ws.getRow(r).height = 28;
+  ws.getColumn(1).width = 23;
+  ws.getColumn(2).width = 13.5;
+  ws.getColumn(3).width = 16.25;
+  ws.getColumn(4).width = 14.25;
+  for (let c = 5; c <= lastCol; c++) ws.getColumn(c).width = 11;
+
+  // 先给合并区每个格子刷样式再合并（合并后从属格样式无法单独写，
+  // 否则从属格在文件里残留默认 Calibri，边框/字体与模板逐格比对不一致）
+  const merge = (
+    r1: number,
+    c1: number,
+    r2: number,
+    c2: number,
+    value: ExcelJS.CellValue,
+    opts: Parameters<typeof fdCell>[4] = {},
+  ) => {
+    for (let rr = r1; rr <= r2; rr++) {
+      for (let cc = c1; cc <= c2; cc++) fdCell(ws, rr, cc, rr === r1 && cc === c1 ? value : null, opts);
+    }
+    ws.mergeCells(r1, c1, r2, c2);
+  };
+
+  // ── A/B 标签列 ──
+  const label = (r1: number, r2: number, c1: number, c2: number, text: string) => {
+    merge(r1, c1, r2, c2, text, { bold: true });
+  };
+  label(1, 1, 1, 2, "月份");
+  label(2, 2, 1, 2, "MCC");
+  label(3, 3, 1, 2, "币种");
+  label(4, 4, 1, 2, "广告费");
+  label(5, 5, 1, 2, "广告联盟");
+  label(6, 6, 1, 2, "账号名称");
+  label(7, 7, 1, 2, "账面佣金（美金）");
+  label(8, 8, 1, 2, "失效佣金（美金）");
+  merge(9, 1, 11, 1, "应收佣金（美金）", { bold: true });
+  fdCell(ws, 9, 2, "5号", { fill: FD.G4, bold: true });
+  fdCell(ws, 10, 2, "15号", { fill: FD.G6, bold: true });
+  fdCell(ws, 11, 2, "合计", { fill: FD.GREEN, bold: true });
+  merge(12, 1, 14, 1, "实收佣金（人民币）", { bold: true });
+  fdCell(ws, 12, 2, "10号", { fill: FD.G4, bold: true });
+  fdCell(ws, 13, 2, "20号", { fill: FD.G6, bold: true });
+  fdCell(ws, 14, 2, "合计", { fill: FD.GREEN, bold: true });
+  label(15, 15, 1, 2, "收款人");
+  label(16, 16, 1, 2, "收款卡号");
+  label(17, 17, 1, 2, "可分配利润（实收佣金-广告费）");
+
+  // ── 行1 黄条（C..last，无左右框线，与模板一致） ──
+  for (let c = 3; c <= lastCol; c++) fdCell(ws, 1, c, "", { fill: FD.YELLOW, bold: true, tbOnly: true });
+
+  // ── C..M 合计块（公式动态定界到最后一个成员块） ──
+  merge(2, 3, 2, 13, "合计", { bold: true });
+
+  merge(3, 3, 3, 5, "美金", { fill: FD.GREEN });
+  merge(3, 6, 3, 8, "人民币", { fill: FD.GREEN });
+  merge(3, 9, 3, 13, "在跑广告量", { fill: FD.GREEN });
+
+  const sumifRow = (row: number, keyCell: string) =>
+    ({ formula: `SUMIF($N$3:$${lastL}$3,${keyCell},$N${row}:$${lastL}${row})` });
+  merge(4, 3, 4, 5, sumifRow(4, "C$3"), { numFmt: FD_NUM_AD });
+  merge(4, 6, 4, 8, sumifRow(4, "F$3"), { numFmt: FD_NUM_AD });
+  merge(4, 9, 4, 13, sumifRow(4, "I$3"), { numFmt: FD_NUM_AD });
+
+  P.forEach((p, i) => fdCell(ws, 5, 3 + i, p, { fill: FD.GREEN }));
+  fdCell(ws, 5, 13, "合计", { fill: FD.GREEN, bold: true });
+  for (let c = 3; c <= 13; c++) fdCell(ws, 6, c, "", { fill: FD.GREEN });
+
+  // 平台聚合公式行：SUMIF 匹配行5 平台代码
+  const platSumif = (row: number, fillHex?: string) => {
+    for (let i = 0; i < NP; i++) {
+      const cL = fdColL(3 + i);
+      fdCell(ws, row, 3 + i, { formula: `SUMIF($N$5:$${lastL}$5,${cL}$5,$N${row}:$${lastL}${row})` }, { fill: fillHex });
+    }
+  };
+  platSumif(7);
+  fdCell(ws, 7, 13, { formula: "SUM(C7:L7)" }, { bold: true, numFmt: FD_NUM_AD });
+  platSumif(8);
+  fdCell(ws, 8, 13, { formula: "SUM(C8:L8)" }, { bold: true, numFmt: FD_NUM_AD });
+  platSumif(9, FD.G4);
+  fdCell(ws, 9, 13, { formula: "SUM(C9:L9)" }, { fill: FD.G4, bold: true });
+  platSumif(10, FD.G4);
+  fdCell(ws, 10, 13, { formula: "SUM(C10:L10)" }, { fill: FD.G4, bold: true });
+  for (let i = 0; i < NP; i++) {
+    const cL = fdColL(3 + i);
+    fdCell(ws, 11, 3 + i, { formula: `SUM(${cL}9:${cL}10)` }, { fill: FD.GREEN });
+  }
+  fdCell(ws, 11, 13, { formula: "SUM(C11:L11)" }, { fill: FD.GREEN, bold: true });
+  platSumif(12, FD.G4);
+  fdCell(ws, 12, 13, { formula: "SUM(C12:L12)" }, { fill: FD.G4, bold: true });
+  platSumif(13, FD.G4);
+  fdCell(ws, 13, 13, { formula: "SUM(C13:L13)" }, { fill: FD.G4, bold: true });
+  for (let i = 0; i < NP; i++) {
+    const cL = fdColL(3 + i);
+    fdCell(ws, 14, 3 + i, { formula: `SUM(${cL}12:${cL}13)` }, { fill: FD.GREEN });
+  }
+  fdCell(ws, 14, 13, { formula: "SUM(C14:L14)" }, { fill: FD.GREEN, bold: true });
+
+  for (let c = 3; c <= 13; c++) {
+    fdCell(ws, 15, c, "", {});
+    fdCell(ws, 16, c, "", {});
+  }
+  fdCell(ws, 17, 3, "", { hDefault: true });
+  for (let c = 4; c <= 12; c++) fdCell(ws, 17, c, "", { numFmt: FD_NUM_PROFIT, hDefault: true });
+  fdCell(ws, 17, 13, { formula: "M14-C4" }, { numFmt: FD_NUM_PROFIT, hDefault: true });
+
+  // ── 每成员 12 列块 ──
+  reports.forEach((rep, mi) => {
+    const c0 = FIRST + BLOCK * mi; // 块内第 1 列（对应模板 N）
+    const cCny = c0 + NP;          // 人民币列（对应模板 X）
+    const cCnt = c0 + NP + 1;      // 在跑广告量列（对应模板 Y）
+    const agg = fdAggregate(rep);
+
+    merge(2, c0, 2, cCnt, rep.displayName || rep.username, {});
+
+    // 行3 币种：前 9 列美金、第 10 列留空（模板如此）、人民币、在跑广告量
+    for (let i = 0; i < NP - 1; i++) fdCell(ws, 3, c0 + i, "美金", { fill: FD.GREEN });
+    fdCell(ws, 3, c0 + NP - 1, "", { fill: FD.GREEN });
+    fdCell(ws, 3, cCny, "人民币", { fill: FD.GREEN });
+    fdCell(ws, 3, cCnt, "在跑广告量", { fill: FD.GREEN });
+
+    // 行4 广告费
+    fdCell(ws, 4, c0, fdNv(rep.adCostTotalUsd), { numFmt: FD_NUM_AD });
+    for (let i = 1; i < NP; i++) fdCell(ws, 4, c0 + i, "", { numFmt: FD_NUM_AD });
+    fdCell(ws, 4, cCny, fdNv(rep.adCostTotalCny), { numFmt: FD_NUM_AD });
+    fdCell(ws, 4, cCnt, rep.enabledCampaigns || "", {});
+
+    // 行5 平台 / 行6 账号名称
+    P.forEach((p, i) => fdCell(ws, 5, c0 + i, p, { fill: FD.GREEN }));
+    fdCell(ws, 5, cCny, "", { fill: FD.GREEN });
+    fdCell(ws, 5, cCnt, "", { fill: FD.GREEN });
+    P.forEach((p, i) => fdCell(ws, 6, c0 + i, agg.get(p)?.accountNames || "", { fill: FD.GREEN }));
+    fdCell(ws, 6, cCny, "", { fill: FD.GREEN });
+    fdCell(ws, 6, cCnt, "", { fill: FD.GREEN });
+
+    // 数值行：7账面 8失效 9应收5号 10应收15号 12实收10号 13实收20号
+    const valueRow = (row: number, get: (col: FdPlatCol) => number, fillHex?: string) => {
+      P.forEach((p, i) => {
+        const col = agg.get(p);
+        fdCell(ws, row, c0 + i, col ? fdNv(get(col)) : "", { fill: fillHex, numFmt: FD_NUM_RED });
       });
-    });
-    setCell(ws, r, totalCol, nv(spec.totalUsd), { fill: CLR.GREEN, bold: true, numFmt: USD_FMT });
-    for (const c of [adUsdCol, adCnyCol, profitAdCol, enabledCol]) setCell(ws, r, c, "", {});
-    r++;
+      fdCell(ws, row, cCny, "", { fill: fillHex, numFmt: FD_NUM_RED });
+      fdCell(ws, row, cCnt, "", { fill: fillHex });
+    };
+    valueRow(7, (c) => c.book);
+    valueRow(8, (c) => c.rejected);
+    valueRow(9, (c) => c.recvH1, FD.G4);
+    valueRow(10, (c) => c.recvH2, FD.G6);
+    valueRow(11, () => 0, FD.GREEN); // 模板成员块合计行留空（合计在 C..M 公式区）
+    valueRow(12, (c) => c.paidCnyH1, FD.G4);
+    valueRow(13, (c) => c.paidCnyH2, FD.G6);
+    valueRow(14, () => 0, FD.GREEN);
+
+    // 行15/16 收款人、卡号
+    P.forEach((p, i) => fdCell(ws, 15, c0 + i, agg.get(p)?.payees || "", {}));
+    fdCell(ws, 15, cCny, "", {});
+    fdCell(ws, 15, cCnt, "", {});
+    P.forEach((p, i) => fdCell(ws, 16, c0 + i, agg.get(p)?.cards || "", {}));
+    fdCell(ws, 16, cCny, "", {});
+    fdCell(ws, 16, cCnt, "", {});
+
+    // 行17 利润行（成员块与模板一致留空，仅保留数字格式）
+    for (let i = 0; i < NP + 1; i++) fdCell(ws, 17, c0 + i, "", { numFmt: FD_NUM_RED, hDefault: true });
+    fdCell(ws, 17, cCnt, "", { hDefault: true });
   });
-
-  // ── 收款人 / 收款卡号（按人分开一行一人；多卡同格顿号分隔）──
-  setCell(ws, r, 1, "收款人", { fill: CLR.GRAY, bold: true, h: "left" });
-  setCell(ws, r, 2, "", { fill: CLR.GRAY });
-  setCell(ws, r + 1, 1, "收款卡号", { fill: CLR.GRAY, bold: true, h: "left" });
-  setCell(ws, r + 1, 2, "", { fill: CLR.GRAY });
-  let maxPayeeLines = 1;
-  plats.forEach((p, i) => {
-    const names = p.payees.map((pe) => pe.name).join("\n");
-    const cards = p.payees.map((pe) => pe.cards.join("、") || "—").join("\n");
-    maxPayeeLines = Math.max(maxPayeeLines, p.payees.length);
-    ws.mergeCells(r, platCol(i), r, platCol(i) + 1);
-    setCell(ws, r, platCol(i), names, { wrap: true });
-    ws.mergeCells(r + 1, platCol(i), r + 1, platCol(i) + 1);
-    setCell(ws, r + 1, platCol(i), cards, { wrap: true });
-  });
-  for (const c of [totalCol, adUsdCol, adCnyCol, profitAdCol, enabledCol]) {
-    setCell(ws, r, c, "", {});
-    setCell(ws, r + 1, c, "", {});
-  }
-  ws.getRow(r).height = Math.max(18, maxPayeeLines * 14);
-  ws.getRow(r + 1).height = Math.max(18, maxPayeeLines * 14);
-  r += 2;
-
-  // ── 实收3列 + 可分配利润 ──
-  ws.mergeCells(r, 1, r, 2);
-  setCell(ws, r, 1, "实收佣金(USD)·员工累计", { fill: CLR.GRAY, bold: true, h: "left" });
-  ws.mergeCells(r, C0, r, C0 + 1);
-  setCell(ws, r, C0, nv(sum.paidUsdTotal), { numFmt: USD_FMT, bold: true });
-  ws.mergeCells(r, C0 + 2, r, C0 + 3);
-  setCell(ws, r, C0 + 2, "默认实收(CNY)·打款日汇率", { fill: CLR.GRAY, bold: true });
-  ws.mergeCells(r, C0 + 4, r, C0 + 5);
-  setCell(ws, r, C0 + 4, nv(sum.estimatedPaidCny), { numFmt: CNY_FMT, bold: true });
-  ws.mergeCells(r, C0 + 6, r, C0 + 7);
-  setCell(ws, r, C0 + 6, "实际佣金(CNY)", { fill: CLR.GRAY, bold: true });
-  ws.mergeCells(r, C0 + 8, r, C0 + 9);
-  setCell(ws, r, C0 + 8, sum.actualPaidCny != null ? nv(sum.actualPaidCny) : "未填", { numFmt: sum.actualPaidCny != null ? CNY_FMT : undefined, bold: true });
-  r++;
-
-  ws.mergeCells(r, 1, r, 2);
-  setCell(ws, r, 1, "可分配利润（实收佣金-核算广告费）", { fill: CLR.GREEN_DARK, bold: true, h: "left" });
-  ws.mergeCells(r, C0, r, enabledCol);
-  setCell(ws, r, C0, `¥${sum.profitCny.toFixed(2)}（${sum.actualPaidCny != null ? "实际佣金" : "预估实收"} − 核算广告费 ¥${sum.profitAdCostCny.toFixed(2)}）`, { fill: CLR.GREEN, bold: true, h: "left" });
-
-  ws.views = [{ state: "frozen", xSplit: 2, ySplit: 2 }];
 }
 
 /** 年度报表 sheet（R-04.2：整年 12 个月新口径） */

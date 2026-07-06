@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { withUser } from "@/lib/api-handler";
 import ExcelJS from "exceljs";
 import { buildMemberMonthlyReport } from "@/lib/monthly-report";
-import { buildMemberSheet } from "@/lib/monthly-report-xlsx";
+import { buildFengduMonthSheet } from "@/lib/monthly-report-xlsx";
 
 export const dynamic = "force-dynamic";
 
@@ -21,7 +21,8 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
   const wb = new ExcelJS.Workbook();
   wb.creator = "CRM System";
   wb.created = new Date();
-  buildMemberSheet(wb, report, `${parseInt(month.slice(5), 10)}月份统计表`);
+  // R-06：与「丰度收支统计表」月份 sheet 完全同版式（单人 = 只有自己一个成员块）
+  buildFengduMonthSheet(wb, [report], `${parseInt(month.slice(5), 10)}月份`);
 
   const buffer = await wb.xlsx.writeBuffer();
   const filename = encodeURIComponent(`${report.username}${month}收支统计.xlsx`);
