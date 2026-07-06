@@ -3,14 +3,14 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Table, Tag, Button, Input, InputNumber, Space, Typography, Card, Row, Col,
-  Tooltip, App, Statistic, Switch, Tabs, Popconfirm, Badge, Alert,
+  Tooltip, App, Statistic, Switch, Tabs, Popconfirm, Badge, Alert, Segmented,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import {
   SwapOutlined, ThunderboltOutlined, LinkOutlined,
   CheckCircleOutlined, CloseCircleOutlined, QuestionCircleOutlined,
   KeyOutlined, CopyOutlined, SyncOutlined, WarningOutlined, BellOutlined,
-  AimOutlined, LoadingOutlined, EditOutlined,
+  AimOutlined, LoadingOutlined, EditOutlined, HistoryOutlined,
 } from "@ant-design/icons";
 import AppPageHeader from "@/components/AppPageHeader";
 
@@ -71,6 +71,26 @@ interface OverviewData {
   proxyStatus: { kookeeyLow: boolean; kookeeyLeftGB: number | null; thresholdGB: number } | null;
 }
 
+interface HistoryDailyRow {
+  date: string;
+  brushSuccess: number;
+  brushFailed: number;
+  replenished: number;
+  affiliateClicks: number;
+}
+interface HistoryCampaignRow {
+  date: string;
+  campaignId: string;
+  campaignName: string | null;
+  success: number;
+  failed: number;
+}
+interface HistoryData {
+  days: number;
+  daily: HistoryDailyRow[];
+  byCampaign: HistoryCampaignRow[];
+}
+
 const ALERT_TYPE_LABEL: Record<string, string> = {
   invalid_link: "链接无效",
   merchant_not_found: "商家库找不到",
@@ -103,6 +123,9 @@ export default function LinkExchangePage() {
   const [replenishing, setReplenishing] = useState<string | null>(null);
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
   const [alertsLoading, setAlertsLoading] = useState(false);
+  const [history, setHistory] = useState<HistoryData | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyDays, setHistoryDays] = useState(7);
   const [activeTab, setActiveTab] = useState("links");
   const [brushCounts, setBrushCounts] = useState<Record<string, number>>({});
   const [brushing, setBrushing] = useState<string | null>(null);
@@ -134,7 +157,22 @@ export default function LinkExchangePage() {
     }
   }, []);
 
+  const fetchHistory = useCallback(async (days: number) => {
+    setHistoryLoading(true);
+    try {
+      const res = await fetch(`/api/user/link-exchange/history?days=${days}`).then((r) => r.json());
+      if (res.code === 0) setHistory(res.data);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
   useEffect(() => { fetchData(); fetchAlerts(); }, [fetchData, fetchAlerts]);
+
+  // 打开「历史记录」页或切换天数时按需加载
+  useEffect(() => {
+    if (activeTab === "history") fetchHistory(historyDays);
+  }, [activeTab, historyDays, fetchHistory]);
 
   const hasRunningBrush = (data?.rows ?? []).some(
     (r) => r.clickTask && (r.clickTask.status === "running" || r.clickTask.status === "pending"),
@@ -772,6 +810,70 @@ export default function LinkExchangePage() {
                   pagination={{ defaultPageSize: 20, showTotal: (t) => `共 ${t} 条` }}
                   locale={{ emptyText: "暂无待处理告警" }}
                 />
+              ),
+            },
+            {
+              key: "history",
+              label: <Space size={4}><HistoryOutlined />历史记录</Space>,
+              children: (
+                <>
+                  <Space style={{ marginBottom: 12 }} wrap>
+                    <Segmented
+                      size="small"
+                      value={historyDays}
+                      onChange={(v) => setHistoryDays(Number(v))}
+                      options={[{ label: "近7天", value: 7 }, { label: "近14天", value: 14 }, { label: "近30天", value: 30 }]}
+                    />
+                    <Button size="small" icon={<SyncOutlined />} loading={historyLoading} onClick={() => fetchHistory(historyDays)}>刷新</Button>
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      按东八区自然日统计。展开某天可看各广告系列刷点击明细；「联盟平台点击」为联盟后台回传的真实点击，用于核对刷的点击是否生效。
+                    </Text>
+                  </Space>
+                  <Table<HistoryDailyRow>
+                    rowKey="date"
+                    size="small"
+                    loading={historyLoading}
+                    dataSource={history?.daily ?? []}
+                    pagination={false}
+                    locale={{ emptyText: "暂无历史数据" }}
+                    columns={[
+                      { title: "日期", dataIndex: "date", width: 130 },
+                      {
+                        title: "刷点击成功", dataIndex: "brushSuccess", width: 110, align: "right",
+                        render: (v: number) => <Text strong style={{ color: v > 0 ? "#52c41a" : undefined }}>{v}</Text>,
+                      },
+                      {
+                        title: "刷点击失败", dataIndex: "brushFailed", width: 110, align: "right",
+                        render: (v: number) => v > 0 ? <Text type="danger">{v}</Text> : <Text type="secondary">0</Text>,
+                      },
+                      { title: "库存产出", dataIndex: "replenished", width: 100, align: "right",
+                        render: (v: number) => <Tooltip title="当天新增的换链库存条数（补货 + 刷点击均计入）"><span>{v}</span></Tooltip> },
+                      {
+                        title: "联盟平台点击", dataIndex: "affiliateClicks", width: 130, align: "right",
+                        render: (v: number) => <Tooltip title="联盟后台 API 回传的真实点击数（含自然流量，通常 ≥ 刷的次数即表示已生效）"><Text style={{ color: v > 0 ? "#1677ff" : undefined }}>{v}</Text></Tooltip>,
+                      },
+                    ]}
+                    expandable={{
+                      rowExpandable: (row) => (history?.byCampaign ?? []).some((c) => c.date === row.date),
+                      expandedRowRender: (row) => {
+                        const items = (history?.byCampaign ?? []).filter((c) => c.date === row.date);
+                        return (
+                          <Table<HistoryCampaignRow>
+                            rowKey={(r) => `${r.date}-${r.campaignId}`}
+                            size="small"
+                            dataSource={items}
+                            pagination={false}
+                            columns={[
+                              { title: "广告系列", dataIndex: "campaignName", render: (n: string | null, r) => n || `#${r.campaignId}` },
+                              { title: "刷成功", dataIndex: "success", width: 90, align: "right", render: (v: number) => <Text style={{ color: v > 0 ? "#52c41a" : undefined }}>{v}</Text> },
+                              { title: "刷失败", dataIndex: "failed", width: 90, align: "right", render: (v: number) => v > 0 ? <Text type="danger">{v}</Text> : <Text type="secondary">0</Text> },
+                            ]}
+                          />
+                        );
+                      },
+                    }}
+                  />
+                </>
               ),
             },
           ]}
