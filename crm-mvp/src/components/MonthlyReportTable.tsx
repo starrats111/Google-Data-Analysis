@@ -6,6 +6,12 @@
  * 布局分两块：
  *   1. 广告费区：MCC 段（原币展示，组员可覆盖）+ 合计 + 核算广告费 + 在投广告数
  *   2. 佣金区：动态账号列（账面/失效/应收/实收USD+CNY/收款方式）+ 合计列 + 可分配利润
+ *
+ * 可读性设计（2026-07 对眼睛友好版）：
+ *   - 左侧行标签列、右侧「佣金合计」列滚动冻结，横向滚动不丢上下文
+ *   - 账号列按奇偶做斑马纹，跨行竖向扫读不串列
+ *   - 账面/应收/实收/收款/利润 区块之间用粗分隔线，行间留白加大
+ *   - 配色收敛：仅保留 平台绿表头 / 合计绿 / 纠正蓝 / 利润绿 四种语义色
  */
 
 import React, { useState } from "react";
@@ -18,34 +24,40 @@ const { Text } = Typography;
 const fmt = (n: number | null | undefined, empty = "") =>
   n == null ? empty : n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-// ─── 调色板 ───
+// ─── 调色板（收敛到语义色） ───
 const C = {
-  border: "#e5eaf0",
-  labelBg: "#f7f9fc",
-  labelText: "#3d4a5c",
-  headBg: "#f0f4f9",
-  platBg: "#e9f4ea",
+  border: "#e8edf3",
+  borderStrong: "#c9d6e4", // 区块分隔线
+  labelBg: "#f5f8fb",
+  labelText: "#42506b",
+  headBg: "#eef3f9",
+  platBg: "#e3f2e4", // 平台表头绿（对齐团队 Excel 习惯）
   platText: "#2f6b33",
   acctBg: "#fbfcfd",
-  totalBg: "#f4fbee",
+  totalBg: "#f2faee",
   totalBorder: "#b7d9a0",
-  recvBg: "#fffdf5",
-  paidBg: "#f8fbff",
   subHeadBg: "#eef5ff",
   overrideBg: "#e6f4ff",
   profitBg: "#f0f9e8",
-  zebra: "#fafbfd",
+  zebra: "#f7fafd", // 偶数账号列底色
 };
 
-// ─── 单元格样式 ───
+// 左侧冻结列宽（与 sticky 偏移量必须一致）
+const LABEL_W = 148;
+const SUB_W = 92;
+
+// ─── 单元格样式（separate 边框模型：每格只画右/下边，外框由外壳提供） ───
 const cellBase: React.CSSProperties = {
-  border: `1px solid ${C.border}`,
-  padding: "6px 10px",
+  borderRight: `1px solid ${C.border}`,
+  borderBottom: `1px solid ${C.border}`,
+  padding: "7px 10px",
   fontSize: 12.5,
   textAlign: "right",
   whiteSpace: "nowrap",
   fontVariantNumeric: "tabular-nums",
   color: "#1f2937",
+  minWidth: 88,
+  background: "#fff",
 };
 const headCell: React.CSSProperties = {
   ...cellBase,
@@ -61,12 +73,20 @@ const labelCell: React.CSSProperties = {
   fontWeight: 600,
   color: C.labelText,
 };
-const subLabelCell: React.CSSProperties = { ...labelCell, fontWeight: 400, paddingLeft: 16 };
+const subLabelCell: React.CSSProperties = {
+  ...labelCell,
+  fontWeight: 400,
+  paddingLeft: 14,
+  width: SUB_W,
+  minWidth: SUB_W,
+  maxWidth: SUB_W,
+};
 const totalCell: React.CSSProperties = {
   ...cellBase,
   background: C.totalBg,
   fontWeight: 600,
   borderLeft: `2px solid ${C.totalBorder}`,
+  minWidth: 108,
 };
 const platHeadCell: React.CSSProperties = {
   ...cellBase,
@@ -85,6 +105,11 @@ const acctNameCell: React.CSSProperties = {
   fontSize: 11.5,
 };
 
+/** 冻结列公共类名 */
+const FX0 = "mrt-fx0"; // 左 1 列（或 colSpan=2 的整块标签）
+const FX1 = "mrt-fx1"; // 左 2 列（子标签）
+const FXR = "mrt-fxr"; // 右侧合计列
+
 /** 表格外壳：圆角 + 细边框 + 横向滚动 */
 function TableShell({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
   return (
@@ -102,7 +127,9 @@ function TableShell({ title, hint, children }: { title: string; hint?: string; c
 }
 
 const tableStyle: React.CSSProperties = {
-  borderCollapse: "collapse",
+  // sticky 冻结列与 border-collapse 不兼容，改用 separate + spacing 0
+  borderCollapse: "separate",
+  borderSpacing: 0,
   width: "100%",
   minWidth: 720,
 };
@@ -141,7 +168,7 @@ function EditableCell({
 
   if (!editable) {
     return (
-      <td style={{ ...cellBase, background: baseBg }} colSpan={colSpan}>
+      <td style={{ ...cellBase, background: baseBg ?? cellBase.background }} colSpan={colSpan}>
         {overridden ? (
           <Tooltip title={`手工纠正值（系统计算 ${fmt(systemValue)}）`}>
             <span style={{ color: "#1677ff", fontWeight: 500 }}>{fmt(value)}</span>
@@ -153,7 +180,7 @@ function EditableCell({
 
   if (editing) {
     return (
-      <td style={{ ...cellBase, padding: 0, background: baseBg }} colSpan={colSpan}>
+      <td style={{ ...cellBase, padding: 0, background: baseBg ?? cellBase.background }} colSpan={colSpan}>
         <InputNumber
           autoFocus
           size="small"
@@ -182,7 +209,7 @@ function EditableCell({
   return (
     <td
       className="mrt-edit"
-      style={{ ...cellBase, cursor: "pointer", background: baseBg }}
+      style={{ ...cellBase, cursor: "pointer", background: baseBg ?? cellBase.background }}
       colSpan={colSpan}
       onClick={() => { setDraft(value); setEditing(true); }}
     >
@@ -227,12 +254,22 @@ export default function MonthlyReportTable({
     if (onOverride) await onOverride(scopeKey, value);
   };
 
+  /** 账号列斑马纹：偶数账号列微底色，竖向扫读不串列（纠正蓝优先于斑马纹） */
+  const zebra = (i: number): string | undefined => (i % 2 === 1 ? C.zebra : undefined);
+
   return (
     <div>
       <style>{`
         .mrt-edit .mrt-edit-ic { opacity: 0; transition: opacity .15s; }
         .mrt-edit:hover .mrt-edit-ic { opacity: 1; }
         .mrt-edit:hover { box-shadow: inset 0 0 0 1px #91caff; }
+        /* 冻结列：左侧行标签 / 右侧合计 */
+        .${FX0} { position: sticky; left: 0; z-index: 3; }
+        .${FX1} { position: sticky; left: ${LABEL_W}px; z-index: 3; box-shadow: 2px 0 4px -2px rgba(15,40,80,.12); }
+        .${FX0}[colspan] { box-shadow: 2px 0 4px -2px rgba(15,40,80,.12); }
+        .${FXR} { position: sticky; right: 0; z-index: 3; box-shadow: -2px 0 4px -2px rgba(15,40,80,.12); }
+        /* 区块分隔线（账面→应收→实收→收款→利润） */
+        tr.mrt-sec > td, tr.mrt-sec > th { border-top: 2px solid ${C.borderStrong} !important; }
       `}</style>
 
       {/* 汇率提示条 */}
@@ -286,66 +323,70 @@ export default function MonthlyReportTable({
             {mccs.length === 0 ? (
               <tr><td colSpan={6} style={{ ...cellBase, textAlign: "center", color: "#999", padding: 16 }}>本月无广告消耗</td></tr>
             ) : mccs.map((m: MccSection, idx) => {
-              const rowBg = idx % 2 === 1 ? C.zebra : undefined;
+              const rowBg = idx % 2 === 1 ? C.zebra : "#fff";
               return (
-                <tr key={m.mccDbId} style={{ background: rowBg }}>
-                  <td style={{ ...cellBase, textAlign: "left" }}>
+                <tr key={m.mccDbId}>
+                  <td style={{ ...cellBase, background: rowBg, textAlign: "left" }}>
                     <Text strong style={{ fontSize: 12.5 }}>{m.mccName}</Text>
                     <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>{m.mccId}</Text>
                   </td>
-                  <td style={{ ...cellBase, textAlign: "center" }}>
+                  <td style={{ ...cellBase, background: rowBg, textAlign: "center" }}>
                     <Tag color={m.currency === "CNY" ? "blue" : "green"} style={{ margin: 0 }}>{m.currency === "CNY" ? "人民币" : "美金"}</Tag>
                   </td>
-                  <td style={cellBase}>{fmt(m.costOriginal)}</td>
-                  <td style={{ ...cellBase, color: m.adjustment > 0 ? undefined : "#c3cad4" }}>{m.adjustment > 0 ? fmt(m.adjustment) : "—"}</td>
+                  <td style={{ ...cellBase, background: rowBg }}>{fmt(m.costOriginal)}</td>
+                  <td style={{ ...cellBase, background: rowBg, color: m.adjustment > 0 ? undefined : "#c3cad4" }}>{m.adjustment > 0 ? fmt(m.adjustment) : "—"}</td>
                   <EditableCell
                     value={m.effectiveOriginal}
                     overridden={m.override != null}
                     editable={editable}
                     systemValue={m.costOriginal}
+                    bg={rowBg}
                     onSave={(v) => save(`mcc:${m.mccDbId}`, v)}
                   />
-                  <td style={{ ...cellBase, fontWeight: 500 }}>{fmt(m.effectiveUsd)}</td>
+                  <td style={{ ...cellBase, background: rowBg, fontWeight: 500 }}>{fmt(m.effectiveUsd)}</td>
                 </tr>
               );
             })}
-            <tr>
-              <td style={{ ...totalCell, borderLeft: `1px solid ${C.border}`, textAlign: "left" }} colSpan={2}>广告费合计</td>
-              <td style={{ ...totalCell, borderLeft: `1px solid ${C.border}`, textAlign: "center" }} colSpan={2}>
+            <tr className="mrt-sec">
+              <td style={{ ...totalCell, borderLeft: undefined, textAlign: "left" }} colSpan={2}>广告费合计</td>
+              <td style={{ ...totalCell, borderLeft: undefined, textAlign: "center" }} colSpan={2}>
                 $ {fmt(report.adCostTotalUsd)}{report.adCostTotalCny > 0 && <> ｜ ¥ {fmt(report.adCostTotalCny)}</>}
               </td>
-              <td style={{ ...totalCell, borderLeft: `1px solid ${C.border}`, textAlign: "center" }}>
+              <td style={{ ...totalCell, borderLeft: undefined, textAlign: "center" }}>
                 <Tooltip title="用于核算利润的广告费：人民币按报表汇率折美金 + 美金累计">核算广告费 $ {fmt(report.profitAdCostUsd)}</Tooltip>
               </td>
-              <td style={{ ...totalCell, borderLeft: `1px solid ${C.border}`, textAlign: "center" }}>在投广告数 {report.enabledCampaigns}</td>
+              <td style={{ ...totalCell, borderLeft: undefined, textAlign: "center" }}>在投广告数 {report.enabledCampaigns}</td>
             </tr>
           </tbody>
         </table>
       </TableShell>
 
       {/* ── 佣金区（动态账号列，每账号占 2 列；实收区拆 USD/CNY 双列） ── */}
-      <TableShell title="佣金明细" hint={editable ? "所有数值均可点击手工纠正（蓝底为已纠正，↺ 恢复系统值）" : undefined}>
+      <TableShell
+        title="佣金明细"
+        hint={editable ? "所有数值均可点击手工纠正（蓝底为已纠正，↺ 恢复系统值）；左右两侧列已冻结" : "左右两侧列已冻结，可横向滚动"}
+      >
         <table style={tableStyle}>
           <thead>
             <tr>
-              <th style={{ ...headCell, textAlign: "left" }} colSpan={2}>广告联盟</th>
-              {accounts.map((a: AccountColumn) => (
-                <th key={`${a.platform}-${a.accountName}`} style={platHeadCell} colSpan={2}>{a.label}</th>
+              <th className={FX0} style={{ ...headCell, textAlign: "left", width: LABEL_W + SUB_W, minWidth: LABEL_W + SUB_W }} colSpan={2}>广告联盟</th>
+              {accounts.map((a: AccountColumn, i) => (
+                <th key={`${a.platform}-${a.accountName}`} style={{ ...platHeadCell, background: i % 2 === 1 ? "#d8ecd9" : C.platBg }} colSpan={2}>{a.label}</th>
               ))}
-              <th style={{ ...headCell, borderLeft: `2px solid ${C.totalBorder}` }}>佣金合计</th>
+              <th className={FXR} style={{ ...headCell, borderLeft: `2px solid ${C.totalBorder}` }}>佣金合计</th>
             </tr>
             <tr>
-              <th style={{ ...acctNameCell, textAlign: "left", fontWeight: 600, color: C.labelText, background: C.labelBg }} colSpan={2}>账号名称</th>
-              {accounts.map((a) => (
-                <th key={`${a.platform}-${a.accountName}`} style={acctNameCell} colSpan={2}>{a.accountName || "—"}</th>
+              <th className={FX0} style={{ ...acctNameCell, textAlign: "left", fontWeight: 600, color: C.labelText, background: C.labelBg }} colSpan={2}>账号名称</th>
+              {accounts.map((a, i) => (
+                <th key={`${a.platform}-${a.accountName}`} style={{ ...acctNameCell, background: zebra(i) ?? C.acctBg }} colSpan={2}>{a.accountName || "—"}</th>
               ))}
-              <th style={{ ...acctNameCell, borderLeft: `2px solid ${C.totalBorder}` }}></th>
+              <th className={FXR} style={{ ...acctNameCell, background: C.totalBg, borderLeft: `2px solid ${C.totalBorder}` }}></th>
             </tr>
           </thead>
           <tbody>
             <tr>
-              <td style={labelCell} colSpan={2}>账面佣金（美金）</td>
-              {accounts.map((a) => (
+              <td className={FX0} style={labelCell} colSpan={2}>账面佣金（美金）</td>
+              {accounts.map((a, i) => (
                 <EditableCell
                   key={a.label}
                   colSpan={2}
@@ -353,14 +394,15 @@ export default function MonthlyReportTable({
                   overridden={a.bookOverride != null}
                   editable={editable && a.accountName !== "(历史账号)"}
                   systemValue={a.book}
+                  bg={zebra(i)}
                   onSave={(v) => save(`book:${a.platform}:${a.accountName}`, v)}
                 />
               ))}
-              <td style={totalCell}>{fmt(totals.book)}</td>
+              <td className={FXR} style={totalCell}>{fmt(totals.book)}</td>
             </tr>
             <tr>
-              <td style={labelCell} colSpan={2}>失效佣金（美金）</td>
-              {accounts.map((a) => (
+              <td className={FX0} style={labelCell} colSpan={2}>失效佣金（美金）</td>
+              {accounts.map((a, i) => (
                 <EditableCell
                   key={a.label}
                   colSpan={2}
@@ -368,17 +410,18 @@ export default function MonthlyReportTable({
                   overridden={a.rejectedOverride != null}
                   editable={editable && a.accountName !== "(历史账号)"}
                   systemValue={a.rejected}
-                  valueColor={a.rejectedEffective > 0 ? "#cf1322" : undefined}
+                  bg={zebra(i)}
+                  valueColor={a.rejectedEffective > 0 ? "#cf1322" : "#c3cad4"}
                   onSave={(v) => save(`rejected:${a.platform}:${a.accountName}`, v)}
                 />
               ))}
-              <td style={{ ...totalCell, color: totals.rejected > 0 ? "#cf1322" : undefined }}>{fmt(totals.rejected)}</td>
+              <td className={FXR} style={{ ...totalCell, color: totals.rejected > 0 ? "#cf1322" : undefined }}>{fmt(totals.rejected)}</td>
             </tr>
             {/* 应收 */}
-            <tr>
-              <td style={labelCell} rowSpan={3}>应收佣金（美金）</td>
-              <td style={subLabelCell}>5号 · 上半月</td>
-              {accounts.map((a) => (
+            <tr className="mrt-sec">
+              <td className={FX0} rowSpan={3} style={{ ...labelCell, width: LABEL_W, minWidth: LABEL_W, maxWidth: LABEL_W }}>应收佣金（美金）</td>
+              <td className={FX1} style={subLabelCell}>5号 · 上半月</td>
+              {accounts.map((a, i) => (
                 <EditableCell
                   key={a.label}
                   colSpan={2}
@@ -386,16 +429,16 @@ export default function MonthlyReportTable({
                   overridden={a.recvH1Override != null}
                   editable={editable && a.accountName !== "(历史账号)"}
                   systemValue={a.recvH1}
-                  bg={C.recvBg}
+                  bg={zebra(i)}
                   blankZero={!a.hasPayments}
                   onSave={(v) => save(`due:${a.platform}:${a.accountName}:H1`, v)}
                 />
               ))}
-              <td style={totalCell}>{fmt(totals.recvH1)}</td>
+              <td className={FXR} style={totalCell}>{fmt(totals.recvH1)}</td>
             </tr>
             <tr>
-              <td style={subLabelCell}>15号 · 下半月</td>
-              {accounts.map((a) => (
+              <td className={FX1} style={subLabelCell}>15号 · 下半月</td>
+              {accounts.map((a, i) => (
                 <EditableCell
                   key={a.label}
                   colSpan={2}
@@ -403,29 +446,29 @@ export default function MonthlyReportTable({
                   overridden={a.recvH2Override != null}
                   editable={editable && a.accountName !== "(历史账号)"}
                   systemValue={a.recvH2}
-                  bg={C.recvBg}
+                  bg={zebra(i)}
                   blankZero={!a.hasPayments}
                   onSave={(v) => save(`due:${a.platform}:${a.accountName}:H2`, v)}
                 />
               ))}
-              <td style={totalCell}>{fmt(totals.recvH2)}</td>
+              <td className={FXR} style={totalCell}>{fmt(totals.recvH2)}</td>
             </tr>
             <tr>
-              <td style={{ ...subLabelCell, fontWeight: 600 }}>合计</td>
-              {accounts.map((a) => (
-                <td key={a.label} style={{ ...cellBase, background: C.recvBg, fontWeight: 600 }} colSpan={2}>
+              <td className={FX1} style={{ ...subLabelCell, fontWeight: 600 }}>合计</td>
+              {accounts.map((a, i) => (
+                <td key={a.label} style={{ ...cellBase, background: zebra(i) ?? "#fff", fontWeight: 600 }} colSpan={2}>
                   {a.hasPayments || a.recvH1Override != null || a.recvH2Override != null ? fmt(a.recvH1Effective + a.recvH2Effective) : ""}
                 </td>
               ))}
-              <td style={totalCell}>{fmt(totals.recvTotal)}</td>
+              <td className={FXR} style={totalCell}>{fmt(totals.recvTotal)}</td>
             </tr>
             {/* 实收（USD/CNY 双列，可编辑） */}
-            <tr>
-              <td style={labelCell} rowSpan={4}>
+            <tr className="mrt-sec">
+              <td className={FX0} rowSpan={4} style={{ ...labelCell, width: LABEL_W, minWidth: LABEL_W, maxWidth: LABEL_W }}>
                 实收佣金
                 {editable && <div><Text type="secondary" style={{ fontSize: 10.5 }}>点击单元格手工纠正</Text></div>}
               </td>
-              <td style={{ ...subLabelCell, background: C.subHeadBg }}></td>
+              <td className={FX1} style={{ ...subLabelCell, background: C.subHeadBg }}></td>
               {accounts.map((a) => (
                 <React.Fragment key={a.label}>
                   <td style={{ ...cellBase, background: C.subHeadBg, textAlign: "center", fontSize: 11, fontWeight: 600, color: "#0958d9" }}>USD</td>
@@ -434,18 +477,18 @@ export default function MonthlyReportTable({
                   </td>
                 </React.Fragment>
               ))}
-              <td style={{ ...totalCell, background: C.subHeadBg, textAlign: "center", fontSize: 11 }}>$ / ¥</td>
+              <td className={FXR} style={{ ...totalCell, background: C.subHeadBg, textAlign: "center", fontSize: 11 }}>$ / ¥</td>
             </tr>
             <tr>
-              <td style={subLabelCell}>10号 · 上半月</td>
-              {accounts.map((a) => (
+              <td className={FX1} style={subLabelCell}>10号 · 上半月</td>
+              {accounts.map((a, i) => (
                 <React.Fragment key={a.label}>
                   <EditableCell
                     value={a.paidH1Effective}
                     overridden={a.paidH1Override != null}
                     editable={editable && a.accountName !== "(历史账号)"}
                     systemValue={a.paidH1}
-                    bg={C.paidBg}
+                    bg={zebra(i)}
                     blankZero={!a.hasPayments}
                     onSave={(v) => save(`recv:${a.platform}:${a.accountName}:H1`, v)}
                   />
@@ -454,27 +497,27 @@ export default function MonthlyReportTable({
                     overridden={a.paidCnyH1Override != null}
                     editable={editable && a.accountName !== "(历史账号)"}
                     systemValue={a.paidCnyH1}
-                    bg={C.paidBg}
+                    bg={zebra(i)}
                     blankZero={!a.hasPayments}
                     onSave={(v) => save(`recvcny:${a.platform}:${a.accountName}:H1`, v)}
                   />
                 </React.Fragment>
               ))}
-              <td style={totalCell}>
+              <td className={FXR} style={totalCell}>
                 <div>{fmt(totals.paidH1)}</div>
                 <div style={{ color: "#d46b08", fontWeight: 500 }}>¥{fmt(totals.paidCnyH1)}</div>
               </td>
             </tr>
             <tr>
-              <td style={subLabelCell}>20号 · 下半月</td>
-              {accounts.map((a) => (
+              <td className={FX1} style={subLabelCell}>20号 · 下半月</td>
+              {accounts.map((a, i) => (
                 <React.Fragment key={a.label}>
                   <EditableCell
                     value={a.paidH2Effective}
                     overridden={a.paidH2Override != null}
                     editable={editable && a.accountName !== "(历史账号)"}
                     systemValue={a.paidH2}
-                    bg={C.paidBg}
+                    bg={zebra(i)}
                     blankZero={!a.hasPayments}
                     onSave={(v) => save(`recv:${a.platform}:${a.accountName}:H2`, v)}
                   />
@@ -483,52 +526,52 @@ export default function MonthlyReportTable({
                     overridden={a.paidCnyH2Override != null}
                     editable={editable && a.accountName !== "(历史账号)"}
                     systemValue={a.paidCnyH2}
-                    bg={C.paidBg}
+                    bg={zebra(i)}
                     blankZero={!a.hasPayments}
                     onSave={(v) => save(`recvcny:${a.platform}:${a.accountName}:H2`, v)}
                   />
                 </React.Fragment>
               ))}
-              <td style={totalCell}>
+              <td className={FXR} style={totalCell}>
                 <div>{fmt(totals.paidH2)}</div>
                 <div style={{ color: "#d46b08", fontWeight: 500 }}>¥{fmt(totals.paidCnyH2)}</div>
               </td>
             </tr>
             <tr>
-              <td style={{ ...subLabelCell, fontWeight: 600 }}>合计</td>
-              {accounts.map((a) => {
+              <td className={FX1} style={{ ...subLabelCell, fontWeight: 600 }}>合计</td>
+              {accounts.map((a, i) => {
                 const hasPaid = a.hasPayments || a.paidH1Override != null || a.paidH2Override != null
                   || a.paidCnyH1Override != null || a.paidCnyH2Override != null;
                 return (
                   <React.Fragment key={a.label}>
-                    <td style={{ ...cellBase, background: C.paidBg, fontWeight: 600 }}>{hasPaid ? fmt(a.paidH1Effective + a.paidH2Effective) : ""}</td>
-                    <td style={{ ...cellBase, background: C.paidBg, fontWeight: 600, color: "#d46b08" }}>{hasPaid ? fmt(a.paidCnyH1Effective + a.paidCnyH2Effective) : ""}</td>
+                    <td style={{ ...cellBase, background: zebra(i) ?? "#fff", fontWeight: 600 }}>{hasPaid ? fmt(a.paidH1Effective + a.paidH2Effective) : ""}</td>
+                    <td style={{ ...cellBase, background: zebra(i) ?? "#fff", fontWeight: 600, color: "#d46b08" }}>{hasPaid ? fmt(a.paidCnyH1Effective + a.paidCnyH2Effective) : ""}</td>
                   </React.Fragment>
                 );
               })}
-              <td style={totalCell}>
+              <td className={FXR} style={totalCell}>
                 <div>{fmt(totals.paidTotal)}</div>
                 <div style={{ color: "#d46b08", fontWeight: 500 }}>¥{fmt(totals.paidCnyTotal)}</div>
               </td>
             </tr>
             {/* 收款方式 */}
-            <tr>
-              <td style={labelCell} colSpan={2}>收款人</td>
-              {accounts.map((a) => <td key={a.label} style={{ ...cellBase, textAlign: "center" }} colSpan={2}>{a.payeeName}</td>)}
-              <td style={totalCell}></td>
+            <tr className="mrt-sec">
+              <td className={FX0} style={labelCell} colSpan={2}>收款人</td>
+              {accounts.map((a, i) => <td key={a.label} style={{ ...cellBase, background: zebra(i) ?? "#fff", textAlign: "center" }} colSpan={2}>{a.payeeName}</td>)}
+              <td className={FXR} style={totalCell}></td>
             </tr>
             <tr>
-              <td style={labelCell} colSpan={2}>收款卡号</td>
-              {accounts.map((a) => <td key={a.label} style={{ ...cellBase, textAlign: "center", fontSize: 11, color: "#6b7686" }} colSpan={2}>{a.cardNo}</td>)}
-              <td style={totalCell}></td>
+              <td className={FX0} style={labelCell} colSpan={2}>收款卡号</td>
+              {accounts.map((a, i) => <td key={a.label} style={{ ...cellBase, background: zebra(i) ?? "#fff", textAlign: "center", fontSize: 11, color: "#6b7686" }} colSpan={2}>{a.cardNo}</td>)}
+              <td className={FXR} style={totalCell}></td>
             </tr>
             {/* 可分配利润 */}
-            <tr>
-              <td style={{ ...labelCell, background: C.profitBg, fontSize: 13 }} colSpan={2}>可分配利润<div><Text type="secondary" style={{ fontSize: 10.5 }}>实收佣金 − 核算广告费</Text></div></td>
+            <tr className="mrt-sec">
+              <td className={FX0} style={{ ...labelCell, background: C.profitBg, fontSize: 13 }} colSpan={2}>可分配利润<div><Text type="secondary" style={{ fontSize: 10.5 }}>实收佣金 − 核算广告费</Text></div></td>
               <td style={{ ...cellBase, background: C.profitBg, textAlign: "center", fontSize: 14, fontWeight: 700, color: report.profit.usd >= 0 ? "#389e0d" : "#cf1322" }} colSpan={Math.max(accounts.length * 2, 1)}>
                 $ {fmt(report.profit.usd)}{rate.cnyToUsd > 0 && <span style={{ marginLeft: 16 }}>¥ {fmt(report.profit.cny)}</span>}
               </td>
-              <td style={{ ...totalCell, background: C.profitBg }}></td>
+              <td className={FXR} style={{ ...totalCell, background: C.profitBg }}></td>
             </tr>
           </tbody>
         </table>
