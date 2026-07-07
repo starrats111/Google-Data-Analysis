@@ -715,7 +715,9 @@ export default function SettlementPage() {
             <Col xs={24} sm={8}>
               <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
                 <div style={{ textAlign: "center" }}>
-                  <Text type="secondary" style={{ fontSize: 13 }}>确认率</Text>
+                  <Tooltip title="确认率 = (已确认 approved + 已打款 paid) / 总佣金——paid 是 approved 的后继状态，一并计入">
+                    <Text type="secondary" style={{ fontSize: 13, borderBottom: "1px dashed #ccc", cursor: "help" }}>确认率</Text>
+                  </Tooltip>
                   <Progress type="dashboard" percent={s.approval_rate} size={80} strokeColor={COLORS.successGreen} format={(p) => `${p}%`} />
                 </div>
               </Card>

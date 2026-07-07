@@ -164,8 +164,9 @@ export async function GET(req: NextRequest) {
   const awaitingPayment = approvedCommission + paidCommission - receivedAmount;
 
   const fix2 = (n: number) => +n.toFixed(2);
-  // 确认率=已确认/总；拒付率=拒付/总；结算率=已支付/总。
-  const approvalRate   = totalCommission > 0 ? fix2(approvedCommission / totalCommission * 100) : 0;
+  // 确认率=(approved+paid)/总（paid 是 approved 的后继状态，确认口径须含已打款部分）；
+  // 拒付率=拒付/总；结算率=已支付(交易 paid 桶)/总。
+  const approvalRate   = totalCommission > 0 ? fix2((approvedCommission + paidCommission) / totalCommission * 100) : 0;
   const rejectionRate  = totalCommission > 0 ? fix2(rejectedCommission / totalCommission * 100) : 0;
   const settlementRate = totalCommission > 0 ? fix2(paidCommission     / totalCommission * 100) : 0;
 
