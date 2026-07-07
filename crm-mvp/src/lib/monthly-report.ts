@@ -145,6 +145,10 @@ export interface TeamPlatformAgg {
   /** R-04.4：每平台实收(CNY)组长手填（scope team_paid_cny:{平台}:{H1|H2}），null=未填 */
   paidCnyH1: number | null;
   paidCnyH2: number | null;
+  /** R-07：银行流水登记的实际入账(CNY)聚合（平台×半月，txn_at 北京时间归半月），null=该半月无登记。
+   *  实际佣金取值优先级：组长手填 > 银行流水 > 成员默认CNY */
+  bankCnyH1: number | null;
+  bankCnyH2: number | null;
   /** 该平台成员实收(CNY)生效值累计（逐笔打款日汇率 + 组员手填），手填为空时的默认展示值 */
   memberCnyH1: number;
   memberCnyH2: number;
@@ -754,7 +758,8 @@ export async function buildTeamMonthlySummary(
         agg = {
           platform: col.platform, book: 0, rejected: 0, recvH1: 0, recvH2: 0, recvTotal: 0,
           paidH1: 0, paidH2: 0, paidTotal: 0,
-          paidCnyH1: null, paidCnyH2: null, memberCnyH1: 0, memberCnyH2: 0, estPaidCny: 0, payees: [],
+          paidCnyH1: null, paidCnyH2: null, bankCnyH1: null, bankCnyH2: null,
+          memberCnyH1: 0, memberCnyH2: 0, estPaidCny: 0, payees: [],
         };
         platMap.set(col.platform, agg);
       }
@@ -766,6 +771,32 @@ export async function buildTeamMonthlySummary(
       agg.paidH2 += col.paidH2Effective;
       agg.memberCnyH1 += col.paidCnyH1Effective;
       agg.memberCnyH2 += col.paidCnyH2Effective;
+    }
+  }
+
+  // R-07：银行流水登记的实际入账(CNY)，按 平台×半月 聚合（txn_at 北京时间切半月）。
+  // 组长在「银行流水」页登记的到账即实际佣金来源，无需再到月度报表手填一遍。
+  const bankEntries = await prisma.bank_flow_entries.findMany({
+    where: { team_id: teamId, month, is_deleted: 0 },
+    select: { platform: true, txn_at: true, amount: true },
+  });
+  const bankCnyByPlat = new Map<string, { H1: number; H2: number; hasH1: boolean; hasH2: boolean }>();
+  for (const e of bankEntries) {
+    const day = new Date(e.txn_at.getTime() + 8 * 3600 * 1000).getUTCDate();
+    let b = bankCnyByPlat.get(e.platform);
+    if (!b) { b = { H1: 0, H2: 0, hasH1: false, hasH2: false }; bankCnyByPlat.set(e.platform, b); }
+    if (day <= 15) { b.H1 += Number(e.amount || 0); b.hasH1 = true; }
+    else { b.H2 += Number(e.amount || 0); b.hasH2 = true; }
+  }
+  // 银行流水可能涉及成员报表里没有的平台列（如历史账号已删），补一列空聚合避免金额丢失
+  for (const plat of bankCnyByPlat.keys()) {
+    if (!platMap.has(plat)) {
+      platMap.set(plat, {
+        platform: plat, book: 0, rejected: 0, recvH1: 0, recvH2: 0, recvTotal: 0,
+        paidH1: 0, paidH2: 0, paidTotal: 0,
+        paidCnyH1: null, paidCnyH2: null, bankCnyH1: null, bankCnyH2: null,
+        memberCnyH1: 0, memberCnyH2: 0, estPaidCny: 0, payees: [],
+      });
     }
   }
 
@@ -803,6 +834,7 @@ export async function buildTeamMonthlySummary(
   const platforms = [...platMap.values()]
     .map((a) => {
       const manual = platCnyManual.get(a.platform) || {};
+      const bank = bankCnyByPlat.get(a.platform);
       const paidH1 = r2(a.paidH1), paidH2 = r2(a.paidH2);
       const memberCnyH1 = r2(a.memberCnyH1), memberCnyH2 = r2(a.memberCnyH2);
       const byName = payeeByPlatform.get(a.platform);
@@ -813,6 +845,8 @@ export async function buildTeamMonthlySummary(
         paidH1, paidH2, paidTotal: r2(paidH1 + paidH2),
         paidCnyH1: manual.H1 != null ? r2(manual.H1) : null,
         paidCnyH2: manual.H2 != null ? r2(manual.H2) : null,
+        bankCnyH1: bank?.hasH1 ? r2(bank.H1) : null,
+        bankCnyH2: bank?.hasH2 ? r2(bank.H2) : null,
         memberCnyH1, memberCnyH2,
         estPaidCny: r2(memberCnyH1 + memberCnyH2),
         payees: byName
@@ -858,12 +892,20 @@ export async function buildTeamMonthlySummary(
   // 默认实收(CNY) = 成员实收CNY生效值累计（逐笔打款日汇率 + 组员手填）
   const estimatedPaidCny = totals.paidCnyTotal;
 
-  // 实际佣金(CNY)：R-04.4 起 = Σ每平台(组长手填 ?? 该平台成员默认CNY)；旧版总额 actual_cny 若存在则整体覆盖（兼容）
-  const anyPlatformManual = platforms.some((p) => p.paidCnyH1 != null || p.paidCnyH2 != null);
+  // 实际佣金(CNY)：Σ每平台每半月(组长手填 ?? 银行流水登记 ?? 该平台成员默认CNY)；
+  // 旧版总额 actual_cny 若存在则整体覆盖（兼容）。
+  // R-07 起银行流水登记即自动同步进报表，只有手填/流水都为空时才回落成员默认估算。
+  const anyPlatformManual = platforms.some(
+    (p) => p.paidCnyH1 != null || p.paidCnyH2 != null || p.bankCnyH1 != null || p.bankCnyH2 != null,
+  );
   const actualPaidCny = legacyActualCny != null
     ? legacyActualCny
     : anyPlatformManual
-      ? r2(platforms.reduce((s, p) => s + (p.paidCnyH1 ?? p.memberCnyH1) + (p.paidCnyH2 ?? p.memberCnyH2), 0))
+      ? r2(platforms.reduce(
+          (s, p) =>
+            s + (p.paidCnyH1 ?? p.bankCnyH1 ?? p.memberCnyH1) + (p.paidCnyH2 ?? p.bankCnyH2 ?? p.memberCnyH2),
+          0,
+        ))
       : null;
 
   const profitCny = r2((actualPaidCny ?? estimatedPaidCny) - profitAdCostCny);
@@ -1166,6 +1208,22 @@ export async function buildTeamAnnualReport(
     }
   }
 
+  // ── 4a. 银行流水登记（R-07）：月×平台×半月 实际入账(CNY)聚合，优先级低于组长手填、高于成员估算 ──
+  const bankRows = await prisma.bank_flow_entries.findMany({
+    where: { team_id: teamId, is_deleted: 0, month: { startsWith: `${year}-` } },
+    select: { month: true, platform: true, txn_at: true, amount: true },
+  });
+  const bankCnyMonthPlat = new Map<string, Map<string, { H1?: number; H2?: number }>>();
+  for (const e of bankRows) {
+    const day = new Date(e.txn_at.getTime() + 8 * 3600 * 1000).getUTCDate();
+    const half = day <= 15 ? "H1" : "H2";
+    let byPlat = bankCnyMonthPlat.get(e.month);
+    if (!byPlat) { byPlat = new Map(); bankCnyMonthPlat.set(e.month, byPlat); }
+    const entry = byPlat.get(e.platform) || {};
+    entry[half as "H1" | "H2"] = (entry[half as "H1" | "H2"] || 0) + Number(e.amount || 0);
+    byPlat.set(e.platform, entry);
+  }
+
   // ── 4. 组长手填（每平台 CNY + 旧版总额），按月套用 ──
   const leadOv = await prisma.report_overrides.findMany({
     where: {
@@ -1198,20 +1256,23 @@ export async function buildTeamAnnualReport(
     const estPaidCny = r2(a.paidCnyTotal);
 
     const byPlat = platManualByMonth.get(m);
+    const bankByPlat = bankCnyMonthPlat.get(m);
     let actualPaidCny: number | null = legacyByMonth.get(m) ?? null;
-    if (actualPaidCny == null && byPlat && byPlat.size > 0) {
-      // 参与平台 = 有实收的平台 ∪ 有手填的平台
-      const plats = new Set<string>([...byPlat.keys()]);
+    if (actualPaidCny == null && ((byPlat && byPlat.size > 0) || (bankByPlat && bankByPlat.size > 0))) {
+      // 参与平台 = 有实收的平台 ∪ 有手填的平台 ∪ 有银行流水登记的平台
+      const plats = new Set<string>([...(byPlat?.keys() || []), ...(bankByPlat?.keys() || [])]);
       for (const key of paidCnyPlatHalf.keys()) {
         const [pm, plat] = key.split("|");
         if (pm === m) plats.add(plat);
       }
       let sum = 0;
       for (const plat of plats) {
-        const manual = byPlat.get(plat) || {};
+        const manual = byPlat?.get(plat) || {};
+        const bank = bankByPlat?.get(plat) || {};
         const estH1 = paidCnyPlatHalf.get(`${m}|${plat}|H1`) || 0;
         const estH2 = paidCnyPlatHalf.get(`${m}|${plat}|H2`) || 0;
-        sum += (manual.H1 ?? estH1) + (manual.H2 ?? estH2);
+        // 优先级：组长手填 > 银行流水登记 > 成员默认估算
+        sum += (manual.H1 ?? bank.H1 ?? estH1) + (manual.H2 ?? bank.H2 ?? estH2);
       }
       actualPaidCny = r2(sum);
     }

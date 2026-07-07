@@ -634,32 +634,35 @@ export function TeamSummaryTable({
     </>
   );
 
-  /** 实收行：平台拆 $（支付数据，只读）/ ¥（组长手填，默认成员CNY累计）两列 */
+  /** 实收行：平台拆 $（支付数据，只读）/ ¥ 两列。
+   *  ¥ 取值优先级：组长手填(蓝) > 银行流水登记(绿) > 成员默认CNY累计(灰) */
   const paidRow = (
     half: "H1" | "H2",
     getUsd: (p: TeamPlatformAgg) => number,
     getCnyManual: (p: TeamPlatformAgg) => number | null,
+    getCnyBank: (p: TeamPlatformAgg) => number | null,
     getCnyDefault: (p: TeamPlatformAgg) => number,
     totalUsd: number,
   ) => {
-    const totalCny = plats.reduce((s, p) => s + (getCnyManual(p) ?? getCnyDefault(p)), 0);
+    const totalCny = plats.reduce((s, p) => s + (getCnyManual(p) ?? getCnyBank(p) ?? getCnyDefault(p)), 0);
     return (
       <>
         {plats.map((p, i) => {
           const usd = getUsd(p);
           const manual = getCnyManual(p);
+          const bank = getCnyBank(p);
           return (
             <React.Fragment key={`paid-${half}-${p.platform}`}>
               <td style={{ ...cellBase, background: zebra(i) ?? "#fff", color: muted(usd) }}>{fmt(usd)}</td>
               <EditableCell
-                value={manual ?? getCnyDefault(p)}
+                value={manual ?? bank ?? getCnyDefault(p)}
                 overridden={manual != null}
                 editable={editable}
-                systemValue={getCnyDefault(p)}
+                systemValue={bank ?? getCnyDefault(p)}
                 bg={zebra(i)}
-                valueColor={muted(getCnyDefault(p), "#8a94a3")}
+                valueColor={bank != null ? "#389e0d" : muted(getCnyDefault(p), "#8a94a3")}
                 manualLabel="组长手填实际到账(¥)"
-                systemLabel="默认值·成员实收CNY累计(打款日汇率)"
+                systemLabel={bank != null ? "银行流水登记合计(¥)" : "默认值·成员实收CNY累计(打款日汇率)"}
                 onSave={(v) => onSavePlatCny!(p.platform, half, v)}
               />
             </React.Fragment>
@@ -674,7 +677,9 @@ export function TeamSummaryTable({
   };
 
   const cnyTotal = (half: "H1" | "H2") =>
-    plats.reduce((s, p) => s + ((half === "H1" ? p.paidCnyH1 ?? p.memberCnyH1 : p.paidCnyH2 ?? p.memberCnyH2)), 0);
+    plats.reduce((s, p) => s + ((half === "H1"
+      ? p.paidCnyH1 ?? p.bankCnyH1 ?? p.memberCnyH1
+      : p.paidCnyH2 ?? p.bankCnyH2 ?? p.memberCnyH2)), 0);
 
   return (
     <div>
@@ -729,7 +734,7 @@ export function TeamSummaryTable({
                     <Tooltip title="支付数据累计（USD），只读">USD</Tooltip>
                   </td>
                   <td style={{ ...cellBase, background: C.subHeadBg, textAlign: "center", fontSize: 11, fontWeight: 600, color: "#d46b08" }}>
-                    <Tooltip title="实际到账人民币，组长手填；未填默认为成员实收CNY累计（逐笔打款日汇率）">CNY</Tooltip>
+                    <Tooltip title="实际到账人民币。取值优先级：组长手填(蓝) > 银行流水登记自动同步(绿) > 成员实收CNY累计·打款日汇率(灰)">CNY</Tooltip>
                   </td>
                 </React.Fragment>
               ))}
@@ -737,18 +742,18 @@ export function TeamSummaryTable({
             </tr>
             <tr>
               <td className={FX1} style={subLabelCell}>10号 · 上半月</td>
-              {paidRow("H1", (p) => p.paidH1, (p) => p.paidCnyH1, (p) => p.memberCnyH1, totals.paidH1)}
+              {paidRow("H1", (p) => p.paidH1, (p) => p.paidCnyH1, (p) => p.bankCnyH1, (p) => p.memberCnyH1, totals.paidH1)}
             </tr>
             <tr>
               <td className={FX1} style={subLabelCell}>20号 · 下半月</td>
-              {paidRow("H2", (p) => p.paidH2, (p) => p.paidCnyH2, (p) => p.memberCnyH2, totals.paidH2)}
+              {paidRow("H2", (p) => p.paidH2, (p) => p.paidCnyH2, (p) => p.bankCnyH2, (p) => p.memberCnyH2, totals.paidH2)}
             </tr>
             <tr>
               <td className={FX1} style={{ ...subLabelCell, fontWeight: 600 }}>合计</td>
               {plats.map((p, i) => {
                 const usd = p.paidH1 + p.paidH2;
-                const cny = (p.paidCnyH1 ?? p.memberCnyH1) + (p.paidCnyH2 ?? p.memberCnyH2);
-                const hasManual = p.paidCnyH1 != null || p.paidCnyH2 != null;
+                const cny = (p.paidCnyH1 ?? p.bankCnyH1 ?? p.memberCnyH1) + (p.paidCnyH2 ?? p.bankCnyH2 ?? p.memberCnyH2);
+                const hasManual = p.paidCnyH1 != null || p.paidCnyH2 != null || p.bankCnyH1 != null || p.bankCnyH2 != null;
                 return (
                   <React.Fragment key={`paid-sum-${p.platform}`}>
                     <td style={{ ...cellBase, background: zebra(i) ?? "#fff", fontWeight: 600, color: muted(usd) }}>{fmt(usd)}</td>

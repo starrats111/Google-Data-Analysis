@@ -158,8 +158,8 @@ export default function MonthlyReportTab() {
                 <Col xs={12} sm={6}>
                   <Statistic
                     title={
-                      <Tooltip title="Σ每平台(手填实收¥ ?? 预估)。在下方总计表按平台手填实际到账人民币">
-                        实际佣金(CNY) · 按平台手填汇总
+                      <Tooltip title="Σ每平台每半月(组长手填 ?? 银行流水登记 ?? 成员默认估算)。「银行流水」页登记的到账会自动同步到这里，也可在下方总计表按平台手填覆盖">
+                        实际佣金(CNY) · 银行流水自动同步
                       </Tooltip>
                     }
                     value={summary.actualPaidCny != null ? summary.actualPaidCny : undefined}
