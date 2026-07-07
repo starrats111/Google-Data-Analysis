@@ -13,7 +13,9 @@
  * 3. 该 MCC 自己配置的 token + JSON（兜底；组长未配池时行为与旧版完全一致）
  *
  * 轮询策略：
- * - 请求级 round-robin，各 token 均摊流量
+ * - 剩余额度优先：每次挑「今日剩余额度（实测额度 detected_quota 优先，否则组长
+ *   预设 daily_quota，再减去今日已用）最高」的 token；剩余相同的做 round-robin
+ *   分摊 QPS。额度高的 token 天然多吃流量，各 token 大致同时耗尽，池总额度用满。
  * - 某 token 收到 429 → 冷却 3 分钟（或 Google 返回的 retryDelay，取大者），期间跳过
  * - 某 token 报 DEVELOPER_TOKEN_NOT_APPROVED → 冷却 24 小时
  * - 全部候选都在冷却时，返回冷却最早结束的那个（调用方自行决定等待）
@@ -147,6 +149,17 @@ async function loadTeamCredentials(mccId: string): Promise<TokenCredential[]> {
   return creds;
 }
 
+/**
+ * 今日剩余额度：实测额度（触顶反推）优先，否则组长预设，减去今日已用。
+ * 非池内凭证（环境变量/员工 MCC 自带）无额度信息，返回 -1 表示最后兜底。
+ */
+function remainingQuota(token: string): number {
+  const meta = tokenMetaCache.get(token);
+  if (!meta) return -1;
+  const quota = meta.detectedQuota ?? meta.dailyQuota;
+  return quota - meta.todayRequests;
+}
+
 /** 该凭证对此 MCC 是否可用（自动标记学习结果；unknown 视为可用，让真实流量去探明） */
 function isUsableFor(token: string, mccKey: string): boolean {
   if (deniedPairs.has(`${token}|${mccKey}`)) return false;
@@ -194,7 +207,10 @@ export async function pickCredential(
     && isUsableFor(c.token, mccKey),
   );
   if (available.length > 0) {
-    return available[rr++ % available.length];
+    // 剩余额度最高者优先；剩余相同的（如每天开局）round-robin 分摊 QPS
+    const maxRemaining = Math.max(...available.map((c) => remainingQuota(c.token)));
+    const top = available.filter((c) => remainingQuota(c.token) === maxRemaining);
+    return top[rr++ % top.length];
   }
 
   // 全在冷却/已排除：取冷却最早结束的（未被排除者优先），让调用方自行决定等待
