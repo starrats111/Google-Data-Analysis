@@ -2,9 +2,11 @@
  * GET /api/cron/merchant-link-health — 换链接「断链商家」健康巡检（按有无交易数据分流）
  *
  * 背景（需求口径）：
- *   广告系列的联盟链接断裂有多种自愈中的中间态——从 Google 回填的系列 user_merchant_id=0（未关联）、
+ *   广告系列的联盟链接断裂有多种自愈中的中间态——未关联(user_merchant_id=0)、
  *   换平台账号后旧商家被同步清理导致的孤儿引用、商家在库但还没拿到 tracking_link 等。
- *   这些只要「商家同步 / Google 回拉 / 手动填链接」流程跑起来，多数会自愈，不应反复刷「商家库找不到」。
+ *   这些只要「商家同步 / 手动填链接」流程跑起来，多数会自愈，不应反复刷「商家库找不到」。
+ *   注：曾有「Google 回拉」自动兜底（final_url+final_url_suffix 拼链接回填），2026-07 起废弃——
+ *   拼出来的是落地页+冻结令牌（静态后缀），对换链无价值且会覆盖人工填的真实平台链接，改为一律人工补链。
  *
  * 分流规则（唯一权威判定点；补货 / lease 路径已全部静默）：
  *   - 断链系列若关联商家「近 N 天有真实交易(affiliate_transactions)」→ 这是正在赚钱却断链的真问题，
@@ -12,7 +14,7 @@
  *   - 断链系列若无任何交易 → 视为「自愈流程中」，解决该系列遗留的 merchant_not_found 噪音告警，静默。
  *   - 已自愈（不再断链）的系列 → 一并解决其遗留 merchant_not_found 告警。
  *   - 「有交易却断链」的高优先告警若被人工点掉(resolved)，且点掉之后没有新的佣金回流 →
- *     视为「确实没佣金、人工已确认」，尊重人工判断、不再重复刷告警，也不再耗 Google 回拉配额；
+ *     视为「确实没佣金、人工已确认」，尊重人工判断、不再重复刷告警；
  *     一旦点掉之后又出现新交易（说明确实是在赚钱却断链），才会重新升级告警。
  *
  * 返回观察统计，便于「先观察」阶段评估真问题规模。
@@ -26,15 +28,12 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { raiseAlert, resolveAlertsByType } from '@/lib/suffix-engine/alerts'
 import { parseCampaignNameFull } from '@/lib/campaign-merchant-link'
-import { backfillTrackingLinkFromGoogle } from '@/lib/suffix-engine/google-link-backfill'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 
 /** 「有交易」的回看窗口（天）。可调：默认近 30 天有任意 affiliate_transactions 记录即视为有数据。 */
 const REVENUE_LOOKBACK_DAYS = 30
-/** 单轮最多尝试 Google 回拉的系列数（保护 Google Ads API 配额，仅用于「有交易却断链」的高价值系列） */
-const GOOGLE_BACKFILL_BUDGET = 20
 
 let isRunning = false
 
@@ -46,18 +45,13 @@ function verifyCron(req: NextRequest): boolean {
 
 interface UserHealth {
   brokenTotal: number
-  withRevenue: number // 有交易→已升级高优先告警（或被 Google 回拉自愈）
-  recovered: number // 有交易断链 → Google 回拉成功自愈
+  withRevenue: number // 有交易→已升级高优先告警
   selfHealing: number // 无交易→静默/清噪音
   dismissed: number // 有交易断链，但人工已点掉告警且之后无新佣金回流 → 尊重人工判断、静默不再刷
 }
 
-interface Budget {
-  remaining: number
-}
-
-async function checkUser(userId: bigint, budget: Budget): Promise<UserHealth> {
-  const health: UserHealth = { brokenTotal: 0, withRevenue: 0, recovered: 0, selfHealing: 0, dismissed: 0 }
+async function checkUser(userId: bigint): Promise<UserHealth> {
+  const health: UserHealth = { brokenTotal: 0, withRevenue: 0, selfHealing: 0, dismissed: 0 }
 
   // 1. 该用户「已启用」广告系列（与告警可见性口径一致）
   const campaigns = await prisma.campaigns.findMany({
@@ -181,25 +175,14 @@ async function checkUser(userId: bigint, budget: Budget): Promise<UserHealth> {
       health.withRevenue++
       const reason = isUnmatched ? '未匹配商家' : isOrphan ? '关联商家已不在商家库（孤儿）' : '商家缺联盟追踪链接'
 
-      // 先尝试 Google 回拉自愈（仅高价值「有交易」系列、受配额预算限制）
-      if (budget.remaining > 0) {
-        budget.remaining--
-        const r = await backfillTrackingLinkFromGoogle(userId, c).catch((e) => ({
-          ok: false,
-          reason: e instanceof Error ? e.message : String(e),
-        }))
-        if (r.ok) {
-          health.recovered++
-          continue // 回拉成功即自愈，告警已在 backfill 内解决
-        }
-      }
-
-      // 回拉失败/无预算 → 写高优先告警，等人工补链接
+      // 不再做 Google 自动回拉：final_url + final_url_suffix 拼出来的是「落地页 + 冻结令牌」，
+      // 每次生成的后缀内容相同（静态后缀），对换链无价值，还会覆盖人工填的平台真实追踪链接。
+      // 断链一律升级高优先告警，要求人工到商家库填平台原始追踪链接。
       await raiseAlert(userId, {
         type: 'merchant_not_found',
         campaignId: c.id,
         level: 'error',
-        message: `广告系列「${c.campaign_name ?? c.id}」有真实交易却断链（${reason}），Google 回拉未补回，请尽快人工补联盟链接`,
+        message: `广告系列「${c.campaign_name ?? c.id}」有真实交易却断链（${reason}），请尽快到商家库手动填写平台追踪链接`,
         context: {
           hasRevenue: true,
           kind: 'broken_link_with_revenue',
@@ -234,15 +217,13 @@ export async function GET(req: NextRequest) {
       select: { id: true, username: true },
     })
 
-    const budget: Budget = { remaining: GOOGLE_BACKFILL_BUDGET }
-    const totals = { usersScanned: 0, brokenTotal: 0, withRevenue: 0, recovered: 0, selfHealing: 0, dismissed: 0 }
+    const totals = { usersScanned: 0, brokenTotal: 0, withRevenue: 0, selfHealing: 0, dismissed: 0 }
     for (const u of users) {
       try {
-        const h = await checkUser(u.id, budget)
+        const h = await checkUser(u.id)
         totals.usersScanned++
         totals.brokenTotal += h.brokenTotal
         totals.withRevenue += h.withRevenue
-        totals.recovered += h.recovered
         totals.selfHealing += h.selfHealing
         totals.dismissed += h.dismissed
       } catch (e) {
@@ -252,7 +233,7 @@ export async function GET(req: NextRequest) {
 
     console.log(
       `[cron/merchant-link-health] users=${totals.usersScanned} broken=${totals.brokenTotal} ` +
-        `withRevenue=${totals.withRevenue} googleRecovered=${totals.recovered} selfHealing(silenced)=${totals.selfHealing} ` +
+        `withRevenue=${totals.withRevenue} selfHealing(silenced)=${totals.selfHealing} ` +
         `dismissed(manual)=${totals.dismissed} cost=${Date.now() - startedAt}ms`,
     )
     return NextResponse.json({ code: 0, data: { ...totals, lookbackDays: REVENUE_LOOKBACK_DAYS } })
