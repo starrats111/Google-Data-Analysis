@@ -11,8 +11,9 @@ export const dynamic = "force-dynamic";
 
 /**
  * GET /api/user/team/report/bank-flow/export?month=YYYY-MM[&methodId=]
- * 导出银行流水：每个收款方式一张正规「账户交易明细清单」sheet + 「打款对账明细」sheet。
- * methodId 指定时只导出该收款方式（对账明细也只含该卡条目）。
+ * 导出银行流水：每个收款方式一张正规「账户交易明细清单」sheet +
+ * 按实际收款人（去掉括号里的银行标注归并，如 龚建成(农业)/龚建成(WISE) → 龚建成）
+ * 各一张「打款对账明细」sheet。methodId 指定时只导出该收款方式。
  */
 export const GET = withLeader(async (req: NextRequest, { user }) => {
   if (!user.teamId) return new NextResponse("未关联小组", { status: 400 });
@@ -81,7 +82,19 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     used.add(name);
     buildBankStatementSheet(wb, month, m, entries.filter((e) => e.paymentMethodId === m.id), name);
   }
-  buildBankReconSheet(wb, month, methods, entries);
+  // 对账明细按实际收款人分表（龚建成 / 张文俊 各一张，卡不同也归同一收款人）
+  const payees = [...new Set(methods.map((m) => m.payeeName.replace(/[（(].*$/, "").trim() || m.payeeName))];
+  for (const payee of payees) {
+    const payeeMethods = methods.filter((m) => (m.payeeName.replace(/[（(].*$/, "").trim() || m.payeeName) === payee);
+    const methodIds = new Set(payeeMethods.map((m) => m.id));
+    const payeeEntries = entries.filter((e) => methodIds.has(e.paymentMethodId));
+    if (payeeEntries.length === 0 && payees.length > 1) continue; // 该收款人本月无到账则不出空表
+    let name = `对账-${payee}`.slice(0, 28);
+    let i = 2;
+    while (used.has(name)) name = `对账-${payee.slice(0, 20)}(${i++})`;
+    used.add(name);
+    buildBankReconSheet(wb, month, payeeMethods, payeeEntries, name, payee);
+  }
 
   const buffer = await wb.xlsx.writeBuffer();
   const filename = encodeURIComponent(`银行流水-${month}${methodIdParam ? `-${methods[0].payeeName}` : ""}.xlsx`);

@@ -155,19 +155,21 @@ export function buildBankStatementSheet(
   ws.getRow(r).height = 26;
 }
 
-/** 打款对账明细 sheet（核对应到/实到/手续费 + 逐人明细） */
+/** 打款对账明细 sheet（核对应到/实到/手续费 + 逐人明细）；按收款人分表时传 sheetName/payeeName */
 export function buildBankReconSheet(
   wb: ExcelJS.Workbook,
   month: string,
   methods: BankFlowExportMethod[],
   entries: BankFlowExportEntry[],
+  sheetName = "打款对账明细",
+  payeeName = "",
 ) {
-  const ws = wb.addWorksheet("打款对账明细");
+  const ws = wb.addWorksheet(sheetName);
   const widths = [20, 18, 8, 16, 16, 16, 14, 9, 46, 20];
   widths.forEach((w, i) => (ws.getColumn(i + 1).width = w));
 
   ws.mergeCells(1, 1, 1, 10);
-  cell(ws, 1, 1, `${month} 平台打款对账明细（手续费 = 员工明细合计 − 实际到账；个人手续费按费率分摊，费率 = 手续费 ÷ 明细合计）`, { sz: 14, bold: true, noBorder: true });
+  cell(ws, 1, 1, `${month} ${payeeName ? `${payeeName} ` : ""}平台打款对账明细（手续费 = 员工明细合计 − 实际到账；个人手续费按费率分摊，费率 = 手续费 ÷ 明细合计）`, { sz: 14, bold: true, noBorder: true });
   ws.getRow(1).height = 30;
 
   const HEAD = ["收款人", "收款卡号", "平台", "到账时间", "员工明细合计(¥)", "实际到账(¥)", "手续费(¥)", "费率", "员工收款明细（含个人手续费/净到手）", "备注"];
