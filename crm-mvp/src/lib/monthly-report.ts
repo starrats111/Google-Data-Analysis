@@ -23,6 +23,7 @@
 import prisma from "@/lib/prisma";
 import { sqlTxnRange, sqlTxnMonth, REPORT_PLATFORM_ORDER, paymentDisplayAmount } from "@/lib/report-metrics";
 import { nowCST, dateColumnStart } from "@/lib/date-utils";
+import { apportionFee } from "@/lib/bank-flow-fee";
 
 /** 半月归批分界：请求日 ≤10号 归 5号批(H1)，>10号 归 15号批(H2)。
  *  平台名义 5号/15号 分两期请求打款，实际有 4-6号 / 14-16号 漂移，按就近原则判批。 */
@@ -83,8 +84,9 @@ export interface AccountColumn {
   /** 实收生效值（override ?? 计算值） */
   paidH1Effective: number;
   paidH2Effective: number;
-  /** 实收(CNY) 默认值：逐笔按打款日（request_date）当日或其前最近汇率快照折算；
-   *  若实收 USD 被手工纠正，则默认改为 纠正值 × 报表汇率 */
+  /** 实收(CNY) 默认值：优先取银行流水登记净额（该员工明细金额 − 分摊手续费）；
+   *  无流水登记时逐笔按打款日（request_date）当日或其前最近汇率快照折算；
+   *  若实收 USD 被手工纠正，则汇率估算改为 纠正值 × 报表汇率 */
   paidCnyH1: number;
   paidCnyH2: number;
   /** 实收(CNY) 手填（scope recvcny:{platform}:{account}:{H1|H2}，null = 未填） */
@@ -281,7 +283,7 @@ export async function buildMemberMonthlyReport(
   const [user, rate, overridesRaw] = await Promise.all([
     prisma.users.findFirst({
       where: { id: userId, is_deleted: 0 },
-      select: { id: true, username: true, display_name: true },
+      select: { id: true, username: true, display_name: true, team_id: true },
     }),
     getReportRate(month),
     prisma.report_overrides.findMany({
@@ -457,6 +459,47 @@ export async function buildMemberMonthlyReport(
     }
   }
 
+  // ── 3b. 银行流水净额（R-07）：有流水登记时，员工实收(CNY)默认值改用
+  //        流水明细中该员工金额 − 按比例分摊的手续费（净到手），
+  //        替代打款日汇率毛额估算；组员手填 recvcny:* 仍最优先 ──────────
+  const bankNetForCol = new Map<ColKey, { H1?: number; H2?: number }>();
+  if (user.team_id) {
+    const bankEntries = await prisma.bank_flow_entries.findMany({
+      where: { team_id: user.team_id, month, is_deleted: 0 },
+      select: { platform: true, txn_at: true, amount: true, fee: true, source_date: true, breakdown: true },
+    });
+    if (bankEntries.length > 0) {
+      const teamMembers = await prisma.users.findMany({
+        where: { team_id: user.team_id, is_deleted: 0, role: "user" },
+        select: { id: true },
+      });
+      const halves = await resolveBankBatchHalves(bankEntries, teamMembers.map((m) => m.id));
+      for (const e of bankEntries) {
+        let items: { userId?: unknown; account?: unknown; amount?: unknown }[] = [];
+        try { items = e.breakdown ? JSON.parse(e.breakdown) : []; } catch { /* 脏数据跳过 */ }
+        if (!Array.isArray(items) || items.length === 0) continue;
+        const fees = apportionFee(items.map((i) => Number(i.amount || 0)), Number(e.fee || 0));
+        const half = bankEntryHalf(e, halves);
+        items.forEach((it, idx) => {
+          if (String(it.userId ?? "") !== String(userId)) return;
+          const net = Number(it.amount || 0) - fees[idx];
+          // 账号列归属：平台+账号名精确匹配，匹配不到归该平台第一列
+          const acct = String(it.account ?? "").trim();
+          let key: ColKey = `${e.platform}\u0000${acct}`;
+          if (!colByKey.has(key)) {
+            const alt = [...colByKey.keys()].find((k) => k.startsWith(`${e.platform}\u0000`));
+            if (!alt) return;
+            key = alt;
+          }
+          let slot = bankNetForCol.get(key);
+          if (!slot) { slot = {}; bankNetForCol.set(key, slot); }
+          slot[half] = (slot[half] || 0) + net;
+          colByKey.get(key)!.hasPayments = true;
+        });
+      }
+    }
+  }
+
   // ── 4. 列排序 + 编号 + 实收覆盖 ─────────────────────────────────────
   const accounts = [...colByKey.values()].sort((a, b) => {
     const ia = REPORT_PLATFORM_ORDER.indexOf(a.platform);
@@ -501,6 +544,10 @@ export async function buildMemberMonthlyReport(
     // 实收(CNY)：USD 被纠正时默认改按 纠正值×报表汇率；再套手填覆盖
     col.paidCnyH1 = r2(col.paidH1Override != null ? col.paidH1Override * rate.usdToCny : col.paidCnyH1);
     col.paidCnyH2 = r2(col.paidH2Override != null ? col.paidH2Override * rate.usdToCny : col.paidCnyH2);
+    // 银行流水净额优先于估算/USD纠正推导（是真实到手金额）；组员手填仍最优先
+    const bankNet = bankNetForCol.get(`${col.platform}\u0000${col.accountName}`);
+    if (bankNet?.H1 != null) col.paidCnyH1 = r2(bankNet.H1);
+    if (bankNet?.H2 != null) col.paidCnyH2 = r2(bankNet.H2);
     const ovCnyH1 = overrides.get(`recvcny:${col.platform}:${col.accountName}:H1`);
     const ovCnyH2 = overrides.get(`recvcny:${col.platform}:${col.accountName}:H2`);
     col.paidCnyH1Override = ovCnyH1 !== undefined ? r2(ovCnyH1) : null;

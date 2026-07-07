@@ -145,8 +145,8 @@ export default function MonthlyReportTab() {
                 <Col xs={12} sm={6}>
                   <Statistic
                     title={
-                      <Tooltip title="成员实收CNY生效值累计：逐笔按打款日汇率折算，含组员手填">
-                        默认实收(CNY) · 打款日汇率
+                      <Tooltip title="成员实收CNY生效值累计：有银行流水登记的用净额（员工明细金额−分摊手续费），否则逐笔按打款日汇率折算；含组员手填">
+                        默认实收(CNY) · 流水净额/汇率
                       </Tooltip>
                     }
                     value={summary.estimatedPaidCny}

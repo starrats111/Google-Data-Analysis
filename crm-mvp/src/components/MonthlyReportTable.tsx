@@ -662,7 +662,7 @@ export function TeamSummaryTable({
                 bg={zebra(i)}
                 valueColor={bank != null ? "#389e0d" : muted(getCnyDefault(p), "#8a94a3")}
                 manualLabel="组长手填实际到账(¥)"
-                systemLabel={bank != null ? "银行流水登记合计(¥)" : "默认值·成员实收CNY累计(打款日汇率)"}
+                systemLabel={bank != null ? "银行流水登记合计(¥)" : "默认值·成员实收CNY累计(流水净额/打款日汇率)"}
                 onSave={(v) => onSavePlatCny!(p.platform, half, v)}
               />
             </React.Fragment>
