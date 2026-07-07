@@ -53,7 +53,7 @@ function parseBreakdown(raw: unknown): { items: BankFlowBreakdownItem[]; total: 
 
 function serializeEntry(e: {
   id: bigint; team_id: bigint; month: string; payment_method_id: bigint; txn_at: Date;
-  platform: string; counterparty: string; summary: string;
+  platform: string; source_date: Date | null; counterparty: string; summary: string;
   amount: unknown; currency: string; expected_amount: unknown; fee: unknown;
   breakdown: string | null; remark: string | null; created_at: Date; updated_at: Date;
 }) {
@@ -67,6 +67,7 @@ function serializeEntry(e: {
     paymentMethodId: String(e.payment_method_id),
     txnAt: e.txn_at.toISOString(),
     platform: e.platform,
+    sourceDate: e.source_date ? e.source_date.toISOString().slice(0, 10) : null,
     counterparty: e.counterparty,
     summary: e.summary,
     amount: Number(e.amount),
@@ -144,7 +145,8 @@ export const POST = withLeader(async (req: NextRequest, { user }) => {
     return apiSuccess(null, "期初余额已保存");
   }
 
-  const { month, paymentMethodId, platform, txnAt, amount, currency, counterparty, summary, remark, breakdown } = body;
+  const { month, paymentMethodId, platform, txnAt, amount, currency, counterparty, summary, remark, breakdown, sourceDate } = body;
+  if (sourceDate != null && !/^\d{4}-\d{2}-\d{2}$/.test(String(sourceDate))) return apiError("sourceDate 格式必须为 YYYY-MM-DD");
   if (!/^\d{4}-\d{2}$/.test(month || "")) return apiError("month 格式必须为 YYYY-MM");
   if (typeof platform !== "string" || !/^[A-Z]{2,8}$/.test(platform)) return apiError("platform 无效");
   const txnDate = new Date(txnAt);
@@ -168,6 +170,7 @@ export const POST = withLeader(async (req: NextRequest, { user }) => {
       payment_method_id: method.id,
       txn_at: txnDate,
       platform,
+      source_date: sourceDate ? new Date(`${sourceDate}T00:00:00Z`) : null,
       counterparty: typeof counterparty === "string" ? counterparty.trim().slice(0, 128) : "",
       summary: typeof summary === "string" && summary.trim() ? summary.trim().slice(0, 128) : "佣金结算",
       amount: amt,
@@ -204,6 +207,10 @@ export const PUT = withLeader(async (req: NextRequest, { user }) => {
   if (body.platform !== undefined) {
     if (typeof body.platform !== "string" || !/^[A-Z]{2,8}$/.test(body.platform)) return apiError("platform 无效");
     data.platform = body.platform;
+  }
+  if (body.sourceDate !== undefined) {
+    if (body.sourceDate != null && !/^\d{4}-\d{2}-\d{2}$/.test(String(body.sourceDate))) return apiError("sourceDate 格式必须为 YYYY-MM-DD");
+    data.source_date = body.sourceDate ? new Date(`${body.sourceDate}T00:00:00Z`) : null;
   }
   if (body.counterparty !== undefined) data.counterparty = String(body.counterparty).trim().slice(0, 128);
   if (body.summary !== undefined) data.summary = String(body.summary).trim().slice(0, 128) || "佣金结算";

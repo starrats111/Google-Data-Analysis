@@ -1401,6 +1401,7 @@ model bank_flow_entries {
   payment_method_id BigInt   @db.UnsignedBigInt // payment_methods.id（收款方式=收款卡）
   txn_at            DateTime @db.DateTime(0) // 到账日期时间（组长输入 xx号xx时间）
   platform          String   @db.VarChar(8) // 打款平台（对账维度）
+  source_date       DateTime? @db.Date // 预填来源批次日（平台实际打款日），同批次不再重复预填；手工明细为 NULL
   counterparty      String   @default("") @db.VarChar(128) // 对方户名（默认平台打款主体，可改）
   summary           String   @default("佣金结算") @db.VarChar(128) // 交易摘要
   amount            Decimal  @default(0.00) @db.Decimal(14, 2) // 实际总打款入账金额

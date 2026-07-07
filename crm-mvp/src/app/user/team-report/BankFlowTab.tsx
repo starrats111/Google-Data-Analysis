@@ -50,6 +50,7 @@ interface FlowEntry {
   paymentMethodId: string;
   txnAt: string;
   platform: string;
+  sourceDate: string | null;
   counterparty: string;
   summary: string;
   amount: number;
@@ -81,6 +82,8 @@ export default function BankFlowTab() {
   const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
   const [breakdown, setBreakdown] = useState<BreakdownItem[]>([]);
+  // 预填来源批次日（平台实际打款日）：随保存写库，已登记过的批次不再重复预填
+  const [sourceDate, setSourceDate] = useState<string | null>(null);
 
   const monthStr = month.format("YYYY-MM");
 
@@ -109,6 +112,7 @@ export default function BankFlowTab() {
   const openAdd = () => {
     setEditing(null);
     setBreakdown([]);
+    setSourceDate(null);
     form.resetFields();
     // 默认到账时间：当月取今天，历史月取该月 10 号，实际按银行到账日期改
     const defaultTxn = month.isSame(dayjs(), "month") ? dayjs().hour(10).minute(0) : month.date(10).hour(10).minute(0);
@@ -119,6 +123,7 @@ export default function BankFlowTab() {
   const openEdit = (e: FlowEntry) => {
     setEditing(e);
     setBreakdown(e.breakdown);
+    setSourceDate(e.sourceDate ?? null);
     form.setFieldsValue({
       paymentMethodId: e.paymentMethodId,
       platform: e.platform,
@@ -147,12 +152,13 @@ export default function BankFlowTab() {
         platform,
         date: txnAt.format("YYYY-MM-DD"),
       });
+      if (editing) params.set("excludeId", editing.id);
       const res = await fetch(`/api/user/team/report/bank-flow/prefill?${params}`).then((r) => r.json());
       if (res.code !== 0) {
         message.error(res.message || "预填失败");
         return;
       }
-      const { items, note } = res.data as { items: BreakdownItem[]; note: string };
+      const { items, note, matchedDate } = res.data as { items: BreakdownItem[]; note: string; matchedDate: string | null };
       setBreakdown(items.map((it) => ({
         userId: it.userId,
         username: it.username,
@@ -161,6 +167,7 @@ export default function BankFlowTab() {
         account: it.account,
         amount: it.amount,
       })));
+      setSourceDate(items.length > 0 ? matchedDate : null);
       if (items.length === 0) message.info(note || "没有匹配的打款记录，可手动添加明细行");
       else message.success(`${note}，共 ${items.length} 条`);
     } catch {
@@ -204,6 +211,7 @@ export default function BankFlowTab() {
         summary: values.summary || "佣金结算",
         remark: values.remark || "",
         breakdown,
+        sourceDate,
       };
       const res = await fetch("/api/user/team/report/bank-flow", {
         method: editing ? "PUT" : "POST",
