@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { normalizePlatformCode } from "@/lib/constants";
+import { parseCampaignNameFull } from "@/lib/campaign-merchant-link";
 import { getExchangeRate, preloadRates } from "@/lib/exchange-rate";
 import { nowCST, dateColumnStart, parseTxnDateStart } from "@/lib/date-utils";
 import { autoRepairPublishedArticles } from "@/lib/article-auto-repair";
@@ -325,7 +326,7 @@ async function syncAllUsersMcc(): Promise<unknown> {
                           customer_id: sample.customer_id || null,
                           campaign_name: sample.campaign_name,
                           daily_budget: sample.budget,
-                          target_country: "US",
+                          target_country: parseCampaignNameFull(sample.campaign_name || "")?.country || "US",
                           google_status: sample.status,
                           last_google_sync_at: new Date(),
                         },
@@ -432,7 +433,7 @@ async function syncAllUsersMcc(): Promise<unknown> {
                                 customer_id: cd.customer_id,
                                 campaign_name: cd.campaign_name,
                                 daily_budget: cd.budget_dollars,
-                                target_country: "US",
+                                target_country: parseCampaignNameFull(cd.campaign_name || "")?.country || "US",
                                 google_status: cd.campaign_status,
                                 last_google_sync_at: new Date(),
                               },
@@ -513,7 +514,7 @@ async function syncAllUsersMcc(): Promise<unknown> {
                                   user_id: uid, user_merchant_id: BigInt(0),
                                   google_campaign_id: cd.campaign_id, mcc_id: mcc.id,
                                   customer_id: cd.customer_id, campaign_name: cd.campaign_name,
-                                  daily_budget: cd.budget_dollars, target_country: "US",
+                                  daily_budget: cd.budget_dollars, target_country: parseCampaignNameFull(cd.campaign_name || "")?.country || "US",
                                   status: "paused", google_status: "REMOVED",
                                   last_google_sync_at: new Date(),
                                 },

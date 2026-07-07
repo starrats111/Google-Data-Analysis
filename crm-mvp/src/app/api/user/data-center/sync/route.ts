@@ -226,7 +226,7 @@ async function syncAdsData(
                     user_id: userId, user_merchant_id: merchantId,
                     google_campaign_id: cd.campaign_id, mcc_id: mcc.id,
                     customer_id: cd.customer_id, campaign_name: cd.campaign_name,
-                    daily_budget: cd.budget_dollars, target_country: "US",
+                    daily_budget: cd.budget_dollars, target_country: parsed?.country || "US",
                     google_status: cd.campaign_status, last_google_sync_at: new Date(),
                   }, { userId, mccId: mcc.id, gcid: cd.campaign_id, softDeletedGcids });
                   if (!createdC) continue; // 被清洗过的 gcid，跳过回灌
@@ -316,7 +316,7 @@ async function syncAdsData(
               user_id: userId, user_merchant_id: merchantId,
               google_campaign_id: cd.campaign_id, mcc_id: mcc.id,
               customer_id: cd.customer_id, campaign_name: cd.campaign_name,
-              daily_budget: cd.budget_dollars, target_country: "US",
+              daily_budget: cd.budget_dollars, target_country: parsed?.country || "US",
               google_status: cd.campaign_status, last_google_sync_at: new Date(),
             }, { userId, mccId: mcc.id, gcid: cd.campaign_id, softDeletedGcids });
             if (!createdC) continue; // 被清洗过的 gcid，跳过回灌
@@ -427,7 +427,7 @@ async function syncAdsData(
                 user_id: userId, user_merchant_id: merchantId,
                 google_campaign_id: gcid, mcc_id: mcc.id,
                 customer_id: cs.customerId || null, campaign_name: cs.name || gcid,
-                target_country: "US",
+                target_country: parseCampaignNameFull(cs.name || "")?.country || "US",
                 google_status: cs.status, last_google_sync_at: new Date(),
               }, { userId, mccId: mcc.id, gcid, softDeletedGcids })
             ));
@@ -469,7 +469,7 @@ async function syncAdsData(
                   user_id: userId, user_merchant_id: merchantId,
                   google_campaign_id: cd.campaign_id, mcc_id: mcc.id,
                   customer_id: cd.customer_id, campaign_name: cd.campaign_name,
-                  daily_budget: cd.budget_dollars, target_country: "US",
+                  daily_budget: cd.budget_dollars, target_country: parsed?.country || "US",
                   status: "paused", google_status: "REMOVED", last_google_sync_at: new Date(),
                 }, { userId, mccId: mcc.id, gcid: cd.campaign_id });
                 if (!created) continue; // 被清洗过的 gcid 跳过
@@ -555,7 +555,7 @@ async function upsertSheetRowsBatch(
         user_id: userId, user_merchant_id: merchantId,
         google_campaign_id: gid, mcc_id: mccId,
         customer_id: row.customer_id, campaign_name: row.campaign_name,
-        daily_budget: row.budget, target_country: "US",
+        daily_budget: row.budget, target_country: parsed?.country || "US",
         google_status: row.status, last_google_sync_at: new Date(),
       }, { userId, mccId, gcid: gid, softDeletedGcids: sheetSoftDeletedGcids });
       if (!campaign) continue; // 被清洗过的 gcid，跳过回灌
