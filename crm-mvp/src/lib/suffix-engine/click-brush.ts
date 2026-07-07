@@ -35,12 +35,16 @@ async function isLinkExchangeDisabled(userId: bigint): Promise<boolean> {
 }
 
 // ── cron 执行器调参（低配生产机：2 核 / 3.7G） ──
+// 2026-07 提吞吐：kookeey 隔离后单条点击变慢（成功均值 ~16s、失败 ~46s），旧参数
+// (20/轮、5/任务、并发5、2分钟一轮) 实际每轮只消化 6-9 条，全局积压 ~700 条到期未执行。
+// 提限额+提并发+cron 加密到 1 分钟；内存安全由 puppeteer-semaphore 独立封顶（Chrome ≤2）保证，
+// 多数点击是纯 HTTP 跟链，提并发主要加速这部分。
 /** 单次 cron 最多执行多少个到期子项 */
-const MAX_ITEMS_PER_CRON = 20
+const MAX_ITEMS_PER_CRON = 40
 /** 单次 cron 单个任务最多执行多少个子项（其余留待下次 cron，自然分摊负载） */
-const MAX_ITEMS_PER_TASK_PER_CRON = 5
+const MAX_ITEMS_PER_TASK_PER_CRON = 8
 /** 跨任务并行度 */
-const TASK_CONCURRENCY = STOCK_CONFIG.CONCURRENCY
+const TASK_CONCURRENCY = 8
 /** 同一任务内连续点击的真人间隔（毫秒） */
 const MIN_CLICK_INTERVAL_MS = 3000
 const MAX_CLICK_INTERVAL_MS = 9000
@@ -310,17 +314,24 @@ async function buildTaskRuntime(taskId: bigint): Promise<TaskRuntime | null> {
   }
 }
 
-/** 执行单条点击子项 */
-async function executeItem(rt: TaskRuntime, itemId: bigint): Promise<{ ok: boolean }> {
+/** 执行单条点击子项。返回 skipped=true 表示子项已被并行轮次认领，本轮跳过（不计成败） */
+async function executeItem(rt: TaskRuntime, itemId: bigint): Promise<{ ok: boolean; skipped?: boolean }> {
   const startedAt = Date.now()
+  // 原子认领：仅当仍是 pending 才置 executing。cron 加密到 1 分钟后相邻轮次可能重叠，
+  // 靠这个条件更新保证同一子项绝不会被两轮重复执行（重复点击=重复烧代理流量+污染任务计数）。
+  const claimed = await prisma.kyads_click_task_items
+    .updateMany({
+      where: { id: itemId, status: 'pending' },
+      data: { status: 'executing', executed_at: new Date() },
+    })
+    .catch(() => ({ count: 0 }))
+  if (claimed.count === 0) return { ok: false, skipped: true }
+
   // 读取上次错误，判断是否已重排过（error 以 RETRY_MARK 开头 = 本子项已延后重试过一次）
   const prior = await prisma.kyads_click_task_items
     .findUnique({ where: { id: itemId }, select: { error: true } })
     .catch(() => null)
   const alreadyRequeued = !!prior?.error && prior.error.startsWith(RETRY_MARK)
-  await prisma.kyads_click_task_items
-    .update({ where: { id: itemId }, data: { status: 'executing', executed_at: new Date() } })
-    .catch(() => {})
 
   const r = await generateOneSuffix(rt.affiliateUrl, rt.country, rt.platform, {
     userId: rt.userId,
@@ -398,6 +409,7 @@ async function runTaskItems(rt: TaskRuntime, itemIds: bigint[]): Promise<{ done:
   let failed = 0
   for (let i = 0; i < itemIds.length; i++) {
     const res = await executeItem(rt, itemIds[i])
+    if (res.skipped) continue // 已被并行轮次认领，不计成败也不等间隔
     if (res.ok) done++
     else failed++
     if (i < itemIds.length - 1) {
