@@ -4,8 +4,9 @@
  * R-07 组长端 — 银行流水 Tab
  *
  * 核对每个收款方式（收款人+卡号）的实际收款：
- * 平台打款是总打款，组长录入「到账日期时间 + 实际总金额」，
- * 系统按该卡×该平台×该半月的组员实收(CNY)生效值自动预填员工明细（可修改），
+ * 平台打款是总打款，组长录入「实际到账日期时间 + 实际总金额」，
+ * 系统按到账日期精确匹配当天（当天没有则取最近一天）的组员打款记录预填员工明细（可修改），
+ * 同一半月多笔到账（如 6-16、6-18 各一笔）各自预填各自批次，不混算。
  * 手续费 = 员工明细合计 − 实际到账，自动计算。
  * 支持导出正规「账户交易明细清单」（银行流水单版式）+「打款对账明细」。
  */
@@ -23,7 +24,6 @@ import {
 import dayjs, { type Dayjs } from "dayjs";
 import type { ColumnsType } from "antd/es/table";
 import { REPORT_PLATFORM_ORDER } from "@/lib/report-metrics";
-import type { MemberMonthlyReport, TeamMonthlySummary } from "@/lib/monthly-report";
 
 const { Text } = Typography;
 
@@ -59,13 +59,8 @@ interface FlowEntry {
   remark: string;
 }
 
-type SummaryWithMembers = TeamMonthlySummary & { memberReports: MemberMonthlyReport[] };
-
 const fmt = (n: number | null | undefined) =>
   n == null ? "—" : n.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-/** 卡号归一化（去空格/横线）用于匹配组员绑定 */
-const normCard = (s: string) => (s || "").replace(/[\s-]/g, "");
 
 export default function BankFlowTab() {
   const { message } = App.useApp();
@@ -73,8 +68,9 @@ export default function BankFlowTab() {
   const [loading, setLoading] = useState(false);
   const [methods, setMethods] = useState<MethodItem[]>([]);
   const [entries, setEntries] = useState<FlowEntry[]>([]);
-  const [summary, setSummary] = useState<SummaryWithMembers | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [prefilling, setPrefilling] = useState(false);
 
   // 新增/编辑弹窗
   const [modalOpen, setModalOpen] = useState(false);
@@ -90,21 +86,18 @@ export default function BankFlowTab() {
   const fetchAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [flowRes, sumRes] = await Promise.all([
-        fetch(`/api/user/team/report/bank-flow?month=${monthStr}`).then((r) => r.json()),
-        fetch(`/api/user/team/report/monthly-summary?month=${monthStr}`).then((r) => r.json()),
-      ]);
+      const flowRes = await fetch(`/api/user/team/report/bank-flow?month=${monthStr}`).then((r) => r.json());
       if (flowRes.code === 0) {
         setMethods(flowRes.data.methods);
         setEntries(flowRes.data.entries);
       } else {
         message.error(flowRes.message || "加载流水失败");
       }
-      if (sumRes.code === 0) setSummary(sumRes.data);
     } catch {
       message.error("网络错误");
     } finally {
       setLoading(false);
+      setLoaded(true);
     }
   }, [monthStr, message]);
 
@@ -112,40 +105,13 @@ export default function BankFlowTab() {
 
   const methodById = useMemo(() => new Map(methods.map((m) => [m.id, m])), [methods]);
 
-  /** 按 收款方式×平台×半月 预填员工明细（组员实收 CNY 生效值，0 值跳过） */
-  const buildPrefill = useCallback(
-    (methodId: string, platform: string, txnAt: Dayjs | null): BreakdownItem[] => {
-      const m = methodById.get(methodId);
-      if (!m || !summary) return [];
-      const half: "H1" | "H2" = txnAt && txnAt.date() > 15 ? "H2" : "H1";
-      const items: BreakdownItem[] = [];
-      for (const rep of summary.memberReports) {
-        for (const a of rep.accounts) {
-          if (a.platform !== platform) continue;
-          if ((a.payeeName || "").trim() !== m.payeeName.trim()) continue;
-          if (normCard(m.cardNo) && normCard(a.cardNo) !== normCard(m.cardNo)) continue;
-          const amount = half === "H1" ? a.paidCnyH1Effective : a.paidCnyH2Effective;
-          if (Math.abs(amount) < 0.005) continue;
-          items.push({
-            userId: rep.userId,
-            username: rep.username,
-            displayName: rep.displayName,
-            platform: a.platform,
-            account: a.accountName,
-            amount: Math.round(amount * 100) / 100,
-          });
-        }
-      }
-      return items;
-    },
-    [methodById, summary],
-  );
-
   const openAdd = () => {
     setEditing(null);
     setBreakdown([]);
     form.resetFields();
-    form.setFieldsValue({ txnAt: month.date(10).hour(10).minute(0), summary: "佣金结算" });
+    // 默认到账时间：当月取今天，历史月取该月 10 号，实际按银行到账日期改
+    const defaultTxn = month.isSame(dayjs(), "month") ? dayjs().hour(10).minute(0) : month.date(10).hour(10).minute(0);
+    form.setFieldsValue({ txnAt: defaultTxn, summary: "佣金结算" });
     setModalOpen(true);
   };
 
@@ -164,16 +130,43 @@ export default function BankFlowTab() {
     setModalOpen(true);
   };
 
-  const doPrefill = () => {
-    const { paymentMethodId, platform, txnAt } = form.getFieldsValue(["paymentMethodId", "platform", "txnAt"]);
-    if (!paymentMethodId || !platform) {
-      message.warning("请先选择收款方式和平台");
+  /** 按到账日期精确匹配当天（无则最近一天）的组员打款记录，服务端预填 */
+  const doPrefill = async () => {
+    const { paymentMethodId, platform, txnAt } = form.getFieldsValue(["paymentMethodId", "platform", "txnAt"]) as {
+      paymentMethodId?: string; platform?: string; txnAt?: Dayjs | null;
+    };
+    if (!paymentMethodId || !platform || !txnAt) {
+      message.warning("请先选择收款方式、平台和到账日期");
       return;
     }
-    const items = buildPrefill(paymentMethodId, platform, txnAt);
-    setBreakdown(items);
-    if (items.length === 0) message.info("该收款方式×平台×半月没有组员实收记录，可手动添加明细行");
-    else message.success(`已按组员实收(CNY)预填 ${items.length} 条明细`);
+    setPrefilling(true);
+    try {
+      const params = new URLSearchParams({
+        methodId: paymentMethodId,
+        platform,
+        date: txnAt.format("YYYY-MM-DD"),
+      });
+      const res = await fetch(`/api/user/team/report/bank-flow/prefill?${params}`).then((r) => r.json());
+      if (res.code !== 0) {
+        message.error(res.message || "预填失败");
+        return;
+      }
+      const { items, note } = res.data as { items: BreakdownItem[]; note: string };
+      setBreakdown(items.map((it) => ({
+        userId: it.userId,
+        username: it.username,
+        displayName: it.displayName,
+        platform: it.platform,
+        account: it.account,
+        amount: it.amount,
+      })));
+      if (items.length === 0) message.info(note || "没有匹配的打款记录，可手动添加明细行");
+      else message.success(`${note}，共 ${items.length} 条`);
+    } catch {
+      message.error("网络错误");
+    } finally {
+      setPrefilling(false);
+    }
   };
 
   const breakdownTotal = useMemo(
@@ -398,7 +391,7 @@ export default function BankFlowTab() {
         </Button>
       </Space>
 
-      {loading && !summary ? (
+      {loading && !loaded ? (
         <div style={{ textAlign: "center", padding: 60 }}><Spin /></div>
       ) : methods.length === 0 ? (
         <Empty description={<>尚未维护收款方式，请先到「小组设置」添加收款人和卡号</>} />
@@ -477,8 +470,9 @@ export default function BankFlowTab() {
             />
             <div style={{ marginTop: 12 }}>
               <Text type="secondary" style={{ fontSize: 12 }}>
-                * 员工明细默认按「该收款方式 × 该平台 × 该半月」的组员实收(CNY)生效值自动预填（10号打款取上半月、20号打款取下半月），可逐人修改；
-                手续费 = 员工明细合计 − 实际到账，自动计算。导出的「账户交易明细清单」按期初余额逐笔滚动余额，可直接作为对账材料。
+                * 到账时间请填银行实际入账日期；员工明细按「该收款方式 × 该平台 × 到账日当天」的组员打款记录自动预填（当天没有记录时取最近一天的那批，按打款日汇率折成 CNY），
+                同一半月多笔到账各自预填各自批次，可逐人修改；手续费 = 员工明细合计 − 实际到账，自动计算。
+                导出的「账户交易明细清单」按期初余额逐笔滚动余额，可直接作为对账材料。
               </Text>
             </div>
           </Card>
@@ -603,8 +597,8 @@ export default function BankFlowTab() {
             size="small"
             title="员工收款明细"
             extra={
-              <Button size="small" icon={<ThunderboltOutlined />} onClick={doPrefill}>
-                按组员实收自动预填
+              <Button size="small" icon={<ThunderboltOutlined />} onClick={doPrefill} loading={prefilling}>
+                按到账日打款记录预填
               </Button>
             }
           >

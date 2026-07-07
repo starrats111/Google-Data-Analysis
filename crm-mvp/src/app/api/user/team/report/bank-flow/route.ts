@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
  * DELETE { id }                     软删
  *
  * 手续费口径：fee = 员工明细合计(expected_amount) − 实际入账(amount)。
- * 员工明细默认由前端按「该收款方式×该平台×该半月」的组员实收(CNY)生效值预填，可修改。
+ * 员工明细默认由 ./prefill 按「该收款方式×该平台×到账日当天」的组员打款记录预填，可修改。
  */
 
 export interface BankFlowBreakdownItem {
