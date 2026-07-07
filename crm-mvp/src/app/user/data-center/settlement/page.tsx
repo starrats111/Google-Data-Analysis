@@ -26,6 +26,8 @@ interface Summary {
   rejected_commission: number; // 已拒付 = 交易表 rejected
   paid_commission: number; // 已支付 = 交易表 paid 桶（与「支付查询」的账户级到账分开）
   pending_commission: number;
+  received_amount: number; // 已到账 = 支付API 实付（去重毛额，与「支付查询」实付合计同源）
+  awaiting_payment: number; // 待打款 = (approved+paid) − 已到账
   total_orders: number;
   total_order_amount: number;
   approval_rate: number;
@@ -642,42 +644,61 @@ export default function SettlementPage() {
         </>
       ) : s && s.total_orders > 0 ? (
         <>
+          {/* 口径B 闭合等式：总佣金 = 审核中 + 已拒绝 + 待打款 + 已到账 */}
           <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
             <Col xs={12} sm={8} md={4}>
               <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
-                <Statistic title="总佣金" value={s.total_commission} prefix="$" precision={2} styles={{ content: { fontSize: 18 } }} />
+                <Statistic
+                  title={
+                    <Tooltip title="总佣金 = 审核中 + 已拒绝 + 待打款 + 已到账（算式闭合）">
+                      <span style={{ borderBottom: "1px dashed #aaa", cursor: "help" }}>总佣金</span>
+                    </Tooltip>
+                  }
+                  value={s.total_commission} prefix="$" precision={2} styles={{ content: { fontSize: 18 } }} />
               </Card>
             </Col>
             <Col xs={12} sm={8} md={4}>
               <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
                 <Statistic
                   title={
-                    <Tooltip title="已确认 = 交易表 status=approved 的佣金（已支付订单已分到「已支付」桶，不重复计入）">
-                      <span style={{ borderBottom: "1px dashed #aaa", cursor: "help" }}>已确认</span>
+                    <Tooltip title="审核中 = 交易表 status=pending 的佣金（平台尚未确认）">
+                      <span style={{ borderBottom: "1px dashed #aaa", cursor: "help" }}>审核中</span>
                     </Tooltip>
                   }
-                  value={s.approved_commission} prefix="$" precision={2} styles={{ content: { fontSize: 18, color: COLORS.successGreen } }} />
+                  value={s.pending_commission} prefix="$" precision={2} styles={{ content: { fontSize: 18, color: "#faad14" } }} />
               </Card>
             </Col>
             <Col xs={12} sm={8} md={4}>
               <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
                 <Statistic
                   title={
-                    <Tooltip title="已支付 = 交易表已标记打款的订单佣金（CG/PM/LB 来自交易API paid_date，RW/LH 来自支付细节API）。账户级实际到账金额见「支付查询」页签。">
-                      <span style={{ borderBottom: "1px dashed #aaa", cursor: "help" }}>已支付</span>
+                    <Tooltip title="待打款 = (已确认 + 平台标记已结) − 已到账，即平台已确认应付但尚未实际到账的钱。可能为负：本期到账的打款单里含更早窗口订单的佣金（时间轴差），属正常。">
+                      <span style={{ borderBottom: "1px dashed #aaa", cursor: "help" }}>待打款</span>
                     </Tooltip>
                   }
-                  value={s.paid_commission} prefix="$" precision={2} styles={{ content: { fontSize: 18, color: "#1890ff" } }} />
+                  value={s.awaiting_payment} prefix="$" precision={2} styles={{ content: { fontSize: 18, color: "#1890ff" } }} />
               </Card>
             </Col>
             <Col xs={12} sm={8} md={4}>
               <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
-                <Statistic title="拒付" value={s.rejected_commission} prefix="$" precision={2} styles={{ content: { fontSize: 18, color: "#cf1322" } }} />
+                <Statistic
+                  title={
+                    <Tooltip title="已到账 = 支付API 实付打款单合计（按打款日归窗、去重毛额），与「支付查询」页签实付合计同源">
+                      <span style={{ borderBottom: "1px dashed #aaa", cursor: "help" }}>已到账</span>
+                    </Tooltip>
+                  }
+                  value={s.received_amount} prefix="$" precision={2} styles={{ content: { fontSize: 18, color: COLORS.successGreen } }} />
               </Card>
             </Col>
             <Col xs={12} sm={8} md={4}>
               <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
-                <Statistic title="待审核" value={s.pending_commission} prefix="$" precision={2} styles={{ content: { fontSize: 18, color: "#faad14" } }} />
+                <Statistic
+                  title={
+                    <Tooltip title="已拒绝 = 交易表 status=rejected 的佣金。若后期平台实际打款（支付细节API 证实），会自动改回 paid 并计入待打款/已到账侧。">
+                      <span style={{ borderBottom: "1px dashed #aaa", cursor: "help" }}>已拒绝</span>
+                    </Tooltip>
+                  }
+                  value={s.rejected_commission} prefix="$" precision={2} styles={{ content: { fontSize: 18, color: "#cf1322" } }} />
               </Card>
             </Col>
             <Col xs={12} sm={8} md={4}>

@@ -77,6 +77,7 @@ export async function GET(req: NextRequest) {
       summary: {
         total_commission: 0, approved_commission: 0, rejected_commission: 0,
         paid_commission: 0, pending_commission: 0,
+        received_amount: 0, awaiting_payment: 0,
         total_orders: 0, total_order_amount: 0,
         approval_rate: 0, rejection_rate: 0, settlement_rate: 0,
       },
@@ -123,15 +124,17 @@ export async function GET(req: NextRequest) {
     WHERE ${baseWhere}
   `, ...baseParams);
 
-  // 口径A（交易表四桶直白口径，等式算术恒等）：
-  //   总佣金 = 交易表全部佣金。
-  //   已确认 = status=approved；已拒付 = status=rejected；审核中 = status=pending；
-  //   已支付 = status=paid（交易表 paid 桶）。
-  // approved/rejected/pending/paid 把整张表无重叠分完，故
-  //   总 = 已确认 + 已支付 + 拒付 + 审核中 恒等闭合。
-  // paid 桶来源：CG/PM/LB 等交易API 带 paid_date 自动推导为 paid；RW/LH 交易API 无 paid_date，
-  // 由支付细节API（按 withdrawal_id 展开 sign_id）标记。
-  // 注：账户级到账金额（支付API / affiliate_payments）单独在「支付查询」页签展示，不参与本等式。
+  // 口径B（2026-07-07 应用户要求改版，算式闭合）：
+  //   总佣金 = 审核中 + 已拒绝 + 待打款 + 已到账
+  //   审核中 = 交易表 status=pending；已拒绝 = status=rejected；
+  //   已到账 = 支付API（affiliate_payments status=paid，按打款日在所选窗口内，
+  //            金额为平台毛额、(platform,payment_no) 去重——与「支付查询」实付合计同源）；
+  //   待打款 = (approved + paid 交易桶) − 已到账。
+  // approved+paid 表示「平台已确认应付的佣金」，减去实际到账即为平台还欠的钱；
+  // 定义式保证闭合恒等。若拒付后期转实付（carve 会把 rejected 行标回 paid），
+  // 金额自动从「已拒绝」移入 approved+paid 侧，按 paid 参与计算。
+  // 注意：交易按下单时间归窗、打款按打款日归窗，窗口小时（如本月）「待打款」可能为负
+  // （本期到账的是更早订单的钱），属正常时间差；打款记录无商家维度，mid 筛选不作用于已到账。
   const sum = summaryRows[0] || {};
   const totalCommission    = Number(sum.total_commission    || 0);
   const approvedCommission = Number(sum.approved_commission || 0); // 已确认 = 交易表 approved
@@ -140,6 +143,25 @@ export async function GET(req: NextRequest) {
   const pendingCommission  = Number(sum.pending_commission  || 0); // 审核中 = 交易表 pending
   const totalOrders        = Number(sum.total_orders        || 0);
   const totalOrderAmount   = Number(sum.total_order_amount  || 0);
+
+  // ── 1b. 已到账（支付API 账户级实付，与「支付查询」实付合计同口径）──────────
+  // paid_date 为日期型（UTC 零点入库），用日期字符串边界过滤；
+  // (platform, payment_no) 去重后取毛额（gross 优先，空/0 回退净额）。
+  const payParams: unknown[] = [...userIds, `${startStr} 00:00:00`, `${endExclStr} 00:00:00`];
+  let payPlatformClause = "";
+  if (platform) { payPlatformClause = " AND platform = ?"; payParams.push(platform); }
+  const receivedRows = await prisma.$queryRawUnsafe<{ received: number }[]>(`
+    SELECT COALESCE(SUM(amt), 0) AS received FROM (
+      SELECT MAX(CAST(COALESCE(NULLIF(gross_amount, 0), amount) AS DECIMAL(14,4))) AS amt
+      FROM affiliate_payments
+      WHERE user_id IN (${uidPlaceholders}) AND is_deleted = 0 AND status = 'paid'
+        AND paid_date >= ? AND paid_date < ?${payPlatformClause}
+      GROUP BY platform, payment_no
+    ) x
+  `, ...payParams);
+  const receivedAmount  = Number(receivedRows[0]?.received || 0);
+  // 待打款 = 平台已确认应付（approved+paid 桶）− 实际到账；定义式保证等式闭合
+  const awaitingPayment = approvedCommission + paidCommission - receivedAmount;
 
   const fix2 = (n: number) => +n.toFixed(2);
   // 确认率=已确认/总；拒付率=拒付/总；结算率=已支付/总。
@@ -275,6 +297,8 @@ export async function GET(req: NextRequest) {
       rejected_commission: fix2(rejectedCommission), // 已拒付 = 交易表 rejected
       paid_commission: fix2(paidCommission), // 已支付 = 交易表 paid 桶
       pending_commission: fix2(pendingCommission), // 审核中 = 交易表 pending
+      received_amount: fix2(receivedAmount), // 已到账 = 支付API 实付（去重毛额）
+      awaiting_payment: fix2(awaitingPayment), // 待打款 = approved+paid − 已到账
       total_orders: totalOrders,
       total_order_amount: fix2(totalOrderAmount),
       approval_rate: approvalRate,
