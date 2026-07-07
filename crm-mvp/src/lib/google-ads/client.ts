@@ -52,6 +52,28 @@ function isMccPermissionError(errBody: string): boolean {
     || (errBody.includes("PERMISSION_DENIED") && errBody.includes("authorizationError"));
 }
 
+/**
+ * CID 级权限错误可能是「CID 已脱离 MCC」而非「凭证对 MCC 无权限」。
+ * 用同一凭证对 MCC 本身发一次最小查询确认：MCC 也拒绝 → 真是凭证问题（可标记）；
+ * MCC 通过 → 是 CID 自身的问题（换凭证也没用，不能标记，否则会毒化整个池）。
+ */
+async function confirmMccLevelDenied(devToken: string, saJson: string, mccKey: string): Promise<boolean> {
+  try {
+    const accessToken = await getAccessToken(saJson);
+    const resp = await fetch(`${ADS_BASE_URL}/customers/${mccKey}/googleAds:search`, {
+      method: "POST",
+      headers: buildHeaders(accessToken, devToken, mccKey),
+      body: JSON.stringify({ query: "SELECT customer.id FROM customer LIMIT 1" }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (resp.ok) return false;
+    const body = await resp.text().catch(() => "");
+    return isMccPermissionError(body);
+  } catch {
+    return false; // 确认失败（网络等）时不标记，宁可下次再学
+  }
+}
+
 /** Google Ads API 错误中单个违规项 */
 export interface GoogleAdsViolation {
   errorCode: string;
@@ -369,6 +391,11 @@ export async function queryGoogleAds(
       throw new Error("Google Ads API 权限错误：Developer Token 仅被批准用于测试账号，无法访问正式广告账号。请在 Google Ads API Center 申请标准访问权限。");
     }
     if (isMccPermissionError(errBody)) {
+      const mccKey = credentials.mcc_id.replace(/-/g, "");
+      // 先确认是凭证对 MCC 无权限，还是 CID 自身的问题（后者换凭证无解，且不能标记凭证）
+      if (cid !== mccKey && !(await confirmMccLevelDenied(devToken, resolveSaJson(cred, own), mccKey))) {
+        throw new Error(`CID ${customerId} 无访问权限（USER_PERMISSION_DENIED）：该 CID 可能已脱离 MCC 或未授权，请同步 CID 列表后重试。`);
+      }
       reportTokenDeniedForMcc(devToken, credentials.mcc_id);
       triedTokens.add(devToken);
       if (await hasAlternativeToken(own, credentials.mcc_id, triedTokens)) {
@@ -489,6 +516,10 @@ export async function mutateGoogleAds(
       throw new Error("Google Ads API 权限错误：Developer Token 仅被批准用于测试账号，无法访问正式广告账号。请在 Google Ads API Center 申请标准访问权限。");
     }
     if (isMccPermissionError(errBody)) {
+      const mccKey = credentials.mcc_id.replace(/-/g, "");
+      if (cid !== mccKey && !(await confirmMccLevelDenied(devToken, resolveSaJson(cred, own), mccKey))) {
+        throw new Error(`CID ${customerId} 无访问权限（USER_PERMISSION_DENIED）：该 CID 可能已脱离 MCC 或未授权，请同步 CID 列表后重试。`);
+      }
       reportTokenDeniedForMcc(devToken, credentials.mcc_id);
       triedTokens.add(devToken);
       // mutate 在权限校验阶段被拒，Google 未执行任何变更，换凭证重试安全

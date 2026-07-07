@@ -369,10 +369,13 @@ export function getTokenCooldown(token: string): Date | null {
   return until > Date.now() ? new Date(until) : null;
 }
 
-/** 探测确认 token 恢复可用后，清掉内存冷却与体检缓存（下次加载重读 DB 最新标记） */
+/** 探测确认 token 恢复可用后，清掉内存冷却、体检缓存与实时 denied 标记（下次加载重读 DB 最新标记） */
 export function clearTokenCooldown(token: string): void {
   cooldownUntil.delete(token);
   tokenMetaCache.delete(token);
+  for (const pair of deniedPairs) {
+    if (pair.startsWith(`${token}|`)) deniedPairs.delete(pair);
+  }
   poolCacheByMcc.clear();
 }
 
