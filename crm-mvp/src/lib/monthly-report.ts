@@ -7,7 +7,8 @@
  * 口径（2026-07-03 拍板）：
  * - 账面佣金 = 当月全部 status 交易佣金；失效 = rejected；按交易发生月归
  *   （复用 report-metrics 的平台后台时间口径）
- * - 应收/实收都按 affiliate_payments.request_date 归月归半月（1-15 上半月 / 16-月末 下半月），
+ * - 应收/实收都按 affiliate_payments.request_date 归月归半月；半月按请求日就近归批：
+ *   ≤10号 归 5号批(上半月)，>10号 归 15号批(下半月)——平台请求日有 4-6号 / 14-16号 漂移（2026-07 拍板），
  *   应收计 status IN ('paid','processing')（打款单已生成即应收，含审核中），
  *   实收只计 status='paid'（rejected 忽略）——LB 商家佣金单审核期内为 processing
  * - 应收 = 平台显示金额 amount；实收 = 毛额优先回退净额（paymentDisplayAmount），可手工纠正
@@ -22,6 +23,10 @@
 import prisma from "@/lib/prisma";
 import { sqlTxnRange, sqlTxnMonth, REPORT_PLATFORM_ORDER, paymentDisplayAmount } from "@/lib/report-metrics";
 import { nowCST, dateColumnStart } from "@/lib/date-utils";
+
+/** 半月归批分界：请求日 ≤10号 归 5号批(H1)，>10号 归 15号批(H2)。
+ *  平台名义 5号/15号 分两期请求打款，实际有 4-6号 / 14-16号 漂移，按就近原则判批。 */
+export const HALF_SPLIT_DAY = 10;
 
 // ─────────────────────────────────────────────────────────────
 // 类型
@@ -441,7 +446,7 @@ export async function buildMemberMonthlyReport(
       : 0;
     // 实收 CNY 默认值：逐笔按打款日（当日或其前最近快照）汇率折算
     const paidCny = isPaid ? paid * dailyUsdToCny(p.request_date!) : 0;
-    if (day <= 15) {
+    if (day <= HALF_SPLIT_DAY) {
       col.recvH1 += recv;
       col.paidH1 += paid;
       col.paidCnyH1 += paidCny;
@@ -722,6 +727,61 @@ async function buildMccSections(
 }
 
 // ─────────────────────────────────────────────────────────────
+// 银行流水归半月（R-07）
+// 流水核对按 paid_date 走（prefill），但并入报表时半月必须按「请求时间」口径：
+// 通过 source_date（平台显示打款日）反查该批打款单的 request_date 判批。
+// ─────────────────────────────────────────────────────────────
+
+type BankEntryLite = { platform: string; txn_at: Date; amount: unknown; source_date: Date | null };
+
+/** 反查各批次（platform×source_date）对应打款单的请求日，返回 `platform|YYYY-MM-DD` → H1/H2。
+ *  同批出现多个请求日时取金额占比最大的。 */
+async function resolveBankBatchHalves(
+  entries: BankEntryLite[],
+  memberIds: bigint[],
+): Promise<Map<string, "H1" | "H2">> {
+  const result = new Map<string, "H1" | "H2">();
+  const dates = [...new Set(entries.filter((e) => e.source_date).map((e) => e.source_date!.toISOString().slice(0, 10)))];
+  if (dates.length === 0 || memberIds.length === 0) return result;
+  const rows = await prisma.affiliate_payments.findMany({
+    where: {
+      user_id: { in: memberIds }, is_deleted: 0,
+      status: { in: ["paid", "processing"] },
+      platform: { in: [...new Set(entries.map((e) => e.platform))] },
+      paid_date: { in: dates.map((d) => new Date(`${d}T00:00:00Z`)) },
+    },
+    select: { platform: true, paid_date: true, request_date: true, amount: true },
+  });
+  const byBatch = new Map<string, Map<number, number>>(); // 批次 → 请求日 → 金额合计
+  for (const r of rows) {
+    if (!r.paid_date || !r.request_date) continue;
+    const key = `${r.platform}|${r.paid_date.toISOString().slice(0, 10)}`;
+    let m = byBatch.get(key);
+    if (!m) { m = new Map(); byBatch.set(key, m); }
+    const d = r.request_date.getUTCDate();
+    m.set(d, (m.get(d) || 0) + Number(r.amount || 0));
+  }
+  for (const [key, m] of byBatch) {
+    let bestDay = 0, bestAmt = -1;
+    for (const [d, amt] of m) if (amt > bestAmt) { bestAmt = amt; bestDay = d; }
+    result.set(key, bestDay <= HALF_SPLIT_DAY ? "H1" : "H2");
+  }
+  return result;
+}
+
+/** 单条流水归半月：优先批次请求日；反查不到时按打款/到账日就近兜底
+ *（5号批顺延最晚 ~13号入账，15号批最早 ~16号）。 */
+function bankEntryHalf(e: BankEntryLite, batchHalves: Map<string, "H1" | "H2">): "H1" | "H2" {
+  if (e.source_date) {
+    const h = batchHalves.get(`${e.platform}|${e.source_date.toISOString().slice(0, 10)}`);
+    if (h) return h;
+  }
+  const base = e.source_date ?? e.txn_at;
+  const day = new Date(base.getTime() + 8 * 3600 * 1000).getUTCDate();
+  return day <= 13 ? "H1" : "H2";
+}
+
+// ─────────────────────────────────────────────────────────────
 // 组长总计表
 // ─────────────────────────────────────────────────────────────
 
@@ -774,18 +834,21 @@ export async function buildTeamMonthlySummary(
     }
   }
 
-  // R-07：银行流水登记的实际入账(CNY)，按 平台×半月 聚合（txn_at 北京时间切半月）。
-  // 组长在「银行流水」页登记的到账即实际佣金来源，无需再到月度报表手填一遍。
+  // R-07：银行流水登记的实际入账(CNY)，按 平台×半月 聚合。
+  // 归半月用「请求时间」口径与报表其余列一致：通过 source_date（平台显示打款日）反查
+  // 该批打款单的 request_date 判批（≤10号 = 5号批 H1，>10号 = 15号批 H2）；
+  // 反查不到时才退回到账日就近判断。银行流水核对本身仍按 paid_date 走（prefill 不变）。
   const bankEntries = await prisma.bank_flow_entries.findMany({
     where: { team_id: teamId, month, is_deleted: 0 },
-    select: { platform: true, txn_at: true, amount: true },
+    select: { platform: true, txn_at: true, amount: true, source_date: true },
   });
+  const bankHalfByBatch = await resolveBankBatchHalves(bankEntries, members.map((m) => m.id));
   const bankCnyByPlat = new Map<string, { H1: number; H2: number; hasH1: boolean; hasH2: boolean }>();
   for (const e of bankEntries) {
-    const day = new Date(e.txn_at.getTime() + 8 * 3600 * 1000).getUTCDate();
+    const half = bankEntryHalf(e, bankHalfByBatch);
     let b = bankCnyByPlat.get(e.platform);
     if (!b) { b = { H1: 0, H2: 0, hasH1: false, hasH2: false }; bankCnyByPlat.set(e.platform, b); }
-    if (day <= 15) { b.H1 += Number(e.amount || 0); b.hasH1 = true; }
+    if (half === "H1") { b.H1 += Number(e.amount || 0); b.hasH1 = true; }
     else { b.H2 += Number(e.amount || 0); b.hasH2 = true; }
   }
   // 银行流水可能涉及成员报表里没有的平台列（如历史账号已删），补一列空聚合避免金额丢失
@@ -1039,7 +1102,7 @@ export async function buildTeamAnnualReport(
         TRIM(COALESCE(pc.account_name, '')) AS acct,
         DATE_FORMAT(p.request_date, '%Y-%m-%d') AS d,
         DATE_FORMAT(p.request_date, '%Y-%m') AS m,
-        CASE WHEN DAY(p.request_date) <= 15 THEN 'H1' ELSE 'H2' END AS half,
+        CASE WHEN DAY(p.request_date) <= ${HALF_SPLIT_DAY} THEN 'H1' ELSE 'H2' END AS half,
         SUM(CAST(p.amount AS DECIMAL(14,4))) AS recv,
         SUM(CAST(CASE WHEN p.status = 'paid'
                  THEN (CASE WHEN p.gross_amount IS NOT NULL AND p.gross_amount > 0 THEN p.gross_amount ELSE p.amount END)
@@ -1209,18 +1272,19 @@ export async function buildTeamAnnualReport(
   }
 
   // ── 4a. 银行流水登记（R-07）：月×平台×半月 实际入账(CNY)聚合，优先级低于组长手填、高于成员估算 ──
+  // 归半月同月度口径：source_date 反查批次 request_date 判批，兜底按日期就近
   const bankRows = await prisma.bank_flow_entries.findMany({
     where: { team_id: teamId, is_deleted: 0, month: { startsWith: `${year}-` } },
-    select: { month: true, platform: true, txn_at: true, amount: true },
+    select: { month: true, platform: true, txn_at: true, amount: true, source_date: true },
   });
+  const bankBatchHalves = await resolveBankBatchHalves(bankRows, memberIds);
   const bankCnyMonthPlat = new Map<string, Map<string, { H1?: number; H2?: number }>>();
   for (const e of bankRows) {
-    const day = new Date(e.txn_at.getTime() + 8 * 3600 * 1000).getUTCDate();
-    const half = day <= 15 ? "H1" : "H2";
+    const half = bankEntryHalf(e, bankBatchHalves);
     let byPlat = bankCnyMonthPlat.get(e.month);
     if (!byPlat) { byPlat = new Map(); bankCnyMonthPlat.set(e.month, byPlat); }
     const entry = byPlat.get(e.platform) || {};
-    entry[half as "H1" | "H2"] = (entry[half as "H1" | "H2"] || 0) + Number(e.amount || 0);
+    entry[half] = (entry[half] || 0) + Number(e.amount || 0);
     byPlat.set(e.platform, entry);
   }
 
