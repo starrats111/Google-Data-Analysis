@@ -24,6 +24,7 @@ import {
 import dayjs, { type Dayjs } from "dayjs";
 import type { ColumnsType } from "antd/es/table";
 import { REPORT_PLATFORM_ORDER } from "@/lib/report-metrics";
+import { apportionFee } from "@/lib/bank-flow-fee";
 
 const { Text } = Typography;
 
@@ -172,6 +173,17 @@ export default function BankFlowTab() {
   const breakdownTotal = useMemo(
     () => Math.round(breakdown.reduce((s, b) => s + (b.amount || 0), 0) * 100) / 100,
     [breakdown],
+  );
+
+  // 弹窗内实时分摊：费率 = 总手续费 ÷ 明细合计，个人手续费 = 明细金额 × 费率（尾差调到金额最大者）
+  const watchedAmount = Form.useWatch("amount", form);
+  const modalFee = useMemo(
+    () => Math.round((breakdownTotal - (Number(watchedAmount) || 0)) * 100) / 100,
+    [breakdownTotal, watchedAmount],
+  );
+  const modalFees = useMemo(
+    () => apportionFee(breakdown.map((b) => b.amount || 0), modalFee),
+    [breakdown, modalFee],
   );
 
   const handleSave = async () => {
@@ -332,10 +344,10 @@ export default function BankFlowTab() {
   ];
 
   const breakdownColumns: ColumnsType<BreakdownItem> = [
-    { title: "组员", key: "member", width: 110, render: (_, b) => b.displayName || b.username },
+    { title: "组员", key: "member", width: 100, render: (_, b) => b.displayName || b.username },
     { title: "平台账号", dataIndex: "account", ellipsis: true },
     {
-      title: "金额(¥)", dataIndex: "amount", width: 140, align: "right",
+      title: "金额(¥)", dataIndex: "amount", width: 135, align: "right",
       render: (_, b, idx) => (
         <InputNumber
           size="small"
@@ -348,6 +360,18 @@ export default function BankFlowTab() {
           }}
         />
       ),
+    },
+    {
+      title: <Tooltip title="按费率（总手续费÷明细合计）比例分摊，尾差调整到金额最大者">个人手续费(¥)</Tooltip>,
+      key: "fee", width: 110, align: "right",
+      render: (_, __, idx) => {
+        const f = modalFees[idx] ?? 0;
+        return <Text type={f > 0 ? "danger" : "secondary"}>¥{fmt(f)}</Text>;
+      },
+    },
+    {
+      title: "净到手(¥)", key: "net", width: 110, align: "right",
+      render: (_, b, idx) => <Text strong>¥{fmt(Math.round(((b.amount || 0) - (modalFees[idx] ?? 0)) * 100) / 100)}</Text>,
     },
     {
       title: "", key: "del", width: 40,
@@ -471,7 +495,8 @@ export default function BankFlowTab() {
             <div style={{ marginTop: 12 }}>
               <Text type="secondary" style={{ fontSize: 12 }}>
                 * 到账时间请填银行实际入账日期；员工明细按「该收款方式 × 该平台 × 到账日当天」的组员打款记录自动预填（当天没有记录时取最近一天的那批，按打款日汇率折成 CNY），
-                同一半月多笔到账各自预填各自批次，可逐人修改；手续费 = 员工明细合计 − 实际到账，自动计算。
+                同一半月多笔到账各自预填各自批次，可逐人修改；手续费 = 员工明细合计 − 实际到账，自动计算；
+                个人手续费 = 明细金额 × 费率（费率 = 手续费 ÷ 明细合计），尾差调整到金额最大者，净到手 = 明细金额 − 个人手续费。
                 导出的「账户交易明细清单」按期初余额逐笔滚动余额，可直接作为对账材料。
               </Text>
             </div>
@@ -495,6 +520,7 @@ export default function BankFlowTab() {
         {viewing && (() => {
           const m = methodById.get(viewing.paymentMethodId);
           const rate = viewing.expectedAmount > 0 ? `${((viewing.fee / viewing.expectedAmount) * 100).toFixed(2)}%` : "—";
+          const viewFees = apportionFee(viewing.breakdown.map((b) => b.amount || 0), viewing.fee);
           return (
             <Space direction="vertical" size={12} style={{ width: "100%" }}>
               <Descriptions size="small" bordered column={2} styles={{ label: { width: 110 } }}>
@@ -517,9 +543,21 @@ export default function BankFlowTab() {
               </Descriptions>
               <Table<BreakdownItem>
                 columns={[
-                  { title: "组员", key: "member", width: 120, render: (_, b) => b.displayName || b.username },
+                  { title: "组员", key: "member", width: 100, render: (_, b) => b.displayName || b.username },
                   { title: "平台账号", dataIndex: "account", ellipsis: true },
-                  { title: "金额(¥)", dataIndex: "amount", width: 130, align: "right", render: (v: number) => `¥${fmt(v)}` },
+                  { title: "金额(¥)", dataIndex: "amount", width: 110, align: "right", render: (v: number) => `¥${fmt(v)}` },
+                  {
+                    title: <Tooltip title="按费率（总手续费÷明细合计）比例分摊，尾差调整到金额最大者">个人手续费(¥)</Tooltip>,
+                    key: "fee", width: 110, align: "right",
+                    render: (_, __, idx) => {
+                      const f = viewFees[idx] ?? 0;
+                      return <Text type={f > 0 ? "danger" : "secondary"}>{fmt(f)}</Text>;
+                    },
+                  },
+                  {
+                    title: "净到手(¥)", key: "net", width: 110, align: "right",
+                    render: (_, b, idx) => <Text strong>¥{fmt(Math.round(((b.amount || 0) - (viewFees[idx] ?? 0)) * 100) / 100)}</Text>,
+                  },
                 ]}
                 dataSource={viewing.breakdown}
                 rowKey={(b, i) => `${b.userId}-${b.account}-${i}`}
@@ -531,6 +569,8 @@ export default function BankFlowTab() {
                   <Table.Summary.Row style={{ background: "#fafafa", fontWeight: 600 }}>
                     <Table.Summary.Cell index={0} colSpan={2}>合计（{viewing.breakdown.length} 人）</Table.Summary.Cell>
                     <Table.Summary.Cell index={1} align="right">¥{fmt(viewing.expectedAmount)}</Table.Summary.Cell>
+                    <Table.Summary.Cell index={2} align="right">¥{fmt(viewing.fee)}</Table.Summary.Cell>
+                    <Table.Summary.Cell index={3} align="right">¥{fmt(Math.round((viewing.expectedAmount - viewing.fee) * 100) / 100)}</Table.Summary.Cell>
                   </Table.Summary.Row>
                 )}
               />
@@ -613,27 +653,20 @@ export default function BankFlowTab() {
             <div style={{ marginTop: 8, textAlign: "right" }}>
               <Space size={16}>
                 <Text>明细合计：<Text strong>¥{fmt(breakdownTotal)}</Text></Text>
-                <FeePreview form={form} total={breakdownTotal} />
+                <Text>
+                  手续费：
+                  <Text strong style={{ color: modalFee > 0 ? "#cf1322" : modalFee < 0 ? "#fa8c16" : undefined }}>
+                    {modalFee >= 0 ? `¥${fmt(modalFee)}` : `-¥${fmt(-modalFee)}`}
+                  </Text>
+                </Text>
+                <Text type="secondary">
+                  费率 {breakdownTotal > 0 ? `${((modalFee / breakdownTotal) * 100).toFixed(2)}%` : "—"}
+                </Text>
               </Space>
             </div>
           </Card>
         </Form>
       </Modal>
     </div>
-  );
-}
-
-/** 弹窗内手续费实时预览（明细合计 − 输入的总金额） */
-function FeePreview({ form, total }: { form: ReturnType<typeof Form.useForm>[0]; total: number }) {
-  const amount = Form.useWatch("amount", form);
-  const fee = total - (Number(amount) || 0);
-  const r = Math.round(fee * 100) / 100;
-  return (
-    <Text>
-      手续费：
-      <Text strong style={{ color: r > 0 ? "#cf1322" : r < 0 ? "#fa8c16" : undefined }}>
-        {r >= 0 ? `¥${r.toFixed(2)}` : `-¥${(-r).toFixed(2)}`}
-      </Text>
-    </Text>
   );
 }

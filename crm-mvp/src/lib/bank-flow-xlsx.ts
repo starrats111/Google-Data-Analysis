@@ -8,6 +8,7 @@
  */
 
 import ExcelJS from "exceljs";
+import { apportionFee } from "@/lib/bank-flow-fee";
 
 export interface BankFlowExportMethod {
   id: string;
@@ -166,20 +167,26 @@ export function buildBankReconSheet(
   widths.forEach((w, i) => (ws.getColumn(i + 1).width = w));
 
   ws.mergeCells(1, 1, 1, 10);
-  cell(ws, 1, 1, `${month} 平台打款对账明细（手续费 = 员工明细合计 − 实际到账）`, { sz: 14, bold: true, noBorder: true });
+  cell(ws, 1, 1, `${month} 平台打款对账明细（手续费 = 员工明细合计 − 实际到账；个人手续费按费率分摊，费率 = 手续费 ÷ 明细合计）`, { sz: 14, bold: true, noBorder: true });
   ws.getRow(1).height = 30;
 
-  const HEAD = ["收款人", "收款卡号", "平台", "到账时间", "员工明细合计(¥)", "实际到账(¥)", "手续费(¥)", "费率", "员工收款明细", "备注"];
+  const HEAD = ["收款人", "收款卡号", "平台", "到账时间", "员工明细合计(¥)", "实际到账(¥)", "手续费(¥)", "费率", "员工收款明细（含个人手续费/净到手）", "备注"];
   HEAD.forEach((h, i) => cell(ws, 2, 1 + i, h, { bold: true, fill: GRAY }));
   ws.getRow(2).height = 24;
 
   const byId = new Map(methods.map((m) => [m.id, m]));
   const sorted = [...entries].sort((a, b) => a.txnAt.getTime() - b.txnAt.getTime());
   let r = 3;
+  const money = (n: number) => n.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   for (const e of sorted) {
     const m = byId.get(e.paymentMethodId);
+    const fees = apportionFee(e.breakdown.map((b) => b.amount || 0), e.fee);
     const detail = e.breakdown
-      .map((b) => `${b.displayName || b.username}｜${b.platform} ${b.account}｜¥${b.amount.toLocaleString("zh-CN", { minimumFractionDigits: 2 })}`)
+      .map((b, i) => {
+        const fee = fees[i] ?? 0;
+        const net = Math.round(((b.amount || 0) - fee) * 100) / 100;
+        return `${b.displayName || b.username}｜${b.platform} ${b.account}｜应发¥${money(b.amount)}｜手续费¥${money(fee)}｜净到手¥${money(net)}`;
+      })
       .join("\n");
     cell(ws, r, 1, m?.payeeName || "—", {});
     cell(ws, r, 2, m?.cardNo || "—", {});

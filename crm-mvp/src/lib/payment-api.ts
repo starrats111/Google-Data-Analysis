@@ -12,14 +12,19 @@
  *   3. merchant_commission（按商家已付佣金）：LB
  *      GET  mod=settlement&op=merchant_commission（begin_date/end_date ≤ 62 天）
  *      → data[]: {payment_id, paid_date, sale_comm, mcid, merchant_name, settlement_uuid}
- *      ⚠ 三个坑（2026-07-06 实测 payment_id=17520）：
- *        a) 无任何状态字段——paid_date 只是打款单生成/计划打款日，单子可能仍在平台审核，
- *           不能直接视为已到账 → 打款单日 + LB_PAYMENT_CONFIRM_DAYS 天后才归一化为 paid，
- *           之前为 processing（进报表「应收」，不进「实收」）
+ *      ⚠ 四个坑（2026-07-06/07 实测 payment_id=17520）：
+ *        a) 无任何状态字段——paid_date 只是打款单生成/计划打款日，单子可能仍在平台审核。
+ *           2026-07-07 实测确认：LB api.php 不存在打款单级接口（mod=linkpayment 无论 op
+ *           传什么都返回同一份商家结算行，无状态字段；网页 Payment Summary 的
+ *           Pending/Paid 是内部接口，token 调不到）→ 只能用打款单日 +
+ *           LB_PAYMENT_CONFIRM_DAYS 天后归一化为 paid 的推断，之前为 processing
+ *           （进报表「应收」，不进「实收」）；若单子在 LB 长期 Pending 需人工核对
  *        b) 行按 settlement_date（商家结算日）过滤，同一打款单可覆盖横跨数月的结算行
  *           （17520 实测跨 2~6 月共 58 行）→ 窗口不满会聚合出偏小金额并被 upsert 覆盖，
  *           必须全历史窗口拉取，忽略调用方传入的窗口
  *        c) settlement_date 跨多月，无归月意义 → request_date 用 paid_date（打款单日）
+ *        d) 打款单总额 = 明细 sale_comm 全精度求和后【截断到分】，不是四舍五入
+ *           （17520：Σ=1061.445376，页面=1061.44）→ 聚合后用 floor 到分对齐 LB 后台
  *
  * 说明：RW/LH 提现级金额无法拆到商家/交易月，仅平台级统计（结算率分子）。
  */
@@ -382,7 +387,8 @@ async function fetchLinkbuxMerchantCommission(
 
   const out: PlatformPayment[] = [];
   for (const [paymentId, v] of agg) {
-    // 打款单日 + 审核确认期后才视为已到账；每日同步会自动把到期的单转正为 paid
+    // 打款单日 + 审核确认期后才视为已到账；每日同步会自动把到期的单转正为 paid。
+    // 注意这是推断（LB 无打款单状态接口，见文件头坑 a），长期 Pending 的单需人工核对。
     const paidTs = v.paid_date ? new Date(v.paid_date).getTime() : 0;
     const confirmed = paidTs > 0 && Date.now() - paidTs >= LB_PAYMENT_CONFIRM_DAYS * 86400000;
     out.push({
@@ -391,7 +397,8 @@ async function fetchLinkbuxMerchantCommission(
       paid_date: v.paid_date,
       // settlement_date 跨多月无归属意义，归月一律按打款单日
       request_date: v.paid_date,
-      amount: +v.amount.toFixed(2),
+      // LB 后台打款单总额 = 明细全精度求和后截断到分（见文件头坑 d）
+      amount: Math.floor(v.amount * 100 + 1e-6) / 100,
       gross_amount: null,
       currency: "USD",
       status: confirmed ? "paid" : "processing",
