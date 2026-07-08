@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Table, Tag, Button, Input, InputNumber, Space, Typography, Card, Row, Col,
-  Tooltip, App, Statistic, Switch, Tabs, Popconfirm, Badge, Alert, Segmented,
+  Tooltip, App, Statistic, Switch, Tabs, Popconfirm, Badge, Alert, Segmented, Select,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import {
@@ -13,6 +13,7 @@ import {
   AimOutlined, LoadingOutlined, EditOutlined, HistoryOutlined,
 } from "@ant-design/icons";
 import AppPageHeader from "@/components/AppPageHeader";
+import { ALL_COUNTRIES } from "@/lib/constants";
 
 const { Text, Paragraph } = Typography;
 
@@ -135,6 +136,11 @@ export default function LinkExchangePage() {
   const [editingLinkId, setEditingLinkId] = useState<string | null>(null);
   const [linkDraft, setLinkDraft] = useState("");
   const [savingLink, setSavingLink] = useState(false);
+  // 「取链接」工具：输入联盟链接 + 国家 → 用该国动态住宅代理跟链，返回最终落地 URL
+  const [fetchLinkInput, setFetchLinkInput] = useState("");
+  const [fetchLinkCountry, setFetchLinkCountry] = useState<string>("US");
+  const [fetchLinkLoading, setFetchLinkLoading] = useState(false);
+  const [fetchLinkResult, setFetchLinkResult] = useState<{ finalUrl: string; hasTracking: boolean } | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchData = useCallback(async () => {
@@ -300,6 +306,28 @@ export default function LinkExchangePage() {
       } else message.error(res.message ?? "保存失败");
     } finally {
       setSavingLink(false);
+    }
+  };
+
+  const handleFetchLink = async () => {
+    const url = fetchLinkInput.trim();
+    if (!/^https?:\/\//i.test(url)) { message.error("请填写有效的 http(s) 联盟链接"); return; }
+    setFetchLinkLoading(true);
+    setFetchLinkResult(null);
+    try {
+      const res = await fetch("/api/user/link-exchange/fetch-link", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ affiliateUrl: url, country: fetchLinkCountry }),
+      }).then((r) => r.json());
+      if (res.code === 0 && res.data?.finalUrl) {
+        setFetchLinkResult({ finalUrl: res.data.finalUrl, hasTracking: !!res.data.hasTracking });
+        if (res.data.hasTracking) message.success("取链接成功，已跟到带追踪参数的最终链接");
+        else message.warning("已跟到最终页面，但未检出追踪参数，请确认链接是否正确");
+      } else message.error(res.message ?? "取链接失败");
+    } catch {
+      message.error("请求失败，请重试");
+    } finally {
+      setFetchLinkLoading(false);
     }
   };
 
@@ -728,24 +756,77 @@ export default function LinkExchangePage() {
         </Col>
       </Row>
 
-      {/* API Key 卡片 */}
-      <Card size="small" style={{ marginBottom: 16 }} title={<Space><KeyOutlined /> 脚本 API Key</Space>}>
-        <Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 8 }}>
-          统一 Google Ads 脚本（数据采集 + 换链接）通过此 Key 鉴权。脚本在「个人设置 → Google Ads MCC → 复制脚本」处生成，已自动填入此 Key，无需手动配置。
-        </Paragraph>
-        {apiKey ? (
-          <Space wrap>
-            <Input readOnly value={keyVisible ? apiKey : maskedKey} style={{ width: 380, fontFamily: "monospace" }} />
-            <Button onClick={() => setKeyVisible((v) => !v)}>{keyVisible ? "隐藏" : "显示"}</Button>
-            <Button icon={<CopyOutlined />} onClick={() => { navigator.clipboard.writeText(apiKey); message.success("API Key 已复制"); }}>复制</Button>
-            <Popconfirm title="重置后旧 Key 立即失效，需更新所有已部署脚本，确认重置？" onConfirm={handleResetKey} okText="确认重置" cancelText="取消">
-              <Button danger loading={resetting} icon={<SyncOutlined />}>重置</Button>
-            </Popconfirm>
-          </Space>
-        ) : (
-          <Button type="primary" icon={<KeyOutlined />} onClick={handleGenerateKey}>生成 API Key</Button>
-        )}
-      </Card>
+      {/* API Key + 取链接 工具卡片 */}
+      <Row gutter={16} style={{ marginBottom: 16 }}>
+        <Col xs={24} lg={12}>
+          <Card size="small" style={{ height: "100%" }} title={<Space><KeyOutlined /> 脚本 API Key</Space>}>
+            <Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 8 }}>
+              统一 Google Ads 脚本（数据采集 + 换链接）通过此 Key 鉴权。脚本在「个人设置 → Google Ads MCC → 复制脚本」处生成，已自动填入此 Key，无需手动配置。
+            </Paragraph>
+            {apiKey ? (
+              <Space wrap>
+                <Input readOnly value={keyVisible ? apiKey : maskedKey} style={{ width: 380, fontFamily: "monospace" }} />
+                <Button onClick={() => setKeyVisible((v) => !v)}>{keyVisible ? "隐藏" : "显示"}</Button>
+                <Button icon={<CopyOutlined />} onClick={() => { navigator.clipboard.writeText(apiKey); message.success("API Key 已复制"); }}>复制</Button>
+                <Popconfirm title="重置后旧 Key 立即失效，需更新所有已部署脚本，确认重置？" onConfirm={handleResetKey} okText="确认重置" cancelText="取消">
+                  <Button danger loading={resetting} icon={<SyncOutlined />}>重置</Button>
+                </Popconfirm>
+              </Space>
+            ) : (
+              <Button type="primary" icon={<KeyOutlined />} onClick={handleGenerateKey}>生成 API Key</Button>
+            )}
+          </Card>
+        </Col>
+        <Col xs={24} lg={12}>
+          <Card size="small" style={{ height: "100%" }} title={<Space><LinkOutlined /> 取链接</Space>}>
+            <Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 8 }}>
+              输入联盟链接 → 选择国家 → 验证。用对应国家的动态住宅 IP 访问并跟随跳转，跳转到最终链接为成功（不换链、不入库存）。
+            </Paragraph>
+            <Space.Compact style={{ width: "100%", marginBottom: 8 }}>
+              <Input
+                placeholder="粘贴联盟链接，如 https://www.linkhaitao.com/index.php?mod=lhdeal&track=..."
+                value={fetchLinkInput}
+                onChange={(e) => setFetchLinkInput(e.target.value)}
+                onPressEnter={handleFetchLink}
+                allowClear
+              />
+              <Select
+                value={fetchLinkCountry}
+                onChange={setFetchLinkCountry}
+                style={{ width: 130 }}
+                showSearch
+                optionFilterProp="label"
+                options={ALL_COUNTRIES.map((c) => ({ value: c.code, label: `${c.flag} ${c.code} ${c.name}` }))}
+              />
+              <Button type="primary" loading={fetchLinkLoading} onClick={handleFetchLink}>
+                {fetchLinkLoading ? "跟链中" : "验证"}
+              </Button>
+            </Space.Compact>
+            {fetchLinkLoading && (
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                <LoadingOutlined /> 正在用 {fetchLinkCountry} 动态住宅 IP 跟随跳转，最长约 1 分钟…
+              </Text>
+            )}
+            {fetchLinkResult && (
+              <Space.Compact style={{ width: "100%" }}>
+                <Input
+                  readOnly
+                  value={fetchLinkResult.finalUrl}
+                  style={{ fontFamily: "monospace", fontSize: 12 }}
+                  status={fetchLinkResult.hasTracking ? undefined : "warning"}
+                  prefix={fetchLinkResult.hasTracking
+                    ? <CheckCircleOutlined style={{ color: "#52c41a" }} />
+                    : <WarningOutlined style={{ color: "#faad14" }} />}
+                />
+                <Button icon={<CopyOutlined />}
+                  onClick={() => { navigator.clipboard.writeText(fetchLinkResult.finalUrl); message.success("最终链接已复制"); }}>
+                  复制
+                </Button>
+              </Space.Compact>
+            )}
+          </Card>
+        </Col>
+      </Row>
 
       <Card size="small">
         <Tabs
