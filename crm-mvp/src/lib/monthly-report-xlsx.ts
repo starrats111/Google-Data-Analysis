@@ -221,13 +221,17 @@ export function buildFengduMonthSheet(wb: ExcelJS.Workbook, reports: MemberMonth
 
   merge(3, 3, 3, 5, "美金", { fill: FD.GREEN });
   merge(3, 6, 3, 8, "人民币", { fill: FD.GREEN });
-  merge(3, 9, 3, 13, "在跑广告量", { fill: FD.GREEN });
+  // R-08：人民币后加「核算广告费」（美金广告费×报表汇率+人民币广告费），在跑广告量右移
+  merge(3, 9, 3, 10, "核算广告费", { fill: FD.GREEN });
+  merge(3, 11, 3, 13, "在跑广告量", { fill: FD.GREEN });
 
   const sumifRow = (row: number, keyCell: string) =>
     ({ formula: `SUMIF($N$3:$${lastL}$3,${keyCell},$N${row}:$${lastL}${row})` });
+  const rateUsdToCny = reports[0]?.rate.usdToCny || 0;
   merge(4, 3, 4, 5, sumifRow(4, "C$3"), { numFmt: FD_NUM_AD });
   merge(4, 6, 4, 8, sumifRow(4, "F$3"), { numFmt: FD_NUM_AD });
-  merge(4, 9, 4, 13, sumifRow(4, "I$3"), { numFmt: FD_NUM_AD });
+  merge(4, 9, 4, 10, { formula: `ROUND(C4*${rateUsdToCny.toFixed(6)}+F4,2)` }, { numFmt: FD_NUM_AD });
+  merge(4, 11, 4, 13, sumifRow(4, "K$3"), { numFmt: FD_NUM_AD });
 
   P.forEach((p, i) => fdCell(ws, 5, 3 + i, p, { fill: FD.GREEN }));
   fdCell(ws, 5, 13, "合计", { fill: FD.GREEN, bold: true });
@@ -269,7 +273,8 @@ export function buildFengduMonthSheet(wb: ExcelJS.Workbook, reports: MemberMonth
   }
   fdCell(ws, 17, 3, "", { hDefault: true });
   for (let c = 4; c <= 12; c++) fdCell(ws, 17, c, "", { numFmt: FD_NUM_PROFIT, hDefault: true });
-  fdCell(ws, 17, 13, { formula: "M14-C4" }, { numFmt: FD_NUM_PROFIT, hDefault: true });
+  // 利润 = 实收¥合计 − 核算广告费(I4)（原模板 M14-C4 是人民币减美金广告费，量纲错误，已矫正）
+  fdCell(ws, 17, 13, { formula: "M14-I4" }, { numFmt: FD_NUM_PROFIT, hDefault: true });
 
   // ── 每成员 12 列块 ──
   reports.forEach((rep, mi) => {
