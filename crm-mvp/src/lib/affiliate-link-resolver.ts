@@ -42,8 +42,20 @@ export interface ResolveResult {
   requiresBrowserEnrich?: boolean;
 }
 
-const BROWSER_UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+// 跟链/换链一律用「移动端」UA（安卓 Chrome + iPhone Safari），不再用 Windows 桌面：
+// 移动版落地页普遍更轻量（更少大图/桌面脚本）→ 省代理流量，且与住宅代理出口更贴近真实手机用户。
+const MOBILE_UA_POOL = [
+  // Android Chrome
+  "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+  "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+  "Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36",
+  // iPhone Safari
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1",
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 17_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Mobile/15E148 Safari/604.1",
+];
+function pickMobileUA(): string {
+  return MOBILE_UA_POOL[Math.floor(Math.random() * MOBILE_UA_POOL.length)];
+}
 
 // 跳板/中转域名：最终落地页不应停在这些域名上。停在此 → 没跟到广告主（多半国家出口不对）。
 const TRACKER_HOST_PATTERNS: RegExp[] = [
@@ -350,7 +362,7 @@ export async function fetchChain(
     if (proxyUrl) agent = await makeAgent(proxyUrl);
   };
   const chain: string[] = [];
-  const ua = fp.userAgent || BROWSER_UA;
+  const ua = fp.userAgent || pickMobileUA();
 
   type HopResult =
     | { type: "redirect"; location: string; status: number }
@@ -592,8 +604,9 @@ async function resolveViaBrowser(
     if (proxyAuth) {
       await page.authenticate({ username: proxyAuth.username, password: proxyAuth.password });
     }
-    await page.setUserAgent(BROWSER_UA);
-    await page.setViewport({ width: 1366, height: 768 });
+    // 移动端 UA + 匹配的移动端视口（避免「手机 UA + 桌面分辨率」的指纹矛盾），并请求移动版轻量落地页。
+    await page.setUserAgent(pickMobileUA());
+    await page.setViewport({ width: 393, height: 852, isMobile: true, hasTouch: true, deviceScaleFactor: 3 });
     await page.setRequestInterception(true);
     page.on("request", (reqUnknown: unknown) => {
       const r = reqUnknown as {
