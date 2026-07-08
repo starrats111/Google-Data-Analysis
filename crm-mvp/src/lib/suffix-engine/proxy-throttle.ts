@@ -55,8 +55,3 @@ export async function withProxySlot<T>(fn: () => Promise<T>): Promise<T> {
     if (next) next()
   }
 }
-
-/** 诊断用：当前在飞会话数与等待队列长度。 */
-export function proxySlotStats(): { active: number; waiting: number } {
-  return { active, waiting: waiters.length }
-}

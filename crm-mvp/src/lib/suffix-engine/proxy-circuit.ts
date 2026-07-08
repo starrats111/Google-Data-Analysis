@@ -105,13 +105,3 @@ export function openProvider(id: string, ms = PROBE_COOLDOWN_MS): void {
 export function clearProvider(id: string): void {
   if (id) breakers.delete(id)
 }
-
-/** 诊断：当前所有熔断条目及剩余冷却时长（ms）。 */
-export function circuitStats(): Array<{ id: string; fails: number; openForMs: number }> {
-  const now = Date.now()
-  return [...breakers.entries()].map(([id, b]) => ({
-    id,
-    fails: b.fails,
-    openForMs: Math.max(0, b.openUntil - now),
-  }))
-}

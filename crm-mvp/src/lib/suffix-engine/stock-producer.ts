@@ -544,13 +544,3 @@ export function triggerReplenishAsync(campaignId: bigint, opts: { force?: boolea
     console.error('[stock-producer] async replenish failed:', campaignId.toString(), err instanceof Error ? err.message : err)
   })
 }
-
-/** 单系列库存统计 */
-export async function getCampaignStock(campaignId: bigint) {
-  const [available, leased, consumed] = await Promise.all([
-    prisma.suffix_pool.count({ where: { campaign_id: campaignId, status: 'available', is_deleted: 0 } }),
-    prisma.suffix_pool.count({ where: { campaign_id: campaignId, status: 'leased', is_deleted: 0 } }),
-    prisma.suffix_pool.count({ where: { campaign_id: campaignId, status: 'consumed', is_deleted: 0 } }),
-  ])
-  return { available, leased, consumed, target: STOCK_CONFIG.TARGET_STOCK, lowWatermark: STOCK_CONFIG.LOW_WATERMARK }
-}
