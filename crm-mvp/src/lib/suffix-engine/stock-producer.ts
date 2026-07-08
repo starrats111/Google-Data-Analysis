@@ -191,6 +191,11 @@ async function doReplenish(
     // 其余视为「仍在自愈流程中」（商家同步 / Google 回拉 / 手动填链接会修复），静默不刷屏。
     return { campaignId: cid, skipped: true, reason: 'merchant_no_tracking_link', before, generated: 0, after: before, failed: 0 }
   }
+  // 落地无参数自愈兜底：pickCampaignAffiliateLink 优先返回「冻结的 campaign_link/账号链接」，
+  // 而商家改版后该冻结链接的落地可能被 301 弹到无追踪参数的新站（FC-Moto/xcaret 类），
+  // 商家动态 tracking_link 反而能跟出 per-click 参数。故记下 tracking_link 作兜底：
+  // 当挑中链接 probe 命中 no_tracking 时，用 tracking_link 重试一次，成功即切换为本轮生效链接。
+  const trackingFallback = merchant.tracking_link?.trim() || ''
 
   const country = campaign.target_country
   const platform = merchant.platform
@@ -242,23 +247,34 @@ async function doReplenish(
   // 与刷点击同源，让补货追链也带上真实来路，提升联盟点击归因。整条补货解析一次复用。
   const refererUrl = (await resolveMerchantReferer(merchant.id)).url
 
+  // 本轮实际生效链接：默认账号挑中链接，probe 命中 no_tracking 且存在不同的 tracking_link 时切换。
+  let effectiveUrl = affiliateUrl
+
   // ── probe：先探一条 ──
-  const probe = await generateOneSuffix(affiliateUrl, country, platform, { userId: campaign.user_id, campaignId, referer: refererUrl })
+  let probe = await generateOneSuffix(effectiveUrl, country, platform, { userId: campaign.user_id, campaignId, referer: refererUrl })
+  if (!probe.ok && probe.reason === 'no_tracking' && trackingFallback && trackingFallback !== effectiveUrl) {
+    // 挑中链接落地无追踪参数：改用商家动态 tracking_link 重试一次。
+    const retry = await generateOneSuffix(trackingFallback, country, platform, { userId: campaign.user_id, campaignId, referer: refererUrl })
+    if (retry.ok) {
+      effectiveUrl = trackingFallback
+      probe = retry
+    }
+  }
   if (!probe.ok) {
     failed++
-    await emitGenFailureAlert(campaign, merchant.merchant_name, affiliateUrl, probe)
+    await emitGenFailureAlert(campaign, merchant.merchant_name, effectiveUrl, probe)
     return { campaignId: cid, skipped: false, reason: 'probe_failed', before, generated: 0, after: before, failed }
   }
   if (await persist(probe.suffix, probe.exitIp)) generated++
 
-  // ── batch：成功后批量生成剩余 ──
+  // ── batch：成功后批量生成剩余（用本轮生效链接） ──
   const remaining = need - 1
   if (remaining > 0) {
     let consecutiveFail = 0
     let circuitOpen = false
     await runWithConcurrency(remaining, STOCK_CONFIG.CONCURRENCY, async () => {
       if (circuitOpen) return
-      const r = await generateOneSuffix(affiliateUrl, country, platform, { userId: campaign.user_id, campaignId, referer: refererUrl })
+      const r = await generateOneSuffix(effectiveUrl, country, platform, { userId: campaign.user_id, campaignId, referer: refererUrl })
       if (r.ok) {
         consecutiveFail = 0
         if (await persist(r.suffix, r.exitIp)) generated++
@@ -294,7 +310,7 @@ async function doReplenish(
         campaignName: campaign.campaign_name,
         platform,
         country,
-        affiliateUrl: affiliateUrl.slice(0, 300),
+        affiliateUrl: effectiveUrl.slice(0, 300),
         reason: sample?.reason,
       },
     })

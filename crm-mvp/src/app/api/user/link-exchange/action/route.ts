@@ -136,7 +136,7 @@ export async function POST(req: NextRequest) {
     }
     const campaign = await prisma.campaigns.findFirst({
       where: { id: BigInt(body.campaignId), user_id: userId, is_deleted: 0 },
-      select: { id: true, user_merchant_id: true, campaign_name: true, target_country: true },
+      select: { id: true, user_merchant_id: true, campaign_name: true, target_country: true, platform_connection_id: true },
     })
     if (!campaign) return NextResponse.json({ code: -1, message: '广告系列不存在或无权限' }, { status: 404 })
 
@@ -151,11 +151,33 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    // 手动重填即以新链接为准，必须清掉可能盖住 tracking_link 的「冻结链接」：
+    //   - campaign_link（历史同步冻结的落地链接）
+    //   - connection_campaign_links 里本广告归属账号(platform_connection_id)的项
+    // 否则 pickCampaignAffiliateLink 仍优先返回旧冻结链接，用户重填不生效
+    // （FC-Moto/xcaret 类「落地无追踪参数」误报根因）。只删本账号的项，不动同商家其他账号链接。
+    let cleanedConnLinks: Record<string, string> | undefined = undefined
+    const connKey = campaign.platform_connection_id?.toString()
+    if (connKey) {
+      const cur = await prisma.user_merchants.findUnique({
+        where: { id: merchantId },
+        select: { connection_campaign_links: true },
+      })
+      const raw = cur?.connection_campaign_links
+      if (raw && typeof raw === 'object' && !Array.isArray(raw) && connKey in (raw as Record<string, string>)) {
+        const obj = { ...(raw as Record<string, string>) }
+        delete obj[connKey]
+        cleanedConnLinks = obj
+      }
+    }
+
     // 写入新链接并重置校验/上级联盟状态，等待重新巡航
     await prisma.user_merchants.update({
       where: { id: merchantId },
       data: {
         tracking_link: link,
+        campaign_link: null,
+        ...(cleanedConnLinks !== undefined ? { connection_campaign_links: cleanedConnLinks } : {}),
         tracking_status: 'unchecked',
         link_status: 'unchecked',
         parent_network: null,
