@@ -24,7 +24,6 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
       orderBy: { insight_date: "desc" },
       skip: (page - 1) * pageSize,
       take: pageSize,
-      omit: { content: true },
     }),
   ]);
 
