@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
 import { generateOneSuffix } from '@/lib/suffix-engine/suffix-generator'
-import { ALL_COUNTRIES } from '@/lib/constants'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -27,8 +26,9 @@ export async function POST(req: NextRequest) {
   if (!/^https?:\/\//i.test(affiliateUrl)) {
     return NextResponse.json({ code: -1, message: '请填写有效的 http(s) 联盟链接' }, { status: 400 })
   }
-  if (!/^[A-Z]{2}$/.test(country) || !ALL_COUNTRIES.some((c) => c.code === country)) {
-    return NextResponse.json({ code: -1, message: '请选择有效的投放国家' }, { status: 400 })
+  // 任意 2 位 ISO 国家代码均放行（不限于内置国家列表）；kookeey 无该国出口时会以跟链失败返回
+  if (!/^[A-Z]{2}$/.test(country)) {
+    return NextResponse.json({ code: -1, message: '请输入 2 位国家代码，如 US、ES、DE' }, { status: 400 })
   }
 
   // 不传 campaignId → 不做出口 IP 去重、不写库存；仅按国家取 kookeey 出口跟链一次。

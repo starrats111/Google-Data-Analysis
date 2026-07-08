@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Table, Tag, Button, Input, InputNumber, Space, Typography, Card, Row, Col,
-  Tooltip, App, Statistic, Switch, Tabs, Popconfirm, Badge, Alert, Segmented, Select,
+  Tooltip, App, Statistic, Switch, Tabs, Popconfirm, Badge, Alert, Segmented, AutoComplete,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import {
@@ -312,6 +312,7 @@ export default function LinkExchangePage() {
   const handleFetchLink = async () => {
     const url = fetchLinkInput.trim();
     if (!/^https?:\/\//i.test(url)) { message.error("请填写有效的 http(s) 联盟链接"); return; }
+    if (!/^[A-Z]{2}$/.test(fetchLinkCountry)) { message.error("请输入 2 位国家代码，如 US、ES、DE"); return; }
     setFetchLinkLoading(true);
     setFetchLinkResult(null);
     try {
@@ -780,7 +781,7 @@ export default function LinkExchangePage() {
         <Col xs={24} lg={12}>
           <Card size="small" style={{ height: "100%" }} title={<Space><LinkOutlined /> 取链接</Space>}>
             <Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 8 }}>
-              输入联盟链接 → 选择国家 → 验证。用对应国家的动态住宅 IP 访问并跟随跳转，跳转到最终链接为成功（不换链、不入库存）。
+              输入联盟链接 → 输入国家代码（如 US、ES、DE）→ 验证。用对应国家的动态住宅 IP 访问并跟随跳转，跳转到最终链接为成功（不换链、不入库存）。
             </Paragraph>
             <Space.Compact style={{ width: "100%", marginBottom: 8 }}>
               <Input
@@ -790,13 +791,15 @@ export default function LinkExchangePage() {
                 onPressEnter={handleFetchLink}
                 allowClear
               />
-              <Select
+              <AutoComplete
                 value={fetchLinkCountry}
-                onChange={setFetchLinkCountry}
+                onChange={(v) => setFetchLinkCountry((v || "").toUpperCase().slice(0, 2))}
                 style={{ width: 130 }}
-                showSearch
-                optionFilterProp="label"
+                placeholder="国家代码"
                 options={ALL_COUNTRIES.map((c) => ({ value: c.code, label: `${c.flag} ${c.code} ${c.name}` }))}
+                filterOption={(input, option) =>
+                  !!option && String(option.label).toUpperCase().includes(input.toUpperCase())
+                }
               />
               <Button type="primary" loading={fetchLinkLoading} onClick={handleFetchLink}>
                 {fetchLinkLoading ? "跟链中" : "验证"}
