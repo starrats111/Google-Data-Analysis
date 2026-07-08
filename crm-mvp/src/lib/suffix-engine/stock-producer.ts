@@ -35,6 +35,13 @@ const failCooldown = new Map<string, number>()
 const FAIL_COOLDOWN_MS = 30 * 60_000
 /** 商家缺失/缺链接的冷却时长（属数据问题，2h 重试一次即可） */
 const MERCHANT_COOLDOWN_MS = 2 * 60 * 60_000
+/**
+ * 「必须浏览器」系列的补货冷却表（进程内）。
+ * suffix_needs_browser=1 的系列每生成一条都要整页跑无头浏览器（纯 HTTP 的几十倍代理流量），
+ * 补完一轮后冷却 BROWSER_REPLENISH_COOLDOWN_MS，期间即便低于水位也不被 cron 选中，压低补货频率。
+ * lease NO_STOCK 的 force 路径不受此表影响（真没货时仍可按需补）。
+ */
+const browserCooldown = new Map<string, number>()
 
 export interface ReplenishResult {
   campaignId: string
@@ -44,6 +51,8 @@ export interface ReplenishResult {
   generated: number
   after: number
   failed: number
+  /** 本轮 probe 观测：该系列是否必须无头浏览器才能跟链（仅 probe 成功的轮次有值） */
+  needsBrowser?: boolean
 }
 
 interface CampaignForReplenish {
@@ -53,6 +62,7 @@ interface CampaignForReplenish {
   platform_connection_id: bigint | null
   target_country: string
   suffix_exchange_enabled: number
+  suffix_needs_browser: number
   is_deleted: number
   campaign_name: string | null
   status: string | null
@@ -104,7 +114,6 @@ async function doReplenish(
   opts: { target?: number; force?: boolean },
 ): Promise<ReplenishResult> {
   const cid = campaignId.toString()
-  const target = Math.max(1, opts.target ?? STOCK_CONFIG.TARGET_STOCK)
 
   const campaign = (await prisma.campaigns.findFirst({
     where: { id: campaignId, is_deleted: 0 },
@@ -115,6 +124,7 @@ async function doReplenish(
       platform_connection_id: true,
       target_country: true,
       suffix_exchange_enabled: true,
+      suffix_needs_browser: true,
       is_deleted: true,
       campaign_name: true,
       status: true,
@@ -155,12 +165,22 @@ async function doReplenish(
     return { campaignId: cid, skipped: true, reason: 'merchant_not_linked', before: 0, generated: 0, after: 0, failed: 0 }
   }
 
+  // 「必须浏览器」系列（suffix_needs_browser=1，生成成功时自动学习）：
+  // 每条后缀都要整页跑无头浏览器，代理流量是纯 HTTP 的几十倍——用更低的目标库存/水位少蓄水、少补货。
+  // 调用方显式传 opts.target 时以显式值优先（lease 按需路径等）。
+  const needsBrowser = campaign.suffix_needs_browser === 1
+  const target = Math.max(
+    1,
+    opts.target ?? (needsBrowser ? STOCK_CONFIG.BROWSER_TARGET_STOCK : STOCK_CONFIG.TARGET_STOCK),
+  )
+  const lowWatermark = needsBrowser ? STOCK_CONFIG.BROWSER_LOW_WATERMARK : STOCK_CONFIG.LOW_WATERMARK
+
   const before = await prisma.suffix_pool.count({
     where: { campaign_id: campaignId, status: 'available', is_deleted: 0 },
   })
 
   let need = target - before
-  if (!opts.force && before > STOCK_CONFIG.LOW_WATERMARK) {
+  if (!opts.force && before > lowWatermark) {
     return { campaignId: cid, skipped: true, reason: 'stock_sufficient', before, generated: 0, after: before, failed: 0 }
   }
   need = Math.min(Math.max(need, 0), STOCK_CONFIG.MAX_PER_REPLENISH)
@@ -265,6 +285,19 @@ async function doReplenish(
     await emitGenFailureAlert(campaign, merchant.merchant_name, effectiveUrl, probe)
     return { campaignId: cid, skipped: false, reason: 'probe_failed', before, generated: 0, after: before, failed }
   }
+  // 学习「必须浏览器」标记：probe 成功即知本系列纯 HTTP 能否跟到（usedBrowser）。
+  // 双向回写——变为需要 → 置 1（下轮起低频补货）；恢复纯 HTTP 可跟 → 清 0（恢复正常水位）。仅变化时写库。
+  const observedNeedsBrowser = probe.usedBrowser ? 1 : 0
+  if (observedNeedsBrowser !== campaign.suffix_needs_browser) {
+    try {
+      await prisma.campaigns.update({
+        where: { id: campaignId },
+        data: { suffix_needs_browser: observedNeedsBrowser },
+      })
+    } catch (e) {
+      console.warn('[stock-producer] 更新 suffix_needs_browser 失败:', cid, e instanceof Error ? e.message : e)
+    }
+  }
   if (await persist(probe.suffix, probe.exitIp)) generated++
 
   // ── batch：成功后批量生成剩余（用本轮生效链接） ──
@@ -295,7 +328,7 @@ async function doReplenish(
     // 不是故障——现有库存即是全部可能内容，消费后 lease 会触发按需重生成。
     // 清掉此前误报的告警，并交由调用方长冷却，停止每轮空烧 20 次生成。
     await resolveAlertsByType(campaign.user_id, campaignId, ['low_stock', 'replenish_failed', 'invalid_link', 'merchant_not_found'])
-    return { campaignId: cid, skipped: false, reason: 'static_suffix', before, generated: 0, after: before, failed: 0 }
+    return { campaignId: cid, skipped: false, reason: 'static_suffix', before, generated: 0, after: before, failed: 0, needsBrowser: probe.usedBrowser }
   }
 
   if (generated === 0) {
@@ -320,7 +353,7 @@ async function doReplenish(
     // 若产出仍不足低水位，记一条 low_stock（warning）。
     // 例外：缺口是「内容重复」造成的（静态后缀商家补 1 条后其余全是重复）——
     // 库存不可能超过不同内容数，报 low_stock 只会每轮刷屏。
-    if (after <= STOCK_CONFIG.LOW_WATERMARK && duplicates === 0) {
+    if (after <= lowWatermark && duplicates === 0) {
       await raiseAlert(campaign.user_id, {
         type: 'low_stock',
         campaignId,
@@ -331,7 +364,7 @@ async function doReplenish(
     }
   }
 
-  return { campaignId: cid, skipped: false, before, generated, after, failed }
+  return { campaignId: cid, skipped: false, before, generated, after, failed, needsBrowser: probe.usedBrowser }
 }
 
 /** 跟链失败 → 落「链接无效」告警 */
@@ -394,10 +427,13 @@ export async function replenishLowStock(
       user_merchant_id: { not: BigInt(0) },
       ...(disabledUserIds.length > 0 ? { user_id: { notIn: disabledUserIds } } : {}),
     },
-    select: { id: true },
+    select: { id: true, suffix_needs_browser: true },
   })
   if (enabled.length === 0) return { scanned: 0, lowStock: 0, replenished: 0, results: [] }
   const ids = enabled.map((c) => c.id)
+  const browserCampaignIds = new Set(
+    enabled.filter((c) => c.suffix_needs_browser === 1).map((c) => c.id.toString()),
+  )
 
   // 2. 一次 groupBy 取每系列当前可用库存（避免 N 次 count）
   const stockRows = await prisma.suffix_pool.groupBy({
@@ -408,16 +444,28 @@ export async function replenishLowStock(
   const stockMap = new Map(stockRows.map((r) => [r.campaign_id.toString(), r._count._all]))
 
   // 3. 低于低水位的（含 0 库存 / 无记录），按库存升序，最紧急优先，限额保护。
-  //    跳过仍在失败冷却期内的系列（常败系列不再每轮霸占预算，让位给健康系列）。
+  //    「必须浏览器」系列用更低的专用水位（少进队）；
+  //    跳过仍在失败冷却/浏览器补货冷却期内的系列（常败系列不再每轮霸占预算，让位给健康系列）。
   const now = Date.now()
   const lowAll = ids
     .map((id) => ({ id, stock: stockMap.get(id.toString()) ?? 0 }))
-    .filter((x) => x.stock <= STOCK_CONFIG.LOW_WATERMARK)
+    .filter((x) => {
+      const watermark = browserCampaignIds.has(x.id.toString())
+        ? STOCK_CONFIG.BROWSER_LOW_WATERMARK
+        : STOCK_CONFIG.LOW_WATERMARK
+      return x.stock <= watermark
+    })
     .sort((a, b) => a.stock - b.stock)
 
-  const low = lowAll.filter((x) => (failCooldown.get(x.id.toString()) ?? 0) <= now)
+  const low = lowAll.filter((x) => {
+    const key = x.id.toString()
+    if ((failCooldown.get(key) ?? 0) > now) return false
+    if ((browserCooldown.get(key) ?? 0) > now) return false
+    return true
+  })
   // 清理已过期的冷却项，避免 Map 无限增长
   for (const [k, until] of failCooldown) if (until <= now) failCooldown.delete(k)
+  for (const [k, until] of browserCooldown) if (until <= now) browserCooldown.delete(k)
 
   const targets = low.slice(0, maxCampaigns)
 
@@ -433,6 +481,11 @@ export async function replenishLowStock(
     const r = await replenishCampaign(c.id)
     results.push(r)
     const key = c.id.toString()
+    // 「必须浏览器」系列：本轮处理过（无论成败）即进入浏览器补货冷却，压低整页浏览器跑动频率。
+    // r.needsBrowser 覆盖本轮 probe 首次学到「必须浏览器」的系列（进队时还不在 browserCampaignIds 里）。
+    if (browserCampaignIds.has(key) || r.needsBrowser === true) {
+      browserCooldown.set(key, Date.now() + STOCK_CONFIG.BROWSER_REPLENISH_COOLDOWN_MS)
+    }
     if ((r.generated ?? 0) > 0) {
       replenished++
       failCooldown.delete(key) // 成功产出：清除冷却

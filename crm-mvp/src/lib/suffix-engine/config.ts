@@ -12,6 +12,13 @@ export const STOCK_CONFIG = {
   TARGET_STOCK: 20,
   /** 低水位：可用库存 <= 此值时触发补货 */
   LOW_WATERMARK: 6,
+  /** 「必须无头浏览器才能跟链」的系列（suffix_needs_browser=1）专用的更低目标库存。
+   *  这类系列每生成一条都要跑整页浏览器（纯 HTTP 的几十倍流量），故按最小可用量蓄水，降频补货省流量。 */
+  BROWSER_TARGET_STOCK: 5,
+  /** 浏览器系列的低水位：可用库存 <= 此值才补货（比普通系列更低，减少被 cron 选中的频次）。 */
+  BROWSER_LOW_WATERMARK: 2,
+  /** 浏览器系列两次 cron 补货之间的最小冷却（毫秒）。即便低于水位，冷却期内也跳过，进一步压低频率。 */
+  BROWSER_REPLENISH_COOLDOWN_MS: 60 * 60_000,
   /** 单次补货最多生成数量（防止单系列长时间占用资源） */
   MAX_PER_REPLENISH: 24,
   /** 批量生成并发度。

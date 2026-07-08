@@ -514,6 +514,21 @@ interface BrowserChainResult {
   error?: string;
 }
 
+// 浏览器兜底流量优化：只保留「跟到广告主落地页」所必需的请求，砍掉与联盟跳转无关的大头。
+// kookeey 按流量计费，浏览器整页加载是纯 HTTP 的几十倍——这里两级拦截把落地页大头（第三方 JS SDK /
+// 追踪像素 / 广告交易 / 心跳）挡在代理出口之外，同时放行 document + 联盟/广告主域名的 script / XHR，
+// 保证 JS 跳转链仍能跟到带追踪参数的最终落地页。
+// 1) 重资源类型直接拦（图片/媒体/字体/CSS/预取/推送/心跳等，均不参与跳转判定）。
+const BROWSER_BLOCK_RESOURCE_TYPES = new Set([
+  "image", "media", "font", "stylesheet", "texttrack",
+  "eventsource", "websocket", "manifest", "prefetch", "ping",
+  "cspviolationreport", "signedexchange",
+]);
+// 2) 第三方分析/广告/追踪域名整类拦（GA/GTM/Pixel/热图/广告交易/错误上报等）。联盟跳转经由联盟自身及
+//    广告主域名完成，从不依赖这些域名，故整类 abort 不影响跟链成功率，却能砍掉落地页流量的最大头。
+const BROWSER_BLOCK_HOST_RE =
+  /(google-analytics|googletagmanager|googlesyndication|googleadservices|doubleclick|adservice\.google|connect\.facebook|facebook\.com|fbcdn\.net|hotjar|clarity\.ms|fullstory|mouseflow|luckyorange|cdn\.segment|api\.segment|mixpanel|amplitude|heapanalytics|analytics\.tiktok|analytics\.twitter|static\.ads-twitter|bat\.bing|criteo|taboola|outbrain|scorecardresearch|quantserve|adroll|mc\.yandex|newrelic|nr-data|sentry\.io|datadoghq|bugsnag|optimizely|onetrust|cookielaw|adnxs|pubmatic|rubiconproject|casalemedia|openx|3lift|33across|ct\.pinterest|klaviyo|cloudflareinsights|hs-analytics|matomo|piwik|tr\.snapchat|sc-static\.net|adsrvr\.org|bidswitch|smartadserver|teads|moatads|adsafeprotected|branch\.io|appsflyer|kochava|adjust\.com)/i;
+
 async function resolveViaBrowser(
   startUrl: string,
   country: string,
@@ -590,10 +605,23 @@ async function resolveViaBrowser(
         continue: () => Promise<void>;
       };
       const t = r.resourceType();
-      if (r.isNavigationRequest() && r.frame() === page.mainFrame()) {
+      const isNav = r.isNavigationRequest() && r.frame() === page.mainFrame();
+      if (isNav) {
         chain.push(r.url());
       }
-      if (t === "image" || t === "media" || t === "font" || t === "stylesheet") {
+      // 导航请求（document 主跳转链）永不拦，否则会中断跟链。
+      if (isNav) {
+        r.continue().catch(() => {});
+        return;
+      }
+      // 重资源类型 + 第三方分析/广告/追踪域名整类拦，砍掉落地页流量大头。
+      let host = "";
+      try {
+        host = new URL(r.url()).hostname;
+      } catch {
+        /* 非法 URL：交给类型判定 */
+      }
+      if (BROWSER_BLOCK_RESOURCE_TYPES.has(t) || (host && BROWSER_BLOCK_HOST_RE.test(host))) {
         r.abort().catch(() => {});
       } else {
         r.continue().catch(() => {});

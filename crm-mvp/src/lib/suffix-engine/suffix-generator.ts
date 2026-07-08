@@ -22,6 +22,9 @@ export interface GenSuccess {
   finalUrl: string | null
   /** 生成该后缀时代理出口 IP（去重场景写入 suffix_pool.exit_ip / proxy_exit_ip_usage） */
   exitIp: string | null
+  /** 本条是否走了无头浏览器兜底才成功（纯 HTTP 跟不到、必须执行 JS）。
+   *  用于「必须浏览器的系列降频补货」——浏览器整页加载是纯 HTTP 的几十倍流量。 */
+  usedBrowser: boolean
 }
 
 export interface GenFailure {
@@ -122,7 +125,7 @@ export async function generateOneSuffix(
       let finalExitIp: string | null = r.exitIp ?? exitIp
       if (!finalExitIp && !r.usedBrowser && proxyUrl) finalExitIp = await probeExitIp(proxyUrl)
       reportProxy(true) // 代理健康：成功跟到落地页并取到追踪参数
-      return { ok: true, suffix: r.trackingLink, finalUrl: r.finalUrl, exitIp: finalExitIp }
+      return { ok: true, suffix: r.trackingLink, finalUrl: r.finalUrl, exitIp: finalExitIp, usedBrowser: r.usedBrowser }
     }
     if (r.status === 'no_tracking') {
       reportProxy(true) // 代理健康：已到落地页，只是页面无追踪参数（下游问题）
