@@ -533,7 +533,25 @@ export default function IntelligencePage() {
             prefix={<SearchOutlined style={{ color: "#bfbfbf" }} />}
             allowClear
           />
-          <Select value={region} onChange={setRegion} options={regionOptions} style={{ width: 180 }} popupMatchSelectWidth={false} />
+          <Select
+            value={region}
+            onChange={setRegion}
+            options={regionOptions}
+            style={{ width: 180 }}
+            popupMatchSelectWidth={false}
+            showSearch
+            placeholder="国家代码 / 中文名"
+            filterOption={(input, option) => {
+              const kw = input.trim().toLowerCase();
+              if (!kw) return true;
+              const o = option as RegionOption | undefined;
+              return (
+                (o?.value ?? "").toLowerCase().includes(kw) ||
+                (o?.zhName ?? "").toLowerCase().includes(kw) ||
+                (o?.label ?? "").toLowerCase().includes(kw)
+              );
+            }}
+          />
           <Button type="primary" icon={<SearchOutlined />} loading={loading} onClick={handleSearch}>搜索</Button>
         </Space>
 

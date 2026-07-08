@@ -774,6 +774,18 @@ export default function MerchantsPage() {
           style={{ width: "100%", marginBottom: 10 }}
           options={atcRegionOptions}
           popupMatchSelectWidth={false}
+          showSearch
+          placeholder="国家代码 / 中文名"
+          filterOption={(input, option) => {
+            const kw = input.trim().toLowerCase();
+            if (!kw) return true;
+            const o = option as { value?: string; label?: string; zhName?: string } | undefined;
+            return (
+              (o?.value ?? "").toLowerCase().includes(kw) ||
+              (o?.zhName ?? "").toLowerCase().includes(kw) ||
+              (o?.label ?? "").toLowerCase().includes(kw)
+            );
+          }}
         />
         <Button type="primary" size="small" block onClick={() => triggerAtcQuery(rec, region, true)}>
           开始查询

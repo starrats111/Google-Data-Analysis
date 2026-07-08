@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withUser } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
+import { REGION_CODE_MAP } from "@/lib/atc-regions";
 
 function maskKey(key: string): string {
   return `${key.slice(0, 8)}${"*".repeat(Math.max(0, key.length - 8))}`;
@@ -102,10 +103,11 @@ export const PUT = withUser(async (req: NextRequest, { user }) => {
   if (!testKey) return NextResponse.json({ code: -1, message: "请提供 Key 或 id" }, { status: 400 });
 
   try {
+    // 该引擎必须提供 advertiser_id 或 text 之一；region 需用 SerpApi 数字码（US=2840）
     const qs = new URLSearchParams({
       engine: "google_ads_transparency_center",
-      domain: "nike.com",
-      region: "US",
+      text: "nike.com",
+      region: REGION_CODE_MAP["US"],
       num: "1",
       api_key: testKey,
     }).toString();

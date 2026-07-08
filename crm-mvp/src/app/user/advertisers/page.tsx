@@ -961,6 +961,18 @@ export default function AdvertisersPage() {
                       style={{ width: 180 }}
                       popupMatchSelectWidth={false}
                       size="small"
+                      showSearch
+                      placeholder="国家代码 / 中文名"
+                      filterOption={(input, option) => {
+                        const kw = input.trim().toLowerCase();
+                        if (!kw) return true;
+                        const o = option as { value?: string; label?: string; zhName?: string } | undefined;
+                        return (
+                          (o?.value ?? "").toLowerCase().includes(kw) ||
+                          (o?.zhName ?? "").toLowerCase().includes(kw) ||
+                          (o?.label ?? "").toLowerCase().includes(kw)
+                        );
+                      }}
                     />
                     <Text type="secondary" style={{ fontSize: 12 }}>
                       <GlobalOutlined style={{ marginRight: 4 }} />
