@@ -115,7 +115,8 @@ export const ModelName = {
   policy_violations: 'policy_violations',
   team_developer_tokens: 'team_developer_tokens',
   token_usage_daily: 'token_usage_daily',
-  google_ads_api_usage: 'google_ads_api_usage'
+  google_ads_api_usage: 'google_ads_api_usage',
+  ad_decision_journal: 'ad_decision_journal'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -1376,6 +1377,27 @@ export const Google_ads_api_usageScalarFieldEnum = {
 export type Google_ads_api_usageScalarFieldEnum = (typeof Google_ads_api_usageScalarFieldEnum)[keyof typeof Google_ads_api_usageScalarFieldEnum]
 
 
+export const Ad_decision_journalScalarFieldEnum = {
+  id: 'id',
+  decision_id: 'decision_id',
+  user_id: 'user_id',
+  campaign_id: 'campaign_id',
+  campaign_name: 'campaign_name',
+  snapshot_json: 'snapshot_json',
+  action_type: 'action_type',
+  magnitude: 'magnitude',
+  reasoning: 'reasoning',
+  outcome_3d: 'outcome_3d',
+  outcome_7d: 'outcome_7d',
+  verdict: 'verdict',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Ad_decision_journalScalarFieldEnum = (typeof Ad_decision_journalScalarFieldEnum)[keyof typeof Ad_decision_journalScalarFieldEnum]
+
+
 export const SortOrder = {
   asc: 'asc',
   desc: 'desc'
@@ -2117,4 +2139,16 @@ export const google_ads_api_usageOrderByRelevanceFieldEnum = {
 } as const
 
 export type google_ads_api_usageOrderByRelevanceFieldEnum = (typeof google_ads_api_usageOrderByRelevanceFieldEnum)[keyof typeof google_ads_api_usageOrderByRelevanceFieldEnum]
+
+
+export const ad_decision_journalOrderByRelevanceFieldEnum = {
+  decision_id: 'decision_id',
+  campaign_name: 'campaign_name',
+  action_type: 'action_type',
+  magnitude: 'magnitude',
+  reasoning: 'reasoning',
+  verdict: 'verdict'
+} as const
+
+export type ad_decision_journalOrderByRelevanceFieldEnum = (typeof ad_decision_journalOrderByRelevanceFieldEnum)[keyof typeof ad_decision_journalOrderByRelevanceFieldEnum]
 

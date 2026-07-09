@@ -448,7 +448,8 @@ export const ModelName = {
   policy_violations: 'policy_violations',
   team_developer_tokens: 'team_developer_tokens',
   token_usage_daily: 'token_usage_daily',
-  google_ads_api_usage: 'google_ads_api_usage'
+  google_ads_api_usage: 'google_ads_api_usage',
+  ad_decision_journal: 'ad_decision_journal'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -464,7 +465,7 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
     omit: GlobalOmitOptions
   }
   meta: {
-    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "parent_networks" | "platform_blacklist" | "ad_rejection_feedback" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "holiday_calendar" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "ad_generation_jobs" | "ad_submit_jobs" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "google_mcc_accounts" | "affiliate_transactions" | "affiliate_click_daily" | "affiliate_payments" | "notifications" | "notification_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "kyads_click_task_items" | "proxy_exit_ip_usage" | "suffix_alerts" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "user_serpapi_keys" | "user_semrush_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log" | "semrush_keyword_cache" | "semrush_health_logs" | "payment_methods" | "report_overrides" | "payment_binding_snapshots" | "bank_flow_entries" | "policy_violations" | "team_developer_tokens" | "token_usage_daily" | "google_ads_api_usage"
+    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "parent_networks" | "platform_blacklist" | "ad_rejection_feedback" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "holiday_calendar" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "ad_generation_jobs" | "ad_submit_jobs" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "google_mcc_accounts" | "affiliate_transactions" | "affiliate_click_daily" | "affiliate_payments" | "notifications" | "notification_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "kyads_click_task_items" | "proxy_exit_ip_usage" | "suffix_alerts" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "user_serpapi_keys" | "user_semrush_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log" | "semrush_keyword_cache" | "semrush_health_logs" | "payment_methods" | "report_overrides" | "payment_binding_snapshots" | "bank_flow_entries" | "policy_violations" | "team_developer_tokens" | "token_usage_daily" | "google_ads_api_usage" | "ad_decision_journal"
     txIsolationLevel: TransactionIsolationLevel
   }
   model: {
@@ -4758,6 +4759,72 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         }
       }
     }
+    ad_decision_journal: {
+      payload: Prisma.$ad_decision_journalPayload<ExtArgs>
+      fields: Prisma.ad_decision_journalFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.ad_decision_journalFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_decision_journalPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.ad_decision_journalFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_decision_journalPayload>
+        }
+        findFirst: {
+          args: Prisma.ad_decision_journalFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_decision_journalPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.ad_decision_journalFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_decision_journalPayload>
+        }
+        findMany: {
+          args: Prisma.ad_decision_journalFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_decision_journalPayload>[]
+        }
+        create: {
+          args: Prisma.ad_decision_journalCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_decision_journalPayload>
+        }
+        createMany: {
+          args: Prisma.ad_decision_journalCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.ad_decision_journalDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_decision_journalPayload>
+        }
+        update: {
+          args: Prisma.ad_decision_journalUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_decision_journalPayload>
+        }
+        deleteMany: {
+          args: Prisma.ad_decision_journalDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.ad_decision_journalUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.ad_decision_journalUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_decision_journalPayload>
+        }
+        aggregate: {
+          args: Prisma.Ad_decision_journalAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateAd_decision_journal>
+        }
+        groupBy: {
+          args: Prisma.ad_decision_journalGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Ad_decision_journalGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.ad_decision_journalCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Ad_decision_journalCountAggregateOutputType> | number
+        }
+      }
+    }
   }
 } & {
   other: {
@@ -6039,6 +6106,27 @@ export const Google_ads_api_usageScalarFieldEnum = {
 export type Google_ads_api_usageScalarFieldEnum = (typeof Google_ads_api_usageScalarFieldEnum)[keyof typeof Google_ads_api_usageScalarFieldEnum]
 
 
+export const Ad_decision_journalScalarFieldEnum = {
+  id: 'id',
+  decision_id: 'decision_id',
+  user_id: 'user_id',
+  campaign_id: 'campaign_id',
+  campaign_name: 'campaign_name',
+  snapshot_json: 'snapshot_json',
+  action_type: 'action_type',
+  magnitude: 'magnitude',
+  reasoning: 'reasoning',
+  outcome_3d: 'outcome_3d',
+  outcome_7d: 'outcome_7d',
+  verdict: 'verdict',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Ad_decision_journalScalarFieldEnum = (typeof Ad_decision_journalScalarFieldEnum)[keyof typeof Ad_decision_journalScalarFieldEnum]
+
+
 export const SortOrder = {
   asc: 'asc',
   desc: 'desc'
@@ -6782,6 +6870,18 @@ export const google_ads_api_usageOrderByRelevanceFieldEnum = {
 export type google_ads_api_usageOrderByRelevanceFieldEnum = (typeof google_ads_api_usageOrderByRelevanceFieldEnum)[keyof typeof google_ads_api_usageOrderByRelevanceFieldEnum]
 
 
+export const ad_decision_journalOrderByRelevanceFieldEnum = {
+  decision_id: 'decision_id',
+  campaign_name: 'campaign_name',
+  action_type: 'action_type',
+  magnitude: 'magnitude',
+  reasoning: 'reasoning',
+  verdict: 'verdict'
+} as const
+
+export type ad_decision_journalOrderByRelevanceFieldEnum = (typeof ad_decision_journalOrderByRelevanceFieldEnum)[keyof typeof ad_decision_journalOrderByRelevanceFieldEnum]
+
+
 
 /**
  * Field references
@@ -7010,6 +7110,7 @@ export type GlobalOmitConfig = {
   team_developer_tokens?: Prisma.team_developer_tokensOmit
   token_usage_daily?: Prisma.token_usage_dailyOmit
   google_ads_api_usage?: Prisma.google_ads_api_usageOmit
+  ad_decision_journal?: Prisma.ad_decision_journalOmit
 }
 
 /* Types for Logging */

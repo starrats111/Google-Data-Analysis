@@ -1543,3 +1543,31 @@ model google_ads_api_usage {
   @@unique([date, token, mcc_id, customer_id, kind], map: "uk_gaau_key")
   @@index([date, mcc_id], map: "idx_gaau_date_mcc")
 }
+
+// -----------------------------------------------------------
+// 广告决策日志（批次6，参照 kyads decision_journal）
+// analyze-campaigns cron 每日按 7 天表现给每个在投系列生成一条建议；
+// track-outcomes cron 在建议后 3/7 天回填实际走势并评判建议对错，
+// 形成「建议 → 结果 → 准确率」闭环，评估决策规则质量。
+// -----------------------------------------------------------
+model ad_decision_journal {
+  id            BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  decision_id   String    @unique(map: "uk_adj_decision_id") @db.VarChar(64) // campaignId_YYYY-MM-DD，天然幂等
+  user_id       BigInt    @db.UnsignedBigInt
+  campaign_id   BigInt    @db.UnsignedBigInt // campaigns.id
+  campaign_name String    @db.VarChar(255)
+  snapshot_json Json // 建议时点的 7 天表现快照（CampaignSnapshot）
+  action_type   String    @db.VarChar(20) // pause / decrease_budget / increase_budget / keep / observe
+  magnitude     String?   @db.VarChar(32) // 如 "-30%" / "+20%"
+  reasoning     String?   @db.Text
+  outcome_3d    Json? // 建议后 3 天实际走势（OutcomeData）
+  outcome_7d    Json? // 建议后 7 天实际走势
+  verdict       String?   @db.VarChar(20) // correct / partial / wrong / no_data（按 7d 评判）
+  is_deleted    Int       @default(0) @db.TinyInt
+  created_at    DateTime  @default(now()) @db.DateTime(0)
+  updated_at    DateTime  @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([user_id, created_at], map: "idx_adj_user_created")
+  @@index([campaign_id, created_at], map: "idx_adj_campaign_created")
+  @@index([verdict], map: "idx_adj_verdict")
+}

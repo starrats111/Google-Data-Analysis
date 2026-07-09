@@ -368,3 +368,8 @@ export type token_usage_daily = Prisma.token_usage_dailyModel
  * 
  */
 export type google_ads_api_usage = Prisma.google_ads_api_usageModel
+/**
+ * Model ad_decision_journal
+ * 
+ */
+export type ad_decision_journal = Prisma.ad_decision_journalModel
