@@ -1290,8 +1290,8 @@ export default function AdPreviewPage() {
 
       if (type === "images") {
         const allImgs = (data || []) as string[];
-        // 后端已完成 OCR 过滤，前端只取前 20 张展示
-        const imgs = allImgs.slice(0, 20);
+        // 后端已完成 OCR 过滤，前端只取前 15 张展示
+        const imgs = allImgs.slice(0, 15);
         setCrawledImages(imgs); setImageUrls([]);
         setCrawledImagesTextFlags({}); setCrawledImagesOcrDone(true); setCrawledImagesOcrProgress(imgs.length);
         if (imgs.length > 0) {
@@ -1345,7 +1345,13 @@ export default function AdPreviewPage() {
         if (data && typeof data === "object" && !Array.isArray(data)) {
           const d = data as Record<string, unknown>;
           if (d.skipped) {
-            // 未爬取到真实价格数据，不展示此扩展
+            // 未爬取到真实价格数据 → 填空表单供员工手动输入（现在是勾选后按需提取，需给反馈）
+            setPriceItems((prev) => prev.length > 0 ? prev : [
+              { header: "", description: "", price_amount: 0, currency_code: defaultCurrencyCode, final_url: "" },
+              { header: "", description: "", price_amount: 0, currency_code: defaultCurrencyCode, final_url: "" },
+              { header: "", description: "", price_amount: 0, currency_code: defaultCurrencyCode, final_url: "" },
+            ]);
+            message.info("未从商家网站提取到价格信息，可手动填写");
             setPriceLoading(false); return;
           }
           if (Array.isArray(d.items) && d.items.length > 0) {
@@ -1370,7 +1376,8 @@ export default function AdPreviewPage() {
         if (data && typeof data === "object") {
           const c = data as Record<string, unknown>;
           if (c.skipped) {
-            // 未爬取到真实电话，不展示此扩展
+            // 未爬取到真实电话 → 提示员工手动填写（现在是勾选后按需提取）
+            message.info("未从商家网站提取到联系电话，可手动填写");
             setCallLoading(false); return;
           }
           if (c.phone_number) { setEnableCall(true); setCallCountryCode(String(c.country_code || targetCountry || callCountryCode)); setCallPhoneNumber(String(c.phone_number)); message.success("已自动提取联系电话"); }
@@ -1379,9 +1386,12 @@ export default function AdPreviewPage() {
       }
 
       if (type === "structured_snippet") {
-        if (data && typeof data === "object") {
-          const s = data as Record<string, unknown>;
-          if (s.header && Array.isArray(s.values) && s.values.length >= 3) { setEnableSnippet(true); setSnippetHeader(String(s.header || defaultSnippetHeader)); setSnippetValues((s.values as string[]).map(String)); message.success("已自动生成结构化摘要"); }
+        const s = (data && typeof data === "object") ? (data as Record<string, unknown>) : null;
+        if (s?.header && Array.isArray(s.values) && (s.values as string[]).length >= 3) {
+          setEnableSnippet(true); setSnippetHeader(String(s.header || defaultSnippetHeader)); setSnippetValues((s.values as string[]).map(String)); message.success("已自动生成结构化摘要");
+        } else {
+          // 现在是勾选后按需提取，未成功时给反馈
+          message.info("未能从商家网站提取结构化摘要，可手动填写");
         }
         setSnippetLoading(false); return;
       }
@@ -2034,16 +2044,15 @@ export default function AdPreviewPage() {
     setCurrentStep(1);
     setHeadlines(Array(15).fill(""));
     setDescriptions(Array(4).fill(""));
-    // 3. 并行触发全部内容生成
+    // 3. 并行触发内容生成（提速：3 job → 2 job）
     //    - core: 标题 + 描述（含完整 pageText/商品数据） + 站内链接
-    //    - callouts + snippet: AI 生成
-    //    - promotion + price + call: 从爬取数据提取（无真实数据时返回 skipped，前端自动隐藏）
+    //    - callouts + promotion: AI 生成宣传信息 + 爬取促销数据
+    //    - price / call / snippet 默认不搜索（每单省 2 个子页抓取 + 1 次 AI 调用），员工勾选时按需提取
     // 注意：标题/描述由 core 统一生成（带完整页面上下文），不单独调 aiGenerateHeadlines/Descriptions
     // 避免低质量的无上下文版本覆盖 core 的高质量输出
     await Promise.allSettled([
       generateExtension("core"),
-      generateExtension("callouts", "snippet"),
-      generateExtension("promotion", "price", "call"),
+      generateExtension("callouts", "promotion"),
     ]);
   }, [kwList, triggerNegativeKeywords, setCurrentStep, setHeadlines, setDescriptions, generateExtension, aiGenerateHeadlines, aiGenerateDescriptions, message]);
 
@@ -2056,10 +2065,10 @@ export default function AdPreviewPage() {
     setDescriptions(Array(4).fill(""));
     // D-092：自动启动即先置「关键词查询中」，让面板立刻有反馈（不等 keywords_pending 事件抵达）
     if (kwList.length === 0) setKwAutoQuerying(true);
+    // 提速：price / call / snippet 默认不搜索，员工勾选对应扩展时才按需提取
     await Promise.allSettled([
       generateExtension("core"),
-      generateExtension("callouts", "snippet"),
-      generateExtension("promotion", "price", "call"),
+      generateExtension("callouts", "promotion"),
     ]);
     setKwAutoQuerying(false);
   }, [setCurrentStep, setHeadlines, setDescriptions, generateExtension, kwList.length]);
@@ -3068,12 +3077,9 @@ export default function AdPreviewPage() {
             <div style={{ marginBottom: 16 }}>
               <Checkbox checked={enablePrice} onChange={(e) => {
                 setEnablePrice(e.target.checked);
-                if (e.target.checked && priceItems.length === 0) {
-                  setPriceItems([
-                    { header: "", description: "", price_amount: 0, currency_code: defaultCurrencyCode, final_url: "" },
-                    { header: "", description: "", price_amount: 0, currency_code: defaultCurrencyCode, final_url: "" },
-                    { header: "", description: "", price_amount: 0, currency_code: defaultCurrencyCode, final_url: "" },
-                  ]);
+                // 默认不搜索价格，勾选时才按需从商家网站提取（提取失败会填空表单供手动输入）
+                if (e.target.checked && priceItems.length === 0 && !priceLoading) {
+                  generateExtension("price");
                 }
               }}>
                 <Space><DollarOutlined /><Text strong>价格 (Price)</Text></Space>
@@ -3146,6 +3152,10 @@ export default function AdPreviewPage() {
             <div style={{ marginBottom: 16 }}>
               <Checkbox checked={enableCall} onChange={(e) => {
                 setEnableCall(e.target.checked);
+                // 默认不搜索电话，勾选时才按需从商家网站提取
+                if (e.target.checked && !callPhoneNumber.trim() && !callLoading) {
+                  generateExtension("call");
+                }
               }}>
                 <Space><PhoneOutlined /><Text strong>致电 (Call)</Text></Space>
               </Checkbox>
@@ -3185,6 +3195,10 @@ export default function AdPreviewPage() {
             <div>
               <Checkbox checked={enableSnippet} onChange={(e) => {
                 setEnableSnippet(e.target.checked);
+                // 默认不生成结构化摘要，勾选时才按需 AI 提取
+                if (e.target.checked && !snippetValues.some((v) => v.trim()) && !snippetLoading) {
+                  generateExtension("snippet");
+                }
               }}>
                 <Space><UnorderedListOutlined /><Text strong>结构化摘要 (Structured Snippet)</Text></Space>
               </Checkbox>

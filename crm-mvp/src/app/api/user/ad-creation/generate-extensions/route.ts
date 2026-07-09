@@ -3036,8 +3036,8 @@ const TEXT_PROMO_URL_PATTERNS = [
   "/coupon",
 ];
 
-// 前端最少接收图片数，无论如何必须达到
-const MIN_IMAGES_TO_FRONTEND = 20;
+// 前端最少接收图片数，无论如何必须达到（提速：20→15，减少 HEAD/OCR/传输量）
+const MIN_IMAGES_TO_FRONTEND = 15;
 
 /**
  * 移除 Aliyun OSS 残缺的图片处理参数。
@@ -3317,7 +3317,7 @@ async function selectBestImages(
     try { const h = new URL(url).hostname.toLowerCase(); return KNOWN_IMAGE_CDNS.some(cdn => h === cdn || h.endsWith("." + cdn)); } catch { return false; }
   };
   const checked: string[] = [];
-  for (let i = 0; i < pool.length && checked.length < 80; i += 10) {
+  for (let i = 0; i < pool.length && checked.length < 60; i += 10) {
     const batch = pool.slice(i, i + 10);
     const results = await Promise.allSettled(
       batch.map(async (url) => {
@@ -3337,11 +3337,11 @@ async function selectBestImages(
       }),
     );
     for (const r of results) if (r.status === "fulfilled" && r.value) checked.push(r.value);
-    if (checked.length >= 40) break;
+    if (checked.length >= 30) break; // 目标 15 张，2 倍余量即可提前结束
   }
 
   const headPassed = checked.length >= MIN_IMAGES_TO_FRONTEND ? checked
-    : (checked.length > 0 ? [...checked, ...pool.filter(u => !checked.includes(u))].slice(0, 80) : pool.slice(0, 80));
+    : (checked.length > 0 ? [...checked, ...pool.filter(u => !checked.includes(u))].slice(0, 60) : pool.slice(0, 60));
 
   // Step 2：软过滤
   const cleanImages = headPassed.filter(softFilter);
@@ -3359,7 +3359,7 @@ async function selectBestImages(
     console.warn("[SelectImages] OCR 过滤异常，保留原始候选:", e instanceof Error ? e.message : e);
   }
 
-  // ─── 硬保障：精确返回 20 张（07确认） ───
+  // ─── 硬保障：精确返回 15 张 ───
   // 优先 OCR 通过的图片；不足时依次从 cleanImages → headPassed → pool → 原始列表补充
   let result: string[];
   if (ocrPassed.length >= MIN_IMAGES_TO_FRONTEND) {
@@ -3399,9 +3399,9 @@ async function selectBestImages(
 
   const topScores = scored.slice(0, 5).map((s) => `${s.score}:${s.url.slice(-40)}`).join(" | ");
   console.log(
-    `[SelectImages] raw=${rawImages.length} normalized=${normalizedImages.length} filtered=${filtered.length} headPassed=${headPassed.length} clean=${cleanImages.length} ocrPassed=${ocrPassed.length} canonicalDedup=${result.length} final=${Math.min(result.length, 20)} | topScores: ${topScores}`,
+    `[SelectImages] raw=${rawImages.length} normalized=${normalizedImages.length} filtered=${filtered.length} headPassed=${headPassed.length} clean=${cleanImages.length} ocrPassed=${ocrPassed.length} canonicalDedup=${result.length} final=${Math.min(result.length, MIN_IMAGES_TO_FRONTEND)} | topScores: ${topScores}`,
   );
-  return result.slice(0, 20);
+  return result.slice(0, MIN_IMAGES_TO_FRONTEND);
 }
 
 // ─── D-047 / C-115: 站内链接「只用爬虫真实 URL，AI 只写文案」───

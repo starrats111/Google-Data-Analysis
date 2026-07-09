@@ -1574,8 +1574,9 @@ function decodeUrlHtmlEntities(u: string): string {
     .replace(/&#0*34;/g, '"');
 }
 
-// 目标：缓存层至少积累 60 张原始图片候选，保证前端过滤后仍有 20+ 张可用
-const IMG_COLLECT_TARGET = 60;
+// 目标：缓存层至少积累 45 张原始图片候选，保证前端过滤后仍有 15+ 张可用
+// （提速：前端图片数 20→15 后等比下调 60→45，子页 HTTP 补图可更早停止）
+const IMG_COLLECT_TARGET = 45;
 
 async function collectImages(
   crawlImages: string[],
