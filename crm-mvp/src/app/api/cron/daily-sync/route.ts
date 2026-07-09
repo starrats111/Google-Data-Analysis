@@ -91,6 +91,13 @@ async function doDailySync() {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log(`FATAL: ${msg}`);
+    const { sendAlert } = await import("@/lib/alert");
+    void sendAlert({
+      level: "error",
+      title: "每日同步(daily-sync)中断",
+      content: `同步流程被异常中断，后续步骤未执行：${msg.slice(0, 400)}`,
+      source: "cron/daily-sync",
+    });
   }
 }
 

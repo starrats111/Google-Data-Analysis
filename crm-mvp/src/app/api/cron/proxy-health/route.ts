@@ -51,6 +51,8 @@ async function notifyAdminOnce(title: string, content: string, metadata: Record<
       metadata: JSON.stringify(metadata, (_, v) => (typeof v === 'bigint' ? v.toString() : v)),
     },
   })
+  const { sendAlert } = await import('@/lib/alert')
+  void sendAlert({ level: 'warning', title, content, source: 'cron/proxy-health' })
   return true
 }
 

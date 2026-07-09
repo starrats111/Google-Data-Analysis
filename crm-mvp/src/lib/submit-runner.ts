@@ -148,6 +148,16 @@ async function finalizeFailed(jobId: bigint, message: string): Promise<void> {
       },
     })
     .catch(() => {});
+  // 提交 job 走到最终失败 = 广告没发出去且不会再自动重试，外部告警让人立刻介入
+  try {
+    const { sendAlert } = await import("@/lib/alert");
+    void sendAlert({
+      level: "error",
+      title: `广告提交任务最终失败 job=${jobId}`,
+      content: (message || "提交失败").slice(0, 400),
+      source: "submit-runner",
+    });
+  } catch { /* 告警失败不影响主流程 */ }
 }
 
 /**

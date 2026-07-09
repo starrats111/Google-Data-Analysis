@@ -202,6 +202,15 @@ export async function GET(req: NextRequest) {
     leaders_alerted: leaderAggregate.size,
     elapsed_ms: elapsed,
   };
+  if (notifsCreated > 0) {
+    const { sendAlert } = await import("@/lib/alert");
+    void sendAlert({
+      level: "warning",
+      title: "联盟平台连接异常",
+      content: `本轮发现 ${rawConns.length} 条异常连接（涉及 ${userIdsAlerted.size} 个用户），已写站内通知。请相关用户到「设置 → 联盟平台连接」重新配置。`,
+      source: "cron/connection-health",
+    });
+  }
   log(`完成：${JSON.stringify(result)}`);
   // 防止 raw query 返回的 BigInt 字段污染（用 replacer 把所有 BigInt 转字符串）
   const safeBody = JSON.parse(JSON.stringify(result, (_, v) => (typeof v === "bigint" ? v.toString() : v)));

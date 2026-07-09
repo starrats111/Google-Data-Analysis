@@ -177,6 +177,15 @@ export async function GET(req: NextRequest) {
     users_alerted: userIdsAlerted.size,
     elapsed_ms: elapsed,
   };
+  if (notifsCreated > 0) {
+    const { sendAlert } = await import("@/lib/alert");
+    void sendAlert({
+      level: "warning",
+      title: "发现广告系列状态漂移（CRM 已暂停但 Google 仍在跑）",
+      content: `本轮发现 ${notifsCreated} 条漂移（涉及 ${userIdsAlerted.size} 个用户），已写站内通知，请到 Google Ads 后台核实暂停。`,
+      source: "cron/campaign-status-drift",
+    });
+  }
   log(`完成：${JSON.stringify(result)}`);
   return NextResponse.json(result);
 }

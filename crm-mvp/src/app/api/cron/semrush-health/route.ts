@@ -125,6 +125,13 @@ async function maybeNotifyAdmin(result: HealthCheckResult) {
       where: { overall: "failure" },
       data: { alerted: 1 },
     });
+    const { sendAlert } = await import("@/lib/alert");
+    void sendAlert({
+      level: "warning",
+      title: `[SemRush] 3UE 健康检查失败（errorType=${errorType}）`,
+      content: `${result.detail}\nAction: ${result.action}`,
+      source: "cron/semrush-health",
+    });
     log(`已通知 admin (errorType=${errorType})`);
   } catch (err) {
     log(`通知 admin 失败: ${err instanceof Error ? err.message : err}`);
