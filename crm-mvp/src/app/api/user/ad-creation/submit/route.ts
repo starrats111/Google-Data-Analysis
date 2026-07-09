@@ -964,9 +964,15 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
     // D-157：Google Ads 要求 final_url_suffix 是合法 query string，**不能以 '?' 或 '&' 开头**（否则 INVALID_ARGUMENT，
     // 报 "The final url suffix cannot begin with '?' or '&'…"）。前端/联盟后缀常带前导 '?'（如 ?utm_source=...&clickId=...），
     // 这里统一剥掉前导 ?/& 与首尾空白、去掉尾部多余 &，兼容已存库的脏值。
-    const finalUrlSuffix: string | undefined = rawFinalUrlSuffix
+    let finalUrlSuffix: string | undefined = rawFinalUrlSuffix
       ? (rawFinalUrlSuffix.trim().replace(/^[?&\s]+/, "").replace(/[?&\s]+$/, "").trim() || undefined)
       : undefined;
+    // 后缀里出现协议头 = 有人把整条追踪链接贴进了后缀（历史脏数据/误操作）。
+    // 送到 Google 会拼出「落地页?https://...」的废到达页，宁可不带后缀也不能带废后缀。
+    if (finalUrlSuffix && (finalUrlSuffix.includes("://") || /^https?[:%]/i.test(finalUrlSuffix))) {
+      console.warn(`[AdSubmit] final_url_suffix 疑似整条链接，已丢弃不上传: ${finalUrlSuffix.slice(0, 100)}`);
+      finalUrlSuffix = undefined;
+    }
 
     operations.push({
       campaign_operation: {

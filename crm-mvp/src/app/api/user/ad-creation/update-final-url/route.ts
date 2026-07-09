@@ -92,6 +92,11 @@ export async function PATCH(req: NextRequest) {
     const suffixVal = typeof final_url_suffix === "string"
       ? (final_url_suffix.trim().replace(/^[?&\s]+/, "").replace(/[?&\s]+$/, "").trim() || null)
       : null;
+    // 后缀必须是 query 参数串（k=v&k2=v2），不能是整条链接——历史上有员工把 linkhaitao/partnermatic
+    // 整条追踪链接贴进来，Google 端拼出 `落地页?https://...` 的废链接，换链/刷点击全部失效
+    if (suffixVal && (suffixVal.includes("://") || /^https?[:%]/i.test(suffixVal))) {
+      return apiError("最终到达网址后缀必须是追踪参数串（如 utm_source=xx&clickid=yy），不能填整条跟踪链接。整条链接请填在上方「联盟跟踪链接」输入框");
+    }
     updates.push(prisma.campaigns.update({
       where: { id: campaign.id },
       data: { final_url_suffix: suffixVal || null } as any,

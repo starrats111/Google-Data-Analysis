@@ -250,7 +250,11 @@ function parseMerchants(
     // 各平台均返回 snake_case 字段名（comm_rate / site_url / support_region），同时兼容 camelCase 备用
     const commission = String(item.comm_rate || item.commRate || item.commission_rate || item.commissionRate || item.commission || "");
     const regions = parseRegions(item.support_region || item.supportRegion || item.supported_regions || item.regions || item.country || "");
-    const url = String(item.site_url || item.siteUrl || item.merchant_url || item.url || item.website || item.domain || item.homepage || "");
+    // 部分平台 feed 的 site_url 实际是带未展开宏的追踪链接（如 doubleclick 的 ${gdpr}、weborama 的 [random]），
+    // 宏字面量入库后会传染到爬虫/落地页解析，这里统一剔除
+    const url = String(item.site_url || item.siteUrl || item.merchant_url || item.url || item.website || item.domain || item.homepage || "")
+      .replace(/\$\{[^}]*\}/g, "")
+      .replace(/\[random\]/gi, "");
     const logo = String(
       item.logo || item.logo_url || item.logoUrl ||
       item.icon || item.icon_url || item.iconUrl ||
