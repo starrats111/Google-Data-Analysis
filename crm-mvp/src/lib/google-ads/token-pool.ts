@@ -34,6 +34,12 @@
  *   当日用量 ≥ 实测额度的 token 直接跳过，不再撞墙。
  */
 import prisma from "@/lib/prisma";
+import {
+  isDailyQuotaExhausted,
+  isTokenUsableForMcc,
+  remainingQuotaOf,
+  type TokenQuotaMeta,
+} from "@/lib/google-ads/token-pool-logic";
 
 const POOL_CACHE_TTL_MS = 60_000;
 const RATE_LIMIT_COOLDOWN_MS = 3 * 60_000;
@@ -49,18 +55,8 @@ export interface TokenCredential {
   saJson: string | null;
 }
 
-/** 池内 token 的自动体检元数据（随凭证列表一起 60s 缓存） */
-interface TokenMeta {
-  healthStatus: string;
-  /** {"<mcc客户号>": "ok" | "denied"} */
-  mccAccess: Record<string, string>;
-  /** 实测额度（触顶反推）；null = 未触顶过 */
-  detectedQuota: number | null;
-  /** 组长手填额度 */
-  dailyQuota: number;
-  /** 今日已用（DB 口径，不含内存缓冲） */
-  todayRequests: number;
-}
+/** 池内 token 的自动体检元数据（随凭证列表一起 60s 缓存）；结构见 token-pool-logic */
+type TokenMeta = TokenQuotaMeta;
 
 /** mcc_id（Google MCC 客户号）→ 团队凭证对列表缓存 */
 const poolCacheByMcc = new Map<string, { creds: TokenCredential[]; loadedAt: number }>();
@@ -161,22 +157,16 @@ async function loadTeamCredentials(mccId: string): Promise<TokenCredential[]> {
  * 非池内凭证（环境变量/员工 MCC 自带）无额度信息，返回 -1 表示最后兜底。
  */
 function remainingQuota(token: string): number {
-  const meta = tokenMetaCache.get(token);
-  if (!meta) return -1;
-  const quota = meta.detectedQuota ?? meta.dailyQuota;
-  return quota - meta.todayRequests;
+  return remainingQuotaOf(tokenMetaCache.get(token));
 }
 
 /** 该凭证对此 MCC 是否可用（自动标记学习结果；unknown 视为可用，让真实流量去探明） */
 function isUsableFor(token: string, mccKey: string): boolean {
-  if (deniedPairs.has(`${token}|${mccKey}`)) return false;
-  const meta = tokenMetaCache.get(token);
-  if (!meta) return true; // 环境变量/MCC 自带凭证无元数据，不设限
-  if (meta.healthStatus === "invalid") return false;
-  if (meta.mccAccess[mccKey] === "denied") return false;
-  // 实测出真实额度后，当日用量触顶的 token 直接跳过，不再撞墙
-  if (meta.detectedQuota != null && meta.todayRequests >= meta.detectedQuota) return false;
-  return true;
+  return isTokenUsableForMcc(
+    tokenMetaCache.get(token),
+    deniedPairs.has(`${token}|${mccKey}`),
+    mccKey,
+  );
 }
 
 /** 单次请求的全部候选凭证对：团队池 + 环境变量全局池 + MCC 自带凭证 */
@@ -314,13 +304,7 @@ export function reportTokenOk(token: string, mccId: string): void {
  *   detected_quota，并冷却到太平洋时区次日（Google 配额重置点）
  */
 export function reportTokenRateLimited(token: string, retryDelaySec?: number, errBody?: string): void {
-  const isDailyExhausted =
-    !!errBody
-    && errBody.includes("RESOURCE_EXHAUSTED")
-    && !errBody.includes("RESOURCE_TEMPORARILY_EXHAUSTED")
-    && ((retryDelaySec ?? 0) > 600 || /daily|per day|quota/i.test(errBody));
-
-  if (isDailyExhausted) {
+  if (isDailyQuotaExhausted(retryDelaySec, errBody)) {
     const ms = msUntilPacificMidnight();
     const until = new Date(Date.now() + ms);
     cooldownUntil.set(token, until.getTime());

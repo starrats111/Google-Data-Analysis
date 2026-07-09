@@ -7,6 +7,8 @@
     "build": "NODE_OPTIONS='--max-old-space-size=1536' next build --webpack",
     "start": "NODE_OPTIONS='--max-old-space-size=768' next start -p 20050",
     "lint": "eslint .",
+    "test": "node scripts/run-tests.mjs",
+    "typecheck:tests": "tsc -p tsconfig.tests.json",
     "seed": "npx tsx prisma/seed.ts",
     "cleanup:affiliate-invalid-connection": "npx tsx scripts/cleanup-affiliate-txns-invalid-connection.ts",
     "diag:wj02-cg-keys": "npx tsx scripts/compare-wj02-cg-api-keys.ts",

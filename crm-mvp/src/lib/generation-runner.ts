@@ -12,6 +12,7 @@
 // ───────────────────────────────────────────────────────────────
 
 import prisma from "@/lib/prisma";
+import { classifyJobForSweep, isJobFresh } from "@/lib/job-sweep-logic";
 
 // 与 generate-extensions/route.ts 的 GenerationRequestPayload 同构（此处本地定义避免静态循环依赖）
 export interface GenerationRequestPayload {
@@ -91,11 +92,7 @@ export async function createOrReuseGenerationJob(args: {
     }
   });
   if (existing) {
-    const hbFresh = existing.heartbeat_at
-      ? Date.now() - new Date(existing.heartbeat_at).getTime() < STALE_MS
-      : false;
-    const justCreated = Date.now() - new Date(existing.created_at).getTime() < STALE_MS;
-    if (hbFresh || justCreated) {
+    if (isJobFresh(existing, Date.now(), STALE_MS)) {
       return { id: existing.id, reused: true };
     }
     // 僵死的旧 running/queued job（进程可能已重启）：标记 failed，重建新的
@@ -345,17 +342,19 @@ export async function sweepGenerationJobs(): Promise<{ scanned: number; requeued
   const now = Date.now();
   for (const job of candidates) {
     stats.scanned++;
-    if (inFlight.has(job.id.toString())) continue; // 本进程正在跑，勿动
-    const hbAt = job.heartbeat_at ? new Date(job.heartbeat_at).getTime() : new Date(job.created_at).getTime();
-    const stale = now - hbAt >= STALE_MS;
-    if (job.status === "running" && !stale) continue;
-    if (job.status === "queued" && !stale && (job.attempt ?? 0) > 0) continue;
-    if ((job.attempt ?? 0) >= MAX_ATTEMPT) {
+    const decision = classifyJobForSweep(job, {
+      now,
+      staleMs: STALE_MS,
+      maxAttempt: MAX_ATTEMPT,
+      inFlight: inFlight.has(job.id.toString()),
+    });
+    if (decision === "skip") continue;
+    if (decision === "fail") {
       await finalizeFailed(job.id, "任务多次中断后仍未完成，请重新生成");
       stats.failed++;
       continue;
     }
-    console.warn(`[GenRunner] sweeper 重新入队 job=${job.id} status=${job.status} attempt=${job.attempt} staleMs=${now - hbAt}`);
+    console.warn(`[GenRunner] sweeper 重新入队 job=${job.id} status=${job.status} attempt=${job.attempt}`);
     enqueueGenerationJob(job.id);
     stats.requeued++;
   }
