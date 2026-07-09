@@ -51,7 +51,8 @@ function parseCampaignInfoRows(rows: string[][], recentDates: Set<string>): Camp
       campaignName: nameIdx >= 0 ? (row[nameIdx] ?? "").trim() : "",
       status: statusIdx >= 0 ? (row[statusIdx] ?? "").trim() : "",
       creationDate,
-      customerId: customerIdx >= 0 ? (row[customerIdx] ?? "").trim() : "",
+      // 与 sheet-status-sync 口径一致：去横杠存纯数字，否则 CID 计数/换链按 customer_id 匹配会失效
+      customerId: customerIdx >= 0 ? (row[customerIdx] ?? "").trim().replace(/-/g, "") : "",
     });
   }
   return result;
