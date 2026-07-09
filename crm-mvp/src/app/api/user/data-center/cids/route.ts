@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
+import { deriveDisplayAvailability } from "@/lib/google-ads/cid-availability";
 
 /**
  * GET /api/user/data-center/cids?mcc_account_id=xxx
@@ -61,8 +62,12 @@ export async function GET(req: NextRequest) {
       enabled_count: c.enabled,
       paused_count: c.paused,
       removed_count: c.removed,
-      // 保留 is_available 向后兼容：有 ≥1 ENABLED 标 N，否则 Y
-      is_available: c.enabled > 0 ? "N" : "Y",
+      // 批次5：Y/N/U/D 四态（D=停用禁选，U=未核实需提示），语义见 cid-availability.ts
+      is_available: deriveDisplayAvailability({
+        rowStatus: cid.status,
+        storedAvailability: cid.is_available,
+        enabledCount: c.enabled,
+      }),
     };
   });
 
@@ -122,7 +127,8 @@ export async function POST(req: NextRequest) {
             mcc_account_id: BigInt(mcc_account_id),
             customer_id: child.customer_id,
             customer_name: child.customer_name,
-            is_available: "Y", status: "active",
+            // 批次5：新发现的 CID 未核实过 → U（首轮状态同步后会转 Y/N）
+            is_available: "U", status: "active",
             last_synced_at: new Date(),
           },
         });
@@ -134,7 +140,8 @@ export async function POST(req: NextRequest) {
       if (!googleCidSet.has(existing.customer_id) && existing.status === "active") {
         await prisma.mcc_cid_accounts.update({
           where: { id: existing.id },
-          data: { status: "cancelled", is_available: "N" },
+          // 批次5：Google 端已消失 = 停用（D），不再标 N（N 语义是"占用中"）
+          data: { status: "cancelled", is_available: "D" },
         });
         cancelled++;
       }
@@ -176,7 +183,11 @@ export async function POST(req: NextRequest) {
         enabled_count: c.enabled,
         paused_count: c.paused,
         removed_count: c.removed,
-        is_available: c.enabled > 0 ? "N" : "Y",
+        is_available: deriveDisplayAvailability({
+          rowStatus: cid.status,
+          storedAvailability: cid.is_available,
+          enabledCount: c.enabled,
+        }),
       };
     });
 

@@ -116,9 +116,10 @@ export async function POST(req: NextRequest) {
       if (s.status === "ENABLED") cidEnabledFlag.set(s.customerId, true);
       else if (!cidEnabledFlag.has(s.customerId)) cidEnabledFlag.set(s.customerId, false);
     }
+    const { CID_WRITE_GUARD } = await import("@/lib/google-ads/cid-availability");
     for (const [customerId, hasEnabled] of cidEnabledFlag) {
       await prisma.mcc_cid_accounts.updateMany({
-        where: { mcc_account_id: BigInt(mccAccountId), customer_id: customerId },
+        where: { mcc_account_id: BigInt(mccAccountId), customer_id: customerId, ...CID_WRITE_GUARD },
         data: { is_available: hasEnabled ? "N" : "Y", last_synced_at: new Date() },
       });
     }
@@ -152,6 +153,7 @@ export async function POST(req: NextRequest) {
       countsByCid.set(row.customer_id, slot);
     }
 
+    const { deriveDisplayAvailability } = await import("@/lib/google-ads/cid-availability");
     const cidsWithCounts = refreshedCids.map((cid) => {
       const c = countsByCid.get(cid.customer_id) || { enabled: 0, paused: 0, removed: 0 };
       return {
@@ -159,7 +161,11 @@ export async function POST(req: NextRequest) {
         enabled_count: c.enabled,
         paused_count: c.paused,
         removed_count: c.removed,
-        is_available: c.enabled > 0 ? "N" : "Y",
+        is_available: deriveDisplayAvailability({
+          rowStatus: cid.status,
+          storedAvailability: cid.is_available,
+          enabledCount: c.enabled,
+        }),
       };
     });
 

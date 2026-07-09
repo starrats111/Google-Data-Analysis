@@ -18,6 +18,7 @@ import { useApiWithParams, mutateApi } from "@/lib/swr";
 import { describeClientError } from "@/lib/client-error";
 import { BIDDING_STRATEGIES } from "@/lib/constants";
 import { getAdMarketConfig, getCurrencyCodeByCountry, getLanguageCodeByCountry, getSnippetHeaderByCountry } from "@/lib/ad-market";
+import { rankCidsForAutoPick, isCidSelectable } from "@/lib/google-ads/cid-availability";
 
 const CURRENCY_OPTIONS = ["USD", "EUR", "GBP", "CAD", "AUD", "CHF", "BRL", "JPY"];
 
@@ -984,18 +985,10 @@ export default function AdPreviewPage() {
   }, [semrushUrl, preview, kwList, campaignId, message, budget, maxCpc, biddingStrategy]);
 
   // ─── MCC/CID 操作 ───
-  // D-007（2026-05-16）：自动选 CID 改为"当前数量最少 → customer_name 数字最小"优先；不再依赖 is_available
+  // D-007（2026-05-16）：自动选 CID 改为"当前数量最少 → customer_name 数字最小"优先
+  // 批次5：升级为 Y/N/U/D 四态——D（停用）排除，U（未核实）靠后，逻辑收敛到 cid-availability.ts
   const pickDefaultCid = useCallback((cids: any[]): string | undefined => {
-    if (!cids.length) return undefined;
-    const sorted = [...cids].sort((a, b) => {
-      const ae = a.enabled_count ?? (a.is_available === "Y" ? 0 : 1);
-      const be = b.enabled_count ?? (b.is_available === "Y" ? 0 : 1);
-      if (ae !== be) return ae - be;
-      const an = Number(a.customer_name) || 0;
-      const bn = Number(b.customer_name) || 0;
-      return an - bn;
-    });
-    return sorted[0]?.customer_id;
+    return rankCidsForAutoPick(cids)[0]?.customer_id;
   }, []);
 
   const loadCidList = useCallback(async (mccAccountId: string) => {
@@ -3312,7 +3305,8 @@ export default function AdPreviewPage() {
                   .sort((a, b) => (Number(a.customer_name) || 0) - (Number(b.customer_name) || 0))
                   .map((c) => ({
                     value: c.customer_id,
-                    label: `${formatCid(c.customer_id)}${c.customer_name ? ` - ${c.customer_name}` : ""}`,
+                    label: `${formatCid(c.customer_id)}${c.customer_name ? ` - ${c.customer_name}` : ""}${c.is_available === "U" ? "（未核实）" : ""}${c.is_available === "D" ? "（已停用）" : ""}`,
+                    disabled: !isCidSelectable(c.is_available),
                   }))}
                 optionRender={(option) => {
                   const cid = cidList.find((c) => c.customer_id === option.value);

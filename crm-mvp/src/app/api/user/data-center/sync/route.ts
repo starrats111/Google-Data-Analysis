@@ -365,8 +365,9 @@ async function syncAdsData(
 
         const enabledCids = campaignData.filter(cd => cd.campaign_status === "ENABLED").map(cd => cd.customer_id);
         if (enabledCids.length > 0) {
+          const { CID_WRITE_GUARD } = await import("@/lib/google-ads/cid-availability");
           await prisma.mcc_cid_accounts.updateMany({
-            where: { mcc_account_id: mcc.id, customer_id: { in: enabledCids } },
+            where: { mcc_account_id: mcc.id, customer_id: { in: enabledCids }, ...CID_WRITE_GUARD },
             data: { is_available: "N" },
           });
         }
@@ -614,8 +615,9 @@ async function upsertSheetRowsBatch(
   // ─── 5. 批量更新 CID 状态 ───
   const enabledCids = [...new Set(rows.filter((r) => r.status === "ENABLED").map((r) => r.customer_id))].filter(Boolean);
   if (enabledCids.length > 0) {
+    const { CID_WRITE_GUARD } = await import("@/lib/google-ads/cid-availability");
     await prisma.mcc_cid_accounts.updateMany({
-      where: { mcc_account_id: mccId, customer_id: { in: enabledCids } },
+      where: { mcc_account_id: mccId, customer_id: { in: enabledCids }, ...CID_WRITE_GUARD },
       data: { is_available: "N" },
     });
   }

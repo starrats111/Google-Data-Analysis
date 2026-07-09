@@ -55,10 +55,10 @@ export const POST = withAdmin(async (req: NextRequest, { user }) => {
       customerId,
     );
 
-    // 4) 本地标记 cancelled
+    // 4) 本地标记 cancelled + D（停用终态，同步不会冲回 Y/N）
     await prisma.mcc_cid_accounts.update({
       where: { id: cidRec.id },
-      data: { status: "cancelled", is_available: "N", last_synced_at: new Date() },
+      data: { status: "cancelled", is_available: "D", last_synced_at: new Date() },
     });
 
     await logOperation({

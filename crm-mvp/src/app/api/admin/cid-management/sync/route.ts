@@ -48,19 +48,20 @@ export const POST = withAdmin(async (req: NextRequest) => {
             mcc_account_id: BigInt(mcc_account_id),
             customer_id: child.customer_id,
             customer_name: child.customer_name,
-            is_available: "Y", status: "active",
+            // 批次5：新发现的 CID 未核实过 → U（首轮状态同步后会转 Y/N）
+            is_available: "U", status: "active",
             last_synced_at: new Date(),
           },
         });
         created++;
       }
     }
-    // Google 已不返回的 active CID → 标 cancelled
+    // Google 已不返回的 active CID → 标 cancelled + D（停用终态，同步不会冲回 Y/N）
     for (const existing of existingCids) {
       if (!googleCidSet.has(existing.customer_id) && existing.status === "active") {
         await prisma.mcc_cid_accounts.update({
           where: { id: existing.id },
-          data: { status: "cancelled", is_available: "N" },
+          data: { status: "cancelled", is_available: "D" },
         });
         cancelled++;
       }

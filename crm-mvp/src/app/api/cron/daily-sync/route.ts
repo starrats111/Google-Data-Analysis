@@ -745,6 +745,8 @@ async function syncAllCampaignStatuses(): Promise<unknown> {
       }
 
       // 更新 CID 可用状态（Sheet 行缺 CustomerId 时跳过，避免误改）
+      // 批次5：D（停用）是终态，批量 Y/N 回写不得覆盖（CID_WRITE_GUARD）
+      const { CID_WRITE_GUARD } = await import("@/lib/google-ads/cid-availability");
       const cidHasEnabled = new Map<string, boolean>();
       for (const s of statuses) {
         if (!s.customer_id) continue;
@@ -756,7 +758,7 @@ async function syncAllCampaignStatuses(): Promise<unknown> {
       }
       for (const [customerId, hasEnabled] of cidHasEnabled) {
         await prisma.mcc_cid_accounts.updateMany({
-          where: { mcc_account_id: mcc.id, customer_id: customerId },
+          where: { mcc_account_id: mcc.id, customer_id: customerId, ...CID_WRITE_GUARD },
           data: { is_available: hasEnabled ? "N" : "Y", last_synced_at: new Date() },
         });
       }
@@ -767,6 +769,12 @@ async function syncAllCampaignStatuses(): Promise<unknown> {
       const msg = e instanceof Error ? e.message : String(e);
       results[`mcc_${mcc.mcc_id}`] = { error: msg };
       log(`  MCC ${mcc.mcc_name || mcc.mcc_id} status sync error: ${msg}`);
+      // 批次5：本轮没核实到的 MCC，其"空闲"标记不再可信 → 降级为 U（未核实），
+      // 防止自动选号把过期的 Y 当真。N/D 保持不动（占用/停用无需降级）。
+      await prisma.mcc_cid_accounts.updateMany({
+        where: { mcc_account_id: mcc.id, is_deleted: 0, status: "active", is_available: "Y" },
+        data: { is_available: "U" },
+      }).catch(() => {});
     }
   }
   return results;

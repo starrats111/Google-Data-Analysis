@@ -3,6 +3,7 @@ import { withAdmin } from "@/lib/api-handler";
 import { serializeData } from "@/lib/auth";
 import { apiSuccess } from "@/lib/constants";
 import prisma from "@/lib/prisma";
+import { deriveDisplayAvailability } from "@/lib/google-ads/cid-availability";
 
 /**
  * GET /api/admin/cid-management
@@ -114,7 +115,12 @@ export const GET = withAdmin(async (req: NextRequest) => {
         customer_id: c.customer_id,
         customer_name: c.customer_name,
         status: c.status,
-        is_available: c.status === "active" ? (cnt.enabled > 0 ? "N" : "Y") : "D",
+        // 批次5：Y/N/U/D 四态，尊重存量 D/U 标记（语义见 cid-availability.ts）
+        is_available: deriveDisplayAvailability({
+          rowStatus: c.status,
+          storedAvailability: c.is_available,
+          enabledCount: cnt.enabled,
+        }),
         last_synced_at: c.last_synced_at,
         enabled_count: cnt.enabled,
         paused_count: cnt.paused,
