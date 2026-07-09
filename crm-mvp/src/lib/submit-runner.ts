@@ -183,6 +183,40 @@ export async function recoverInterruptedSubmitJobs(): Promise<void> {
   }
 }
 
+/**
+ * DB 驱动扫队（由 /api/cron/job-sweeper 周期调用）：
+ * 把「queued 但没被任何进程捡起」和「running 但心跳超时（进程崩溃/重启丢失）」的 job
+ * 重新入队；超尝试次数上限的判失败。使 job 兜底恢复不再只依赖模块加载时的单次
+ * recoverInterruptedSubmitJobs——任何时刻掉队的 job 最迟一个 cron 周期内被扫起。
+ * 同进程内 inFlight 去重保证对正在跑的 job 重复 enqueue 是 no-op。
+ */
+export async function sweepSubmitJobs(): Promise<{ scanned: number; requeued: number; failed: number }> {
+  const stats = { scanned: 0, requeued: 0, failed: 0 };
+  const candidates = await prisma.ad_submit_jobs.findMany({
+    where: { status: { in: ["queued", "running"] } },
+    orderBy: { id: "asc" },
+    take: 50,
+  });
+  const now = Date.now();
+  for (const job of candidates) {
+    stats.scanned++;
+    if (inFlight.has(job.id.toString())) continue; // 本进程正在跑，勿动
+    const hbAt = job.heartbeat_at ? new Date(job.heartbeat_at).getTime() : new Date(job.created_at).getTime();
+    const stale = now - hbAt >= STALE_MS;
+    if (job.status === "running" && !stale) continue; // 心跳新鲜（理论上不会走到：单进程下活跃 job 必在 inFlight）
+    if (job.status === "queued" && !stale && (job.attempt ?? 0) > 0) continue; // 已被跑过且还新鲜，等下一轮判定
+    if ((job.attempt ?? 0) >= MAX_ATTEMPT) {
+      await finalizeFailed(job.id, "任务多次中断后仍未完成，请到数据中心确认广告是否已创建");
+      stats.failed++;
+      continue;
+    }
+    console.warn(`[SubmitRunner] sweeper 重新入队 job=${job.id} status=${job.status} attempt=${job.attempt} staleMs=${now - hbAt}`);
+    enqueueSubmitJob(job.id);
+    stats.requeued++;
+  }
+  return stats;
+}
+
 // 模块首次加载即触发一次启动恢复（延迟一点，确保 DB 连接就绪）。
 setTimeout(() => {
   void recoverInterruptedSubmitJobs();

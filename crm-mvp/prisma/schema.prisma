@@ -1499,6 +1499,7 @@ model team_developer_tokens {
   detected_quota    Int?      @db.UnsignedInt // 触顶反推出的真实每日额度（未触顶为 null）
   quota_detected_at DateTime? @db.DateTime(0)
   mcc_access        String?   @db.Text // JSON {"<mcc客户号>":"ok"|"denied"}——该凭证对各 MCC 的实测可用性
+  cooldown_until    DateTime? @db.DateTime(0) // 冷却截止（限流/失效/额度耗尽）；重启后回灌内存冷却表
 
   @@index([team_id, is_deleted], map: "idx_tdt_team")
 }

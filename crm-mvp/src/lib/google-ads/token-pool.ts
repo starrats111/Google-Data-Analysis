@@ -114,6 +114,7 @@ async function loadTeamCredentials(mccId: string): Promise<TokenCredential[]> {
           select: {
             token: true, service_account_json: true,
             health_status: true, mcc_access: true, detected_quota: true, daily_quota: true,
+            cooldown_until: true,
           },
         });
         // 今日已用（用于「实测额度已耗尽」的预判跳过）
@@ -138,6 +139,12 @@ async function loadTeamCredentials(mccId: string): Promise<TokenCredential[]> {
             dailyQuota: r.daily_quota,
             todayRequests: usageByToken.get(t) ?? 0,
           });
+          // 冷却回灌：进程重启后内存冷却表清零，从 DB 恢复仍在冷却期的 token，
+          // 避免重启后立刻对已限流/额度耗尽的 token 撞墙。内存里已有更晚的截止时间则不覆盖。
+          const dbCooldown = r.cooldown_until ? new Date(r.cooldown_until).getTime() : 0;
+          if (dbCooldown > now && dbCooldown > (cooldownUntil.get(t) ?? 0)) {
+            cooldownUntil.set(t, dbCooldown);
+          }
         }
       }
     }
@@ -315,7 +322,8 @@ export function reportTokenRateLimited(token: string, retryDelaySec?: number, er
 
   if (isDailyExhausted) {
     const ms = msUntilPacificMidnight();
-    cooldownUntil.set(token, Date.now() + ms);
+    const until = new Date(Date.now() + ms);
+    cooldownUntil.set(token, until.getTime());
     const meta = tokenMetaCache.get(token);
     if (meta) {
       // 今日实际打出的请求数 ≈ 该 token 的真实每日额度（取历史探测值的较大者，防止低估）
@@ -326,29 +334,36 @@ export function reportTokenRateLimited(token: string, retryDelaySec?: number, er
         health_status: "limited",
         health_note: `每日额度耗尽（实测约 ${observed.toLocaleString()} 次/天），太平洋时区次日自动恢复`,
         last_error_at: new Date(),
+        cooldown_until: until,
         ...(observed > 0 ? { detected_quota: observed, quota_detected_at: new Date() } : {}),
       });
       console.warn(`[TokenPool] token ${maskToken(token)} 每日额度耗尽，实测额度≈${observed}，冷却至太平洋次日（${Math.round(ms / 60000)} 分钟后）`);
       return;
     }
+    persistMark(token, { cooldown_until: until });
     console.warn(`[TokenPool] token ${maskToken(token)} 每日额度耗尽，冷却至太平洋次日`);
     return;
   }
 
   const ms = Math.max(RATE_LIMIT_COOLDOWN_MS, (retryDelaySec ?? 0) * 1000);
-  cooldownUntil.set(token, Date.now() + ms);
+  const until = new Date(Date.now() + ms);
+  cooldownUntil.set(token, until.getTime());
+  // 短冷却也落库：429 频率低，写库开销可忽略；重启后回灌避免立刻撞墙
+  persistMark(token, { cooldown_until: until });
   console.warn(`[TokenPool] token ${maskToken(token)} 触发限流，冷却 ${Math.round(ms / 1000)}s`);
 }
 
 /** 上报某 token 不可用（未获批/被禁）：冷却 24 小时 + 持久化失效标记（每日探测自动复检） */
 export function reportTokenInvalid(token: string, note?: string): void {
-  cooldownUntil.set(token, Date.now() + INVALID_COOLDOWN_MS);
+  const until = new Date(Date.now() + INVALID_COOLDOWN_MS);
+  cooldownUntil.set(token, until.getTime());
   const meta = tokenMetaCache.get(token);
   if (meta) meta.healthStatus = "invalid";
   persistMark(token, {
     health_status: "invalid",
     health_note: note || "Developer Token 未获批准或已被禁用",
     last_error_at: new Date(),
+    cooldown_until: until,
   });
   console.warn(`[TokenPool] token ${maskToken(token)} 不可用（未获批/被禁），已标记 invalid，24h 内不再使用`);
 }
@@ -377,6 +392,8 @@ export function clearTokenCooldown(token: string): void {
     if (pair.startsWith(`${token}|`)) deniedPairs.delete(pair);
   }
   poolCacheByMcc.clear();
+  // 同步清掉 DB 冷却标记，避免下次加载又被回灌
+  persistMark(token, { cooldown_until: null });
 }
 
 // ─────────────────────── 用量统计（内存缓冲 → token_usage_daily） ───────────────────────
