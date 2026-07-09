@@ -248,6 +248,46 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
   }
 
   // ═════════════════════════════════════════════════════════════════
+  // AdsBot Destination Preflight（自 kyads 移植）：D-050 之后的第二道落地页硬卡。
+  //   D-050 验证的是「页面活着」；这里验证的是「Google 的审核爬虫（AdsBot-Google UA）
+  //   能访问」。部分站点/CDN 针对 bot UA 拦截——浏览器可达但 AdsBot 被 403/503，
+  //   Google 会以 DESTINATION_NOT_WORKING 拒登。
+  //   仅对 not_publishable_status（浏览器可达 + AdsBot 不可达 = bot 被针对性拦截）阻断；
+  //   server_blocked（两边都不可达，多为本机出口问题）交由上面 D-050 的结论，这里放行。
+  //   覆盖机制沿用 confirm_reachable：用户二次确认后放行（留痕）。
+  // ═════════════════════════════════════════════════════════════════
+  try {
+    const { checkAdsBotDestinationReachable } = await import("@/lib/google-ads/destination-preflight");
+    const preflightSuffix =
+      (bodyFinalUrlSuffix ?? ((campaign as any).final_url_suffix as string | null) ?? "") || "";
+    const preflight = await checkAdsBotDestinationReachable({ finalUrl, finalUrlSuffix: preflightSuffix });
+    if (!preflight.ok && preflight.reason === "not_publishable_status") {
+      if (confirmReachable) {
+        console.warn(`[AdSubmit] AdsBot 预检：用户已确认可访问，覆盖放行 ${preflight.checkedUrl} adsbot=${preflight.status ?? preflight.errorMessage}`);
+      } else {
+        console.warn(`[AdSubmit] AdsBot 预检阻断: ${preflight.checkedUrl} adsbot=${preflight.status ?? preflight.errorMessage} browser=${preflight.browserStatus}`);
+        const statusText = preflight.status ? `HTTP ${preflight.status}` : (preflight.errorMessage || "无响应");
+        return Response.json(
+          {
+            code: -1,
+            message: `落地页拦截了 Google 审核爬虫（AdsBot-Google 访问返回 ${statusText}，但普通浏览器可正常访问）。Google 审核时会以「目标网址无效(DESTINATION_NOT_WORKING)」拒登。请联系商家/CDN 放行 AdsBot-Google，或更换落地页。检测 URL: ${preflight.checkedUrl}`,
+            data: {
+              reason: "landing_unreachable_overridable",
+              finalUrl: preflight.finalUrl,
+              failureReason: "adsbot_blocked",
+            },
+          },
+          { status: 422 },
+        );
+      }
+    } else if (!preflight.ok) {
+      console.warn(`[AdSubmit] AdsBot 预检不可下结论（${preflight.reason}，放行）: ${preflight.checkedUrl}`);
+    }
+  } catch (e) {
+    console.warn(`[AdSubmit] AdsBot 预检异常（放行）: ${e instanceof Error ? e.message : e}`);
+  }
+
+  // ═════════════════════════════════════════════════════════════════
   // C-033: Sitelinks 禁止词预筛 → AI 自动返工（最多3轮），仍违规则移除该条
   //   - keywords/headlines/descriptions/callouts 不在此处处理，保持原有硬阻断
   //   - Sitelinks 由 AI 生成，员工难以手动修改，故改为 AI 自动返工
