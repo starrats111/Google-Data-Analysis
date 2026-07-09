@@ -24,6 +24,17 @@ import { pickMobileUserAgent } from "@/lib/mobile-user-agents";
 
 export type LinkStatus = "ok" | "no_tracking" | "forbidden_network" | "resolve_failed";
 
+/**
+ * 剔除 URL 中「未展开的模板变量字面量」，如 `${http.request.uri.path}`（商家 Cloudflare
+ * 动态重定向误配成静态文本时会原样出现在 Location 头里）或联盟宏 `${gdpr}`。
+ * 这些片段一旦混进 resolved_final_url / final_url，会让后续爬取、后缀验证全部对着
+ * 非法 URL 打（Alphalete 案例）。剔除后语义即商家本意（如"保留原路径跳 HTTPS"）。
+ */
+export function stripUnexpandedTemplateVars(url: string): string {
+  if (!url || !url.includes("${")) return url;
+  return url.replace(/\$\{[^}]*\}/g, "");
+}
+
 export interface ResolveResult {
   status: LinkStatus;
   landingUrl: string | null;
@@ -452,7 +463,9 @@ export async function fetchChain(
       if (hop >= maxRedirects) return { finalUrl: targetUrl, chain, status: res.status, error: "too_many_redirects" };
       let nextUrl: string;
       try {
-        nextUrl = new URL(res.location, targetUrl).toString();
+        // Location 里未展开的 ${...} 模板字面量先剔除再跟（Cloudflare 误配/联盟宏），
+        // 否则脏 URL 会一路传染到 finalUrl / resolved_final_url / final_url
+        nextUrl = new URL(stripUnexpandedTemplateVars(res.location), targetUrl).toString();
       } catch {
         return { finalUrl: targetUrl, chain, status: res.status, error: "bad_location" };
       }
@@ -742,7 +755,8 @@ export async function resolveAffiliateLink(
 
     // App 深链解包：finalUrl 若停在 Adjust/AppsFlyer/Branch 等深链域名，真实 web 落地藏在其回退参数里。
     let stuckOnDeeplink = false;
-    let finalUrl = res.finalUrl;
+    // 浏览器兜底路径的 page.url() 也可能带未展开的 ${...} 字面量（浏览器会照样导航过去），统一在此清洗
+    let finalUrl = res.finalUrl ? stripUnexpandedTemplateVars(res.finalUrl) : res.finalUrl;
     let chain = res.chain;
     if (finalUrl) {
       try {
