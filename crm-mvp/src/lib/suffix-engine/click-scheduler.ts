@@ -6,6 +6,10 @@
  * 模拟真实用户的浏览节奏，而非瞬间把 N 次刷完。
  */
 
+// 移动端 UA 库统一维护在 @/lib/mobile-user-agents，跟链/刷点击/浏览器兜底共用同一份；此处按历史命名对外暴露为 USER_AGENTS。
+// 刷点击一律模拟手机：移动版落地页更轻量（省代理流量），贴近住宅代理真实手机用户画像，不再用桌面 UA。
+export { MOBILE_USER_AGENTS as USER_AGENTS } from '@/lib/mobile-user-agents'
+
 /**
  * 小时权重表（0-23）：值越大该小时被分配的点击越多。
  * 规律：凌晨极低、上午渐增、下午高位、晚间峰值。
@@ -15,24 +19,6 @@ const HOUR_WEIGHTS: number[] = [
   0.15, 0.4, 0.8, 1.2, 1.5, 1.6, // 06-11
   1.3, 1.4, 1.6, 1.7, 1.8, 1.9, // 12-17
   2.0, 2.2, 2.0, 1.6, 1.0, 0.5, // 18-23
-]
-
-/** 真实「移动端」User-Agent 库（安卓 Chrome + iPhone/iPad Safari）。
- *  刷点击一律模拟手机：移动版落地页更轻量（省代理流量），且贴近住宅代理真实手机用户画像。
- *  不再使用 Windows / Mac / Linux 桌面 UA。 */
-export const USER_AGENTS: string[] = [
-  // Android Chrome
-  'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
-  'Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
-  'Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36',
-  'Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Mobile Safari/537.36',
-  'Mozilla/5.0 (Linux; Android 13; 2201122C) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36',
-  // iPhone Safari / Chrome(CriOS)
-  'Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1',
-  'Mozilla/5.0 (iPhone; CPU iPhone OS 17_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Mobile/15E148 Safari/604.1',
-  'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/126.0.6478.54 Mobile/15E148 Safari/604.1',
-  // iPad Safari
-  'Mozilla/5.0 (iPad; CPU OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1',
 ]
 
 /** 随机 Referer 来源（含直接访问空串） */
@@ -52,7 +38,7 @@ export const REFERERS: string[] = [
   '',
 ]
 
-export function randomPick<T>(arr: T[]): T {
+export function randomPick<T>(arr: readonly T[]): T {
   return arr[Math.floor(Math.random() * arr.length)]
 }
 

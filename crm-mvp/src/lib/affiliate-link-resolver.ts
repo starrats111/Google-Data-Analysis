@@ -20,6 +20,7 @@ import prisma from "@/lib/prisma";
 import { getProxyUrlForCountry, ensureCountryEgressHttpProxy } from "@/lib/crawl-proxy";
 import { acquirePuppeteerSlot } from "@/lib/puppeteer-semaphore";
 import { probeExitIp } from "@/lib/suffix-engine/exit-ip";
+import { pickMobileUserAgent } from "@/lib/mobile-user-agents";
 
 export type LinkStatus = "ok" | "no_tracking" | "forbidden_network" | "resolve_failed";
 
@@ -42,21 +43,8 @@ export interface ResolveResult {
   requiresBrowserEnrich?: boolean;
 }
 
-// 跟链/换链一律用「移动端」UA（安卓 Chrome + iPhone Safari），不再用 Windows 桌面：
+// 跟链/换链一律用「移动端」UA（安卓 Chrome + iPhone Safari，见 @/lib/mobile-user-agents），不再用 Windows 桌面：
 // 移动版落地页普遍更轻量（更少大图/桌面脚本）→ 省代理流量，且与住宅代理出口更贴近真实手机用户。
-const MOBILE_UA_POOL = [
-  // Android Chrome
-  "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
-  "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
-  "Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36",
-  // iPhone Safari
-  "Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1",
-  "Mozilla/5.0 (iPhone; CPU iPhone OS 17_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Mobile/15E148 Safari/604.1",
-];
-function pickMobileUA(): string {
-  return MOBILE_UA_POOL[Math.floor(Math.random() * MOBILE_UA_POOL.length)];
-}
-
 // 跳板/中转域名：最终落地页不应停在这些域名上。停在此 → 没跟到广告主（多半国家出口不对）。
 const TRACKER_HOST_PATTERNS: RegExp[] = [
   /(^|\.)flexlinkspro\.com$/i, /(^|\.)flexoffers\.com$/i,
@@ -362,7 +350,7 @@ export async function fetchChain(
     if (proxyUrl) agent = await makeAgent(proxyUrl);
   };
   const chain: string[] = [];
-  const ua = fp.userAgent || pickMobileUA();
+  const ua = fp.userAgent || pickMobileUserAgent();
 
   type HopResult =
     | { type: "redirect"; location: string; status: number }
@@ -605,7 +593,7 @@ async function resolveViaBrowser(
       await page.authenticate({ username: proxyAuth.username, password: proxyAuth.password });
     }
     // 移动端 UA + 匹配的移动端视口（避免「手机 UA + 桌面分辨率」的指纹矛盾），并请求移动版轻量落地页。
-    await page.setUserAgent(pickMobileUA());
+    await page.setUserAgent(pickMobileUserAgent());
     await page.setViewport({ width: 393, height: 852, isMobile: true, hasTouch: true, deviceScaleFactor: 3 });
     await page.setRequestInterception(true);
     page.on("request", (reqUnknown: unknown) => {
