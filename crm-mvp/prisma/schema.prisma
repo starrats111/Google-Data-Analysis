@@ -1521,3 +1521,25 @@ model token_usage_daily {
 
   @@unique([token, date], map: "uk_tud_token_date")
 }
+
+// -----------------------------------------------------------
+// Google Ads API 配额审计账本（批次5，参照 kyads google_ads_api_usage）
+// token_usage_daily 只有 token+日 粒度，答不了「配额被谁烧掉的」；
+// 本表按 日+token+MCC+CID+操作类型 聚合计数（内存缓冲批量 upsert，低配机友好），
+// rate_limited 记录该维度触发 429 的次数，用于定位打爆配额的调用方。
+// -----------------------------------------------------------
+model google_ads_api_usage {
+  id           BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  date         DateTime @db.Date
+  token        String   @db.VarChar(64)
+  mcc_id       String   @db.VarChar(32) // 不带横杠
+  customer_id  String   @default("") @db.VarChar(32) // 不带横杠；MCC 级操作为空串
+  kind         String   @default("query") @db.VarChar(16) // query / mutate
+  requests     Int      @default(0) @db.UnsignedInt
+  rate_limited Int      @default(0) @db.UnsignedInt
+  created_at   DateTime @default(now()) @db.DateTime(0)
+  updated_at   DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@unique([date, token, mcc_id, customer_id, kind], map: "uk_gaau_key")
+  @@index([date, mcc_id], map: "idx_gaau_date_mcc")
+}

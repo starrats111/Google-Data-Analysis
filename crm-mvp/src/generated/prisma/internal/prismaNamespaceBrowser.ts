@@ -111,7 +111,11 @@ export const ModelName = {
   payment_methods: 'payment_methods',
   report_overrides: 'report_overrides',
   payment_binding_snapshots: 'payment_binding_snapshots',
-  policy_violations: 'policy_violations'
+  bank_flow_entries: 'bank_flow_entries',
+  policy_violations: 'policy_violations',
+  team_developer_tokens: 'team_developer_tokens',
+  token_usage_daily: 'token_usage_daily',
+  google_ads_api_usage: 'google_ads_api_usage'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -457,6 +461,7 @@ export const CampaignsScalarFieldEnum = {
   previous_gcids: 'previous_gcids',
   final_url_suffix: 'final_url_suffix',
   suffix_exchange_enabled: 'suffix_exchange_enabled',
+  suffix_needs_browser: 'suffix_needs_browser',
   suffix_last_content: 'suffix_last_content',
   suffix_last_apply_at: 'suffix_last_apply_at',
   suffix_click_baseline: 'suffix_click_baseline',
@@ -1255,6 +1260,31 @@ export const Payment_binding_snapshotsScalarFieldEnum = {
 export type Payment_binding_snapshotsScalarFieldEnum = (typeof Payment_binding_snapshotsScalarFieldEnum)[keyof typeof Payment_binding_snapshotsScalarFieldEnum]
 
 
+export const Bank_flow_entriesScalarFieldEnum = {
+  id: 'id',
+  team_id: 'team_id',
+  month: 'month',
+  payment_method_id: 'payment_method_id',
+  txn_at: 'txn_at',
+  platform: 'platform',
+  source_date: 'source_date',
+  counterparty: 'counterparty',
+  summary: 'summary',
+  amount: 'amount',
+  currency: 'currency',
+  expected_amount: 'expected_amount',
+  fee: 'fee',
+  breakdown: 'breakdown',
+  remark: 'remark',
+  created_by: 'created_by',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Bank_flow_entriesScalarFieldEnum = (typeof Bank_flow_entriesScalarFieldEnum)[keyof typeof Bank_flow_entriesScalarFieldEnum]
+
+
 export const Policy_violationsScalarFieldEnum = {
   id: 'id',
   campaign_id: 'campaign_id',
@@ -1290,6 +1320,60 @@ export const Policy_violationsScalarFieldEnum = {
 } as const
 
 export type Policy_violationsScalarFieldEnum = (typeof Policy_violationsScalarFieldEnum)[keyof typeof Policy_violationsScalarFieldEnum]
+
+
+export const Team_developer_tokensScalarFieldEnum = {
+  id: 'id',
+  team_id: 'team_id',
+  token: 'token',
+  service_account_json: 'service_account_json',
+  daily_quota: 'daily_quota',
+  label: 'label',
+  is_active: 'is_active',
+  created_by: 'created_by',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  health_status: 'health_status',
+  health_note: 'health_note',
+  last_ok_at: 'last_ok_at',
+  last_error_at: 'last_error_at',
+  detected_quota: 'detected_quota',
+  quota_detected_at: 'quota_detected_at',
+  mcc_access: 'mcc_access',
+  cooldown_until: 'cooldown_until'
+} as const
+
+export type Team_developer_tokensScalarFieldEnum = (typeof Team_developer_tokensScalarFieldEnum)[keyof typeof Team_developer_tokensScalarFieldEnum]
+
+
+export const Token_usage_dailyScalarFieldEnum = {
+  id: 'id',
+  token: 'token',
+  date: 'date',
+  requests: 'requests',
+  mcc_ids: 'mcc_ids',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Token_usage_dailyScalarFieldEnum = (typeof Token_usage_dailyScalarFieldEnum)[keyof typeof Token_usage_dailyScalarFieldEnum]
+
+
+export const Google_ads_api_usageScalarFieldEnum = {
+  id: 'id',
+  date: 'date',
+  token: 'token',
+  mcc_id: 'mcc_id',
+  customer_id: 'customer_id',
+  kind: 'kind',
+  requests: 'requests',
+  rate_limited: 'rate_limited',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Google_ads_api_usageScalarFieldEnum = (typeof Google_ads_api_usageScalarFieldEnum)[keyof typeof Google_ads_api_usageScalarFieldEnum]
 
 
 export const SortOrder = {
@@ -1966,6 +2050,19 @@ export const payment_binding_snapshotsOrderByRelevanceFieldEnum = {
 export type payment_binding_snapshotsOrderByRelevanceFieldEnum = (typeof payment_binding_snapshotsOrderByRelevanceFieldEnum)[keyof typeof payment_binding_snapshotsOrderByRelevanceFieldEnum]
 
 
+export const bank_flow_entriesOrderByRelevanceFieldEnum = {
+  month: 'month',
+  platform: 'platform',
+  counterparty: 'counterparty',
+  summary: 'summary',
+  currency: 'currency',
+  breakdown: 'breakdown',
+  remark: 'remark'
+} as const
+
+export type bank_flow_entriesOrderByRelevanceFieldEnum = (typeof bank_flow_entriesOrderByRelevanceFieldEnum)[keyof typeof bank_flow_entriesOrderByRelevanceFieldEnum]
+
+
 export const policy_violationsOrderByRelevanceFieldEnum = {
   google_customer_id: 'google_customer_id',
   campaign_name: 'campaign_name',
@@ -1990,4 +2087,34 @@ export const policy_violationsOrderByRelevanceFieldEnum = {
 } as const
 
 export type policy_violationsOrderByRelevanceFieldEnum = (typeof policy_violationsOrderByRelevanceFieldEnum)[keyof typeof policy_violationsOrderByRelevanceFieldEnum]
+
+
+export const team_developer_tokensOrderByRelevanceFieldEnum = {
+  token: 'token',
+  service_account_json: 'service_account_json',
+  label: 'label',
+  health_status: 'health_status',
+  health_note: 'health_note',
+  mcc_access: 'mcc_access'
+} as const
+
+export type team_developer_tokensOrderByRelevanceFieldEnum = (typeof team_developer_tokensOrderByRelevanceFieldEnum)[keyof typeof team_developer_tokensOrderByRelevanceFieldEnum]
+
+
+export const token_usage_dailyOrderByRelevanceFieldEnum = {
+  token: 'token',
+  mcc_ids: 'mcc_ids'
+} as const
+
+export type token_usage_dailyOrderByRelevanceFieldEnum = (typeof token_usage_dailyOrderByRelevanceFieldEnum)[keyof typeof token_usage_dailyOrderByRelevanceFieldEnum]
+
+
+export const google_ads_api_usageOrderByRelevanceFieldEnum = {
+  token: 'token',
+  mcc_id: 'mcc_id',
+  customer_id: 'customer_id',
+  kind: 'kind'
+} as const
+
+export type google_ads_api_usageOrderByRelevanceFieldEnum = (typeof google_ads_api_usageOrderByRelevanceFieldEnum)[keyof typeof google_ads_api_usageOrderByRelevanceFieldEnum]
 

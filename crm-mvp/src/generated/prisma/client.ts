@@ -344,7 +344,27 @@ export type report_overrides = Prisma.report_overridesModel
  */
 export type payment_binding_snapshots = Prisma.payment_binding_snapshotsModel
 /**
+ * Model bank_flow_entries
+ * 
+ */
+export type bank_flow_entries = Prisma.bank_flow_entriesModel
+/**
  * Model policy_violations
  * 
  */
 export type policy_violations = Prisma.policy_violationsModel
+/**
+ * Model team_developer_tokens
+ * 
+ */
+export type team_developer_tokens = Prisma.team_developer_tokensModel
+/**
+ * Model token_usage_daily
+ * 
+ */
+export type token_usage_daily = Prisma.token_usage_dailyModel
+/**
+ * Model google_ads_api_usage
+ * 
+ */
+export type google_ads_api_usage = Prisma.google_ads_api_usageModel

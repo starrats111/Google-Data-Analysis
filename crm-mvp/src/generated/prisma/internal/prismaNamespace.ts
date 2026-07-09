@@ -444,7 +444,11 @@ export const ModelName = {
   payment_methods: 'payment_methods',
   report_overrides: 'report_overrides',
   payment_binding_snapshots: 'payment_binding_snapshots',
-  policy_violations: 'policy_violations'
+  bank_flow_entries: 'bank_flow_entries',
+  policy_violations: 'policy_violations',
+  team_developer_tokens: 'team_developer_tokens',
+  token_usage_daily: 'token_usage_daily',
+  google_ads_api_usage: 'google_ads_api_usage'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -460,7 +464,7 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
     omit: GlobalOmitOptions
   }
   meta: {
-    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "parent_networks" | "platform_blacklist" | "ad_rejection_feedback" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "holiday_calendar" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "ad_generation_jobs" | "ad_submit_jobs" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "google_mcc_accounts" | "affiliate_transactions" | "affiliate_click_daily" | "affiliate_payments" | "notifications" | "notification_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "kyads_click_task_items" | "proxy_exit_ip_usage" | "suffix_alerts" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "user_serpapi_keys" | "user_semrush_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log" | "semrush_keyword_cache" | "semrush_health_logs" | "payment_methods" | "report_overrides" | "payment_binding_snapshots" | "policy_violations"
+    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "parent_networks" | "platform_blacklist" | "ad_rejection_feedback" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "holiday_calendar" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "ad_generation_jobs" | "ad_submit_jobs" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "google_mcc_accounts" | "affiliate_transactions" | "affiliate_click_daily" | "affiliate_payments" | "notifications" | "notification_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "kyads_click_task_items" | "proxy_exit_ip_usage" | "suffix_alerts" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "user_serpapi_keys" | "user_semrush_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log" | "semrush_keyword_cache" | "semrush_health_logs" | "payment_methods" | "report_overrides" | "payment_binding_snapshots" | "bank_flow_entries" | "policy_violations" | "team_developer_tokens" | "token_usage_daily" | "google_ads_api_usage"
     txIsolationLevel: TransactionIsolationLevel
   }
   model: {
@@ -4424,6 +4428,72 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         }
       }
     }
+    bank_flow_entries: {
+      payload: Prisma.$bank_flow_entriesPayload<ExtArgs>
+      fields: Prisma.bank_flow_entriesFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.bank_flow_entriesFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$bank_flow_entriesPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.bank_flow_entriesFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$bank_flow_entriesPayload>
+        }
+        findFirst: {
+          args: Prisma.bank_flow_entriesFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$bank_flow_entriesPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.bank_flow_entriesFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$bank_flow_entriesPayload>
+        }
+        findMany: {
+          args: Prisma.bank_flow_entriesFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$bank_flow_entriesPayload>[]
+        }
+        create: {
+          args: Prisma.bank_flow_entriesCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$bank_flow_entriesPayload>
+        }
+        createMany: {
+          args: Prisma.bank_flow_entriesCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.bank_flow_entriesDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$bank_flow_entriesPayload>
+        }
+        update: {
+          args: Prisma.bank_flow_entriesUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$bank_flow_entriesPayload>
+        }
+        deleteMany: {
+          args: Prisma.bank_flow_entriesDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.bank_flow_entriesUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.bank_flow_entriesUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$bank_flow_entriesPayload>
+        }
+        aggregate: {
+          args: Prisma.Bank_flow_entriesAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateBank_flow_entries>
+        }
+        groupBy: {
+          args: Prisma.bank_flow_entriesGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Bank_flow_entriesGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.bank_flow_entriesCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Bank_flow_entriesCountAggregateOutputType> | number
+        }
+      }
+    }
     policy_violations: {
       payload: Prisma.$policy_violationsPayload<ExtArgs>
       fields: Prisma.policy_violationsFieldRefs
@@ -4487,6 +4557,204 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         count: {
           args: Prisma.policy_violationsCountArgs<ExtArgs>
           result: runtime.Types.Utils.Optional<Prisma.Policy_violationsCountAggregateOutputType> | number
+        }
+      }
+    }
+    team_developer_tokens: {
+      payload: Prisma.$team_developer_tokensPayload<ExtArgs>
+      fields: Prisma.team_developer_tokensFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.team_developer_tokensFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$team_developer_tokensPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.team_developer_tokensFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$team_developer_tokensPayload>
+        }
+        findFirst: {
+          args: Prisma.team_developer_tokensFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$team_developer_tokensPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.team_developer_tokensFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$team_developer_tokensPayload>
+        }
+        findMany: {
+          args: Prisma.team_developer_tokensFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$team_developer_tokensPayload>[]
+        }
+        create: {
+          args: Prisma.team_developer_tokensCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$team_developer_tokensPayload>
+        }
+        createMany: {
+          args: Prisma.team_developer_tokensCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.team_developer_tokensDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$team_developer_tokensPayload>
+        }
+        update: {
+          args: Prisma.team_developer_tokensUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$team_developer_tokensPayload>
+        }
+        deleteMany: {
+          args: Prisma.team_developer_tokensDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.team_developer_tokensUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.team_developer_tokensUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$team_developer_tokensPayload>
+        }
+        aggregate: {
+          args: Prisma.Team_developer_tokensAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateTeam_developer_tokens>
+        }
+        groupBy: {
+          args: Prisma.team_developer_tokensGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Team_developer_tokensGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.team_developer_tokensCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Team_developer_tokensCountAggregateOutputType> | number
+        }
+      }
+    }
+    token_usage_daily: {
+      payload: Prisma.$token_usage_dailyPayload<ExtArgs>
+      fields: Prisma.token_usage_dailyFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.token_usage_dailyFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$token_usage_dailyPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.token_usage_dailyFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$token_usage_dailyPayload>
+        }
+        findFirst: {
+          args: Prisma.token_usage_dailyFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$token_usage_dailyPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.token_usage_dailyFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$token_usage_dailyPayload>
+        }
+        findMany: {
+          args: Prisma.token_usage_dailyFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$token_usage_dailyPayload>[]
+        }
+        create: {
+          args: Prisma.token_usage_dailyCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$token_usage_dailyPayload>
+        }
+        createMany: {
+          args: Prisma.token_usage_dailyCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.token_usage_dailyDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$token_usage_dailyPayload>
+        }
+        update: {
+          args: Prisma.token_usage_dailyUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$token_usage_dailyPayload>
+        }
+        deleteMany: {
+          args: Prisma.token_usage_dailyDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.token_usage_dailyUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.token_usage_dailyUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$token_usage_dailyPayload>
+        }
+        aggregate: {
+          args: Prisma.Token_usage_dailyAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateToken_usage_daily>
+        }
+        groupBy: {
+          args: Prisma.token_usage_dailyGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Token_usage_dailyGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.token_usage_dailyCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Token_usage_dailyCountAggregateOutputType> | number
+        }
+      }
+    }
+    google_ads_api_usage: {
+      payload: Prisma.$google_ads_api_usagePayload<ExtArgs>
+      fields: Prisma.google_ads_api_usageFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.google_ads_api_usageFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$google_ads_api_usagePayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.google_ads_api_usageFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$google_ads_api_usagePayload>
+        }
+        findFirst: {
+          args: Prisma.google_ads_api_usageFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$google_ads_api_usagePayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.google_ads_api_usageFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$google_ads_api_usagePayload>
+        }
+        findMany: {
+          args: Prisma.google_ads_api_usageFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$google_ads_api_usagePayload>[]
+        }
+        create: {
+          args: Prisma.google_ads_api_usageCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$google_ads_api_usagePayload>
+        }
+        createMany: {
+          args: Prisma.google_ads_api_usageCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.google_ads_api_usageDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$google_ads_api_usagePayload>
+        }
+        update: {
+          args: Prisma.google_ads_api_usageUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$google_ads_api_usagePayload>
+        }
+        deleteMany: {
+          args: Prisma.google_ads_api_usageDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.google_ads_api_usageUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.google_ads_api_usageUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$google_ads_api_usagePayload>
+        }
+        aggregate: {
+          args: Prisma.Google_ads_api_usageAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateGoogle_ads_api_usage>
+        }
+        groupBy: {
+          args: Prisma.google_ads_api_usageGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Google_ads_api_usageGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.google_ads_api_usageCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Google_ads_api_usageCountAggregateOutputType> | number
         }
       }
     }
@@ -4856,6 +5124,7 @@ export const CampaignsScalarFieldEnum = {
   previous_gcids: 'previous_gcids',
   final_url_suffix: 'final_url_suffix',
   suffix_exchange_enabled: 'suffix_exchange_enabled',
+  suffix_needs_browser: 'suffix_needs_browser',
   suffix_last_content: 'suffix_last_content',
   suffix_last_apply_at: 'suffix_last_apply_at',
   suffix_click_baseline: 'suffix_click_baseline',
@@ -5654,6 +5923,31 @@ export const Payment_binding_snapshotsScalarFieldEnum = {
 export type Payment_binding_snapshotsScalarFieldEnum = (typeof Payment_binding_snapshotsScalarFieldEnum)[keyof typeof Payment_binding_snapshotsScalarFieldEnum]
 
 
+export const Bank_flow_entriesScalarFieldEnum = {
+  id: 'id',
+  team_id: 'team_id',
+  month: 'month',
+  payment_method_id: 'payment_method_id',
+  txn_at: 'txn_at',
+  platform: 'platform',
+  source_date: 'source_date',
+  counterparty: 'counterparty',
+  summary: 'summary',
+  amount: 'amount',
+  currency: 'currency',
+  expected_amount: 'expected_amount',
+  fee: 'fee',
+  breakdown: 'breakdown',
+  remark: 'remark',
+  created_by: 'created_by',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Bank_flow_entriesScalarFieldEnum = (typeof Bank_flow_entriesScalarFieldEnum)[keyof typeof Bank_flow_entriesScalarFieldEnum]
+
+
 export const Policy_violationsScalarFieldEnum = {
   id: 'id',
   campaign_id: 'campaign_id',
@@ -5689,6 +5983,60 @@ export const Policy_violationsScalarFieldEnum = {
 } as const
 
 export type Policy_violationsScalarFieldEnum = (typeof Policy_violationsScalarFieldEnum)[keyof typeof Policy_violationsScalarFieldEnum]
+
+
+export const Team_developer_tokensScalarFieldEnum = {
+  id: 'id',
+  team_id: 'team_id',
+  token: 'token',
+  service_account_json: 'service_account_json',
+  daily_quota: 'daily_quota',
+  label: 'label',
+  is_active: 'is_active',
+  created_by: 'created_by',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at',
+  health_status: 'health_status',
+  health_note: 'health_note',
+  last_ok_at: 'last_ok_at',
+  last_error_at: 'last_error_at',
+  detected_quota: 'detected_quota',
+  quota_detected_at: 'quota_detected_at',
+  mcc_access: 'mcc_access',
+  cooldown_until: 'cooldown_until'
+} as const
+
+export type Team_developer_tokensScalarFieldEnum = (typeof Team_developer_tokensScalarFieldEnum)[keyof typeof Team_developer_tokensScalarFieldEnum]
+
+
+export const Token_usage_dailyScalarFieldEnum = {
+  id: 'id',
+  token: 'token',
+  date: 'date',
+  requests: 'requests',
+  mcc_ids: 'mcc_ids',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Token_usage_dailyScalarFieldEnum = (typeof Token_usage_dailyScalarFieldEnum)[keyof typeof Token_usage_dailyScalarFieldEnum]
+
+
+export const Google_ads_api_usageScalarFieldEnum = {
+  id: 'id',
+  date: 'date',
+  token: 'token',
+  mcc_id: 'mcc_id',
+  customer_id: 'customer_id',
+  kind: 'kind',
+  requests: 'requests',
+  rate_limited: 'rate_limited',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Google_ads_api_usageScalarFieldEnum = (typeof Google_ads_api_usageScalarFieldEnum)[keyof typeof Google_ads_api_usageScalarFieldEnum]
 
 
 export const SortOrder = {
@@ -6365,6 +6713,19 @@ export const payment_binding_snapshotsOrderByRelevanceFieldEnum = {
 export type payment_binding_snapshotsOrderByRelevanceFieldEnum = (typeof payment_binding_snapshotsOrderByRelevanceFieldEnum)[keyof typeof payment_binding_snapshotsOrderByRelevanceFieldEnum]
 
 
+export const bank_flow_entriesOrderByRelevanceFieldEnum = {
+  month: 'month',
+  platform: 'platform',
+  counterparty: 'counterparty',
+  summary: 'summary',
+  currency: 'currency',
+  breakdown: 'breakdown',
+  remark: 'remark'
+} as const
+
+export type bank_flow_entriesOrderByRelevanceFieldEnum = (typeof bank_flow_entriesOrderByRelevanceFieldEnum)[keyof typeof bank_flow_entriesOrderByRelevanceFieldEnum]
+
+
 export const policy_violationsOrderByRelevanceFieldEnum = {
   google_customer_id: 'google_customer_id',
   campaign_name: 'campaign_name',
@@ -6389,6 +6750,36 @@ export const policy_violationsOrderByRelevanceFieldEnum = {
 } as const
 
 export type policy_violationsOrderByRelevanceFieldEnum = (typeof policy_violationsOrderByRelevanceFieldEnum)[keyof typeof policy_violationsOrderByRelevanceFieldEnum]
+
+
+export const team_developer_tokensOrderByRelevanceFieldEnum = {
+  token: 'token',
+  service_account_json: 'service_account_json',
+  label: 'label',
+  health_status: 'health_status',
+  health_note: 'health_note',
+  mcc_access: 'mcc_access'
+} as const
+
+export type team_developer_tokensOrderByRelevanceFieldEnum = (typeof team_developer_tokensOrderByRelevanceFieldEnum)[keyof typeof team_developer_tokensOrderByRelevanceFieldEnum]
+
+
+export const token_usage_dailyOrderByRelevanceFieldEnum = {
+  token: 'token',
+  mcc_ids: 'mcc_ids'
+} as const
+
+export type token_usage_dailyOrderByRelevanceFieldEnum = (typeof token_usage_dailyOrderByRelevanceFieldEnum)[keyof typeof token_usage_dailyOrderByRelevanceFieldEnum]
+
+
+export const google_ads_api_usageOrderByRelevanceFieldEnum = {
+  token: 'token',
+  mcc_id: 'mcc_id',
+  customer_id: 'customer_id',
+  kind: 'kind'
+} as const
+
+export type google_ads_api_usageOrderByRelevanceFieldEnum = (typeof google_ads_api_usageOrderByRelevanceFieldEnum)[keyof typeof google_ads_api_usageOrderByRelevanceFieldEnum]
 
 
 
@@ -6614,7 +7005,11 @@ export type GlobalOmitConfig = {
   payment_methods?: Prisma.payment_methodsOmit
   report_overrides?: Prisma.report_overridesOmit
   payment_binding_snapshots?: Prisma.payment_binding_snapshotsOmit
+  bank_flow_entries?: Prisma.bank_flow_entriesOmit
   policy_violations?: Prisma.policy_violationsOmit
+  team_developer_tokens?: Prisma.team_developer_tokensOmit
+  token_usage_daily?: Prisma.token_usage_dailyOmit
+  google_ads_api_usage?: Prisma.google_ads_api_usageOmit
 }
 
 /* Types for Logging */

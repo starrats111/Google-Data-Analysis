@@ -394,12 +394,28 @@ function cstToday(): Date {
   return new Date(`${cst.toISOString().slice(0, 10)}T00:00:00.000Z`);
 }
 
-/** 记录一次经某 token 发出的 API 请求（缓冲，异步落库，绝不阻塞主流程） */
-export function recordTokenUse(token: string, mccId: string): void {
+/** 配额审计维度（批次5）：日+token+MCC+CID+kind 聚合到 google_ads_api_usage */
+type AuditKind = "query" | "mutate";
+/** key = token|mcc|cid|kind */
+const auditBuffer = new Map<string, { requests: number; rateLimited: number }>();
+
+function bumpAudit(token: string, mccId: string, customerId: string | undefined, kind: AuditKind, field: "requests" | "rateLimited"): void {
+  const key = `${token}|${mccId.replace(/-/g, "")}|${(customerId ?? "").replace(/-/g, "")}|${kind}`;
+  const slot = auditBuffer.get(key) || { requests: 0, rateLimited: 0 };
+  slot[field]++;
+  auditBuffer.set(key, slot);
+}
+
+/**
+ * 记录一次经某 token 发出的 API 请求（缓冲，异步落库，绝不阻塞主流程）。
+ * customerId/kind 供配额审计账本定位「配额被谁烧掉的」（批次5）。
+ */
+export function recordTokenUse(token: string, mccId: string, customerId?: string, kind: AuditKind = "query"): void {
   const slot = usageBuffer.get(token) || { count: 0, mccs: new Set<string>() };
   slot.count++;
   slot.mccs.add(mccId.replace(/-/g, ""));
   usageBuffer.set(token, slot);
+  bumpAudit(token, mccId, customerId, kind, "requests");
 
   // 同步累加体检缓存中的今日用量，让「实测额度触顶预判」在缓存窗口内也准确
   const meta = tokenMetaCache.get(token);
@@ -411,11 +427,18 @@ export function recordTokenUse(token: string, mccId: string): void {
   }
 }
 
+/** 记录一次 429（随下次 flushUsage 一起落库；用于审计「谁打爆的配额」） */
+export function recordTokenRateLimitHit(token: string, mccId: string, customerId?: string, kind: AuditKind = "query"): void {
+  bumpAudit(token, mccId, customerId, kind, "rateLimited");
+}
+
 async function flushUsage(): Promise<void> {
-  if (flushing || usageBuffer.size === 0) return;
+  if (flushing || (usageBuffer.size === 0 && auditBuffer.size === 0)) return;
   flushing = true;
   const snapshot = new Map(usageBuffer);
   usageBuffer.clear();
+  const auditSnapshot = new Map(auditBuffer);
+  auditBuffer.clear();
   lastFlushAt = Date.now();
 
   try {
@@ -438,6 +461,15 @@ async function flushUsage(): Promise<void> {
           data: { token, date, requests: count, mcc_ids: JSON.stringify([...mccs]) },
         });
       }
+    }
+    // 配额审计账本（批次5）：按 日+token+MCC+CID+kind upsert 累加
+    for (const [key, { requests, rateLimited }] of auditSnapshot) {
+      const [token, mcc_id, customer_id, kind] = key.split("|");
+      await prisma.google_ads_api_usage.upsert({
+        where: { date_token_mcc_id_customer_id_kind: { date, token, mcc_id, customer_id, kind } },
+        update: { requests: { increment: requests }, rate_limited: { increment: rateLimited } },
+        create: { date, token, mcc_id, customer_id, kind, requests, rate_limited: rateLimited },
+      });
     }
   } catch (e) {
     console.error("[TokenPool] 用量落库失败（丢弃本批计数不影响业务）:", e instanceof Error ? e.message : e);
