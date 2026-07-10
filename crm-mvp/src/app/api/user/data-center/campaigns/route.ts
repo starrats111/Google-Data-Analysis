@@ -368,11 +368,34 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // ─── 合并 MCC 误差费用 ───
+  // ─── 合并 MCC 误差费用 + 今日投放数缓存 + 脚本配置状态（并行） ───
   const queryMonth = (dateStart || cstNow.startOf("month").format("YYYY-MM-DD")).slice(0, 7);
-  const adjustments = await prisma.mcc_cost_adjustments.findMany({
-    where: { user_id: userId, month: queryMonth, is_deleted: 0 },
-  });
+  const [adjustments, todayAdsCache, sheetMccCount] = await Promise.all([
+    prisma.mcc_cost_adjustments.findMany({
+      where: { user_id: userId, month: queryMonth, is_deleted: 0 },
+    }),
+    // 今日投放数：cron today-merchants-sync 每 30 分钟写入的缓存（与组长视角「今日投放广告」同源）
+    prisma.system_configs.findFirst({
+      where: { config_key: `today_merchants_${user.userId}`, is_deleted: 0 },
+      select: { config_value: true },
+    }),
+    // 脚本配置判定：统一 Google Ads Script 依赖 MCC 的 sheet_url，无一配置即视为脚本未同步
+    prisma.google_mcc_accounts.count({
+      where: { user_id: userId, is_deleted: 0, sheet_url: { not: null }, NOT: { sheet_url: "" } },
+    }),
+  ]);
+
+  // 今日投放数（今日 CST 新建且历史无同名系列，按 gcid 去重）；缓存缺失/非当日 → null
+  let todayAdsCount: number | null = null;
+  if (todayAdsCache?.config_value) {
+    try {
+      const parsed = JSON.parse(todayAdsCache.config_value) as { ads_count?: number; date?: string };
+      if (parsed.date === todayStr && typeof parsed.ads_count === "number") {
+        todayAdsCount = parsed.ads_count;
+      }
+    } catch { /* 解析失败视为无缓存 */ }
+  }
+  const scriptConfigured = sheetMccCount > 0;
   const adjustMap = new Map(adjustments.map((a) => [String(a.mcc_account_id), Number(a.amount)]));
   let totalAdjustment = 0;
   for (const mcc of costByMcc) {
@@ -399,6 +422,10 @@ export async function GET(req: NextRequest) {
     campaignCount: dedupedCampaigns.length,
     enabledCount,
     pausedCount,
+    // 今日投放数（null=脚本缓存缺失）；在跑广告数直接用 enabledCount
+    todayAdsCount,
+    // 是否已配置统一脚本（MCC sheet_url），false 时前端提示「脚本未同步」
+    scriptConfigured,
   };
 
   // ─── 表格行：按状态排序，同状态内按广告系列名称中的序号升序，取前 200 条 ───

@@ -32,6 +32,8 @@ interface MemberRanking {
   status: string;
   today_merchants: number | null;
   today_ads: number | null;
+  /** 是否已配置统一脚本（MCC sheet_url），false 时「今日投放」列显示备注 */
+  script_configured?: boolean;
   active_merchants: number;
   cost: number;
   commission: number;
@@ -220,32 +222,20 @@ export default function TeamOverviewPage() {
       dataIndex: "today_ads",
       key: "today_ads",
       align: "center" as const,
-      width: 120,
+      width: 140,
       sorter: (a: MemberRanking, b: MemberRanking) =>
         (a.today_ads ?? -1) - (b.today_ads ?? -1),
-      render: (v: number | null) => {
-        if (v === null) return <Text type="secondary" style={{ fontSize: 11 }}>未配置</Text>;
+      render: (v: number | null, record: MemberRanking) => {
+        if (record.script_configured === false) {
+          return (
+            <Tooltip title="该成员没有已配置 Google Sheet 的 MCC 统一脚本，无法统计今日投放">
+              <Text style={{ fontSize: 11, color: "#fa8c16" }}>脚本未同步，需同步配置脚本</Text>
+            </Tooltip>
+          );
+        }
+        if (v === null) return <Text type="secondary" style={{ fontSize: 11 }}>未同步</Text>;
         return v > 0
           ? <Badge count={v} color="#1677ff" overflowCount={999} style={{ fontSize: 12 }} />
-          : <Text type="secondary">—</Text>;
-      },
-    },
-    {
-      title: (
-        <Tooltip title="每小时从 Google Sheet 同步，统计今日 ENABLED 状态广告系列对应的去重商家数">
-          今日投放商家
-        </Tooltip>
-      ),
-      dataIndex: "today_merchants",
-      key: "today_merchants",
-      align: "center" as const,
-      width: 120,
-      sorter: (a: MemberRanking, b: MemberRanking) =>
-        (a.today_merchants ?? -1) - (b.today_merchants ?? -1),
-      render: (v: number | null) => {
-        if (v === null) return <Text type="secondary" style={{ fontSize: 11 }}>未配置</Text>;
-        return v > 0
-          ? <Badge count={v} color="#52c41a" overflowCount={99} style={{ fontSize: 12 }} />
           : <Text type="secondary">—</Text>;
       },
     },

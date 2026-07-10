@@ -194,6 +194,22 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     });
   }
 
+  // 脚本配置判定：成员名下无任何 sheet_url 非空的活跃 MCC → 统一脚本未同步，
+  // 今日投放数无从统计，前端在「今日投放」处备注提示
+  const scriptConfiguredUsers = new Set<string>();
+  if (memberIds.length > 0) {
+    const sheetMccs = await prisma.google_mcc_accounts.findMany({
+      where: {
+        user_id: { in: memberIds },
+        is_deleted: 0,
+        sheet_url: { not: null },
+        NOT: { sheet_url: "" },
+      },
+      select: { user_id: true },
+    });
+    for (const m of sheetMccs) scriptConfiguredUsers.add(String(m.user_id));
+  }
+
   // 今日投放商家：读取 cron 每小时同步的 system_configs 缓存
   // 数据来源：Google Sheet CampaignInfo tab，仅统计 CreationDateCST = 今日的系列
   // 适用于 CRM 建系列和直接在 Google Ads 建系列的成员
@@ -252,6 +268,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       status: member.status,
       today_merchants: todayMerchantsMap.get(uid) ?? null,
       today_ads: todayAdsMap.get(uid) ?? null,
+      script_configured: scriptConfiguredUsers.has(uid),
       active_merchants: activeMerchantsByUser.get(uid) || 0,
       cost: Math.round(cost * 100) / 100,
       commission: Math.round(commission * 100) / 100,

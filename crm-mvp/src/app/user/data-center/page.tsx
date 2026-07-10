@@ -85,6 +85,10 @@ interface Summary {
   campaignCount: number;
   enabledCount: number;
   pausedCount: number;
+  /** 今日投放数（今日新建且历史无同名系列，null=脚本缓存缺失） */
+  todayAdsCount?: number | null;
+  /** 是否已配置统一脚本（MCC sheet_url），false 时显示「脚本未同步」备注 */
+  scriptConfigured?: boolean;
 }
 
 function formatInt(value: number | null | undefined): string {
@@ -825,25 +829,62 @@ export default function DataCenterPage() {
         </Row>
       </Card>
 
-      {/* ========== 统计卡片（精简：总花费 + 总佣金 + 拒付佣金） ========== */}
+      {/* ========== 统计卡片（总花费 + 总佣金 + 拒付佣金 + 今日投放数 + 在跑广告数） ========== */}
       <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
-        <Col xs={12} sm={8} md={8}>
+        <Col xs={12} sm={8} md={6}>
           <Card size="small" styles={{ body: { padding: "8px 12px", cursor: "pointer" } }} hoverable onClick={() => setDetailModal(true)}>
             <Statistic title="总花费" value={summary.totalCost} prefix="$" precision={2}
               suffix={<Text style={{ fontSize: 11, color: "#999" }}>点击查看详情</Text>}
               styles={{ content: { fontSize: 18, color: "#cf1322" } }} />
           </Card>
         </Col>
-        <Col xs={12} sm={8} md={8}>
+        <Col xs={12} sm={8} md={6}>
           <Card size="small" styles={{ body: { padding: "8px 12px", cursor: "pointer" } }} hoverable onClick={handleOpenCommissionModal}>
             <Statistic title="总佣金" value={summary.totalCommission} prefix="$" precision={2}
               suffix={<Text style={{ fontSize: 11, color: "#999" }}>点击查看详情</Text>}
               styles={{ content: { fontSize: 18, color: "#389e0d" } }} />
           </Card>
         </Col>
-        <Col xs={12} sm={8} md={8}>
+        <Col xs={12} sm={8} md={4}>
           <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
             <Statistic title="拒付佣金" value={summary.totalRejectedCommission} prefix="$" precision={2} styles={{ content: { fontSize: 18, color: summary.totalRejectedCommission > 0 ? "#cf1322" : undefined } }} />
+          </Card>
+        </Col>
+        <Col xs={12} sm={8} md={4}>
+          <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
+            {summary.scriptConfigured === false ? (
+              <Tooltip title="未检测到已配置 Google Sheet 的 MCC 统一脚本，无法统计今日投放数">
+                <Statistic
+                  title="今日投放数"
+                  valueRender={() => (
+                    <Text style={{ fontSize: 12, color: "#fa8c16" }}>
+                      <WarningOutlined style={{ marginRight: 4 }} />脚本未同步，需同步配置脚本
+                    </Text>
+                  )}
+                />
+              </Tooltip>
+            ) : (
+              <Tooltip title="今日（东八区）新建且历史没出现过同名系列的广告数量，每 30 分钟从 Google Sheet 同步">
+                <Statistic
+                  title="今日投放数"
+                  value={summary.todayAdsCount ?? 0}
+                  suffix="条"
+                  styles={{ content: { fontSize: 18, color: (summary.todayAdsCount ?? 0) > 0 ? "#1677ff" : "#8c8c8c" } }}
+                />
+              </Tooltip>
+            )}
+          </Card>
+        </Col>
+        <Col xs={12} sm={8} md={4}>
+          <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
+            <Tooltip title="当前处于「已启用」状态的广告系列数量（去重后）">
+              <Statistic
+                title="在跑广告数"
+                value={summary.enabledCount}
+                suffix="条"
+                styles={{ content: { fontSize: 18, color: summary.enabledCount > 0 ? "#52c41a" : "#8c8c8c" } }}
+              />
+            </Tooltip>
           </Card>
         </Col>
       </Row>
