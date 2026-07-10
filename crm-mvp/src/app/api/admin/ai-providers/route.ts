@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { getAdminFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
+import { toBigIntId } from "@/lib/safe-bigint";
 import prisma from "@/lib/prisma";
 
 export async function GET(req: NextRequest) {
@@ -33,6 +34,8 @@ export async function PUT(req: NextRequest) {
 
   const { id, provider_name, api_key, api_base_url, status } = await req.json();
   if (!id) return apiError("缺少 ID");
+  const parsedId = toBigIntId(id);
+  if (!parsedId) return apiError("ID 格式无效");
 
   const data: Record<string, unknown> = {};
   if (provider_name !== undefined) data.provider_name = provider_name;
@@ -40,7 +43,7 @@ export async function PUT(req: NextRequest) {
   if (api_base_url !== undefined) data.api_base_url = api_base_url || null;
   if (status !== undefined) data.status = status;
 
-  await prisma.ai_providers.update({ where: { id: BigInt(id) }, data });
+  await prisma.ai_providers.update({ where: { id: parsedId }, data });
   return apiSuccess(null, "更新成功");
 }
 
@@ -50,7 +53,9 @@ export async function DELETE(req: NextRequest) {
 
   const { id } = await req.json();
   if (!id) return apiError("缺少 ID");
+  const parsedId = toBigIntId(id);
+  if (!parsedId) return apiError("ID 格式无效");
 
-  await prisma.ai_providers.update({ where: { id: BigInt(id) }, data: { is_deleted: 1 } });
+  await prisma.ai_providers.update({ where: { id: parsedId }, data: { is_deleted: 1 } });
   return apiSuccess(null, "删除成功");
 }

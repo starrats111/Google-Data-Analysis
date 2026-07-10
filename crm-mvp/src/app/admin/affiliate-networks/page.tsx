@@ -60,6 +60,7 @@ export default function AffiliateNetworksPage() {
   // ───── 上级联盟 ─────
   const openPnModal = (pn?: ParentNetwork) => {
     setEditPn(pn || null);
+    pnForm.resetFields();
     pnForm.setFieldsValue({
       label: pn?.displayName || pn?.label || "",
       match_keywords: pn ? pn.matchKeywords.join(", ") : "",
@@ -70,50 +71,66 @@ export default function AffiliateNetworksPage() {
 
   const savePn = async () => {
     const v = await pnForm.validateFields();
-    const res = await fetch("/api/admin/affiliate-networks", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "parent", label: v.label, match_keywords: v.match_keywords, note: v.note }),
-    }).then((r) => r.json());
-    if (res.code === 0) {
-      message.success("已保存");
-      setPnModalOpen(false);
-      fetchAll();
-    } else {
-      message.error(res.message || "保存失败");
+    try {
+      const res = await fetch("/api/admin/affiliate-networks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: "parent", label: v.label, match_keywords: v.match_keywords, note: v.note }),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        message.success("已保存");
+        setPnModalOpen(false);
+        fetchAll();
+      } else {
+        message.error(res.message || "保存失败");
+      }
+    } catch {
+      message.error("网络异常，请重试");
     }
   };
 
   const deletePn = async (id: string) => {
-    const res = await fetch("/api/admin/affiliate-networks", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "parent", id }),
-    }).then((r) => r.json());
-    if (res.code === 0) { message.success("已删除"); fetchAll(); }
-    else message.error(res.message || "删除失败");
+    try {
+      const res = await fetch("/api/admin/affiliate-networks", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: "parent", id }),
+      }).then((r) => r.json());
+      if (res.code === 0) { message.success("已删除"); fetchAll(); }
+      else message.error(res.message || "删除失败");
+    } catch {
+      message.error("网络异常，请重试");
+    }
   };
 
   // ───── 黑名单 ─────
   const saveBl = async () => {
     const v = await blForm.validateFields();
-    const res = await fetch("/api/admin/affiliate-networks", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "blacklist", platform: v.platform, parent_label: v.parent_label, note: v.note }),
-    }).then((r) => r.json());
-    if (res.code === 0) { message.success("已保存"); setBlModalOpen(false); blForm.resetFields(); fetchAll(); }
-    else message.error(res.message || "保存失败");
+    try {
+      const res = await fetch("/api/admin/affiliate-networks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: "blacklist", platform: v.platform, parent_label: v.parent_label, note: v.note }),
+      }).then((r) => r.json());
+      if (res.code === 0) { message.success("已保存"); setBlModalOpen(false); blForm.resetFields(); fetchAll(); }
+      else message.error(res.message || "保存失败");
+    } catch {
+      message.error("网络异常，请重试");
+    }
   };
 
   const deleteBl = async (id: string) => {
-    const res = await fetch("/api/admin/affiliate-networks", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "blacklist", id }),
-    }).then((r) => r.json());
-    if (res.code === 0) { message.success("已删除"); fetchAll(); }
-    else message.error(res.message || "删除失败");
+    try {
+      const res = await fetch("/api/admin/affiliate-networks", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: "blacklist", id }),
+      }).then((r) => r.json());
+      if (res.code === 0) { message.success("已删除"); fetchAll(); }
+      else message.error(res.message || "删除失败");
+    } catch {
+      message.error("网络异常，请重试");
+    }
   };
 
   const pnColumns: ColumnsType<ParentNetwork> = [

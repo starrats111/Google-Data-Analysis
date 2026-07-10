@@ -940,7 +940,11 @@ export default function AdPreviewPage() {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ campaign_id: campaignId, keywords: merged }),
-        }).catch(() => {/* 静默失败，不影响UI */});
+        }).then((r) => r.json()).then((j) => {
+          if (j?.code !== 0) message.warning("关键词保存到服务器失败，刷新页面后可能丢失，请重新获取");
+        }).catch(() => {
+          message.warning("关键词保存到服务器失败，刷新页面后可能丢失，请重新获取");
+        });
       } else {
         if (!fromCache) message.info("SemRush 关键词已全部存在");
       }
@@ -1010,7 +1014,11 @@ export default function AdPreviewPage() {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ campaign_id: campaignId, keywords: merged }),
-        }).catch(() => {/* 静默失败 */});
+        }).then((r) => r.json()).then((j) => {
+          if (j?.code !== 0) message.warning("关键词保存到服务器失败，刷新页面后可能丢失，请重新获取");
+        }).catch(() => {
+          message.warning("关键词保存到服务器失败，刷新页面后可能丢失，请重新获取");
+        });
       } else {
         message.info("关键词已全部存在");
       }
@@ -1043,10 +1051,14 @@ export default function AdPreviewPage() {
             if (def) setSelectedCid(def);
           }
         }
+      } else {
+        message.warning(`CID 列表加载失败：${json.message || "请重新选择 MCC 重试"}`);
       }
-    } catch { /* ignore */ }
+    } catch {
+      message.warning("CID 列表加载失败，请重新选择 MCC 重试");
+    }
     finally { setCidLoading(false); }
-  }, [selectedCid, pickDefaultCid]);
+  }, [selectedCid, pickDefaultCid, message]);
 
   // MCC 变更时加载 CID 列表
   useEffect(() => {
@@ -1753,9 +1765,10 @@ export default function AdPreviewPage() {
   }, [campaignId, preview, generateExtension, message]);
 
   // ─── 手动输入 URL → 自动获取标题和描述 + 验证 ───
-  const fetchAndValidateSitelink = useCallback(async (idx: number) => {
+  // 返回本次验证结果（"valid"|"invalid"|""），提交流程直接用返回值判定，不依赖闭包里的旧 state（D-163⑨）
+  const fetchAndValidateSitelink = useCallback(async (idx: number): Promise<"valid" | "invalid" | ""> => {
     const url = sitelinks[idx]?.url;
-    if (!url) return;
+    if (!url) return "";
     const merchantDomain = preview?.merchant?.merchant_url || preview?.adCreative?.final_url || "";
     let baseDomain = "";
     try { baseDomain = new URL(merchantDomain).hostname.replace(/^www\./, ""); } catch {}
@@ -1763,19 +1776,19 @@ export default function AdPreviewPage() {
     if (!url.startsWith("http")) {
       setSitelinks((prev) => { const n = [...prev]; n[idx] = { ...n[idx], urlStatus: "invalid" }; return n; });
       message.error("链接必须以 http:// 或 https:// 开头");
-      return;
+      return "invalid";
     }
     try {
       const urlDomain = new URL(url).hostname.replace(/^www\./, "");
       if (baseDomain && !urlDomain.includes(baseDomain) && !baseDomain.includes(urlDomain)) {
         setSitelinks((prev) => { const n = [...prev]; n[idx] = { ...n[idx], urlStatus: "invalid" }; return n; });
         message.error(`链接域名 (${urlDomain}) 与商家域名 (${baseDomain}) 不匹配`);
-        return;
+        return "invalid";
       }
     } catch {
       setSitelinks((prev) => { const n = [...prev]; n[idx] = { ...n[idx], urlStatus: "invalid" }; return n; });
       message.error("URL 格式无效");
-      return;
+      return "invalid";
     }
 
     setSitelinks((prev) => { const n = [...prev]; n[idx] = { ...n[idx], urlStatus: "checking" }; return n; });
@@ -1818,8 +1831,12 @@ export default function AdPreviewPage() {
       } else {
         message.error(checkData?.data?.reason || "链接不可用");
       }
+      return isValid ? "valid" : "invalid";
     } catch {
-      setSitelinks((prev) => { const n = [...prev]; n[idx] = { ...n[idx], urlStatus: "valid" }; return n; });
+      // D-163③：验证请求本身失败 ≠ 链接有效。回到未验证态，由用户重试，不再误标绿
+      setSitelinks((prev) => { const n = [...prev]; n[idx] = { ...n[idx], urlStatus: "" }; return n; });
+      message.warning("链接验证请求失败，请点击验证按钮重试");
+      return "";
     }
   }, [sitelinks, preview, message]);
 
@@ -2030,7 +2047,11 @@ export default function AdPreviewPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ campaign_id: campaignId, types: ["optional"], optionalTypes: ["negative_keywords"], ad_language: adLanguage || undefined }),
       });
-      if (!res.ok || !res.body) { setNegKwLoading(false); return; }
+      if (!res.ok || !res.body) {
+        setNegKwLoading(false);
+        message.warning("否定关键词生成失败，可在步骤1手动添加或稍后重试");
+        return;
+      }
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
@@ -2054,7 +2075,7 @@ export default function AdPreviewPage() {
         }
       }
     } catch {
-      // 静默失败，不影响主流程
+      message.warning("否定关键词生成失败，可在步骤1手动添加或稍后重试");
     } finally {
       setNegKwLoading(false);
     }
@@ -2157,17 +2178,18 @@ export default function AdPreviewPage() {
         .map(({ origIdx }) => origIdx);
       if (uncheckedIndices.length > 0) {
         message.loading({ content: `正在验证 ${uncheckedIndices.length} 条未检查的站内链接...`, key: "sl-check", duration: 0 });
-        await Promise.all(uncheckedIndices.map((idx) => fetchAndValidateSitelink(idx)));
+        // D-163⑨：直接用验证返回值判定；闭包里的 sitelinks 是验证前的旧 state，读它会误判
+        const checkResults = await Promise.all(uncheckedIndices.map((idx) => fetchAndValidateSitelink(idx)));
         message.destroy("sl-check");
-        const afterCheck = sitelinks.filter((s) => s.title.trim() && s.url.trim());
-        const stillInvalid = afterCheck.filter((s) => s.urlStatus === "invalid");
-        if (stillInvalid.length > 0) {
-          message.error(`有 ${stillInvalid.length} 条站内链接无效，请修正或删除后再提交`);
+        const newlyInvalid = checkResults.filter((r) => r === "invalid").length;
+        const alreadyInvalid = validLinks.filter((s) => s.urlStatus === "invalid").length;
+        if (newlyInvalid + alreadyInvalid > 0) {
+          message.error(`有 ${newlyInvalid + alreadyInvalid} 条站内链接无效，请修正或删除后再提交`);
           return;
         }
-        const stillUnchecked = afterCheck.filter((s) => s.urlStatus !== "valid");
-        if (stillUnchecked.length > 0) {
-          message.error("部分站内链接仍未通过验证，请重新检查后提交");
+        const stillUnchecked = checkResults.filter((r) => r !== "valid").length;
+        if (stillUnchecked > 0) {
+          message.error("部分站内链接验证请求失败，请重新验证后提交");
           return;
         }
       } else {

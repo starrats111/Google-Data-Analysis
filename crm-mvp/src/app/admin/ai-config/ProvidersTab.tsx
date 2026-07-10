@@ -23,9 +23,15 @@ export default function AIProvidersTab() {
 
   const fetchData = async () => {
     setLoading(true);
-    const res = await fetch("/api/admin/ai-providers").then((r) => r.json());
-    if (res.code === 0) setList(res.data);
-    setLoading(false);
+    try {
+      const res = await fetch("/api/admin/ai-providers").then((r) => r.json());
+      if (res.code === 0) setList(res.data);
+      else message.error("加载失败：" + (res?.message || "网络异常"));
+    } catch {
+      message.error("加载失败：网络异常");
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { fetchData(); }, []);
@@ -42,18 +48,26 @@ export default function AIProvidersTab() {
     const values = await form.validateFields();
     const method = editItem ? "PUT" : "POST";
     const body = editItem ? { id: editItem.id, ...values } : values;
-    const res = await fetch("/api/admin/ai-providers", {
-      method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-    }).then((r) => r.json());
-    if (res.code === 0) { message.success(editItem ? "更新成功" : "创建成功"); setModalOpen(false); fetchData(); }
-    else message.error(res.message);
+    try {
+      const res = await fetch("/api/admin/ai-providers", {
+        method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      }).then((r) => r.json());
+      if (res.code === 0) { message.success(editItem ? "更新成功" : "创建成功"); setModalOpen(false); fetchData(); }
+      else message.error(res.message);
+    } catch {
+      message.error("网络异常，请重试");
+    }
   };
 
   const handleDelete = async (id: string) => {
-    const res = await fetch("/api/admin/ai-providers", {
-      method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }),
-    }).then((r) => r.json());
-    if (res.code === 0) { message.success("删除成功"); fetchData(); } else message.error(res.message);
+    try {
+      const res = await fetch("/api/admin/ai-providers", {
+        method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }),
+      }).then((r) => r.json());
+      if (res.code === 0) { message.success("删除成功"); fetchData(); } else message.error(res.message);
+    } catch {
+      message.error("网络异常，请重试");
+    }
   };
 
   const columns = [

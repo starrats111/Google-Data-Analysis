@@ -52,9 +52,12 @@ export async function POST(req: NextRequest) {
     });
     if (!existing) return apiError("连接不存在");
 
-    const data: Record<string, unknown> = {
-      publish_site_id: publish_site_id ? BigInt(publish_site_id) : null,
-    };
+    // D-163⑪：与其他字段同策略——请求体未带 publish_site_id 时不动它；显式传 null/"" 才解绑。
+    // 否则脚本/集成只更新其他字段时会静默解绑发布站点
+    const data: Record<string, unknown> = {};
+    if (publish_site_id !== undefined) {
+      data.publish_site_id = publish_site_id ? BigInt(publish_site_id) : null;
+    }
     if (account_name !== undefined) data.account_name = account_name;
     if (api_key && api_key.trim()) data.api_key = api_key;
     if (payee !== undefined) data.payee = normalizedPayee || null;

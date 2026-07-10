@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { apiSuccess, apiError } from "@/lib/constants";
 import { withUser, withLeader } from "@/lib/api-handler";
 import { serializeData } from "@/lib/auth";
+import { toBigIntId } from "@/lib/safe-bigint";
 import prisma from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -46,8 +47,10 @@ export const POST = withLeader(async (req: NextRequest, { user }) => {
   if (name.length > 64 || card.length > 64) return apiError("姓名/卡号长度不能超过64字符");
 
   if (id) {
+    const parsedId = toBigIntId(id);
+    if (!parsedId) return apiError("ID 格式无效");
     const existing = await prisma.payment_methods.findFirst({
-      where: { id: BigInt(id), team_id: teamId, is_deleted: 0 },
+      where: { id: parsedId, team_id: teamId, is_deleted: 0 },
     });
     if (!existing) return apiError("收款方式不存在");
     await prisma.payment_methods.update({
@@ -78,9 +81,11 @@ export const DELETE = withLeader(async (req: NextRequest, { user }) => {
 
   const { id } = await req.json();
   if (!id) return apiError("缺少 ID");
+  const parsedId = toBigIntId(id);
+  if (!parsedId) return apiError("ID 格式无效");
 
   const existing = await prisma.payment_methods.findFirst({
-    where: { id: BigInt(id), team_id: teamId, is_deleted: 0 },
+    where: { id: parsedId, team_id: teamId, is_deleted: 0 },
   });
   if (!existing) return apiError("收款方式不存在");
 

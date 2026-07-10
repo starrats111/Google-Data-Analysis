@@ -1002,10 +1002,17 @@ export const PUT = withUser(async (req: NextRequest, { user }) => {
     });
 
     // 重置商家状态
-    await prisma.user_merchants.updateMany({
+    const released = await prisma.user_merchants.updateMany({
       where: { id: { in: merchantIds }, user_id: userId },
       data: { status: "available", claimed_at: null, target_country: null, holiday_name: null },
     });
+    // D-163⑬：核对实际释放数，混入他人/不存在的 ID 时不再假报「全部成功」
+    if (released.count < merchantIds.length) {
+      return apiSuccess(
+        serializeData({ requested: merchantIds.length, released: released.count }),
+        `已释放 ${released.count}/${merchantIds.length} 个商家，其余不属于当前账号或已不存在，请刷新列表`,
+      );
+    }
     return apiSuccess(null, "释放成功");
   }
 

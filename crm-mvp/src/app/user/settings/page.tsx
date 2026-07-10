@@ -116,7 +116,8 @@ function PlatformConnectionsTab() {
   };
 
   const handleSave = async () => {
-    const values = await form.validateFields();
+    let values;
+    try { values = await form.validateFields(); } catch { return; }
     const isEditingWithUnchangedKey = !!editConn && (!values.api_key || values.api_key === "");
     // D-026: 强制测试通过才能保存（编辑模式且未改 key 时跳过此校验，因为不是新 key）
     if (!isEditingWithUnchangedKey && !modalTestPassed) {
@@ -128,19 +129,25 @@ function PlatformConnectionsTab() {
     }
     // R-01：Select 清空后 antd 置 undefined，显式转 null 才能解绑
     values.payment_method_id = values.payment_method_id ?? null;
+    // D-163⑪：后端改为「未带 publish_site_id 则不动」，前端表单里有该字段，清空时须显式传 null 解绑
+    values.publish_site_id = values.publish_site_id ?? null;
     if (editConn) values.id = editConn.id;
-    const res = await fetch("/api/user/settings/platforms", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(values),
-    }).then((r) => r.json());
-    if (res.code === 0) {
-      message.success("保存成功");
-      setModalOpen(false);
-      setEditConn(null);
-      setModalTestResult(null);
-      setModalTestPassed(false);
-      fetchData();
-    } else {
-      message.error(res.message);
+    try {
+      const res = await fetch("/api/user/settings/platforms", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(values),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        message.success("保存成功");
+        setModalOpen(false);
+        setEditConn(null);
+        setModalTestResult(null);
+        setModalTestPassed(false);
+        fetchData();
+      } else {
+        message.error(res.message);
+      }
+    } catch {
+      message.error("网络异常，保存失败，请重试");
     }
   };
 
@@ -149,6 +156,8 @@ function PlatformConnectionsTab() {
     setModalTestResult(null);
     // 编辑模式：API Key 未改时算作"已通过"（无需重测既有连接才能保存其它字段）
     setModalTestPassed(true);
+    // D-163⑩：先清空再回填，防止上一次「添加连接」取消后残留的 api_key 被误存到这条连接上
+    form.resetFields();
     form.setFieldsValue({
       platform: conn.platform,
       account_name: conn.account_name,
@@ -160,10 +169,14 @@ function PlatformConnectionsTab() {
   };
 
   const handleDelete = async (id: string) => {
-    const res = await fetch("/api/user/settings/platforms", {
-      method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }),
-    }).then((r) => r.json());
-    if (res.code === 0) { message.success("删除成功"); fetchData(); } else message.error(res.message);
+    try {
+      const res = await fetch("/api/user/settings/platforms", {
+        method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }),
+      }).then((r) => r.json());
+      if (res.code === 0) { message.success("删除成功"); fetchData(); } else message.error(res.message);
+    } catch {
+      message.error("网络异常，删除失败，请重试");
+    }
   };
 
   const getSiteName = (siteId: string | null | undefined) => {
@@ -429,25 +442,34 @@ function MccAccountsTab() {
   useEffect(() => { fetchData(); }, []);
 
   const handleSubmit = async () => {
-    const values = await form.validateFields();
+    let values;
+    try { values = await form.validateFields(); } catch { return; }
     const method = editItem ? "PUT" : "POST";
     const body = editItem ? { id: editItem.id, ...values } : values;
     // 编辑模式下，如果 developer_token 为空字符串，说明用户没有修改，不传给后端
     if (method === "PUT" && body.developer_token === "") {
       delete body.developer_token;
     }
-    const res = await fetch("/api/user/settings/mcc", {
-      method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-    }).then((r) => r.json());
-    if (res.code === 0) { message.success("保存成功"); setModalOpen(false); fetchData(); }
-    else message.error(res.message);
+    try {
+      const res = await fetch("/api/user/settings/mcc", {
+        method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      }).then((r) => r.json());
+      if (res.code === 0) { message.success("保存成功"); setModalOpen(false); fetchData(); }
+      else message.error(res.message);
+    } catch {
+      message.error("网络异常，保存失败，请重试");
+    }
   };
 
   const handleDelete = async (id: string) => {
-    const res = await fetch("/api/user/settings/mcc", {
-      method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }),
-    }).then((r) => r.json());
-    if (res.code === 0) { message.success("删除成功"); fetchData(); } else message.error(res.message);
+    try {
+      const res = await fetch("/api/user/settings/mcc", {
+        method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }),
+      }).then((r) => r.json());
+      if (res.code === 0) { message.success("删除成功"); fetchData(); } else message.error(res.message);
+    } catch {
+      message.error("网络异常，删除失败，请重试");
+    }
   };
 
   const columns = [
@@ -461,8 +483,10 @@ function MccAccountsTab() {
         <Space>
           <Button size="small" icon={<EditOutlined />} onClick={() => {
             setEditItem(record);
+            // D-163⑩：先清空防止上一次弹窗的残留值（token/SA JSON）串到这条记录
+            form.resetFields();
             // 编辑时不回填 developer_token（密码字段），避免误清空
-            const { developer_token: _dt, ...rest } = record;
+            const { developer_token: _dt, service_account_json: _sa, ...rest } = record;
             form.setFieldsValue(rest);
             setJsonFileName(record.service_account_json ? "已有凭证" : "");
             setModalOpen(true);
@@ -605,20 +629,25 @@ function NotificationPreferencesTab() {
   const handleSave = async () => {
     setLoading(true);
     const values = form.getFieldsValue();
-    const res = await fetch("/api/user/notifications/preferences", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        notify_system: values.notify_system ? 1 : 0,
-        notify_merchant: values.notify_merchant ? 1 : 0,
-        notify_article: values.notify_article ? 1 : 0,
-        notify_ad: values.notify_ad ? 1 : 0,
-        notify_alert: values.notify_alert ? 1 : 0,
-      }),
-    }).then((r) => r.json());
-    setLoading(false);
-    if (res.code === 0) message.success("通知偏好已保存");
-    else message.error(res.message);
+    try {
+      const res = await fetch("/api/user/notifications/preferences", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          notify_system: values.notify_system ? 1 : 0,
+          notify_merchant: values.notify_merchant ? 1 : 0,
+          notify_article: values.notify_article ? 1 : 0,
+          notify_ad: values.notify_ad ? 1 : 0,
+          notify_alert: values.notify_alert ? 1 : 0,
+        }),
+      }).then((r) => r.json());
+      if (res.code === 0) message.success("通知偏好已保存");
+      else message.error(res.message);
+    } catch {
+      message.error("网络异常，保存失败，请重试");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const notifTypes = [
@@ -727,9 +756,15 @@ function SerpApiTab() {
 
   const fetchKeys = async () => {
     setLoading(true);
-    const res = await fetch("/api/user/settings/serpapi").then((r) => r.json());
-    if (res.code === 0) setKeys(res.data);
-    setLoading(false);
+    try {
+      const res = await fetch("/api/user/settings/serpapi").then((r) => r.json());
+      if (res.code === 0) setKeys(res.data);
+      else message.error(res.message || "加载 Key 列表失败");
+    } catch {
+      message.error("加载 Key 列表失败，请刷新重试");
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { fetchKeys(); }, []);
@@ -738,62 +773,85 @@ function SerpApiTab() {
     const key = newKey.trim();
     if (!key) { message.warning("请输入 API Key"); return; }
     setSaving(true);
-    const res = await fetch("/api/user/settings/serpapi", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ api_key: key, key_name: newKeyName.trim() || undefined }),
-    }).then((r) => r.json());
-    setSaving(false);
-    if (res.code === 0) {
-      message.success("添加成功");
-      setNewKey(""); setNewKeyName(""); setAddVisible(false); fetchKeys();
-    } else message.error(res.message);
+    try {
+      const res = await fetch("/api/user/settings/serpapi", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_key: key, key_name: newKeyName.trim() || undefined }),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        message.success("添加成功");
+        setNewKey(""); setNewKeyName(""); setAddVisible(false); fetchKeys();
+      } else message.error(res.message);
+    } catch {
+      message.error("网络异常，添加失败，请重试");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleDelete = async (id: string) => {
-    const res = await fetch("/api/user/settings/serpapi", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id }),
-    }).then((r) => r.json());
-    if (res.code === 0) { message.success("已删除"); fetchKeys(); }
-    else message.error(res.message);
+    try {
+      const res = await fetch("/api/user/settings/serpapi", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      }).then((r) => r.json());
+      if (res.code === 0) { message.success("已删除"); fetchKeys(); }
+      else message.error(res.message);
+    } catch {
+      message.error("网络异常，删除失败，请重试");
+    }
   };
 
   const handleToggle = async (id: string, is_active: boolean) => {
-    const res = await fetch("/api/user/settings/serpapi", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, is_active: !is_active }),
-    }).then((r) => r.json());
-    if (res.code === 0) { message.success(is_active ? "已禁用" : "已启用"); fetchKeys(); }
-    else message.error(res.message);
+    try {
+      const res = await fetch("/api/user/settings/serpapi", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, is_active: !is_active }),
+      }).then((r) => r.json());
+      if (res.code === 0) { message.success(is_active ? "已禁用" : "已启用"); fetchKeys(); }
+      else message.error(res.message);
+    } catch {
+      message.error("网络异常，操作失败，请重试");
+    }
   };
 
   const handleTestExisting = async (id: string) => {
     setTestingId(id);
-    const res = await fetch("/api/user/settings/serpapi", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id }),
-    }).then((r) => r.json());
-    setTestingId(null);
-    if (res.code === 0) message.success(res.message);
-    else message.error(res.message);
+    try {
+      const res = await fetch("/api/user/settings/serpapi", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      }).then((r) => r.json());
+      if (res.code === 0) message.success(res.message);
+      else message.error(res.message);
+    } catch {
+      message.error("网络异常，测试失败，请重试");
+    } finally {
+      setTestingId(null);
+    }
   };
 
   const handleTestNew = async () => {
     const key = testKeyInput.trim() || newKey.trim();
     if (!key) { message.warning("请先输入 Key"); return; }
     setTestingNew(true);
-    const res = await fetch("/api/user/settings/serpapi", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ api_key: key }),
-    }).then((r) => r.json());
-    setTestingNew(false);
-    if (res.code === 0) message.success(res.message);
-    else message.error(res.message);
+    try {
+      const res = await fetch("/api/user/settings/serpapi", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_key: key }),
+      }).then((r) => r.json());
+      if (res.code === 0) message.success(res.message);
+      else message.error(res.message);
+    } catch {
+      message.error("网络异常，测试失败，请重试");
+    } finally {
+      setTestingNew(false);
+    }
   };
 
   const totalQuota = keys.filter((k) => k.is_active).length * 250;
@@ -936,9 +994,15 @@ function SemRushTab() {
 
   const fetchKeys = async () => {
     setLoading(true);
-    const res = await fetch("/api/user/settings/semrush").then((r) => r.json());
-    if (res.code === 0) setKeys(res.data);
-    setLoading(false);
+    try {
+      const res = await fetch("/api/user/settings/semrush").then((r) => r.json());
+      if (res.code === 0) setKeys(res.data);
+      else message.error(res.message || "加载账号列表失败");
+    } catch {
+      message.error("加载账号列表失败，请刷新重试");
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { fetchKeys(); }, []);
@@ -948,37 +1012,55 @@ function SemRushTab() {
       message.warning("用户名/密码必填"); return;
     }
     setSaving(true);
-    const res = await fetch("/api/user/settings/semrush", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(form),
-    }).then((r) => r.json());
-    setSaving(false);
-    if (res.code === 0) { message.success("添加成功"); resetForm(); setAddVisible(false); fetchKeys(); }
-    else message.error(res.message);
+    try {
+      const res = await fetch("/api/user/settings/semrush", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      }).then((r) => r.json());
+      if (res.code === 0) { message.success("添加成功"); resetForm(); setAddVisible(false); fetchKeys(); }
+      else message.error(res.message);
+    } catch {
+      message.error("网络异常，添加失败，请重试");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleDelete = async (id: string) => {
-    const res = await fetch("/api/user/settings/semrush", {
-      method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }),
-    }).then((r) => r.json());
-    if (res.code === 0) { message.success("已删除"); fetchKeys(); } else message.error(res.message);
+    try {
+      const res = await fetch("/api/user/settings/semrush", {
+        method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }),
+      }).then((r) => r.json());
+      if (res.code === 0) { message.success("已删除"); fetchKeys(); } else message.error(res.message);
+    } catch {
+      message.error("网络异常，删除失败，请重试");
+    }
   };
 
   const handleToggle = async (id: string, is_active: boolean) => {
-    const res = await fetch("/api/user/settings/semrush", {
-      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, is_active: !is_active }),
-    }).then((r) => r.json());
-    if (res.code === 0) { message.success(is_active ? "已禁用" : "已启用"); fetchKeys(); } else message.error(res.message);
+    try {
+      const res = await fetch("/api/user/settings/semrush", {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, is_active: !is_active }),
+      }).then((r) => r.json());
+      if (res.code === 0) { message.success(is_active ? "已禁用" : "已启用"); fetchKeys(); } else message.error(res.message);
+    } catch {
+      message.error("网络异常，操作失败，请重试");
+    }
   };
 
   const handleTestExisting = async (id: string) => {
     setTestingId(id);
-    const res = await fetch("/api/user/settings/semrush", {
-      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }),
-    }).then((r) => r.json());
-    setTestingId(null);
-    if (res.code === 0) message.success(res.message); else message.error(res.message);
+    try {
+      const res = await fetch("/api/user/settings/semrush", {
+        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }),
+      }).then((r) => r.json());
+      if (res.code === 0) message.success(res.message); else message.error(res.message);
+    } catch {
+      message.error("网络异常，测试失败，请重试");
+    } finally {
+      setTestingId(null);
+    }
   };
 
   const handleTestNew = async () => {
@@ -986,11 +1068,16 @@ function SemRushTab() {
       message.warning("请先填用户名和密码再测试"); return;
     }
     setTestingNew(true);
-    const res = await fetch("/api/user/settings/semrush", {
-      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(form),
-    }).then((r) => r.json());
-    setTestingNew(false);
-    if (res.code === 0) message.success(res.message); else message.error(res.message);
+    try {
+      const res = await fetch("/api/user/settings/semrush", {
+        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(form),
+      }).then((r) => r.json());
+      if (res.code === 0) message.success(res.message); else message.error(res.message);
+    } catch {
+      message.error("网络异常，测试失败，请重试");
+    } finally {
+      setTestingNew(false);
+    }
   };
 
   const columns = [

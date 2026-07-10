@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
+import { toBigIntId } from "@/lib/safe-bigint";
 import prisma from "@/lib/prisma";
 import { detectSheetFormat, type DetectResult } from "@/lib/sheet-sync";
 import { logOperation } from "@/lib/operation-log";
@@ -143,16 +144,21 @@ export async function PUT(req: NextRequest) {
 
   const { id, mcc_name, currency, service_account_json, sheet_url, developer_token, is_active } = await req.json();
   if (!id) return apiError("缺少 ID");
+  const parsedId = toBigIntId(id);
+  if (!parsedId) return apiError("ID 格式无效");
 
   // 加固②：属主校验，杜绝越权改他人 MCC（IDOR）
-  const existing = await prisma.google_mcc_accounts.findUnique({ where: { id: BigInt(id) } });
+  const existing = await prisma.google_mcc_accounts.findUnique({ where: { id: parsedId } });
   if (!existing || existing.is_deleted === 1) return apiError("MCC 不存在", 404);
   if (existing.user_id !== BigInt(user.userId)) return apiError("无权操作该 MCC", 403);
 
   const data: Record<string, unknown> = {};
   if (mcc_name !== undefined) data.mcc_name = mcc_name;
   if (currency !== undefined) data.currency = currency;
-  if (service_account_json !== undefined) data.service_account_json = service_account_json;
+  // D-163⑤：空串/空白视为「不修改」，与 developer_token 同策略；否则可静默清空 SA 凭证导致 MCC 全线失效
+  if (service_account_json !== undefined && service_account_json !== null && String(service_account_json).trim() !== "") {
+    data.service_account_json = service_account_json;
+  }
   if (sheet_url !== undefined) data.sheet_url = sheet_url;
   if (developer_token !== undefined && developer_token !== "") data.developer_token = developer_token.trim();
   if (is_active !== undefined) data.is_active = is_active;
@@ -167,7 +173,7 @@ export async function PUT(req: NextRequest) {
     data.service_account_json = service_account_json.trim();
   }
 
-  await prisma.google_mcc_accounts.update({ where: { id: BigInt(id) }, data });
+  await prisma.google_mcc_accounts.update({ where: { id: parsedId }, data });
 
   // 加固③：审计日志，记录 SA 邮箱前后变化（不记私钥）
   const oldEmail = extractSaEmail(existing.service_account_json);
@@ -200,13 +206,15 @@ export async function DELETE(req: NextRequest) {
 
   const { id } = await req.json();
   if (!id) return apiError("缺少 ID");
+  const parsedId = toBigIntId(id);
+  if (!parsedId) return apiError("ID 格式无效");
 
   // 加固②：属主校验
-  const existing = await prisma.google_mcc_accounts.findUnique({ where: { id: BigInt(id) } });
+  const existing = await prisma.google_mcc_accounts.findUnique({ where: { id: parsedId } });
   if (!existing || existing.is_deleted === 1) return apiError("MCC 不存在", 404);
   if (existing.user_id !== BigInt(user.userId)) return apiError("无权操作该 MCC", 403);
 
-  await prisma.google_mcc_accounts.update({ where: { id: BigInt(id) }, data: { is_deleted: 1 } });
+  await prisma.google_mcc_accounts.update({ where: { id: parsedId }, data: { is_deleted: 1 } });
 
   // 加固③：审计日志
   await logOperation({

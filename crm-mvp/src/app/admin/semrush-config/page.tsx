@@ -68,16 +68,20 @@ export default function SemRushConfigPage() {
   };
 
   const handleClear = async () => {
-    const res = await fetch("/api/admin/semrush-config", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-    }).then((r) => r.json());
-    if (res.code === 0) {
-      message.success("配置已清除");
-      form.resetFields();
-      setHasConfig(false);
-    } else {
-      message.error(res.message);
+    try {
+      const res = await fetch("/api/admin/semrush-config", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        message.success("配置已清除");
+        form.resetFields();
+        setHasConfig(false);
+      } else {
+        message.error(res.message);
+      }
+    } catch {
+      message.error("网络异常，请重试");
     }
   };
 

@@ -287,11 +287,11 @@ export default function MerchantsPage() {
         if (r.code === 0 && r.data?.id) setWatchlistMap((p) => ({ ...p, [key]: String(r.data.id) }));
       }
     } catch {
-      // 忽略，下次重试
+      message.error("操作失败，请重试");
     } finally {
       setWatchlistBusy((p) => { const n = { ...p }; delete n[key]; return n; });
     }
-  }, [watchlistBusy, watchlistMap]);
+  }, [watchlistBusy, watchlistMap, message]);
   // C-091.5：批量 ATC 竞争度查询（支持跨页选择）
   const [batchSelectedKeys, setBatchSelectedKeys] = useState<string[]>([]);
   // 维护被选中的完整 merchant 对象（跨页保留），避免翻页后丢失跨页选中条目的数据
@@ -600,12 +600,12 @@ export default function MerchantsPage() {
   const [syncOptModal, setSyncOptModal] = useState<{ open: boolean; mode: "all" | "single"; platform: string }>({ open: false, mode: "all", platform: "CF" });
   const doSync = useCallback(async (platform?: string) => {
     setSyncing(true);
-    setSyncOptModal((prev) => ({ ...prev, open: false }));
     try {
       const body = platform ? JSON.stringify({ platform }) : "{}";
       const r = await fetch("/api/user/merchants/sync", { method: "POST", headers: { "Content-Type": "application/json" }, body }).then(r => r.json());
       if (r.code === 0) {
         message.success(r.data?.message || "商家同步已开始，完成后将通知您");
+        setSyncOptModal((prev) => ({ ...prev, open: false }));
         setTimeout(() => refreshApi(/\/api\/user\/merchants/), 5000);
         setTimeout(() => refreshApi(/\/api\/user\/merchants/), 15000);
         setTimeout(() => refreshApi(/\/api\/user\/merchants/), 30000);
@@ -614,7 +614,17 @@ export default function MerchantsPage() {
     } catch { message.error("同步失败"); }
     finally { setSyncing(false); }
   }, [message]);
-  const saveAd = useCallback(async () => { const v = adForm.getFieldsValue(); const r = await mutateApi("/api/user/ad-settings", { method: "PUT", body: v }, ["/api/user/ad-settings"]); if (r.code === 0) message.success("已保存"); else message.error(r.message); }, [adForm, message]);
+  const [savingAd, setSavingAd] = useState(false);
+  const saveAd = useCallback(async () => {
+    if (savingAd) return;
+    setSavingAd(true);
+    try {
+      const v = adForm.getFieldsValue();
+      const r = await mutateApi("/api/user/ad-settings", { method: "PUT", body: v }, ["/api/user/ad-settings"]);
+      if (r.code === 0) message.success("已保存"); else message.error(r.message);
+    } catch { message.error("网络异常，请重试"); }
+    finally { setSavingAd(false); }
+  }, [adForm, message, savingAd]);
 
   const savePersonaProfile = useCallback(async (updatedProfile: AiRuleProfile) => {
     setSavingPersona(true);
@@ -710,7 +720,17 @@ export default function MerchantsPage() {
       void openClaimModal(m);
     }
   }, [chargebackHitMap, openClaimModal]);
-  const submitClaim = useCallback(async () => { const v = await claimForm.validateFields(); const r = await mutateApi("/api/user/merchants", { method: "POST", body: { merchant_id: claimM?.id, ...v, ...(relaunchMode ? { relaunch: true } : {}) } }, [/\/api\/user\/merchants/]); if (r.code === 0) { message.success(relaunchMode ? "再投成功！正在跳转到广告预览..." : "领取成功！正在跳转到广告预览..."); setClaimModal(false); const cid = (r.data as any)?.campaign_id; if (cid) { setTimeout(() => router.push(`/user/ad-preview/${cid}`), 800); } else { setTab("claimed"); } } else message.error(r.message); }, [claimForm, claimM, relaunchMode, message, router]);
+  const [claimSubmitting, setClaimSubmitting] = useState(false);
+  const submitClaim = useCallback(async () => {
+    let v: any;
+    try { v = await claimForm.validateFields(); } catch { return; }
+    setClaimSubmitting(true);
+    try {
+      const r = await mutateApi("/api/user/merchants", { method: "POST", body: { merchant_id: claimM?.id, ...v, ...(relaunchMode ? { relaunch: true } : {}) } }, [/\/api\/user\/merchants/]);
+      if (r.code === 0) { message.success(relaunchMode ? "再投成功！正在跳转到广告预览..." : "领取成功！正在跳转到广告预览..."); setClaimModal(false); const cid = (r.data as any)?.campaign_id; if (cid) { setTimeout(() => router.push(`/user/ad-preview/${cid}`), 800); } else { setTab("claimed"); } } else message.error(r.message);
+    } catch { message.error("网络异常，请重试"); }
+    finally { setClaimSubmitting(false); }
+  }, [claimForm, claimM, relaunchMode, message, router]);
   const doRelease = useCallback(async (id: string) => { const r = await mutateApi("/api/user/merchants", { method: "PUT", body: { action: "release", ids: [id] } }, [/\/api\/user\/merchants/]); if (r.code === 0) message.success("已取消领取"); else message.error(r.message); }, [message]);
   // 再投一次：二次确认后打开领取弹窗（relaunch 模式），每次都让用户重新选 MCC/连接/国家
   const doRelaunch = useCallback((m: Merchant) => {
@@ -1012,7 +1032,7 @@ export default function MerchantsPage() {
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>{stats.byPlatform.map((p) => <Tag key={p.platform} color={PC[p.platform] || "default"} style={{ fontWeight: 600 }}>{p.platform} {p._count.toLocaleString()}</Tag>)}</div>
           <div style={{ marginTop: 12, fontSize: 12, color: "#999", borderTop: "1px solid #f0f0f0", paddingTop: 8 }}>在投广告 <span style={{ fontWeight: 700, color: "#333" }}>{stats.claimed}</span> 个商家</div>
         </Card></Col>
-        <Col xs={24} sm={12} md={6}><Card size="small" className="func-card-ad" title={<><DollarOutlined style={{ color: "#999" }} /> 广告投放设置</>} extra={<Button type="primary" size="small" icon={<SaveOutlined />} onClick={saveAd}>保存</Button>} style={{ height: "100%" }}>
+        <Col xs={24} sm={12} md={6}><Card size="small" className="func-card-ad" title={<><DollarOutlined style={{ color: "#999" }} /> 广告投放设置</>} extra={<Button type="primary" size="small" icon={<SaveOutlined />} loading={savingAd} disabled={savingAd} onClick={saveAd}>保存</Button>} style={{ height: "100%" }}>
           {adData && (<div style={{ fontSize: 12 }}>
             <Row gutter={[8, 0]}>
               <Col span={12}><Form.Item name="bidding_strategy" label="出价策略" style={{ marginBottom: 6 }}><Select options={BIDDING_STRATEGIES.map((b) => ({ value: b.value, label: b.label }))} /></Form.Item></Col>
@@ -1278,6 +1298,7 @@ export default function MerchantsPage() {
     <Modal
       title="同步商家库"
       open={syncOptModal.open}
+      confirmLoading={syncing}
       onOk={() => doSync(syncOptModal.mode === "single" ? syncOptModal.platform : undefined)}
       okText="开始同步"
       onCancel={() => setSyncOptModal((prev) => ({ ...prev, open: false }))}
@@ -1307,7 +1328,7 @@ export default function MerchantsPage() {
         ⚠️ 同步为后台异步执行，完成后系统将推送通知，请勿重复点击
       </div>
     </Modal>
-    <Modal title={`${relaunchMode ? "再投一次" : "领取商家"}: ${claimM?.merchant_name}`} open={claimModal} onOk={submitClaim} onCancel={() => setClaimModal(false)} okText={relaunchMode ? "再投" : "确定"}>
+    <Modal title={`${relaunchMode ? "再投一次" : "领取商家"}: ${claimM?.merchant_name}`} open={claimModal} confirmLoading={claimSubmitting} onOk={submitClaim} onCancel={() => setClaimModal(false)} okText={relaunchMode ? "再投" : "确定"}>
       {claimM?.policy_status === "restricted" && (<div style={{ marginBottom: 16, padding: "8px 12px", background: "#fff7e6", border: "1px solid #ffd591", borderRadius: 6 }}><WarningOutlined style={{ color: "#fa8c16", marginRight: 6 }} /><Text type="warning" style={{ fontSize: 13 }}>该商家属于受限类别{claimM.policy_category_code ? `（${PN[claimM.policy_category_code] || claimM.policy_category_code}）` : ""}，投放将受限。</Text></div>)}
       <Form form={claimForm} layout="vertical">
         {mccAccounts.length > 1 && (

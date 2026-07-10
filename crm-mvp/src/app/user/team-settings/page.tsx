@@ -16,6 +16,7 @@ function PaymentMethodsCard() {
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [editItem, setEditItem] = useState<PaymentMethod | null>(null);
+  const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
 
   const fetchData = () =>
@@ -28,20 +29,28 @@ function PaymentMethodsCard() {
   useEffect(() => { fetchData(); }, []);
 
   const handleSave = async () => {
-    const values = await form.validateFields();
-    const body = editItem ? { id: editItem.id, ...values } : values;
-    const res = await fetch("/api/user/team/payment-methods", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }).then((r) => r.json());
-    if (res.code === 0) {
-      message.success(res.message || "保存成功");
-      setModalOpen(false);
-      setEditItem(null);
-      fetchData();
-    } else {
-      message.error(res.message);
+    let values: Record<string, unknown>;
+    try { values = await form.validateFields(); } catch { return; }
+    setSaving(true);
+    try {
+      const body = editItem ? { id: editItem.id, ...values } : values;
+      const res = await fetch("/api/user/team/payment-methods", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        message.success(res.message || "保存成功");
+        setModalOpen(false);
+        setEditItem(null);
+        fetchData();
+      } else {
+        message.error(res.message);
+      }
+    } catch {
+      message.error("网络异常，请重试");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -103,6 +112,7 @@ function PaymentMethodsCard() {
       <Modal
         title={editItem ? "编辑收款方式" : "添加收款方式"}
         open={modalOpen}
+        confirmLoading={saving}
         onOk={handleSave}
         onCancel={() => { setModalOpen(false); setEditItem(null); }}
       >
@@ -148,6 +158,7 @@ function TokenPoolCard() {
   const [editItem, setEditItem] = useState<PoolToken | null>(null);
   const [jsonFileName, setJsonFileName] = useState("");
   const [probing, setProbing] = useState<string | null>(null); // "all" 或单个 token id
+  const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
 
   const fetchData = () =>
@@ -160,20 +171,28 @@ function TokenPoolCard() {
   useEffect(() => { fetchData(); }, []);
 
   const handleSave = async () => {
-    const values = await form.validateFields();
-    const body = editItem ? { id: editItem.id, ...values } : values;
-    const res = await fetch("/api/user/team/token-pool", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }).then((r) => r.json());
-    if (res.code === 0) {
-      message.success(res.message || "保存成功");
-      setModalOpen(false);
-      setEditItem(null);
-      fetchData();
-    } else {
-      message.error(res.message);
+    let values: Record<string, unknown>;
+    try { values = await form.validateFields(); } catch { return; }
+    setSaving(true);
+    try {
+      const body = editItem ? { id: editItem.id, ...values } : values;
+      const res = await fetch("/api/user/team/token-pool", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        message.success(res.message || "保存成功");
+        setModalOpen(false);
+        setEditItem(null);
+        fetchData();
+      } else {
+        message.error(res.message);
+      }
+    } catch {
+      message.error("网络异常，请重试");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -335,6 +354,7 @@ function TokenPoolCard() {
         title={editItem ? "编辑 Token" : "添加 Developer Token"}
         open={modalOpen}
         width={560}
+        confirmLoading={saving}
         onOk={handleSave}
         onCancel={() => { setModalOpen(false); setEditItem(null); }}
       >

@@ -390,6 +390,8 @@ export default function DataCenterPage() {
       } else {
         message.error(errors[0] || "刷新失败");
       }
+    } catch {
+      message.error("网络异常，请重试");
     } finally {
       setSyncingFull(false);
     }
@@ -416,7 +418,8 @@ export default function DataCenterPage() {
         message.success(res.data?.message || "CID 同步完成");
         refreshApi(/\/api\/user\/data-center/);
       } else message.error(res.message);
-    } finally { setSyncingCid(false); }
+    } catch { message.error("网络异常，请重试"); }
+    finally { setSyncingCid(false); }
   }, [selectedMcc, mccAccounts, message]);
 
   const handleOpenAdj = useCallback((mcc: CostByMcc) => {
@@ -439,7 +442,8 @@ export default function DataCenterPage() {
         setAdjModal({ open: false, mcc: null });
         refreshApi(/\/api\/user\/data-center\/campaigns/);
       } else message.error(res.message);
-    } finally { setAdjSaving(false); }
+    } catch { message.error("网络异常，请重试"); }
+    finally { setAdjSaving(false); }
   }, [adjModal.mcc, adjAmount, adjRemark, dateRange, message]);
 
   const handleOpenCommissionModal = useCallback(async () => {
@@ -455,9 +459,12 @@ export default function DataCenterPage() {
       if (res.code === 0) {
         setCommissionByAccount(res.data?.byAccount || []);
         setCommissionByMerchant(res.data?.byMerchant || []);
+      } else {
+        message.error(res.message || "佣金数据加载失败");
       }
-    } finally { setLoadingCommission(false); }
-  }, [dateRange]);
+    } catch { message.error("网络异常，请重试"); }
+    finally { setLoadingCommission(false); }
+  }, [dateRange, message]);
 
   const handleEditSuccess = useCallback(() => {
     setEditModal({ open: false, campaign: null, field: "budget" });

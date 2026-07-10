@@ -30,8 +30,15 @@ export const GET = withLeader(async (_req: NextRequest, { user }) => {
 /** PUT：更新本组隐私开关 { cross_team_visible: 0 | 1 } */
 export const PUT = withLeader(async (req: NextRequest, { user }) => {
   if (!user.teamId) return apiError("当前组长未关联小组");
-  const body = await req.json().catch(() => ({}));
-  const raw = (body as { cross_team_visible?: unknown }).cross_team_visible;
+  // D-163⑰：请求体解析失败或缺字段时拒绝，而不是静默当 0 写库（会把「全员可见」悄悄关掉）
+  let body: Record<string, unknown>;
+  try {
+    body = await req.json();
+  } catch {
+    return apiError("请求体解析失败，请重试");
+  }
+  const raw = body.cross_team_visible;
+  if (raw === undefined || raw === null) return apiError("缺少 cross_team_visible 参数");
   const value = raw === 1 || raw === "1" || raw === true ? 1 : 0;
 
   await prisma.teams.update({

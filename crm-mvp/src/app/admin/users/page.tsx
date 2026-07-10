@@ -69,21 +69,29 @@ export default function UsersPage() {
     const values = await form.validateFields();
     const method = editUser ? "PUT" : "POST";
     const body = editUser ? { id: editUser.id, ...values } : values;
-    const res = await mutateApi("/api/admin/users", { method, body });
-    if (res.code === 0) {
-      message.success(editUser ? "更新成功" : "创建成功");
-      setModalOpen(false);
-      mutate();
-    } else {
-      message.error(res.message);
+    try {
+      const res = await mutateApi("/api/admin/users", { method, body });
+      if (res.code === 0) {
+        message.success(editUser ? "更新成功" : "创建成功");
+        setModalOpen(false);
+        mutate();
+      } else {
+        message.error(res.message);
+      }
+    } catch {
+      message.error("网络异常，请重试");
     }
-  }, [form, editUser, mutate]);
+  }, [form, editUser, mutate, message]);
 
   const handleDelete = useCallback(async (id: string) => {
-    const res = await mutateApi("/api/admin/users", { method: "DELETE", body: { id } });
-    if (res.code === 0) { message.success("删除成功"); mutate(); }
-    else message.error(res.message);
-  }, [mutate]);
+    try {
+      const res = await mutateApi("/api/admin/users", { method: "DELETE", body: { id } });
+      if (res.code === 0) { message.success("删除成功"); mutate(); }
+      else message.error(res.message);
+    } catch {
+      message.error("网络异常，请重试");
+    }
+  }, [mutate, message]);
 
   // ─── 打开同步选项 Modal ───
   const handleOpenSyncOpt = useCallback((user: User) => {

@@ -88,15 +88,12 @@ export const POST = withAdmin(async (req: NextRequest) => {
     return apiSuccess(serializeData({ preview, message: "dry_run=true，未执行任何写库操作" }));
   }
 
-  // ── 执行写库操作 ──
-
-  // Step 1: 将源商家标记为 excluded（跨用户归属排除）
-  await prisma.user_merchants.update({
-    where: { id: srcId },
-    data: { status: "excluded", is_deleted: 1 },
+  // ── 执行写库操作（D-163⑥：三步包进同一事务，任一步失败整体回滚，避免留下半套数据）──
+  const srcCampaigns = await prisma.campaigns.findMany({
+    where: { user_id: srcMerchant.user_id, user_merchant_id: srcId, is_deleted: 0 },
+    select: { id: true },
   });
 
-  // Step 2: 迁移该商家名下的所有联盟交易到目标用户 + 目标商家
   const txnUpdateData: Record<string, unknown> = {
     user_id: dstUserId,
     user_merchant_id: dstMerchantId,
@@ -105,24 +102,29 @@ export const POST = withAdmin(async (req: NextRequest) => {
     txnUpdateData.platform_connection_id = dstConnectionId;
   }
 
-  const txnResult = await prisma.affiliate_transactions.updateMany({
-    where: { user_merchant_id: srcId, is_deleted: 0 },
-    data: txnUpdateData,
-  });
-
-  // Step 3: 同步清理源用户 ads_daily_stats 中该商家的佣金字段（归零，待下次同步重算）
-  // 找出源用户下关联该商家的 campaigns
-  const srcCampaigns = await prisma.campaigns.findMany({
-    where: { user_id: srcMerchant.user_id, user_merchant_id: srcId, is_deleted: 0 },
-    select: { id: true },
-  });
-  if (srcCampaigns.length > 0) {
-    const srcCampaignIds = srcCampaigns.map(c => c.id);
-    await prisma.ads_daily_stats.updateMany({
-      where: { campaign_id: { in: srcCampaignIds } },
-      data: { commission: 0, rejected_commission: 0, orders: 0 },
+  const txnResult = await prisma.$transaction(async (tx) => {
+    // Step 1: 将源商家标记为 excluded（跨用户归属排除）
+    await tx.user_merchants.update({
+      where: { id: srcId },
+      data: { status: "excluded", is_deleted: 1 },
     });
-  }
+
+    // Step 2: 迁移该商家名下的所有联盟交易到目标用户 + 目标商家
+    const r = await tx.affiliate_transactions.updateMany({
+      where: { user_merchant_id: srcId, is_deleted: 0 },
+      data: txnUpdateData,
+    });
+
+    // Step 3: 同步清理源用户 ads_daily_stats 中该商家的佣金字段（归零，待下次同步重算）
+    if (srcCampaigns.length > 0) {
+      await tx.ads_daily_stats.updateMany({
+        where: { campaign_id: { in: srcCampaigns.map(c => c.id) } },
+        data: { commission: 0, rejected_commission: 0, orders: 0 },
+      });
+    }
+
+    return r;
+  });
 
   return apiSuccess(serializeData({
     preview,

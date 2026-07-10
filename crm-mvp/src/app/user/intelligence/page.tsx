@@ -256,6 +256,20 @@ export default function IntelligencePage() {
             clearInterval(ocrTimerRef.current);
             ocrTimerRef.current = null;
           }
+          // 超时未出结果：清掉剩余 pending 标记，避免 UI 永远显示「识别中」
+          if (urls.length > 0) {
+            pendingUrls.clear();
+            setResult((prev) => {
+              if (!prev) return prev;
+              return {
+                ...prev,
+                advertisers: prev.advertisers.map((adv) => ({
+                  ...adv,
+                  ads: adv.ads.map((ad) => (ad._ocrPending ? { ...ad, _ocrPending: false } : ad)),
+                })),
+              };
+            });
+          }
           return;
         }
         const resp = await fetch("/api/user/intelligence/ocr-status", {

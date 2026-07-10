@@ -43,9 +43,12 @@ export default function PolicyCategoriesPage() {
     try {
       const res = await fetch("/api/admin/policy-categories").then((r) => r.json());
       if (res.code === 0) setCategories(res.data || []);
-    } catch { /* ignore */ }
+      else message.error("加载政策类别失败");
+    } catch {
+      message.error("加载政策类别失败");
+    }
     setLoading(false);
-  }, []);
+  }, [message]);
 
   useEffect(() => { fetchCategories(); }, [fetchCategories]);
 
@@ -117,28 +120,36 @@ export default function PolicyCategoriesPage() {
     const method = editing ? "PUT" : "POST";
     if (editing) data.id = editing.id;
 
-    const res = await fetch(url, {
-      method,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
-    }).then((r) => r.json());
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      }).then((r) => r.json());
 
-    if (res.code === 0) {
-      message.success(editing ? "更新成功" : "创建成功");
-      setModalOpen(false);
-      fetchCategories();
-    } else {
-      message.error(res.message);
+      if (res.code === 0) {
+        message.success(editing ? "更新成功" : "创建成功");
+        setModalOpen(false);
+        fetchCategories();
+      } else {
+        message.error(res.message);
+      }
+    } catch {
+      message.error("网络异常，请重试");
     }
   };
 
   const handleDelete = async (id: string) => {
-    const res = await fetch(`/api/admin/policy-categories?id=${id}`, { method: "DELETE" }).then((r) => r.json());
-    if (res.code === 0) {
-      message.success("删除成功");
-      fetchCategories();
-    } else {
-      message.error(res.message);
+    try {
+      const res = await fetch(`/api/admin/policy-categories?id=${id}`, { method: "DELETE" }).then((r) => r.json());
+      if (res.code === 0) {
+        message.success("删除成功");
+        fetchCategories();
+      } else {
+        message.error(res.message);
+      }
+    } catch {
+      message.error("网络异常，请重试");
     }
   };
 

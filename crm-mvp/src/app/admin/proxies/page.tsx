@@ -65,10 +65,13 @@ export default function ProxiesPage() {
     try {
       const res = await fetch("/api/admin/proxies").then((r) => r.json());
       if (res.code === 0) setProxies(res.data);
+      else message.error("加载失败：" + (res?.message || "网络异常"));
+    } catch {
+      message.error("加载失败：网络异常");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [message]);
 
   useEffect(() => { fetchProxies(); }, [fetchProxies]);
 
@@ -115,18 +118,22 @@ export default function ProxiesPage() {
       sessionMode: values.sessionMode ?? "",
     };
 
-    const res = await fetch("/api/admin/proxies", {
-      method: isEdit ? "PUT" : "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }).then((r) => r.json());
+    try {
+      const res = await fetch("/api/admin/proxies", {
+        method: isEdit ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }).then((r) => r.json());
 
-    if (res.code === 0) {
-      message.success(isEdit ? "已更新" : "已创建");
-      setModalOpen(false);
-      fetchProxies();
-    } else {
-      message.error(res.message ?? "操作失败");
+      if (res.code === 0) {
+        message.success(isEdit ? "已更新" : "已创建");
+        setModalOpen(false);
+        fetchProxies();
+      } else {
+        message.error(res.message ?? "操作失败");
+      }
+    } catch {
+      message.error("网络异常，请重试");
     }
   };
 
@@ -169,24 +176,32 @@ export default function ProxiesPage() {
   };
 
   const handleDelete = async (id: string) => {
-    const res = await fetch("/api/admin/proxies", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id }),
-    }).then((r) => r.json());
-    if (res.code === 0) { message.success("已删除"); fetchProxies(); }
-    else message.error(res.message ?? "删除失败");
+    try {
+      const res = await fetch("/api/admin/proxies", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      }).then((r) => r.json());
+      if (res.code === 0) { message.success("已删除"); fetchProxies(); }
+      else message.error(res.message ?? "删除失败");
+    } catch {
+      message.error("网络异常，请重试");
+    }
   };
 
   const handleToggleStatus = async (proxy: Proxy) => {
     const newStatus = proxy.status === "active" ? "disabled" : "active";
-    const res = await fetch("/api/admin/proxies", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: proxy.id, status: newStatus }),
-    }).then((r) => r.json());
-    if (res.code === 0) fetchProxies();
-    else message.error(res.message ?? "切换失败");
+    try {
+      const res = await fetch("/api/admin/proxies", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: proxy.id, status: newStatus }),
+      }).then((r) => r.json());
+      if (res.code === 0) fetchProxies();
+      else message.error(res.message ?? "切换失败");
+    } catch {
+      message.error("网络异常，请重试");
+    }
   };
 
   const handleBind = async () => {
@@ -211,16 +226,20 @@ export default function ProxiesPage() {
   };
 
   const handleUnbind = async (bindingId: string) => {
-    const res = await fetch("/api/admin/proxies/users", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ bindingId }),
-    }).then((r) => r.json());
-    if (res.code === 0) {
-      message.success("已解绑");
-      if (selectedProxy) fetchProxyUsers(selectedProxy.id);
-    } else {
-      message.error(res.message ?? "解绑失败");
+    try {
+      const res = await fetch("/api/admin/proxies/users", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bindingId }),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        message.success("已解绑");
+        if (selectedProxy) fetchProxyUsers(selectedProxy.id);
+      } else {
+        message.error(res.message ?? "解绑失败");
+      }
+    } catch {
+      message.error("网络异常，请重试");
     }
   };
 

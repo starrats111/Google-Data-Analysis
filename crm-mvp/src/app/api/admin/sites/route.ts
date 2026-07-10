@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import { withAdmin } from "@/lib/api-handler";
+import { toBigIntId } from "@/lib/safe-bigint";
 import prisma from "@/lib/prisma";
 import { verifySiteWithAutoRegister, getSiteRoot } from "@/lib/remote-publisher";
 
@@ -74,6 +75,8 @@ export const POST = withAdmin(async (req: NextRequest) => {
 export const PUT = withAdmin(async (req: NextRequest) => {
   const { id, site_name, domain, status } = await req.json();
   if (!id) return apiError("缺少 ID");
+  const parsedId = toBigIntId(id);
+  if (!parsedId) return apiError("ID 格式无效");
 
   const data: Record<string, unknown> = {};
   if (site_name !== undefined) data.site_name = site_name;
@@ -87,7 +90,7 @@ export const PUT = withAdmin(async (req: NextRequest) => {
     data.site_type = null;
   }
 
-  await prisma.publish_sites.update({ where: { id: BigInt(id) }, data });
+  await prisma.publish_sites.update({ where: { id: parsedId }, data });
   return apiSuccess(null, "更新成功");
 });
 
@@ -95,7 +98,9 @@ export const PUT = withAdmin(async (req: NextRequest) => {
 export const DELETE = withAdmin(async (req: NextRequest) => {
   const { id } = await req.json();
   if (!id) return apiError("缺少 ID");
+  const parsedId = toBigIntId(id);
+  if (!parsedId) return apiError("ID 格式无效");
 
-  await prisma.publish_sites.update({ where: { id: BigInt(id) }, data: { is_deleted: 1 } });
+  await prisma.publish_sites.update({ where: { id: parsedId }, data: { is_deleted: 1 } });
   return apiSuccess(null, "删除成功");
 });

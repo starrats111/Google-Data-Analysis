@@ -182,8 +182,10 @@ export default function ArticlePublishPage() {
           const claimed = res.data.merchants || [];
           setMerchants(claimed);
           setAllMerchants(claimed);
+        } else {
+          message.error("商家列表加载失败，请刷新重试");
         }
-      }).catch(() => {});
+      }).catch(() => { message.error("商家列表加载失败，请刷新重试"); });
     // 获取已发布文章的商家 ID（仅 published 状态，用于默认视图过滤）
     fetch("/api/user/articles?pageSize=500")
       .then((r) => r.json())
@@ -201,13 +203,15 @@ export default function ArticlePublishPage() {
       .then((r) => r.json())
       .then((res) => {
         if (res.code === 0) setSites(res.data || []);
-      }).catch(() => {});
+        else message.error("站点列表加载失败，请刷新重试");
+      }).catch(() => { message.error("站点列表加载失败，请刷新重试"); });
     // 获取平台连接（含绑定站点）
     fetch("/api/user/settings/platforms")
       .then((r) => r.json())
       .then((res) => {
         if (res.code === 0) setPlatformConns(res.data || []);
-      }).catch(() => {});
+        else message.error("平台连接加载失败，请刷新重试");
+      }).catch(() => { message.error("平台连接加载失败，请刷新重试"); });
   }, []);
 
   // 选择商家后，自动根据平台连接匹配绑定站点；若有多个连接则让用户手动选择
@@ -491,7 +495,8 @@ export default function ArticlePublishPage() {
     setPublishing(true);
     try {
       // 发布前先将最终预览内容保存到数据库，确保发布器读到的是带正确图片的 HTML
-      await fetch("/api/user/articles", {
+      // D-163⑫：落库失败必须中止发布，否则发布器会把库里的旧内容发出去
+      const saveRes = await fetch("/api/user/articles", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -501,7 +506,11 @@ export default function ArticlePublishPage() {
           status: publishTime.isAfter(dayjs().tz(TZ)) ? "preview" : undefined,
           publish_site_id: selectedSite || undefined,
         }),
-      });
+      }).then((r) => r.json());
+      if (saveRes.code !== 0) {
+        message.error(`文章内容保存失败，已中止发布：${saveRes.message || "请重试"}`);
+        return;
+      }
 
       const res = await fetch("/api/user/articles/publish-to-site", {
         method: "POST",

@@ -159,13 +159,15 @@ function ServerConfigCard({ onPoolLoaded }: { onPoolLoaded?: (pool: TokenPool) =
       const res = await fetch("/api/admin/deploy-config").then((r) => r.json());
       if (res.code === 0 && res.data?.config) {
         applyConfigToForm(res.data.config as Record<string, unknown>);
+      } else if (res.code !== 0) {
+        message.error("加载失败：" + (res?.message || "网络异常"));
       }
     } catch {
-      // ignore
+      message.error("加载失败：网络异常");
     } finally {
       setLoading(false);
     }
-  }, [applyConfigToForm]);
+  }, [applyConfigToForm, message]);
 
   useEffect(() => { fetchConfig(); }, [fetchConfig]);
 
@@ -265,12 +267,18 @@ function ServerConfigCard({ onPoolLoaded }: { onPoolLoaded?: (pool: TokenPool) =
   };
 
   const handleKeyDelete = async () => {
-    const res = await fetch("/api/admin/deploy-config/ssh-key", { method: "DELETE" }).then((r) => r.json());
-    if (res.code === 0) {
-      message.success("密钥已删除");
-      form.setFieldValue("bt_ssh_key_content", "");
-      setKeyUploaded(false);
-      setKeyFilename("");
+    try {
+      const res = await fetch("/api/admin/deploy-config/ssh-key", { method: "DELETE" }).then((r) => r.json());
+      if (res.code === 0) {
+        message.success("密钥已删除");
+        form.setFieldValue("bt_ssh_key_content", "");
+        setKeyUploaded(false);
+        setKeyFilename("");
+      } else {
+        message.error(res.message || "删除失败");
+      }
+    } catch {
+      message.error("网络异常，请重试");
     }
   };
 
@@ -493,37 +501,57 @@ export default function AdminSitesPage() {
   const [migrateForm] = Form.useForm();
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const fetchSites = useCallback(async () => {
+  const fetchSites = useCallback(async (opts?: { silent?: boolean }) => {
     setLoading(true);
     try {
       const r = await fetch("/api/admin/sites");
-      if (!r.ok) { setLoading(false); return; }
+      if (!r.ok) {
+        if (!opts?.silent) message.error("加载失败：网络异常");
+        setLoading(false);
+        return;
+      }
       const res = await r.json();
       if (res.code === 0) setSites(res.data || []);
-    } catch { /* ignore */ }
+      else if (!opts?.silent) message.error("加载失败：" + (res?.message || "网络异常"));
+    } catch {
+      if (!opts?.silent) message.error("加载失败：网络异常");
+    }
     setLoading(false);
-  }, []);
+  }, [message]);
 
-  const fetchMigrations = useCallback(async () => {
+  const fetchMigrations = useCallback(async (opts?: { silent?: boolean }) => {
     try {
       const r = await fetch("/api/admin/sites/migrate");
-      if (!r.ok) return;
+      if (!r.ok) {
+        if (!opts?.silent) message.error("加载失败：网络异常");
+        return;
+      }
       const res = await r.json();
       if (res.code === 0) setMigrations(res.data || []);
-    } catch { /* ignore */ }
-  }, []);
+      else if (!opts?.silent) message.error("加载失败：" + (res?.message || "网络异常"));
+    } catch {
+      if (!opts?.silent) message.error("加载失败：网络异常");
+    }
+  }, [message]);
 
   const fetchTokenPool = useCallback(async () => {
     try {
       const r = await fetch("/api/admin/deploy-config");
-      if (!r.ok) return;
+      if (!r.ok) {
+        message.error("加载失败：网络异常");
+        return;
+      }
       const res = await r.json();
       if (res.code === 0) {
         const pool = res.data?.config?.token_pool as TokenPool | undefined;
         setHasTokens(Boolean(pool && (pool.github_tokens.length > 0 || pool.cf_tokens.length > 0)));
+      } else {
+        message.error("加载失败：" + (res?.message || "网络异常"));
       }
-    } catch { /* ignore */ }
-  }, []);
+    } catch {
+      message.error("加载失败：网络异常");
+    }
+  }, [message]);
 
   useEffect(() => {
     fetchSites();
@@ -535,8 +563,8 @@ export default function AdminSitesPage() {
     const hasRunning = migrations.some((m) => !["done", "failed"].includes(m.status));
     if (hasRunning && !pollRef.current) {
       pollRef.current = setInterval(() => {
-        fetchMigrations();
-        fetchSites();
+        fetchMigrations({ silent: true });
+        fetchSites({ silent: true });
       }, 3000);
     } else if (!hasRunning && pollRef.current) {
       clearInterval(pollRef.current);
@@ -557,79 +585,104 @@ export default function AdminSitesPage() {
     const values = await siteForm.validateFields();
     const method = editSite ? "PUT" : "POST";
     const body = editSite ? { id: editSite.id, ...values } : values;
-    const res = await fetch("/api/admin/sites", {
-      method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-    }).then((r) => r.json());
-    if (res.code === 0) {
-      message.success(editSite ? "更新成功" : "站点已创建");
-      setSiteModalOpen(false);
-      fetchSites();
-    } else {
-      message.error(res.message);
+    try {
+      const res = await fetch("/api/admin/sites", {
+        method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        message.success(editSite ? "更新成功" : "站点已创建");
+        setSiteModalOpen(false);
+        fetchSites();
+      } else {
+        message.error(res.message);
+      }
+    } catch {
+      message.error("网络异常，请重试");
     }
   };
 
   const handleDeleteSite = async (id: string) => {
-    const res = await fetch("/api/admin/sites", {
-      method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }),
-    }).then((r) => r.json());
-    if (res.code === 0) { message.success("删除成功"); fetchSites(); } else message.error(res.message);
+    try {
+      const res = await fetch("/api/admin/sites", {
+        method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }),
+      }).then((r) => r.json());
+      if (res.code === 0) { message.success("删除成功"); fetchSites(); } else message.error(res.message);
+    } catch {
+      message.error("网络异常，请重试");
+    }
   };
 
+  const [verifyingId, setVerifyingId] = useState<string | null>(null);
+  const [standardizingId, setStandardizingId] = useState<string | null>(null);
+
   const handleVerifySite = async (site: Site) => {
+    setVerifyingId(site.id);
     message.loading({ content: "验证中...", key: "verify" });
-    const res = await fetch("/api/admin/sites/verify", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: site.id }),
-    }).then((r) => r.json());
-    const checks = res.data?.checks;
-    const publicAccess = res.data?.publicAccess as PublicAccessResult | undefined;
-    const autoStandardizeAttempted = !!res.data?.autoStandardizeAttempted;
-    const a1Standardization = res.data?.a1Standardization as A1StandardizationResult | undefined;
-    const autoRegisterAttempted = !!res.data?.autoRegisterAttempted;
-    const panelRegistration = res.data?.panelRegistration as BtPanelRegistrationResult | undefined;
-    const fullyVerified = res.code === 0 && !!checks?.valid && !!publicAccess?.ok;
-    if (fullyVerified) {
-      const successParts = [
-        autoStandardizeAttempted && a1Standardization?.ok
-          ? `已自动标准化为 A1（合并约 ${a1Standardization.merged_count ?? 0} 条）`
-          : "",
-        autoRegisterAttempted && panelRegistration?.ok
-          ? (panelRegistration.created ? "已自动补登记站点" : "已自动核对宝塔站点")
-          : "",
-      ].filter(Boolean);
-      const successText = successParts.length > 0 ? `${successParts.join("，")}并验证通过` : "验证通过";
-      message.success({ content: successText, key: "verify" });
-    } else {
-      const errText =
-        res.code !== 0
-          ? (res.message || "验证失败")
-          : [
-              autoStandardizeAttempted && a1Standardization && !a1Standardization.ok
-                ? (`自动标准化 A1 失败：${a1Standardization.error || "未知错误"}`)
-                : "",
-              autoRegisterAttempted && panelRegistration && !panelRegistration.ok
-                ? (`自动补登记失败：${panelRegistration.error || "未知错误"}`)
-                : "",
-              !checks?.valid ? (checks?.error || "站点结构校验未通过：请检查宝塔 SSH、站点目录、index.html 与数据 JS 是否完整") : "",
-              !publicAccess?.ok ? (`公网访问未通过：${publicAccess?.error || publicAccess?.checked_url || "站点无法从外网访问"}`) : "",
-            ].filter(Boolean).join("；");
-      message.error({ content: errText || "验证失败", key: "verify" });
+    try {
+      const res = await fetch("/api/admin/sites/verify", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: site.id }),
+      }).then((r) => r.json());
+      const checks = res.data?.checks;
+      const publicAccess = res.data?.publicAccess as PublicAccessResult | undefined;
+      const autoStandardizeAttempted = !!res.data?.autoStandardizeAttempted;
+      const a1Standardization = res.data?.a1Standardization as A1StandardizationResult | undefined;
+      const autoRegisterAttempted = !!res.data?.autoRegisterAttempted;
+      const panelRegistration = res.data?.panelRegistration as BtPanelRegistrationResult | undefined;
+      const fullyVerified = res.code === 0 && !!checks?.valid && !!publicAccess?.ok;
+      if (fullyVerified) {
+        const successParts = [
+          autoStandardizeAttempted && a1Standardization?.ok
+            ? `已自动标准化为 A1（合并约 ${a1Standardization.merged_count ?? 0} 条）`
+            : "",
+          autoRegisterAttempted && panelRegistration?.ok
+            ? (panelRegistration.created ? "已自动补登记站点" : "已自动核对宝塔站点")
+            : "",
+        ].filter(Boolean);
+        const successText = successParts.length > 0 ? `${successParts.join("，")}并验证通过` : "验证通过";
+        message.success({ content: successText, key: "verify" });
+      } else {
+        const errText =
+          res.code !== 0
+            ? (res.message || "验证失败")
+            : [
+                autoStandardizeAttempted && a1Standardization && !a1Standardization.ok
+                  ? (`自动标准化 A1 失败：${a1Standardization.error || "未知错误"}`)
+                  : "",
+                autoRegisterAttempted && panelRegistration && !panelRegistration.ok
+                  ? (`自动补登记失败：${panelRegistration.error || "未知错误"}`)
+                  : "",
+                !checks?.valid ? (checks?.error || "站点结构校验未通过：请检查宝塔 SSH、站点目录、index.html 与数据 JS 是否完整") : "",
+                !publicAccess?.ok ? (`公网访问未通过：${publicAccess?.error || publicAccess?.checked_url || "站点无法从外网访问"}`) : "",
+              ].filter(Boolean).join("；");
+        message.error({ content: errText || "验证失败", key: "verify" });
+      }
+      fetchSites();
+    } catch {
+      message.error({ content: "网络异常，请重试", key: "verify" });
+    } finally {
+      setVerifyingId(null);
     }
-    fetchSites();
   };
 
   const handleStandardizeA1 = async (site: Site) => {
+    setStandardizingId(site.id);
     message.loading({ content: "正在标准化为 A1…", key: "a1" });
-    const res = await fetch("/api/admin/sites/standardize-a1", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: site.id }),
-    }).then((r) => r.json());
-    if (res.code === 0) {
-      message.success({ content: res.message || "已标准化为 A1", key: "a1" });
-      fetchSites();
-    } else {
-      message.error({ content: res.message || "标准化失败", key: "a1" });
+    try {
+      const res = await fetch("/api/admin/sites/standardize-a1", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: site.id }),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        message.success({ content: res.message || "已标准化为 A1", key: "a1" });
+        fetchSites();
+      } else {
+        message.error({ content: res.message || "标准化失败", key: "a1" });
+      }
+    } catch {
+      message.error({ content: "网络异常，请重试", key: "a1" });
+    } finally {
+      setStandardizingId(null);
     }
   };
 
@@ -645,15 +698,19 @@ export default function AdminSitesPage() {
 
   const handleMigrateSubmit = async () => {
     const values = await migrateForm.validateFields();
-    const res = await fetch("/api/admin/sites/migrate", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(values),
-    }).then((r) => r.json());
-    if (res.code === 0) {
-      message.success("迁移任务已创建");
-      setMigrateModalOpen(false);
-      fetchMigrations();
-    } else {
-      message.error(res.message);
+    try {
+      const res = await fetch("/api/admin/sites/migrate", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(values),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        message.success("迁移任务已创建");
+        setMigrateModalOpen(false);
+        fetchMigrations();
+      } else {
+        message.error(res.message);
+      }
+    } catch {
+      message.error("网络异常，请重试");
     }
   };
 
@@ -686,9 +743,9 @@ export default function AdminSitesPage() {
       title: "操作", width: 220,
       render: (_: unknown, record: Site) => (
         <Space size="small">
-          <Tooltip title="验证"><Button type="link" size="small" icon={<SafetyCertificateOutlined />} onClick={() => handleVerifySite(record)} /></Tooltip>
+          <Tooltip title="验证"><Button type="link" size="small" icon={<SafetyCertificateOutlined />} loading={verifyingId === record.id} disabled={verifyingId !== null && verifyingId !== record.id} onClick={() => handleVerifySite(record)} /></Tooltip>
           <Tooltip title="标准化 A1（保留主题与 CSS，统一数据层和 slug 页面）">
-            <Button type="link" size="small" icon={<DatabaseOutlined />} onClick={() => handleStandardizeA1(record)} />
+            <Button type="link" size="small" icon={<DatabaseOutlined />} loading={standardizingId === record.id} disabled={standardizingId !== null && standardizingId !== record.id} onClick={() => handleStandardizeA1(record)} />
           </Tooltip>
           <Tooltip title="编辑"><Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEditSite(record)} /></Tooltip>
           <Popconfirm title="确认删除？" onConfirm={() => handleDeleteSite(record.id)}>
@@ -757,7 +814,7 @@ export default function AdminSitesPage() {
                 {migrations.length > 0 && (
                   <Card
                     title="迁移任务"
-                    extra={<Button size="small" icon={<ReloadOutlined />} onClick={fetchMigrations}>刷新</Button>}
+                    extra={<Button size="small" icon={<ReloadOutlined />} onClick={() => fetchMigrations()}>刷新</Button>}
                   >
                     <Table columns={migrationColumns} dataSource={migrations} rowKey="id" size="small" pagination={{ pageSize: 10 }} />
                   </Card>

@@ -396,6 +396,8 @@ export default function AdvertisersPage() {
       } else {
         message.error(r.message || "更新失败");
       }
+    } catch {
+      message.error("网络异常，请重试");
     } finally {
       setThresholdSaving(false);
     }
@@ -403,47 +405,59 @@ export default function AdvertisersPage() {
 
   // ─── 操作 ───────────────────────────────────────────────
   const unfollow = useCallback(async (id: string) => {
-    const r = await fetch(`/api/user/atc/watchlist/${id}`, { method: "DELETE" }).then((x) => x.json());
-    if (r.code === 0) {
-      message.success("已取消关注");
-      void loadMine();
-    } else {
-      message.error(r.message || "操作失败");
+    try {
+      const r = await fetch(`/api/user/atc/watchlist/${id}`, { method: "DELETE" }).then((x) => x.json());
+      if (r.code === 0) {
+        message.success("已取消关注");
+        void loadMine();
+      } else {
+        message.error(r.message || "操作失败");
+      }
+    } catch {
+      message.error("网络异常，请重试");
     }
   }, [loadMine, message]);
 
   const toggleShare = useCallback(async (id: string, next: boolean) => {
-    const r = await fetch(`/api/user/atc/watchlist/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ is_shared: next }),
-    }).then((x) => x.json());
-    if (r.code === 0) {
-      message.success(next ? "已分享到推荐列表" : "已取消分享");
-      void loadMine();
-    } else {
-      message.error(r.message || "操作失败");
+    try {
+      const r = await fetch(`/api/user/atc/watchlist/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_shared: next }),
+      }).then((x) => x.json());
+      if (r.code === 0) {
+        message.success(next ? "已分享到推荐列表" : "已取消分享");
+        void loadMine();
+      } else {
+        message.error(r.message || "操作失败");
+      }
+    } catch {
+      message.error("网络异常，请重试");
     }
   }, [loadMine, message]);
 
   // C-094.11：行级 min_days 已下线 —— 全局阈值统一管理（顶部控件）
 
   const follow = useCallback(async (item: { advertiser_id: string; advertiser_name?: string | null; region: string }, afterDone?: () => void) => {
-    const r = await fetch("/api/user/atc/watchlist", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        advertiser_id: item.advertiser_id,
-        advertiser_name: item.advertiser_name ?? null,
-        region: item.region,
-        // 不传 min_days：后端会用 users.atc_default_min_days
-      }),
-    }).then((x) => x.json());
-    if (r.code === 0) {
-      message.success("已加入我的关注");
-      afterDone?.();
-    } else {
-      message.error(r.message || "操作失败");
+    try {
+      const r = await fetch("/api/user/atc/watchlist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          advertiser_id: item.advertiser_id,
+          advertiser_name: item.advertiser_name ?? null,
+          region: item.region,
+          // 不传 min_days：后端会用 users.atc_default_min_days
+        }),
+      }).then((x) => x.json());
+      if (r.code === 0) {
+        message.success("已加入我的关注");
+        afterDone?.();
+      } else {
+        message.error(r.message || "操作失败");
+      }
+    } catch {
+      message.error("网络异常，请重试");
     }
   }, [message]);
 

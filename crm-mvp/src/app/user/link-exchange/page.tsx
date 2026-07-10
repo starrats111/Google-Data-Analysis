@@ -158,10 +158,11 @@ export default function LinkExchangePage() {
     try {
       const res = await fetch("/api/user/link-exchange/alerts?status=open&limit=200").then((r) => r.json());
       if (res.code === 0) setAlerts(res.data.rows);
+      else message.error(res.message ?? "预警加载失败");
     } finally {
       setAlertsLoading(false);
     }
-  }, []);
+  }, [message]);
 
   const fetchHistory = useCallback(async (days: number) => {
     setHistoryLoading(true);
@@ -210,10 +211,16 @@ export default function LinkExchangePage() {
     }
   };
 
+  const [generatingKey, setGeneratingKey] = useState(false);
   const handleGenerateKey = async () => {
-    const res = await fetch("/api/user/settings/script-api-key", { method: "POST" }).then((r) => r.json());
-    if (res.code === 0) { message.success("API Key 已生成"); setKeyVisible(true); fetchData(); }
-    else message.error(res.message ?? "生成失败");
+    if (generatingKey) return;
+    setGeneratingKey(true);
+    try {
+      const res = await fetch("/api/user/settings/script-api-key", { method: "POST" }).then((r) => r.json());
+      if (res.code === 0) { message.success("API Key 已生成"); setKeyVisible(true); fetchData(); }
+      else message.error(res.message ?? "生成失败");
+    } catch { message.error("网络异常，请重试"); }
+    finally { setGeneratingKey(false); }
   };
 
   const handleReplenish = async (campaignId: string) => {
@@ -234,15 +241,21 @@ export default function LinkExchangePage() {
     }
   };
 
+  const [replenishingAll, setReplenishingAll] = useState(false);
   const handleReplenishAll = async () => {
-    const res = await fetch("/api/user/link-exchange/action", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "replenishAll" }),
-    }).then((r) => r.json());
-    if (res.code === 0) {
-      message.success(`已为 ${res.data.queued} 个低库存广告系列触发后台补货，稍后刷新查看`);
-      setTimeout(() => { fetchData(); fetchAlerts(); }, 3000);
-    } else message.error(res.message ?? "操作失败");
+    if (replenishingAll) return;
+    setReplenishingAll(true);
+    try {
+      const res = await fetch("/api/user/link-exchange/action", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "replenishAll" }),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        message.success(`已为 ${res.data.queued} 个低库存广告系列触发后台补货，稍后刷新查看`);
+        setTimeout(() => { fetchData(); fetchAlerts(); }, 3000);
+      } else message.error(res.message ?? "操作失败");
+    } catch { message.error("网络异常，请重试"); }
+    finally { setReplenishingAll(false); }
   };
 
   const handleBrushAll = async (count: number) => {
@@ -774,7 +787,7 @@ export default function LinkExchangePage() {
                 </Popconfirm>
               </Space>
             ) : (
-              <Button type="primary" icon={<KeyOutlined />} onClick={handleGenerateKey}>生成 API Key</Button>
+              <Button type="primary" icon={<KeyOutlined />} loading={generatingKey} onClick={handleGenerateKey}>生成 API Key</Button>
             )}
           </Card>
         </Col>
@@ -872,7 +885,7 @@ export default function LinkExchangePage() {
                 <>
                   <Space style={{ marginBottom: 12 }}>
                     <Popconfirm title="将为所有低库存且已启用换链的广告系列触发后台补货，确认？" onConfirm={handleReplenishAll} okText="确认" cancelText="取消">
-                      <Button type="primary" icon={<ThunderboltOutlined />}>一键补货（低库存）</Button>
+                      <Button type="primary" icon={<ThunderboltOutlined />} loading={replenishingAll}>一键补货（低库存）</Button>
                     </Popconfirm>
                     <Text type="secondary" style={{ fontSize: 12 }}>低水位 ≤ {lowWatermark}，目标 {data?.stockConfig.target ?? 20}；进入此页每 10 秒自动刷新</Text>
                   </Space>

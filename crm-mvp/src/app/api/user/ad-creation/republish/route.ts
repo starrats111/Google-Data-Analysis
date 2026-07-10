@@ -39,7 +39,14 @@ export async function POST(req: NextRequest) {
 
     const result = await removeCampaign(credentials, campaign.customer_id, campaign.google_campaign_id);
     if (!result.success) {
-      console.error("[Republish] 移除旧广告失败:", result.message);
+      // Google 侧已不存在（NOT_FOUND/已移除）可以继续重置本地；其余失败必须中止，
+      // 否则本地清空 google_campaign_id 后旧广告仍在线上跑，重新提交会产生重复系列（D-163②）
+      const alreadyGone = /NOT_FOUND|CAMPAIGN_NOT_FOUND|does not exist|已移除/i.test(result.message);
+      if (!alreadyGone) {
+        console.error("[Republish] 移除旧广告失败，中止重置:", result.message);
+        return apiError(`移除 Google Ads 旧广告失败，已中止重新发布（旧广告仍在线上）：${result.message}`);
+      }
+      console.warn("[Republish] 旧广告在 Google 侧已不存在，继续重置本地:", result.message);
     }
   }
 

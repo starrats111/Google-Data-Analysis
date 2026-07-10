@@ -83,42 +83,55 @@ export default function AIModelsTab() {
     const values = await form.validateFields();
     const method = editItem ? "PUT" : "POST";
     const body = editItem ? { id: editItem.id, ...values } : values;
-    const r = await fetch("/api/admin/ai-models", {
-      method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-    });
-    const res = await readApiJson(r);
-    if (res.code === 0) {
-      message.success(editItem ? "更新成功" : "创建成功");
-      setModalOpen(false);
-      fetchData();
-    } else {
-      message.error(res.message ?? "操作失败");
+    try {
+      const r = await fetch("/api/admin/ai-models", {
+        method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      const res = await readApiJson(r);
+      if (res.code === 0) {
+        message.success(editItem ? "更新成功" : "创建成功");
+        setModalOpen(false);
+        fetchData();
+      } else {
+        message.error(res.message ?? "操作失败");
+      }
+    } catch {
+      message.error("网络异常，请重试");
     }
   };
 
   const handleDelete = async (id: string) => {
-    const r = await fetch("/api/admin/ai-models", {
-      method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }),
-    });
-    const res = await readApiJson(r);
-    if (res.code === 0) {
-      message.success("删除成功");
-      fetchData();
-    } else {
-      message.error(res.message ?? "删除失败");
+    try {
+      const r = await fetch("/api/admin/ai-models", {
+        method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }),
+      });
+      const res = await readApiJson(r);
+      if (res.code === 0) {
+        message.success("删除成功");
+        fetchData();
+      } else {
+        message.error(res.message ?? "删除失败");
+      }
+    } catch {
+      message.error("网络异常，请重试");
     }
   };
 
   const handleToggle = async (id: string, checked: boolean) => {
-    const r = await fetch("/api/admin/ai-models", {
-      method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, is_active: checked ? 1 : 0 }),
-    });
-    const res = await readApiJson(r);
-    if (res.code === 0) {
-      fetchData();
-    } else {
-      message.error(res.message ?? "更新启用状态失败");
+    try {
+      const r = await fetch("/api/admin/ai-models", {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, is_active: checked ? 1 : 0 }),
+      });
+      const res = await readApiJson(r);
+      if (res.code === 0) {
+        fetchData();
+      } else {
+        message.error(res.message ?? "更新启用状态失败");
+        fetchData();
+      }
+    } catch {
+      message.error("网络异常，请重试");
       fetchData();
     }
   };

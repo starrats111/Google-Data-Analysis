@@ -1986,6 +1986,7 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
     // 根治③：把本次实际提交给 Google 的关键字回写 keywords 表，让 DB 成为可信真相来源
     //   （历史上关键字多只走「SSE→内存→随提交发 Google」而未落库，导致 DB 关键字大面积为空、
     //   无法用于兜底/审计）。剔除政策重试阶段被丢弃的词（skippedKeywords）。
+    let keywordPersistFailed = false;
     try {
       const persistRows = submittedKeywords
         .filter((k) => k.text.trim().length > 0 && !skippedKeywords.includes(k.text))
@@ -2001,6 +2002,8 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
         ]);
       }
     } catch (e) {
+      // D-163⑦：失败不再纯静默，成功消息里带警告，避免「提交成功但数据中心看不到关键字」的困惑
+      keywordPersistFailed = true;
       console.warn("[AdSubmit] 关键字回写 DB 失败（不影响广告投放）:", e instanceof Error ? e.message : e);
     }
 
@@ -2046,6 +2049,9 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
           ? `${imageUploadResult.failed} 张图片已存入账户素材库，但该账户暂不满足搜索广告图片素材投放资格（需账户历史/消耗达标），暂未挂载到广告（不影响广告投放）`
           : `${imageUploadResult.failed} 张图片素材上传失败（不影响广告）`,
       );
+    }
+    if (keywordPersistFailed) {
+      msgParts.push("注意：关键字已提交到 Google 但未能保存到系统数据库，数据中心可能暂时看不到关键字（不影响广告投放）");
     }
     const successMsg = msgParts.join("，");
 

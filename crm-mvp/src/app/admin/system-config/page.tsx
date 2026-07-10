@@ -247,14 +247,26 @@ function ConfigGroupCard({
   }, [configValues, form, group.fields]);
 
   const handleSave = async () => {
-    const rawValues = await form.validateFields();
+    // D-163④：校验失败必须有反馈（同 admin/sites 的病），否则长页里点保存毫无反应
+    let rawValues;
+    try {
+      rawValues = await form.validateFields();
+    } catch (err) {
+      const first = (err as { errorFields?: Array<{ name: (string | number)[] }> })?.errorFields?.[0];
+      if (first) form.scrollToField(first.name, { behavior: "smooth", block: "center" });
+      message.error("表单有必填项未填或格式错误，请补全后再保存");
+      return;
+    }
     // 将 Switch 布尔值转为 "1" / "0"
     const values: Record<string, string> = {};
     for (const f of group.fields) {
       if (f.isSwitch) {
         values[f.key] = rawValues[f.key] ? "1" : "0";
       } else {
-        values[f.key] = rawValues[f.key] ?? "";
+        const v = rawValues[f.key] ?? "";
+        // D-163④：密码/Token 类字段留空表示「不修改」，不提交，防止把库里已有凭证清空
+        if (f.isPassword && !String(v).trim()) continue;
+        values[f.key] = v;
       }
     }
     setSaving(true);
@@ -304,7 +316,7 @@ function ConfigGroupCard({
               {field.isSwitch ? (
                 <Switch checkedChildren="已启用" unCheckedChildren="已停用" />
               ) : field.isPassword ? (
-                <Password placeholder={field.placeholder} />
+                <Password placeholder={`${field.placeholder}（留空则保持不变）`} />
               ) : field.isTextarea ? (
                 <TextArea rows={6} placeholder={field.placeholder} style={{ fontFamily: "monospace", fontSize: 12 }} />
               ) : (
@@ -333,15 +345,18 @@ export default function SystemConfigPage() {
     // 获取分组配置
     const batchRes = await fetch("/api/admin/system-config/batch").then((r) => r.json()).catch(() => ({ code: -1 }));
     if (batchRes.code === 0) setConfigValues(batchRes.data || {});
+    else message.error("分组配置加载失败，页面显示的可能是空值，请刷新重试");
 
     // 获取通用配置
     const generalRes = await fetch("/api/admin/system-config").then((r) => r.json()).catch(() => ({ code: -1 }));
     if (generalRes.code === 0) {
       // 过滤掉分组配置
       setGeneralList((generalRes.data || []).filter((c: Config) => !groupKeys.has(c.config_key)));
+    } else {
+      message.error("通用配置加载失败，请刷新重试");
     }
     setLoading(false);
-  }, []);
+  }, [message]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
@@ -350,21 +365,30 @@ export default function SystemConfigPage() {
   const handleEdit = (item: Config) => { setEditItem(item); form.setFieldsValue(item); setModalOpen(true); };
 
   const handleSubmit = async () => {
-    const values = await form.validateFields();
+    let values;
+    try { values = await form.validateFields(); } catch { return; }
     const method = editItem ? "PUT" : "POST";
     const body = editItem ? { id: editItem.id, ...values } : values;
-    const res = await fetch("/api/admin/system-config", {
-      method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-    }).then((r) => r.json());
-    if (res.code === 0) { message.success(editItem ? "更新成功" : "创建成功"); setModalOpen(false); fetchAll(); }
-    else message.error(res.message);
+    try {
+      const res = await fetch("/api/admin/system-config", {
+        method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      }).then((r) => r.json());
+      if (res.code === 0) { message.success(editItem ? "更新成功" : "创建成功"); setModalOpen(false); fetchAll(); }
+      else message.error(res.message);
+    } catch {
+      message.error("网络异常，请重试");
+    }
   };
 
   const handleDelete = async (id: string) => {
-    const res = await fetch("/api/admin/system-config", {
-      method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }),
-    }).then((r) => r.json());
-    if (res.code === 0) { message.success("删除成功"); fetchAll(); } else message.error(res.message);
+    try {
+      const res = await fetch("/api/admin/system-config", {
+        method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }),
+      }).then((r) => r.json());
+      if (res.code === 0) { message.success("删除成功"); fetchAll(); } else message.error(res.message);
+    } catch {
+      message.error("网络异常，请重试");
+    }
   };
 
   const columns = [

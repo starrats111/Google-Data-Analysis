@@ -47,19 +47,28 @@ export default function TeamMembersPage() {
     setModalOpen(true);
   }, [form]);
 
+  const [submitting, setSubmitting] = useState(false);
   const handleSubmit = useCallback(async () => {
-    const values = await form.validateFields();
-    const method = editMember ? "PUT" : "POST";
-    const body = editMember ? { id: editMember.id, ...values } : values;
-    // 如果密码为空字符串，编辑时不传
-    if (editMember && !values.password) delete body.password;
-    const res = await mutateApi("/api/user/team/members", { method, body });
-    if (res.code === 0) {
-      message.success(editMember ? "更新成功" : "创建成功");
-      setModalOpen(false);
-      mutate();
-    } else {
-      message.error(res.message);
+    let values: Record<string, unknown>;
+    try { values = await form.validateFields(); } catch { return; }
+    setSubmitting(true);
+    try {
+      const method = editMember ? "PUT" : "POST";
+      const body = editMember ? { id: editMember.id, ...values } : values;
+      // 如果密码为空字符串，编辑时不传
+      if (editMember && !values.password) delete body.password;
+      const res = await mutateApi("/api/user/team/members", { method, body });
+      if (res.code === 0) {
+        message.success(editMember ? "更新成功" : "创建成功");
+        setModalOpen(false);
+        mutate();
+      } else {
+        message.error(res.message);
+      }
+    } catch {
+      message.error("网络异常，请重试");
+    } finally {
+      setSubmitting(false);
     }
   }, [form, editMember, mutate, message]);
 
@@ -127,6 +136,7 @@ export default function TeamMembersPage() {
       <Modal
         title={editMember ? "编辑组员" : "添加组员"}
         open={modalOpen}
+        confirmLoading={submitting}
         onOk={handleSubmit}
         onCancel={() => setModalOpen(false)}
       >

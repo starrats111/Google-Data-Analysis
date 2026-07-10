@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   Card, Table, Tag, Statistic, Row, Col, Progress, Typography, Spin, Empty,
-  Space, DatePicker, Button, Tooltip, notification, Badge,
+  Space, DatePicker, Button, Tooltip, notification, Badge, App,
 } from "antd";
 import {
   TeamOutlined, UserOutlined, TrophyOutlined, ReloadOutlined, SyncOutlined,
@@ -53,6 +53,7 @@ interface TeamStats {
 }
 
 export default function TeamOverviewPage() {
+  const { message } = App.useApp();
   const [memberRanking, setMemberRanking] = useState<MemberRanking[]>([]);
   const [memberCount, setMemberCount] = useState(0);
   const [teamActiveMerchants, setTeamActiveMerchants] = useState(0);
@@ -91,7 +92,8 @@ export default function TeamOverviewPage() {
     };
   }, [memberRanking, memberCount, teamActiveMerchants, teamTodayAds]);
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = opts?.silent === true;
     setLoading(true);
     try {
       const params = new URLSearchParams({
@@ -106,13 +108,16 @@ export default function TeamOverviewPage() {
         setTeamTodayAds(res.data.team_stats?.today_ads ?? 0);
         setLastUpdated(dayjs().tz(TZ));
         setCountdown(AUTO_REFRESH_INTERVAL / 1000);
+      } else if (!silent) {
+        message.error(res.message || "加载小组数据失败");
       }
     } catch (e) {
       console.error("加载小组数据失败:", e);
+      if (!silent) message.error("加载小组数据失败，请重试");
     } finally {
       setLoading(false);
     }
-  }, [dateRange]);
+  }, [dateRange, message]);
 
   /** 同步所有组员今日费用 + 近 7 天佣金，完成后刷新统计 */
   const handleSync = useCallback(async () => {
@@ -163,7 +168,7 @@ export default function TeamOverviewPage() {
   const loadDataRef = useRef(loadData);
   loadDataRef.current = loadData;
   useEffect(() => {
-    const timer = setInterval(() => { loadDataRef.current(); }, AUTO_REFRESH_INTERVAL);
+    const timer = setInterval(() => { loadDataRef.current({ silent: true }); }, AUTO_REFRESH_INTERVAL);
     return () => clearInterval(timer);
   }, []);
 
@@ -318,7 +323,7 @@ export default function TeamOverviewPage() {
                 同步数据
               </Button>
             </Tooltip>
-            <Button icon={<ReloadOutlined />} onClick={loadData} loading={loading} disabled={syncing}>
+            <Button icon={<ReloadOutlined />} onClick={() => loadData()} loading={loading} disabled={syncing}>
               刷新
             </Button>
           </Space>

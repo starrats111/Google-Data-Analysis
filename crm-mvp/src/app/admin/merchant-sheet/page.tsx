@@ -49,31 +49,49 @@ export default function MerchantSheetPage() {
   const [detailContent, setDetailContent] = useState("");
 
   const fetchConfig = async () => {
-    const res = await fetch("/api/admin/merchant-sheet?action=config").then((r) => r.json());
-    if (res.code === 0) {
-      setSheetUrl(res.data.sheet_url || "");
-      setLastSynced(res.data.last_synced_at);
-      setSaEmail(res.data.sa_email || null);
+    try {
+      const res = await fetch("/api/admin/merchant-sheet?action=config").then((r) => r.json());
+      if (res.code === 0) {
+        setSheetUrl(res.data.sheet_url || "");
+        setLastSynced(res.data.last_synced_at);
+        setSaEmail(res.data.sa_email || null);
+      } else {
+        message.error("加载失败：" + (res?.message || "网络异常"));
+      }
+    } catch {
+      message.error("加载失败：网络异常");
     }
   };
 
   const fetchViolations = useCallback(async (p = 1) => {
     setVioLoading(true);
-    const params = new URLSearchParams({ action: "violations", page: String(p), pageSize: "50" });
-    if (vioSearch) params.set("search", vioSearch);
-    const res = await fetch(`/api/admin/merchant-sheet?${params}`).then((r) => r.json());
-    if (res.code === 0) { setViolations(res.data.items); setVioTotal(res.data.total); setVioPage(p); }
-    setVioLoading(false);
-  }, [vioSearch]);
+    try {
+      const params = new URLSearchParams({ action: "violations", page: String(p), pageSize: "50" });
+      if (vioSearch) params.set("search", vioSearch);
+      const res = await fetch(`/api/admin/merchant-sheet?${params}`).then((r) => r.json());
+      if (res.code === 0) { setViolations(res.data.items); setVioTotal(res.data.total); setVioPage(p); }
+      else message.error("加载失败：" + (res?.message || "网络异常"));
+    } catch {
+      message.error("加载失败：网络异常");
+    } finally {
+      setVioLoading(false);
+    }
+  }, [vioSearch, message]);
 
   const fetchRecommendations = useCallback(async (p = 1) => {
     setRecLoading(true);
-    const params = new URLSearchParams({ action: "recommendations", page: String(p), pageSize: "50" });
-    if (recSearch) params.set("search", recSearch);
-    const res = await fetch(`/api/admin/merchant-sheet?${params}`).then((r) => r.json());
-    if (res.code === 0) { setRecommendations(res.data.items); setRecTotal(res.data.total); setRecPage(p); }
-    setRecLoading(false);
-  }, [recSearch]);
+    try {
+      const params = new URLSearchParams({ action: "recommendations", page: String(p), pageSize: "50" });
+      if (recSearch) params.set("search", recSearch);
+      const res = await fetch(`/api/admin/merchant-sheet?${params}`).then((r) => r.json());
+      if (res.code === 0) { setRecommendations(res.data.items); setRecTotal(res.data.total); setRecPage(p); }
+      else message.error("加载失败：" + (res?.message || "网络异常"));
+    } catch {
+      message.error("加载失败：网络异常");
+    } finally {
+      setRecLoading(false);
+    }
+  }, [recSearch, message]);
 
   useEffect(() => { fetchConfig(); }, []);
   useEffect(() => {
@@ -81,14 +99,24 @@ export default function MerchantSheetPage() {
     else fetchRecommendations(1);
   }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const [savingUrl, setSavingUrl] = useState(false);
+
   const handleSaveUrl = async () => {
     if (!sheetUrl.trim()) { message.warning("请输入 Google Sheets 链接"); return; }
-    const res = await fetch("/api/admin/merchant-sheet", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "save_url", sheet_url: sheetUrl.trim() }),
-    }).then((r) => r.json());
-    if (res.code === 0) message.success("链接已保存");
-    else message.error(res.message);
+    if (savingUrl) return;
+    setSavingUrl(true);
+    try {
+      const res = await fetch("/api/admin/merchant-sheet", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "save_url", sheet_url: sheetUrl.trim() }),
+      }).then((r) => r.json());
+      if (res.code === 0) message.success("链接已保存");
+      else message.error(res.message);
+    } catch {
+      message.error("网络异常，请重试");
+    } finally {
+      setSavingUrl(false);
+    }
   };
 
   const [syncProgress, setSyncProgress] = useState("");
@@ -174,15 +202,19 @@ export default function MerchantSheetPage() {
   };
 
   const handleDelete = async (type: string, id: string) => {
-    const res = await fetch("/api/admin/merchant-sheet", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: type === "violation" ? "delete_violation" : "delete_recommendation", id }),
-    }).then((r) => r.json());
-    if (res.code === 0) {
-      message.success("已删除");
-      if (type === "violation") fetchViolations(vioPage);
-      else fetchRecommendations(recPage);
-    } else message.error(res.message);
+    try {
+      const res = await fetch("/api/admin/merchant-sheet", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: type === "violation" ? "delete_violation" : "delete_recommendation", id }),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        message.success("已删除");
+        if (type === "violation") fetchViolations(vioPage);
+        else fetchRecommendations(recPage);
+      } else message.error(res.message);
+    } catch {
+      message.error("网络异常，请重试");
+    }
   };
 
   const handleExcelUpload = async () => {
@@ -225,7 +257,7 @@ export default function MerchantSheetPage() {
             onChange={(e) => setSheetUrl(e.target.value)}
             onPressEnter={handleSaveUrl}
           />
-          <Button onClick={handleSaveUrl}>保存</Button>
+          <Button onClick={handleSaveUrl} loading={savingUrl}>保存</Button>
           <Button type="primary" loading={sheetSyncing} onClick={handleSync} disabled={!sheetUrl} icon={<CloudSyncOutlined />}>
             {sheetSyncing && syncProgress ? syncProgress : "统一同步"}
           </Button>

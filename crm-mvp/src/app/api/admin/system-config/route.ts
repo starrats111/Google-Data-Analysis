@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { getAdminFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
+import { toBigIntId } from "@/lib/safe-bigint";
 import prisma from "@/lib/prisma";
 
 export async function GET(req: NextRequest) {
@@ -36,12 +37,14 @@ export async function PUT(req: NextRequest) {
 
   const { id, config_value, description } = await req.json();
   if (!id) return apiError("缺少 ID");
+  const parsedId = toBigIntId(id);
+  if (!parsedId) return apiError("ID 格式无效");
 
   const data: Record<string, unknown> = {};
   if (config_value !== undefined) data.config_value = config_value;
   if (description !== undefined) data.description = description;
 
-  await prisma.system_configs.update({ where: { id: BigInt(id) }, data });
+  await prisma.system_configs.update({ where: { id: parsedId }, data });
   return apiSuccess(null, "更新成功");
 }
 
@@ -51,7 +54,9 @@ export async function DELETE(req: NextRequest) {
 
   const { id } = await req.json();
   if (!id) return apiError("缺少 ID");
+  const parsedId = toBigIntId(id);
+  if (!parsedId) return apiError("ID 格式无效");
 
-  await prisma.system_configs.update({ where: { id: BigInt(id) }, data: { is_deleted: 1 } });
+  await prisma.system_configs.update({ where: { id: parsedId }, data: { is_deleted: 1 } });
   return apiSuccess(null, "删除成功");
 }
