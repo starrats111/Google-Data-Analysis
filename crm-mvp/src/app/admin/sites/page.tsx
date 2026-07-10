@@ -170,7 +170,17 @@ function ServerConfigCard({ onPoolLoaded }: { onPoolLoaded?: (pool: TokenPool) =
   useEffect(() => { fetchConfig(); }, [fetchConfig]);
 
   const handleSave = async () => {
-    const values = await form.validateFields();
+    // D-162：validateFields 失败原先未捕获——点保存毫无反应（无提示、不滚动到出错项），
+    // 库里 org 为空的历史条目会让整张表单永远保存不了，用户以为「删改不了 token」
+    let values;
+    try {
+      values = await form.validateFields();
+    } catch (err) {
+      const first = (err as { errorFields?: Array<{ name: (string | number)[] }> })?.errorFields?.[0];
+      if (first) form.scrollToField(first.name, { behavior: "smooth", block: "center" });
+      message.error("表单有必填项未填（已定位到出错位置），请补全后再保存");
+      return;
+    }
     setSaving(true);
     try {
       const payload = {
