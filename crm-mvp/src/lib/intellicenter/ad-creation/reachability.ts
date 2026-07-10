@@ -112,13 +112,16 @@ export async function checkReachability(
   }
 
   // CRAWL-04：直连「连接级失败」时走该国代理兜底探一次。
-  //   仅对 timeout / network_error / server_error 触发——这些是「连不上/服务端抖动」，
-  //   本机出口 IP 被地域封锁恰属此类（rcwilley 实证）；4xx（404/410/403…）有明确 HTTP 应答、
-  //   不属「连不上」，不走代理（避免给真死链/真 403 蒙混）。代理探到 2xx 即视为可达放行。
+  //   对 timeout / network_error / server_error 触发——这些是「连不上/服务端抖动」，
+  //   本机出口 IP 被地域封锁恰属此类（rcwilley 实证）。
+  //   404/410 同样走代理复核：部分 CDN/WAF 对机房 IP、非目标国 IP 不回 403 而是直接回 404
+  //   （rad.eu 实证：直连 404、真实浏览器/目标国用户 200），直连 404 ≠ 页面真的不存在。
+  //   代理探到 2xx 即视为可达放行；代理也 404 才维持死链结论。
   if (!lastResult.reachable && opts.country) {
     const fr = lastResult.failureReason || "";
     const isConnLevel = fr.startsWith("network_error") || fr === "timeout" || fr === "server_error";
-    if (isConnLevel) {
+    const isDeadClientError = fr === "client_error" && (lastResult.statusCode === 404 || lastResult.statusCode === 410);
+    if (isConnLevel || isDeadClientError) {
       // 代理链路比直连慢（实测 SOCKS5 取 rcwilley ~6.3s），给更宽松超时避免临界误判
       const viaProxy = await probeViaProxy(url, opts.country, Math.max(timeoutMs, 15000), maxRedirects).catch(() => null);
       if (viaProxy && viaProxy.reachable) {
@@ -240,8 +243,10 @@ async function singleProbeWithRedirects(
         headers,
         signal: AbortSignal.timeout(opts.timeoutMs),
       });
-      // 部分站点 HEAD 返回 405/501，要换 GET 试
-      if (res.status === 405 || res.status === 501) {
+      // 部分站点对 HEAD 处理异常：405/501（不支持）之外，不少 CDN/WAF 对 HEAD 直接回
+      // 404/403（GET 却 200，rad.eu 实证）。凡 HEAD 拿到 >=400 一律换 GET 复核一次，
+      // 以 GET 结果为准，避免把「HEAD 被针对」误判成死链。
+      if (res.status >= 400) {
         res = await fetch(currentUrl, {
           method: "GET",
           redirect: "manual",

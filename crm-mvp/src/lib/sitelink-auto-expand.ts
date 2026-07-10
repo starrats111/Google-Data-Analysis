@@ -11,6 +11,7 @@ import { getProxyUrlForCountry, fetchViaProxy } from "@/lib/crawl-proxy";
 import { fetchUrlMeta } from "@/lib/crawler";
 import {
   isBadSitelinkUrl,
+  isSitelinkLocaleCompatible,
   titleFromUrlPath,
   sanitizeAdText,
   smartTruncate,
@@ -249,7 +250,9 @@ export async function autoExpandSitelinks(opts: {
   try {
     const fromSitemap = await extractFromSitemap(merchantUrl, proxyUrl);
     for (const u of fromSitemap) {
-      if (sameOrigin(u, merchantUrl) && isTopLevelPath(u) && !isBadSitelinkUrl(u)) {
+      // isSitelinkLocaleCompatible：sitemap 常含全部语言版本 URL（/fr /nl /de…），
+      // 只保留与落地页语言一致的，避免 rad.eu「落地页 /en 配 /fr /nl 站内链接」类错配
+      if (sameOrigin(u, merchantUrl) && isTopLevelPath(u) && !isBadSitelinkUrl(u) && isSitelinkLocaleCompatible(u, merchantUrl)) {
         candidates.add(u);
       }
     }
@@ -261,7 +264,7 @@ export async function autoExpandSitelinks(opts: {
     try {
       const fromRobots = await extractFromRobots(merchantUrl, proxyUrl);
       for (const u of fromRobots) {
-        if (sameOrigin(u, merchantUrl) && isTopLevelPath(u) && !isBadSitelinkUrl(u)) {
+        if (sameOrigin(u, merchantUrl) && isTopLevelPath(u) && !isBadSitelinkUrl(u) && isSitelinkLocaleCompatible(u, merchantUrl)) {
           candidates.add(u);
         }
       }
@@ -343,7 +346,7 @@ export async function autoExpandSitelinks(opts: {
         while ((hm = hrefRe.exec(subHtml)) !== null) {
           try {
             const abs = new URL(hm[1], subRoot).toString();
-            if (sameOrigin(abs, merchantUrl) && isTopLevelPath(abs) && !isBadSitelinkUrl(abs) && !usedUrls.has(abs)) {
+            if (sameOrigin(abs, merchantUrl) && isTopLevelPath(abs) && !isBadSitelinkUrl(abs) && isSitelinkLocaleCompatible(abs, merchantUrl) && !usedUrls.has(abs)) {
               subCandidates.push(abs);
             }
           } catch {}

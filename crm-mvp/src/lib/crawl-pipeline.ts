@@ -153,6 +153,68 @@ export function isBadSitelinkUrl(url: string): boolean {
   return false;
 }
 
+// ─── 站内链接 locale 一致性（严查：落地页 /en 却配出 /fr、/nl 站内链接 = 语言错配）───
+// 实证：rad.eu 落地页 https://www.rad.eu/en，站内链接却生成 /fr、/nl（其他语言版首页），
+// 用户点进去语言突变，Google 也可能判 misleading。根因是 CRAWL-06 之后候选 URL「原样采用」，
+// 全链路没有任何「候选 locale 必须与落地页 locale 一致」的校验。
+
+const LOCALE_LANG_CODES = new Set([
+  "en", "de", "fr", "es", "it", "nl", "pt", "sv", "nb", "no", "da", "fi",
+  "pl", "cs", "sk", "hu", "ro", "bg", "el", "tr", "ru", "uk", "ja", "ko",
+  "zh", "ar", "he", "iw", "th", "vi", "id", "ms", "hi",
+]);
+const LOCALE_REGION_CODES = new Set([
+  "us", "gb", "au", "ca", "nz", "ie", "sg", "at", "ch", "be",
+  "se", "dk", "jp", "kr", "cn", "tw", "hk", "in", "br", "mx", "eu",
+]);
+
+/** 解析 URL 路径首段的 locale 前缀（/en、/fr-fr、/en_us…）；非 locale 前缀返回 null */
+export function parseUrlLocalePrefix(url: string): { lang?: string; region?: string; raw: string } | null {
+  try {
+    const segs = new URL(url).pathname.split("/").filter(Boolean);
+    if (segs.length === 0) return null;
+    const first = segs[0].toLowerCase();
+    const m = first.match(/^([a-z]{2})(?:[-_]([a-z]{2}))?$/);
+    if (!m) return null;
+    const [, a, b] = m;
+    if (b) {
+      if (!LOCALE_LANG_CODES.has(a)) return null;
+      return { lang: a, region: b, raw: first };
+    }
+    if (LOCALE_LANG_CODES.has(a)) return { lang: a, raw: first };
+    if (LOCALE_REGION_CODES.has(a)) return { region: a, raw: first };
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** 是否为「裸 locale 首页」（如 https://site.com/fr）——本质是另一语言版首页，不适合做 sitelink */
+export function isBareLocaleRootUrl(url: string): boolean {
+  try {
+    const segs = new URL(url).pathname.split("/").filter(Boolean);
+    return segs.length === 1 && parseUrlLocalePrefix(url) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 站内链接候选与落地页的 locale 是否一致。
+ *   - 裸 locale 首页（/fr、/nl）一律不一致；
+ *   - 两边都带 locale 前缀时按语言比较（en vs en-gb 视为一致，en vs fr 不一致）；
+ *   - 语言不可比时按区域比较；任一边无 locale 前缀 → 无从比较，放行（避免误杀）。
+ */
+export function isSitelinkLocaleCompatible(candidateUrl: string, landingUrl: string): boolean {
+  if (isBareLocaleRootUrl(candidateUrl)) return false;
+  const c = parseUrlLocalePrefix(candidateUrl);
+  const l = parseUrlLocalePrefix(landingUrl);
+  if (!c || !l) return true;
+  if (c.lang && l.lang) return c.lang === l.lang;
+  if (c.region && l.region) return c.region === l.region;
+  return true;
+}
+
 export function decodeHtmlEntities(str: string): string {
   return str
     .replace(/&amp;/gi, "&").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">")
@@ -1077,7 +1139,7 @@ async function discoverSitelinkCandidates(
   const httpFailedLinks: { url: string; text: string }[] = [];
 
   // 拒因计数（最终一次性汇总到 console.warn，避免刷屏）
-  const rejectStats = { notOk: 0, rootPath: 0, duplicate: 0, titleShort: 0, botBlockFallback: 0 };
+  const rejectStats = { notOk: 0, rootPath: 0, duplicate: 0, titleShort: 0, botBlockFallback: 0, localeMismatch: 0 };
 
   // C-017 bot-block 决策：只有当**同批多条**子页都被重定向到首页时，才视为 WAF 整站保护、
   // 信任原 link.url；单条合法 301（老 URL 下线/季节过期）不触发回退，该 URL 按 rootPath 规则拒掉，
@@ -1132,6 +1194,12 @@ async function discoverSitelinkCandidates(
         return false;
       }
     } catch {}
+    // locale 严查：裸 locale 首页（/fr、/nl）及与落地页语言版本不一致的候选一律拒收
+    // （rad.eu 实证：落地页 /en 却配出 /fr、/nl 站内链接）
+    if (!isSitelinkLocaleCompatible(realUrl, merchantUrl)) {
+      rejectStats.localeMismatch++;
+      return false;
+    }
     const normalizedUrl = realUrl.replace(/\/$/, "").replace(/^http:/, "https:");
     if (usedFinalUrls.has(normalizedUrl)) {
       rejectStats.duplicate++;
@@ -1539,6 +1607,7 @@ async function discoverSitelinkCandidates(
         } catch { return false; }
       })
       .filter((l) => !isBadSitelinkUrl(l.url))
+      .filter((l) => isSitelinkLocaleCompatible(l.url, merchantUrl))
       .filter((l) => {
         const t = sanitizeAdText(decodeHtmlEntities((l.text || "").trim()));
         return t.length >= 2 && !BAD_LINK_TEXTS.includes(t.toLowerCase());
@@ -1565,7 +1634,7 @@ async function discoverSitelinkCandidates(
   // C-015 §4：最终汇总行 + 拒因统计（console.warn 必落盘，方便事后诊断）
   console.warn(
     `[Sitelinks] 最终候选 ${candidates.length} 条 / merchantDomain=${merchantDomain} country=${country ?? "-"} ` +
-    `| 拒因: notOk=${rejectStats.notOk} rootPath=${rejectStats.rootPath} dup=${rejectStats.duplicate} titleShort=${rejectStats.titleShort} botBlockFallback=${rejectStats.botBlockFallback}`,
+    `| 拒因: notOk=${rejectStats.notOk} rootPath=${rejectStats.rootPath} dup=${rejectStats.duplicate} titleShort=${rejectStats.titleShort} botBlockFallback=${rejectStats.botBlockFallback} localeMismatch=${rejectStats.localeMismatch}`,
   );
   return candidates.slice(0, 6);
 }

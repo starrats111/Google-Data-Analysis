@@ -3,7 +3,8 @@ import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { getAdMarketConfig } from "@/lib/ad-market";
-import { sanitizeAdText } from "@/lib/crawl-pipeline";
+import { sanitizeAdText, isSitelinkLocaleCompatible } from "@/lib/crawl-pipeline";
+import { tryValidateUrl } from "@/lib/url-validator";
 import { fitAdTextBatch, fitAdTextSync } from "@/lib/ad-text-fit";
 import { collectAiRuleViolations, normalizeAiRuleProfile, getActivePersona, includesForbiddenTerm, autoRewriteForbiddenTerms } from "@/lib/ai-rule-profile";
 import { callAiWithFallback } from "@/lib/ai-service";
@@ -213,14 +214,27 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
   // ═════════════════════════════════════════════════════════════════
   try {
     const reach = await checkReachability(finalUrl, { maxRetries: 3, timeoutMs: 8000, country: campaign.target_country || "US" });
-    if (isHardUnreachable(reach)) {
+    let landingHardBlocked = isHardUnreachable(reach);
+    const fr = reach.failureReason || "";
+    const isConnLevel = fr.startsWith("network_error") || fr === "timeout" || fr === "server_error";
+    const isDead404 = fr === "client_error" && (reach.statusCode === 404 || reach.statusCode === 410);
+    // 404 双标修复：直连 HEAD/GET 404 可能是 CDN/WAF 对机房 IP、爬虫指纹的定向拦截（真实浏览器 200，
+    //   rad.eu 实证）。硬卡前先用与预览页「验证」按钮同源的 tryValidateUrl 复核一次（浏览器级
+    //   header + GET 内容检测 + 目标国代理重试），复核可达即放行——否则会出现「预览页验证全绿、
+    //   提交却被 404 硬卡」的两套标准，员工无所适从。
+    if (landingHardBlocked && isDead404) {
+      const second = await tryValidateUrl(finalUrl).catch(() => null);
+      if (second?.ok) {
+        console.warn(`[AdSubmit] D-050 直连探测 404 但浏览器级复核可达（status=${second.status}${second.reason ? `, ${second.reason}` : ""}），放行 ${finalUrl}`);
+        landingHardBlocked = false;
+      }
+    }
+    if (landingHardBlocked) {
       // CRAWL-04 / 07-B：连接级失败（timeout/network_error/server_error）多为「本服务器出口 IP 被
       //   目标站 CDN(Akamai 等)/地域封锁」——我们到不了 ≠ 站点死了，Google 全球爬虫独立可达。
-      //   故对这类失败提供「二次确认覆盖」：用户在弹窗确认落地页可正常打开后带 confirm_reachable=true，
-      //   即放行提交（仍记日志留痕）。404/410 这类「服务器明确说页面没了」不在覆盖范围内（见下）。
-      const fr = reach.failureReason || "";
-      const isConnLevel = fr.startsWith("network_error") || fr === "timeout" || fr === "server_error";
-      const overridable = isConnLevel; // 仅连接级失败可被用户确认覆盖；404/410 死链不可
+      //   404/410 在代理复核 + tryValidateUrl 双复核仍失败后，同样开放「二次确认覆盖」：反爬手段
+      //   五花八门，机器判死 ≠ 真死，用户亲眼确认页面能打开就应放行（仍记日志留痕，责任随确认转移）。
+      const overridable = isConnLevel || isDead404;
       if (confirmReachable && overridable) {
         console.warn(`[AdSubmit] D-050 落地页硬卡：用户已确认可访问，覆盖放行 ${finalUrl} reason=${fr} status=${reach.statusCode}`);
       } else {
@@ -589,6 +603,21 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
       return apiError(`站内链接 URL 格式无效，请修正后再提交：${badLinks.join("、")}`);
     }
 
+    // 严查：站内链接与落地页语言版本一致性。落地页 /en 却配 /fr、/nl（其他语言版首页或子页，
+    // rad.eu 实证）会把用户带进另一语言站点、Google 亦可能判 misleading——提交前统一剔除并留痕，
+    // 兜住生成阶段修复前已落库的旧草稿/员工手填的错配链接。
+    {
+      const slArr = sitelinks as { finalUrl?: string; title?: string }[];
+      const kept = slArr.filter((sl) => isSitelinkLocaleCompatible((sl.finalUrl || "").trim(), finalUrl));
+      if (kept.length !== slArr.length) {
+        const removed = slArr.filter((sl) => !kept.includes(sl));
+        console.warn(
+          `[AdSubmit] 剔除与落地页语言版本不一致的站内链接 ${removed.length} 条（落地页=${finalUrl}）: ${removed.map((r) => `${r.title || "(无标题)"}(${r.finalUrl})`).join("、")}`,
+        );
+        sitelinks.splice(0, sitelinks.length, ...kept);
+      }
+    }
+
     // D-050 第2块：sitelink 提交前可达性硬卡——确定性死链的 sitelink 直接剔除（不阻断整条广告）。
     //   单条 sitelink 死链同样会被 Google 标记，影响整体审核；剔除比阻断更稳妥。
     try {
@@ -597,7 +626,8 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
         slArr.map(async (sl) => {
           const slUrl = (sl.finalUrl || "").trim();
           try {
-            const r = await checkReachability(slUrl, { maxRetries: 1, timeoutMs: 6000 });
+            // country：直连 404 时走目标国代理复核（与落地页同口径），避免地域封锁误剔正常 sitelink
+            const r = await checkReachability(slUrl, { maxRetries: 1, timeoutMs: 6000, country: campaign.target_country || "US" });
             return isHardUnreachable(r) ? { dead: true, title: sl.title || slUrl, reason: r.failureReason } : { dead: false };
           } catch {
             return { dead: false };
