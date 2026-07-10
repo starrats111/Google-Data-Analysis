@@ -39,6 +39,7 @@ export type CampaignsAvgAggregateOutputType = {
   network_display: number | null
   suffix_exchange_enabled: number | null
   suffix_needs_browser: number | null
+  suffix_is_static: number | null
   suffix_click_baseline: number | null
   is_deleted: number | null
 }
@@ -56,6 +57,7 @@ export type CampaignsSumAggregateOutputType = {
   network_display: number | null
   suffix_exchange_enabled: number | null
   suffix_needs_browser: number | null
+  suffix_is_static: number | null
   suffix_click_baseline: number | null
   is_deleted: number | null
 }
@@ -84,6 +86,7 @@ export type CampaignsMinAggregateOutputType = {
   final_url_suffix: string | null
   suffix_exchange_enabled: number | null
   suffix_needs_browser: number | null
+  suffix_is_static: number | null
   suffix_last_content: string | null
   suffix_last_apply_at: Date | null
   suffix_click_baseline: number | null
@@ -117,6 +120,7 @@ export type CampaignsMaxAggregateOutputType = {
   final_url_suffix: string | null
   suffix_exchange_enabled: number | null
   suffix_needs_browser: number | null
+  suffix_is_static: number | null
   suffix_last_content: string | null
   suffix_last_apply_at: Date | null
   suffix_click_baseline: number | null
@@ -151,6 +155,7 @@ export type CampaignsCountAggregateOutputType = {
   final_url_suffix: number
   suffix_exchange_enabled: number
   suffix_needs_browser: number
+  suffix_is_static: number
   suffix_last_content: number
   suffix_last_apply_at: number
   suffix_click_baseline: number
@@ -175,6 +180,7 @@ export type CampaignsAvgAggregateInputType = {
   network_display?: true
   suffix_exchange_enabled?: true
   suffix_needs_browser?: true
+  suffix_is_static?: true
   suffix_click_baseline?: true
   is_deleted?: true
 }
@@ -192,6 +198,7 @@ export type CampaignsSumAggregateInputType = {
   network_display?: true
   suffix_exchange_enabled?: true
   suffix_needs_browser?: true
+  suffix_is_static?: true
   suffix_click_baseline?: true
   is_deleted?: true
 }
@@ -220,6 +227,7 @@ export type CampaignsMinAggregateInputType = {
   final_url_suffix?: true
   suffix_exchange_enabled?: true
   suffix_needs_browser?: true
+  suffix_is_static?: true
   suffix_last_content?: true
   suffix_last_apply_at?: true
   suffix_click_baseline?: true
@@ -253,6 +261,7 @@ export type CampaignsMaxAggregateInputType = {
   final_url_suffix?: true
   suffix_exchange_enabled?: true
   suffix_needs_browser?: true
+  suffix_is_static?: true
   suffix_last_content?: true
   suffix_last_apply_at?: true
   suffix_click_baseline?: true
@@ -287,6 +296,7 @@ export type CampaignsCountAggregateInputType = {
   final_url_suffix?: true
   suffix_exchange_enabled?: true
   suffix_needs_browser?: true
+  suffix_is_static?: true
   suffix_last_content?: true
   suffix_last_apply_at?: true
   suffix_click_baseline?: true
@@ -408,6 +418,7 @@ export type CampaignsGroupByOutputType = {
   final_url_suffix: string | null
   suffix_exchange_enabled: number
   suffix_needs_browser: number
+  suffix_is_static: number
   suffix_last_content: string | null
   suffix_last_apply_at: Date | null
   suffix_click_baseline: number
@@ -465,6 +476,7 @@ export type campaignsWhereInput = {
   final_url_suffix?: Prisma.StringNullableFilter<"campaigns"> | string | null
   suffix_exchange_enabled?: Prisma.IntFilter<"campaigns"> | number
   suffix_needs_browser?: Prisma.IntFilter<"campaigns"> | number
+  suffix_is_static?: Prisma.IntFilter<"campaigns"> | number
   suffix_last_content?: Prisma.StringNullableFilter<"campaigns"> | string | null
   suffix_last_apply_at?: Prisma.DateTimeNullableFilter<"campaigns"> | Date | string | null
   suffix_click_baseline?: Prisma.IntFilter<"campaigns"> | number
@@ -499,6 +511,7 @@ export type campaignsOrderByWithRelationInput = {
   final_url_suffix?: Prisma.SortOrderInput | Prisma.SortOrder
   suffix_exchange_enabled?: Prisma.SortOrder
   suffix_needs_browser?: Prisma.SortOrder
+  suffix_is_static?: Prisma.SortOrder
   suffix_last_content?: Prisma.SortOrderInput | Prisma.SortOrder
   suffix_last_apply_at?: Prisma.SortOrderInput | Prisma.SortOrder
   suffix_click_baseline?: Prisma.SortOrder
@@ -537,6 +550,7 @@ export type campaignsWhereUniqueInput = Prisma.AtLeast<{
   final_url_suffix?: Prisma.StringNullableFilter<"campaigns"> | string | null
   suffix_exchange_enabled?: Prisma.IntFilter<"campaigns"> | number
   suffix_needs_browser?: Prisma.IntFilter<"campaigns"> | number
+  suffix_is_static?: Prisma.IntFilter<"campaigns"> | number
   suffix_last_content?: Prisma.StringNullableFilter<"campaigns"> | string | null
   suffix_last_apply_at?: Prisma.DateTimeNullableFilter<"campaigns"> | Date | string | null
   suffix_click_baseline?: Prisma.IntFilter<"campaigns"> | number
@@ -571,6 +585,7 @@ export type campaignsOrderByWithAggregationInput = {
   final_url_suffix?: Prisma.SortOrderInput | Prisma.SortOrder
   suffix_exchange_enabled?: Prisma.SortOrder
   suffix_needs_browser?: Prisma.SortOrder
+  suffix_is_static?: Prisma.SortOrder
   suffix_last_content?: Prisma.SortOrderInput | Prisma.SortOrder
   suffix_last_apply_at?: Prisma.SortOrderInput | Prisma.SortOrder
   suffix_click_baseline?: Prisma.SortOrder
@@ -613,6 +628,7 @@ export type campaignsScalarWhereWithAggregatesInput = {
   final_url_suffix?: Prisma.StringNullableWithAggregatesFilter<"campaigns"> | string | null
   suffix_exchange_enabled?: Prisma.IntWithAggregatesFilter<"campaigns"> | number
   suffix_needs_browser?: Prisma.IntWithAggregatesFilter<"campaigns"> | number
+  suffix_is_static?: Prisma.IntWithAggregatesFilter<"campaigns"> | number
   suffix_last_content?: Prisma.StringNullableWithAggregatesFilter<"campaigns"> | string | null
   suffix_last_apply_at?: Prisma.DateTimeNullableWithAggregatesFilter<"campaigns"> | Date | string | null
   suffix_click_baseline?: Prisma.IntWithAggregatesFilter<"campaigns"> | number
@@ -647,6 +663,7 @@ export type campaignsCreateInput = {
   final_url_suffix?: string | null
   suffix_exchange_enabled?: number
   suffix_needs_browser?: number
+  suffix_is_static?: number
   suffix_last_content?: string | null
   suffix_last_apply_at?: Date | string | null
   suffix_click_baseline?: number
@@ -681,6 +698,7 @@ export type campaignsUncheckedCreateInput = {
   final_url_suffix?: string | null
   suffix_exchange_enabled?: number
   suffix_needs_browser?: number
+  suffix_is_static?: number
   suffix_last_content?: string | null
   suffix_last_apply_at?: Date | string | null
   suffix_click_baseline?: number
@@ -715,6 +733,7 @@ export type campaignsUpdateInput = {
   final_url_suffix?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   suffix_exchange_enabled?: Prisma.IntFieldUpdateOperationsInput | number
   suffix_needs_browser?: Prisma.IntFieldUpdateOperationsInput | number
+  suffix_is_static?: Prisma.IntFieldUpdateOperationsInput | number
   suffix_last_content?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   suffix_last_apply_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   suffix_click_baseline?: Prisma.IntFieldUpdateOperationsInput | number
@@ -749,6 +768,7 @@ export type campaignsUncheckedUpdateInput = {
   final_url_suffix?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   suffix_exchange_enabled?: Prisma.IntFieldUpdateOperationsInput | number
   suffix_needs_browser?: Prisma.IntFieldUpdateOperationsInput | number
+  suffix_is_static?: Prisma.IntFieldUpdateOperationsInput | number
   suffix_last_content?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   suffix_last_apply_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   suffix_click_baseline?: Prisma.IntFieldUpdateOperationsInput | number
@@ -783,6 +803,7 @@ export type campaignsCreateManyInput = {
   final_url_suffix?: string | null
   suffix_exchange_enabled?: number
   suffix_needs_browser?: number
+  suffix_is_static?: number
   suffix_last_content?: string | null
   suffix_last_apply_at?: Date | string | null
   suffix_click_baseline?: number
@@ -817,6 +838,7 @@ export type campaignsUpdateManyMutationInput = {
   final_url_suffix?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   suffix_exchange_enabled?: Prisma.IntFieldUpdateOperationsInput | number
   suffix_needs_browser?: Prisma.IntFieldUpdateOperationsInput | number
+  suffix_is_static?: Prisma.IntFieldUpdateOperationsInput | number
   suffix_last_content?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   suffix_last_apply_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   suffix_click_baseline?: Prisma.IntFieldUpdateOperationsInput | number
@@ -851,6 +873,7 @@ export type campaignsUncheckedUpdateManyInput = {
   final_url_suffix?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   suffix_exchange_enabled?: Prisma.IntFieldUpdateOperationsInput | number
   suffix_needs_browser?: Prisma.IntFieldUpdateOperationsInput | number
+  suffix_is_static?: Prisma.IntFieldUpdateOperationsInput | number
   suffix_last_content?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   suffix_last_apply_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   suffix_click_baseline?: Prisma.IntFieldUpdateOperationsInput | number
@@ -891,6 +914,7 @@ export type campaignsCountOrderByAggregateInput = {
   final_url_suffix?: Prisma.SortOrder
   suffix_exchange_enabled?: Prisma.SortOrder
   suffix_needs_browser?: Prisma.SortOrder
+  suffix_is_static?: Prisma.SortOrder
   suffix_last_content?: Prisma.SortOrder
   suffix_last_apply_at?: Prisma.SortOrder
   suffix_click_baseline?: Prisma.SortOrder
@@ -913,6 +937,7 @@ export type campaignsAvgOrderByAggregateInput = {
   network_display?: Prisma.SortOrder
   suffix_exchange_enabled?: Prisma.SortOrder
   suffix_needs_browser?: Prisma.SortOrder
+  suffix_is_static?: Prisma.SortOrder
   suffix_click_baseline?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
 }
@@ -941,6 +966,7 @@ export type campaignsMaxOrderByAggregateInput = {
   final_url_suffix?: Prisma.SortOrder
   suffix_exchange_enabled?: Prisma.SortOrder
   suffix_needs_browser?: Prisma.SortOrder
+  suffix_is_static?: Prisma.SortOrder
   suffix_last_content?: Prisma.SortOrder
   suffix_last_apply_at?: Prisma.SortOrder
   suffix_click_baseline?: Prisma.SortOrder
@@ -974,6 +1000,7 @@ export type campaignsMinOrderByAggregateInput = {
   final_url_suffix?: Prisma.SortOrder
   suffix_exchange_enabled?: Prisma.SortOrder
   suffix_needs_browser?: Prisma.SortOrder
+  suffix_is_static?: Prisma.SortOrder
   suffix_last_content?: Prisma.SortOrder
   suffix_last_apply_at?: Prisma.SortOrder
   suffix_click_baseline?: Prisma.SortOrder
@@ -996,6 +1023,7 @@ export type campaignsSumOrderByAggregateInput = {
   network_display?: Prisma.SortOrder
   suffix_exchange_enabled?: Prisma.SortOrder
   suffix_needs_browser?: Prisma.SortOrder
+  suffix_is_static?: Prisma.SortOrder
   suffix_click_baseline?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
 }
@@ -1027,6 +1055,7 @@ export type campaignsSelect<ExtArgs extends runtime.Types.Extensions.InternalArg
   final_url_suffix?: boolean
   suffix_exchange_enabled?: boolean
   suffix_needs_browser?: boolean
+  suffix_is_static?: boolean
   suffix_last_content?: boolean
   suffix_last_apply_at?: boolean
   suffix_click_baseline?: boolean
@@ -1063,6 +1092,7 @@ export type campaignsSelectScalar = {
   final_url_suffix?: boolean
   suffix_exchange_enabled?: boolean
   suffix_needs_browser?: boolean
+  suffix_is_static?: boolean
   suffix_last_content?: boolean
   suffix_last_apply_at?: boolean
   suffix_click_baseline?: boolean
@@ -1072,7 +1102,7 @@ export type campaignsSelectScalar = {
   updated_at?: boolean
 }
 
-export type campaignsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "user_merchant_id" | "platform_connection_id" | "google_campaign_id" | "mcc_id" | "customer_id" | "campaign_name" | "daily_budget" | "bidding_strategy" | "max_cpc_limit" | "target_country" | "geo_target" | "language_id" | "network_search" | "network_partners" | "network_display" | "status" | "google_status" | "last_google_sync_at" | "previous_gcids" | "final_url_suffix" | "suffix_exchange_enabled" | "suffix_needs_browser" | "suffix_last_content" | "suffix_last_apply_at" | "suffix_click_baseline" | "suffix_click_checkpoint_at" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["campaigns"]>
+export type campaignsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "user_merchant_id" | "platform_connection_id" | "google_campaign_id" | "mcc_id" | "customer_id" | "campaign_name" | "daily_budget" | "bidding_strategy" | "max_cpc_limit" | "target_country" | "geo_target" | "language_id" | "network_search" | "network_partners" | "network_display" | "status" | "google_status" | "last_google_sync_at" | "previous_gcids" | "final_url_suffix" | "suffix_exchange_enabled" | "suffix_needs_browser" | "suffix_is_static" | "suffix_last_content" | "suffix_last_apply_at" | "suffix_click_baseline" | "suffix_click_checkpoint_at" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["campaigns"]>
 
 export type $campaignsPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "campaigns"
@@ -1102,6 +1132,7 @@ export type $campaignsPayload<ExtArgs extends runtime.Types.Extensions.InternalA
     final_url_suffix: string | null
     suffix_exchange_enabled: number
     suffix_needs_browser: number
+    suffix_is_static: number
     suffix_last_content: string | null
     suffix_last_apply_at: Date | null
     suffix_click_baseline: number
@@ -1502,6 +1533,7 @@ export interface campaignsFieldRefs {
   readonly final_url_suffix: Prisma.FieldRef<"campaigns", 'String'>
   readonly suffix_exchange_enabled: Prisma.FieldRef<"campaigns", 'Int'>
   readonly suffix_needs_browser: Prisma.FieldRef<"campaigns", 'Int'>
+  readonly suffix_is_static: Prisma.FieldRef<"campaigns", 'Int'>
   readonly suffix_last_content: Prisma.FieldRef<"campaigns", 'String'>
   readonly suffix_last_apply_at: Prisma.FieldRef<"campaigns", 'DateTime'>
   readonly suffix_click_baseline: Prisma.FieldRef<"campaigns", 'Int'>

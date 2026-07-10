@@ -5192,6 +5192,7 @@ export const CampaignsScalarFieldEnum = {
   final_url_suffix: 'final_url_suffix',
   suffix_exchange_enabled: 'suffix_exchange_enabled',
   suffix_needs_browser: 'suffix_needs_browser',
+  suffix_is_static: 'suffix_is_static',
   suffix_last_content: 'suffix_last_content',
   suffix_last_apply_at: 'suffix_last_apply_at',
   suffix_click_baseline: 'suffix_click_baseline',

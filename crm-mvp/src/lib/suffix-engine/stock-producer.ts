@@ -63,6 +63,7 @@ interface CampaignForReplenish {
   target_country: string
   suffix_exchange_enabled: number
   suffix_needs_browser: number
+  suffix_is_static: number
   is_deleted: number
   campaign_name: string | null
   status: string | null
@@ -125,6 +126,7 @@ async function doReplenish(
       target_country: true,
       suffix_exchange_enabled: true,
       suffix_needs_browser: true,
+      suffix_is_static: true,
       is_deleted: true,
       campaign_name: true,
       status: true,
@@ -328,6 +330,8 @@ async function doReplenish(
     // 不是故障——现有库存即是全部可能内容，消费后 lease 会触发按需重生成。
     // 清掉此前误报的告警，并交由调用方长冷却，停止每轮空烧 20 次生成。
     await resolveAlertsByType(campaign.user_id, campaignId, ['low_stock', 'replenish_failed', 'invalid_link', 'merchant_not_found'])
+    // 学习「静态后缀」标记：写回 campaigns，前端库存列据此不再按低水位误标红（1⚠）。
+    await setStaticFlag(campaign, 1)
     return { campaignId: cid, skipped: false, reason: 'static_suffix', before, generated: 0, after: before, failed: 0, needsBrowser: probe.usedBrowser }
   }
 
@@ -350,6 +354,9 @@ async function doReplenish(
   } else {
     // 有产出：解决该系列旧的库存类告警
     await resolveAlertsByType(campaign.user_id, campaignId, ['low_stock', 'replenish_failed', 'invalid_link', 'merchant_not_found'])
+    // 双向学习「静态后缀」：批量产出全为新内容（零重复）说明落地参数随会话变化（商家换了带 token 的链接），清 0 恢复正常水位口径。
+    // need=1 的单条按需生成无法判定静态性（静态商家消费后重生成同样是 1 条新内容），不作依据。
+    if (duplicates === 0 && need > 1) await setStaticFlag(campaign, 0)
     // 若产出仍不足低水位，记一条 low_stock（warning）。
     // 例外：缺口是「内容重复」造成的（静态后缀商家补 1 条后其余全是重复）——
     // 库存不可能超过不同内容数，报 low_stock 只会每轮刷屏。
@@ -365,6 +372,17 @@ async function doReplenish(
   }
 
   return { campaignId: cid, skipped: false, before, generated, after, failed, needsBrowser: probe.usedBrowser }
+}
+
+/** 「静态后缀」标记回写（仅变化时写库，失败不阻断补货主流程） */
+async function setStaticFlag(campaign: CampaignForReplenish, value: 0 | 1): Promise<void> {
+  if (campaign.suffix_is_static === value) return
+  try {
+    await prisma.campaigns.update({ where: { id: campaign.id }, data: { suffix_is_static: value } })
+    campaign.suffix_is_static = value
+  } catch (e) {
+    console.warn('[stock-producer] 更新 suffix_is_static 失败:', campaign.id.toString(), e instanceof Error ? e.message : e)
+  }
 }
 
 /** 跟链失败 → 落「链接无效」告警 */

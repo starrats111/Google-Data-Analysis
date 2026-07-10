@@ -25,6 +25,7 @@ export async function GET(req: NextRequest) {
       google_status: true,
       user_merchant_id: true,
       suffix_exchange_enabled: true,
+      suffix_is_static: true,
       suffix_last_apply_at: true,
       suffix_last_content: true,
     },
@@ -257,6 +258,8 @@ export async function GET(req: NextRequest) {
       parentNetwork: merchant?.parent_network ?? null,
       parentBlacklisted: merchant?.parent_blacklisted === 1,
       suffixEnabled: c.suffix_exchange_enabled === 1,
+      // 静态后缀商家：落地参数不随会话变化，库存天然≤不同内容数（多为 1），前端不按低水位标红
+      isStatic: c.suffix_is_static === 1,
       todayClicks,
       todayOrders,
       conversion,
@@ -265,7 +268,8 @@ export async function GET(req: NextRequest) {
       lastApplyAt: c.suffix_last_apply_at,
       lastSuffix: c.suffix_last_content,
       stock,
-      lowStock: stock.available <= STOCK_CONFIG.LOW_WATERMARK,
+      // 静态后缀商家不计入「库存偏低」：其库存无法超过不同内容数，低水位是常态而非缺货
+      lowStock: c.suffix_is_static !== 1 && stock.available <= STOCK_CONFIG.LOW_WATERMARK,
       clickTask: clickTask
         ? {
             status: clickTask.status,

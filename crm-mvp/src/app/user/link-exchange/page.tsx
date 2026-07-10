@@ -36,6 +36,7 @@ interface CampaignRow {
   parentNetwork: string | null;
   parentBlacklisted: boolean;
   suffixEnabled: boolean;
+  isStatic: boolean;
   todayClicks: number;
   todayOrders: number;
   conversion: number | null;
@@ -635,13 +636,28 @@ export default function LinkExchangePage() {
     },
     { title: "平台/MID", width: 100, render: (_: unknown, row) => row.platform ? <Text style={{ fontSize: 12 }}>{row.platform}/{row.mid}</Text> : "—" },
     {
-      title: "可用库存", width: 110, align: "center", sorter: (a, b) => a.stock.available - b.stock.available,
-      render: (_: unknown, row) => (
-        <Text style={{ fontSize: 14, fontWeight: 600, color: row.stock.available <= lowWatermark ? "#ff4d4f" : "#52c41a" }}>
-          {row.stock.available}
-          {row.matched && row.suffixEnabled && row.stock.available <= lowWatermark && <WarningOutlined style={{ marginLeft: 4 }} />}
-        </Text>
-      ),
+      title: "可用库存", width: 120, align: "center", sorter: (a, b) => a.stock.available - b.stock.available,
+      render: (_: unknown, row) => {
+        // 静态后缀商家：落地页参数固定（无 per-click clickid/token），库存天然只能维持在「不同内容数」（多为 1）。
+        // 这是商家链接特性而非补货故障——不标红、不加告警图标，改用中性色 + 说明，消费后 lease 会自动重生成同一条。
+        if (row.isStatic) {
+          return (
+            <Tooltip title="该商家落地页参数固定，不随每次点击变化，库存无法超过 1 条。这是正常现象，不影响换链——脚本领取后会自动重新生成，无需补货。">
+              <Space size={4}>
+                <Text style={{ fontSize: 14, fontWeight: 600, color: "#8c8c8c" }}>{row.stock.available}</Text>
+                <Tag color="default" style={{ fontSize: 11, marginInlineEnd: 0 }}>静态链接</Tag>
+              </Space>
+            </Tooltip>
+          );
+        }
+        const isLow = row.matched && row.suffixEnabled && row.stock.available <= lowWatermark;
+        return (
+          <Text style={{ fontSize: 14, fontWeight: 600, color: row.stock.available <= lowWatermark ? "#ff4d4f" : "#52c41a" }}>
+            {row.stock.available}
+            {isLow && <WarningOutlined style={{ marginLeft: 4 }} />}
+          </Text>
+        );
+      },
     },
     { title: "占用中", dataIndex: ["stock", "leased"], width: 80, align: "center", render: (v: number) => <Text type="secondary">{v}</Text> },
     {
@@ -892,7 +908,7 @@ export default function LinkExchangePage() {
                   <Table<CampaignRow>
                     columns={stockColumns} dataSource={enabledRows.filter((r) => r.matched)} rowKey="campaignId" size="small" loading={loading}
                     pagination={{ defaultPageSize: 50, showTotal: (t) => `共 ${t} 条`, showSizeChanger: true }}
-                    rowClassName={(row) => row.suffixEnabled && row.stock.available <= lowWatermark ? "row-invalid-link" : ""}
+                    rowClassName={(row) => !row.isStatic && row.suffixEnabled && row.stock.available <= lowWatermark ? "row-invalid-link" : ""}
                     scroll={{ x: 900 }}
                   />
                 </>
