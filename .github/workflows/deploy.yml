@@ -8,7 +8,32 @@ on:
       - '.github/workflows/deploy.yml'
 
 jobs:
+  # 前置检查：单元测试 + 测试范围类型检查不过就不部署（低配生产机上构建失败代价高，尽量在 CI 拦截）
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: crm-mvp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: crm-mvp/package-lock.json
+      # --ignore-scripts：跳过 puppeteer/prisma 等 postinstall（纯函数测试不需要 Prisma Client 与浏览器）
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: "1"
+      - name: Typecheck (tests scope)
+        run: npm run typecheck:tests
+      - name: Unit tests
+        run: npm test
+
   deploy:
+    needs: ci
     runs-on: ubuntu-latest
     # D-091：2 核/3.7G 低配生产机在「旧进程在线 + next build」并存时内存吃紧、构建偶发 >12m，
     # 触发 appleboy command_timeout(原 12m) 超时（构建仍在跑、非 OOM 早退）。放宽到 24m 留足余量。
