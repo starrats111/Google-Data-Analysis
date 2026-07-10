@@ -81,17 +81,38 @@ export async function POST(req: NextRequest) {
   const { mcc_id, mcc_name, currency, service_account_json, sheet_url, developer_token } = await req.json();
   if (!mcc_id) return apiError("MCC ID 不能为空");
 
+  // 2026-07-10 根治：MCC 客户编号统一规范化为 XXX-XXX-XXXX。
+  // 历史事故：同一 MCC 被录成 "785-636-5898-"（多个尾横杠）+ "785-636-5898" 两条活跃记录，
+  // 广告归属分裂到两条记录上，CID 下拉的 ENABLED 计数全部显示 0。
+  const mccDigits = String(mcc_id).replace(/\D/g, "");
+  if (mccDigits.length !== 10) {
+    return apiError("MCC ID 格式无效，应为 10 位数字的客户编号（如 785-636-5898）");
+  }
+  const normalizedMccId = `${mccDigits.slice(0, 3)}-${mccDigits.slice(3, 6)}-${mccDigits.slice(6)}`;
+
+  // 查重：同一用户下同号（按纯数字比对，容忍历史脏格式）的活跃 MCC 只允许一条
+  const activeMccs = await prisma.google_mcc_accounts.findMany({
+    where: { user_id: BigInt(user.userId), is_deleted: 0 },
+    select: { id: true, mcc_id: true, mcc_name: true },
+  });
+  const dup = activeMccs.find((m) => m.mcc_id.replace(/\D/g, "") === mccDigits);
+  if (dup) {
+    return apiError(
+      `MCC ${normalizedMccId} 已存在（记录「${dup.mcc_name || dup.mcc_id}」）。同一 MCC 不允许重复添加，否则广告归属会分裂、CID 广告数量显示错误；如需修改凭证或 Sheet，请直接编辑现有记录。`,
+    );
+  }
+
   const sa = service_account_json?.trim() || null;
   // 加固①：若提供了服务账号，落库前先做一次只读测试调用，失败则拒绝保存
   if (sa) {
-    const errMsg = await validateMccCredentials(mcc_id.trim(), developer_token?.trim() || "", sa);
+    const errMsg = await validateMccCredentials(normalizedMccId, developer_token?.trim() || "", sa);
     if (errMsg) return apiError(errMsg);
   }
 
   const account = await prisma.google_mcc_accounts.create({
     data: {
       user_id: BigInt(user.userId),
-      mcc_id: mcc_id.trim(),
+      mcc_id: normalizedMccId,
       mcc_name: mcc_name?.trim() || null,
       currency: currency || "USD",
       service_account_json: sa,
@@ -107,7 +128,7 @@ export async function POST(req: NextRequest) {
     action: "mcc_create",
     targetType: "mcc",
     targetId: account.id,
-    detail: { mcc_id: mcc_id.trim(), mcc_name: mcc_name?.trim() || null, sa_email: extractSaEmail(sa), has_token: !!(developer_token?.trim()) },
+    detail: { mcc_id: normalizedMccId, mcc_name: mcc_name?.trim() || null, sa_email: extractSaEmail(sa), has_token: !!(developer_token?.trim()) },
     req,
   });
 
