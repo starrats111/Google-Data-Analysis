@@ -212,8 +212,10 @@ export async function GET(req: NextRequest) {
   const startedAt = Date.now()
 
   try {
+    // 用户级闸门：不参与换链接的账号(link_exchange_disabled=1，如 jy 交垟队)不巡检——
+    // 与补货引擎 replenishLowStock 同口径，否则会给不换链的用户刷「有交易却断链」error 告警
     const users = await prisma.users.findMany({
-      where: { is_deleted: 0, status: 'active', role: { in: ['user', 'leader'] } },
+      where: { is_deleted: 0, status: 'active', role: { in: ['user', 'leader'] }, link_exchange_disabled: 0 },
       select: { id: true, username: true },
     })
 

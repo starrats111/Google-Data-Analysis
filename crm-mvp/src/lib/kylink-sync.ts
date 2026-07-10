@@ -111,10 +111,17 @@ export async function syncOneUser(params: {
 
   result.total = missing.length
 
+  // 失败原因收集：此前逐系列 catch 后只 failed++，同一系列可连续失败数小时无人知晓（LE-01 #3）
+  const failures: string[] = []
+  const fail = (campaign: KylinkMissingCampaign, reason: string) => {
+    result.failed++
+    failures.push(`「${campaign.campaignName ?? campaign.campaignId}」${reason}`)
+  }
+
   for (const campaign of missing) {
     const parsed = parseCampaignNameForLookup(campaign.campaignName)
     if (!parsed) {
-      result.failed++
+      fail(campaign, '系列名无法解析出 平台+MID')
       continue
     }
 
@@ -123,29 +130,47 @@ export async function syncOneUser(params: {
     const rawCountry = (campaign.country || '').trim()
     const country = /^[A-Za-z]{2,3}$/.test(rawCountry) ? rawCountry : (parsed.country || rawCountry)
     if (!country) {
-      result.failed++
+      fail(campaign, '无法确定国家')
       continue
     }
 
     try {
-      const merchant = await prisma.user_merchants.findFirst({
+      const merchantSelect = {
+        platform: true,
+        platform_connection_id: true,
+        connection_campaign_links: true,
+        campaign_link: true,
+        tracking_link: true,
+      } as const
+      let merchant = await prisma.user_merchants.findFirst({
         where: {
           user_id: userId,
           platform: parsed.platform,
           merchant_id: parsed.mid,
           is_deleted: 0,
         },
-        select: {
-          platform_connection_id: true,
-          connection_campaign_links: true,
-          campaign_link: true,
-          tracking_link: true,
-        },
+        select: merchantSelect,
       })
+
+      // 平台段回退：kylink 系列名的平台段可能与商家实际平台不一致（如系列名写 MUI1、
+      // 商家实际在 RW，wj07 johnnieO/106836 曾因此每轮静默失败）。
+      // 按 MID 跨平台查，仅当「全库唯一命中」才采用，避免多平台同 MID 时串错链接。
+      let fallbackPlatform: string | null = null
+      if (!merchant) {
+        const byMid = await prisma.user_merchants.findMany({
+          where: { user_id: userId, merchant_id: parsed.mid, is_deleted: 0 },
+          select: merchantSelect,
+          take: 2,
+        })
+        if (byMid.length === 1) {
+          merchant = byMid[0]
+          fallbackPlatform = byMid[0].platform
+        }
+      }
 
       const link = merchant ? resolveMerchantLink(merchant) : ''
       if (!link) {
-        result.failed++
+        fail(campaign, merchant ? `商家(${parsed.platform}:${parsed.mid})缺联盟链接` : `商家库无 ${parsed.platform}:${parsed.mid}`)
         continue
       }
 
@@ -156,9 +181,22 @@ export async function syncOneUser(params: {
         campaignName: campaign.campaignName ?? undefined,
       })
       result.success++
-    } catch {
-      result.failed++
+      if (fallbackPlatform) {
+        console.log(
+          `[kylink-sync] ${username} 「${campaign.campaignName}」平台段(${parsed.platform})与商家库不符，按 MID 唯一命中回退到 ${fallbackPlatform}`
+        )
+      }
+    } catch (e) {
+      fail(campaign, `回填失败: ${e instanceof Error ? e.message : String(e)}`)
     }
+  }
+
+  if (failures.length > 0) {
+    console.warn(
+      `[kylink-sync] ${username} 未回填 ${failures.length}/${result.total} 条: ` +
+        failures.slice(0, 5).join(' | ') +
+        (failures.length > 5 ? ` ...等${failures.length}条` : '')
+    )
   }
 
   // 回写当日统计（失败不阻断）

@@ -495,58 +495,60 @@ export async function executeClickTaskItems(): Promise<ClickExecuteResult> {
       select: { id: true, task_id: true },
     })
 
-    if (candidates.length === 0) return { executed: 0, succeeded: 0, failed: 0, tasksFinalized: 0 }
-
-    // 2. 公平挑选：按任务限额 + 总量限额
-    const perTaskCount = new Map<string, number>()
-    const selectedByTask = new Map<string, bigint[]>()
-    let totalSelected = 0
-    for (const item of candidates) {
-      if (totalSelected >= MAX_ITEMS_PER_CRON) break
-      const key = item.task_id.toString()
-      const cnt = perTaskCount.get(key) ?? 0
-      if (cnt >= MAX_ITEMS_PER_TASK_PER_CRON) continue
-      perTaskCount.set(key, cnt + 1)
-      if (!selectedByTask.has(key)) selectedByTask.set(key, [])
-      selectedByTask.get(key)!.push(item.id)
-      totalSelected++
-    }
-
-    // 3. 准备每个任务的运行期上下文
-    const taskKeys = Array.from(selectedByTask.keys())
-    const runtimes = new Map<string, TaskRuntime | null>()
-    for (const key of taskKeys) {
-      runtimes.set(key, await buildTaskRuntime(BigInt(key)))
-    }
-
-    // 4. 组间受限并行，组内串行
-    let idx = 0
-    const runNext = async (): Promise<void> => {
-      while (idx < taskKeys.length) {
-        const myIdx = idx++
-        const key = taskKeys[myIdx]
-        const rt = runtimes.get(key)
-        const itemIds = selectedByTask.get(key)!
-        if (!rt) {
-          // 任务上下文缺失（被删/状态变更）：把本批子项标记失败，避免空转
-          await prisma.kyads_click_task_items
-            .updateMany({ where: { id: { in: itemIds } }, data: { status: 'failed', error: 'task_context_missing', executed_at: new Date() } })
-            .catch(() => {})
-          executed += itemIds.length
-          failed += itemIds.length
-          continue
-        }
-        const res = await runTaskItems(rt, itemIds)
-        executed += res.done + res.failed
-        succeeded += res.done
-        failed += res.failed
+    if (candidates.length > 0) {
+      // 2. 公平挑选：按任务限额 + 总量限额
+      const perTaskCount = new Map<string, number>()
+      const selectedByTask = new Map<string, bigint[]>()
+      let totalSelected = 0
+      for (const item of candidates) {
+        if (totalSelected >= MAX_ITEMS_PER_CRON) break
+        const key = item.task_id.toString()
+        const cnt = perTaskCount.get(key) ?? 0
+        if (cnt >= MAX_ITEMS_PER_TASK_PER_CRON) continue
+        perTaskCount.set(key, cnt + 1)
+        if (!selectedByTask.has(key)) selectedByTask.set(key, [])
+        selectedByTask.get(key)!.push(item.id)
+        totalSelected++
       }
-    }
-    await Promise.all(Array.from({ length: Math.min(TASK_CONCURRENCY, taskKeys.length) }, () => runNext()))
 
-    // 5. 收尾已完成的任务
-    for (const key of taskKeys) {
-      if (await finalizeTask(BigInt(key))) tasksFinalized++
+      // 3. 准备每个任务的运行期上下文
+      const taskKeys = Array.from(selectedByTask.keys())
+      const runtimes = new Map<string, TaskRuntime | null>()
+      for (const key of taskKeys) {
+        runtimes.set(key, await buildTaskRuntime(BigInt(key)))
+      }
+
+      // 4. 组间受限并行，组内串行
+      let idx = 0
+      const runNext = async (): Promise<void> => {
+        while (idx < taskKeys.length) {
+          const myIdx = idx++
+          const key = taskKeys[myIdx]
+          const rt = runtimes.get(key)
+          const itemIds = selectedByTask.get(key)!
+          if (!rt) {
+            // 任务上下文缺失（被删/状态变更）：把本批子项标记失败，避免空转
+            await prisma.kyads_click_task_items
+              .updateMany({ where: { id: { in: itemIds } }, data: { status: 'failed', error: 'task_context_missing', executed_at: new Date() } })
+              .catch(() => {})
+            executed += itemIds.length
+            failed += itemIds.length
+            continue
+          }
+          const res = await runTaskItems(rt, itemIds)
+          executed += res.done + res.failed
+          succeeded += res.done
+          failed += res.failed
+        }
+      }
+      await Promise.all(Array.from({ length: Math.min(TASK_CONCURRENCY, taskKeys.length) }, () => runNext()))
+    }
+
+    // 5. 收尾：对「所有」running 任务兜底 finalize，而不只本轮执行过子项的任务（LE-01 #4）。
+    // 否则子项已全部终态、但收尾时机被错过（部署重启 / 卡死回收发生在无候选的轮次）的任务
+    // 会永远停在 running，并让 startBrushTask 一直拒绝该系列的新刷点击任务（僵尸占坑）。
+    for (const id of runningIds) {
+      if (await finalizeTask(id)) tasksFinalized++
     }
   } catch (err) {
     console.error('[click-brush] executeClickTaskItems error:', err instanceof Error ? err.message : err)
