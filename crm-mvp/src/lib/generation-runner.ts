@@ -22,8 +22,11 @@ export interface GenerationRequestPayload {
   optionalTypes?: string[];
 }
 
-// 判定 job 僵死的阈值：心跳/创建超过此时长仍未结束，视为可重建/可恢复
-const STALE_MS = 90_000;
+// 判定 job 僵死的阈值：心跳/创建超过此时长仍未结束，视为可重建/可恢复。
+// D-160：90s → 300s。爬虫阶段最长 165s 无事件 + D-101 巡航 60s 无事件，90s 会把健康 job
+// 误判僵死：刷新页面 → generate-start 标旧 job failed 并重建 → 旧 job 下次落库又复活为 running
+// → 同 campaign 双流水线并行（爬虫/AI 全双份）。配合下方周期心跳，300s 只兜真正的进程崩溃。
+const STALE_MS = 300_000;
 // 单 job 最多尝试次数，防止启动恢复无限重跑
 const MAX_ATTEMPT = 3;
 // 落库去抖间隔
@@ -184,9 +187,11 @@ async function consumeStreamIntoJob(jobId: bigint, stream: ReadableStream): Prom
   const doFlush = async () => {
     if (!dirty) return;
     dirty = false;
+    // D-160：用 updateMany + status 条件，不复活已被外部判僵死标 failed 的 job
+    // （旧逻辑无条件写 status:"running"，会把 failed 改回 running，与重建的新 job 双跑）
     await prisma.ad_generation_jobs
-      .update({
-        where: { id: jobId },
+      .updateMany({
+        where: { id: jobId, status: { in: ["queued", "running"] } },
         data: {
           result: { events, seq } as unknown as object,
           stage: stage ?? undefined,
@@ -198,6 +203,18 @@ async function consumeStreamIntoJob(jobId: bigint, stream: ReadableStream): Prom
       .catch((e) => console.warn(`[GenRunner] job=${jobId} flush 失败:`, e instanceof Error ? e.message : e));
     lastFlush = Date.now();
   };
+
+  // D-160 周期心跳：爬虫/巡航阶段可 60-165s 无 SSE 事件，旧逻辑只在事件落库时写心跳，
+  // 健康 job 会被 generate-start / sweeper 误判僵死。每 30s 主动续心跳（不碰 result）。
+  const hbTimer = setInterval(() => {
+    void prisma.ad_generation_jobs
+      .updateMany({
+        where: { id: jobId, status: { in: ["queued", "running"] } },
+        data: { heartbeat_at: new Date() },
+      })
+      .catch(() => {});
+  }, 30_000);
+  hbTimer.unref?.();
 
   const scheduleFlush = () => {
     dirty = true;
@@ -250,6 +267,7 @@ async function consumeStreamIntoJob(jobId: bigint, stream: ReadableStream): Prom
   } catch (e) {
     sawError = sawError || (e instanceof Error ? e.message : String(e));
   } finally {
+    clearInterval(hbTimer);
     if (flushTimer) {
       clearTimeout(flushTimer);
       flushTimer = null;

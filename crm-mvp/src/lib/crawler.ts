@@ -253,7 +253,7 @@ const BLOCKED_TITLES = new Set([
   "access denied", "you have been blocked", "security check",
 ]);
 
-function isBlockedPage(html: string): boolean {
+export function isBlockedPage(html: string): boolean {
   const textLower = html.toLowerCase();
   const pageLen = html.length;
 

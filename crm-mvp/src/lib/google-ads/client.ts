@@ -21,10 +21,12 @@ const GOOGLE_ADS_SCOPE = "https://www.googleapis.com/auth/adwords";
 const ADS_API_VERSION = "v23";
 const ADS_BASE_URL = `https://googleads.googleapis.com/${ADS_API_VERSION}`;
 
-const MAX_429_RETRIES = 1;
+// D-160：1 → 3。explorer token 日配额极低，429 是 TOP1 提交失败原因；提交/生成已全部
+// 后台 job 化，等待重试不再阻塞用户请求。最坏 3×30s=90s，仍在 submit job 预算内。
+const MAX_429_RETRIES = 3;
 // 单次请求内最多轮换几个不同的 Developer Token（429 时立即换 token 重试，不等待）
 const MAX_TOKEN_ROTATIONS = 3;
-const MAX_429_WAIT_MS = 15_000;
+const MAX_429_WAIT_MS = 30_000;
 const QUERY_TIMEOUT_MS = 30_000;
 const MUTATE_TIMEOUT_MS = 60_000;
 // D-065：Google Ads 瞬时错误（INTERNAL_ERROR / DEADLINE_EXCEEDED / 5xx）指数退避重试。

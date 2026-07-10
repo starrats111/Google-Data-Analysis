@@ -2778,8 +2778,20 @@ Return ONLY a valid JSON object with the applicable keys:
 }`;
 
     try {
-      const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: prompt }], 4096);
-      const parsed = JSON.parse(extractJsonFromAi(raw));
+      // D-160：AI 偶发返回散文（"I appreciate..."）而非 JSON，裸 JSON.parse 一次失败就全空。
+      // 改为宽松解析（JSON5/修复），仍失败再重试一次并在 prompt 尾部强调只回 JSON。
+      const { parseAiJsonLoose } = await import("@/lib/crawl-pipeline");
+      let parsed: Record<string, unknown> | null = null;
+      for (let attempt = 0; attempt < 2 && !parsed; attempt++) {
+        const p = attempt === 0 ? prompt : `${prompt}\n\nIMPORTANT: Respond with ONLY the JSON object. No prose, no explanation, no markdown.`;
+        const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: p }], 4096);
+        try {
+          parsed = parseAiJsonLoose(raw) as Record<string, unknown>;
+        } catch (e) {
+          console.warn(`[Optional] AI 返回非 JSON（第 ${attempt + 1} 次）: ${(e instanceof Error ? e.message : String(e)).slice(0, 80)}`);
+        }
+      }
+      if (!parsed) throw new Error("AI 连续 2 次未返回可解析 JSON");
 
       if (needsAi.includes("callouts")) {
         let callouts: string[] = Array.isArray(parsed.callouts)
@@ -2811,10 +2823,10 @@ Return ONLY a valid JSON object with the applicable keys:
       }
 
       if (needsAi.includes("snippet")) {
-        const snippet = parsed.snippet;
+        const snippet = parsed.snippet as { header?: unknown; values?: unknown[] } | null | undefined;
         if (snippet?.header && Array.isArray(snippet.values) && snippet.values.length >= 3) {
           const validHeader = validateSnippetHeader(String(snippet.header));
-          let values = snippet.values
+          let values = (snippet.values as string[])
             .map((v: string) => String(v || "").trim())
             .filter((v: string) => v.length >= 2 && v.length <= 25)
             .slice(0, 10);
@@ -2847,7 +2859,8 @@ Return ONLY a valid JSON object with the applicable keys:
       console.log(`[Optional] AI 生成完成: ${needsAi.join(", ")}`);
     } catch (err) {
       console.error("[Optional] AI 生成失败:", err instanceof Error ? err.message : err);
-      if (needsAi.includes("callouts")) send("callouts", []);
+      // D-160：失败时不再 send("callouts", []) —— core 任务也会生成 callouts，
+      // 空结果后到会把 core 已展示的成品覆盖成空（前端另有非空保护，双保险）
       if (needsAi.includes("snippet")) send("structured_snippet", null);
       if (needsAi.includes("negative_keywords")) send("negative_keywords", []);
     }

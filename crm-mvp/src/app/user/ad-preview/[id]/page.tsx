@@ -1105,10 +1105,11 @@ export default function AdPreviewPage() {
   }, [selectedMccId, message]);
 
   // ─── 爬虫生成扩展（SSE 流式接收，逐项更新 UI） ───
-  const generateExtension = useCallback(async (...requestedTypes: Array<"core" | "sitelinks" | "images" | "callouts" | "promotion" | "price" | "call" | "snippet">) => {
+  const generateExtension = useCallback(async (...requestedTypes: Array<"core" | "sitelinks" | "images" | "callouts" | "promotion" | "price" | "call" | "snippet" | "negative_keywords">) => {
     const loadingSetters: Record<string, (v: boolean) => void> = {
       sitelinks: setSitelinksLoading, images: setImagesLoading, callouts: setCalloutsLoading,
       promotion: setPromotionLoading, price: setPriceLoading, call: setCallLoading, snippet: setSnippetLoading,
+      negative_keywords: setNegKwLoading,
     };
 
     const isCore = requestedTypes.includes("core" as any);
@@ -1309,8 +1310,9 @@ export default function AdPreviewPage() {
           setEnableCallouts(true);
           message.success(`已生成 ${calloutData.length} 条宣传信息`);
         } else {
-          setCallouts(["", ""]);
-          message.warning("未能生成宣传信息，请手动添加");
+          // D-160：空结果不覆盖已有内容——core 与 optional 都可能推 callouts 事件，
+          // 后到的空结果曾把先到的成品清空（竞态覆盖）
+          setCallouts((prev) => (prev.some((c) => c.trim().length > 0) ? prev : ["", ""]));
         }
         setCalloutsLoading(false); return;
       }
@@ -1530,7 +1532,7 @@ export default function AdPreviewPage() {
           keywords: confirmedKeywords.length > 0 ? confirmedKeywords : undefined,
         };
       } else {
-        const optionalSet = new Set(["callouts", "promotion", "price", "call", "snippet"]);
+        const optionalSet = new Set(["callouts", "promotion", "price", "call", "snippet", "negative_keywords"]);
         const isOptionalBatch = requestedTypes.every((t) => optionalSet.has(t));
         if (isOptionalBatch && requestedTypes.length > 0) {
           reqBody = { campaign_id: campaignId, types: ["optional"], optionalTypes: requestedTypes, ad_language: adLanguage || undefined };
@@ -1545,7 +1547,7 @@ export default function AdPreviewPage() {
       //      （applied 去重防 toast 重复）；连接断/刷新/部署重启都不丢结果——job 在后台跑完落库。
       //   3) 灰度回滚：generate-start 返回 { fallback:true } 时退回旧 SSE 链路（逐字节一致）。
       const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-      const MAX_POLL_MS = 360000; // 6 分钟封顶；超时后台任务仍在跑，重进页面会自动接续
+      const MAX_POLL_MS = 720000; // D-160：6→12 分钟封顶（后端排队 600s+爬取 165s 可超 6 分钟）；超时后台任务仍在跑，重进页面会自动接续
       const genAbort = new AbortController();
       const genTimeout = setTimeout(() => genAbort.abort(), MAX_POLL_MS);
 
@@ -1703,7 +1705,7 @@ export default function AdPreviewPage() {
         if (t.includes("core")) {
           generateExtension("core");
         } else if (t.includes("optional") && (req.optionalTypes?.length ?? 0) > 0) {
-          generateExtension(...((req.optionalTypes || []) as Array<"callouts" | "promotion" | "price" | "call" | "snippet">));
+          generateExtension(...((req.optionalTypes || []) as Array<"callouts" | "promotion" | "price" | "call" | "snippet" | "negative_keywords">));
         } else if (t.length > 0) {
           generateExtension(...(t as Array<"core" | "sitelinks" | "images" | "callouts" | "promotion" | "price" | "call" | "snippet">));
         }
@@ -2038,23 +2040,20 @@ export default function AdPreviewPage() {
   // ─── 确认关键词并全自动并行生成文案+扩展 ───
   const handleConfirmKeywords = useCallback(async () => {
     if (kwList.length === 0) { message.warning("请先添加至少一个关键词"); return; }
-    // 1. 后台静默触发否定关键词（不阻塞进入步骤2）
-    triggerNegativeKeywords();
-    // 2. 进入步骤2，立即清空旧文案——让用户看到"生成中"状态而非旧缓存
+    // 进入步骤2，立即清空旧文案——让用户看到"生成中"状态而非旧缓存
     setCurrentStep(1);
     setHeadlines(Array(15).fill(""));
     setDescriptions(Array(4).fill(""));
-    // 3. 并行触发内容生成（提速：3 job → 2 job）
-    //    - core: 标题 + 描述（含完整 pageText/商品数据） + 站内链接
-    //    - callouts + promotion: AI 生成宣传信息 + 爬取促销数据
-    //    - price / call / snippet 默认不搜索（每单省 2 个子页抓取 + 1 次 AI 调用），员工勾选时按需提取
-    // 注意：标题/描述由 core 统一生成（带完整页面上下文），不单独调 aiGenerateHeadlines/Descriptions
-    // 避免低质量的无上下文版本覆盖 core 的高质量输出
+    // D-160 并行触发内容生成（2 个后台 job，callouts 只由 core 生成一份）：
+    //    - core: 标题 + 描述 + callouts + 站内链接 + 图片（orchestrator 统一生成，带完整页面上下文）
+    //    - promotion + negative_keywords: 爬取促销数据 + AI 否定关键词（原独立 SSE 直连并入本批次，少跑一条流水线）
+    //    - price / call / snippet 默认不搜索，员工勾选时按需提取
+    autoNegKwDone.current = true; // 否定关键词已随本批次生成，防 useEffect 再触发一条旧 SSE
     await Promise.allSettled([
       generateExtension("core"),
-      generateExtension("callouts", "promotion"),
+      generateExtension("promotion", "negative_keywords"),
     ]);
-  }, [kwList, triggerNegativeKeywords, setCurrentStep, setHeadlines, setDescriptions, generateExtension, aiGenerateHeadlines, aiGenerateDescriptions, message]);
+  }, [kwList, setCurrentStep, setHeadlines, setDescriptions, generateExtension, message]);
 
   // ─── D-091: 进页直接自动启动「合并生成」———————————————————————————————
   // core 后台任务内并发跑 SemRush 关键词 + 爬虫 + 文案；关键词由 job 的 "keywords" 事件实时回填
@@ -2065,10 +2064,12 @@ export default function AdPreviewPage() {
     setDescriptions(Array(4).fill(""));
     // D-092：自动启动即先置「关键词查询中」，让面板立刻有反馈（不等 keywords_pending 事件抵达）
     if (kwList.length === 0) setKwAutoQuerying(true);
-    // 提速：price / call / snippet 默认不搜索，员工勾选对应扩展时才按需提取
+    // D-160：callouts 只由 core 生成一份（消除双生成竞态）；否定关键词并入 optional 批次；
+    // price / call / snippet 默认不搜索，员工勾选对应扩展时才按需提取
+    autoNegKwDone.current = true;
     await Promise.allSettled([
       generateExtension("core"),
-      generateExtension("callouts", "promotion"),
+      generateExtension("promotion", "negative_keywords"),
     ]);
     setKwAutoQuerying(false);
   }, [setCurrentStep, setHeadlines, setDescriptions, generateExtension, kwList.length]);

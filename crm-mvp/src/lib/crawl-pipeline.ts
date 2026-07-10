@@ -5,7 +5,7 @@
 import {
   crawlPage, fetchUrlMeta, fetchPageImages, searchMerchantImages, crawlViaSitemap,
   batchFetchMetaViaPuppeteer, crawlWithPuppeteerFull, crawlPageWithPuppeteer,
-  assessCrawlQuality, isQualityImageUrl,
+  assessCrawlQuality, isQualityImageUrl, isBlockedPage,
   harvestImagesFromPagesWithPuppeteer, getAcceptLanguage,
   dedupeByImageStem, capImagesPerDirectory,
 } from "@/lib/crawler";
@@ -14,7 +14,7 @@ import { getAdMarketConfig } from "@/lib/ad-market";
 import { getProxyUrlForCountry, getHttpProxyUrlForCountry, ensureCountryEgressHttpProxy } from "@/lib/crawl-proxy";
 import { isLowValueSitelink } from "@/lib/sitelink-filter";
 import { hostMatchesCountryTld } from "@/lib/country-url-resolver";
-import { getHostKey, isHostChallenged } from "@/lib/crawl-host-cache";
+import { getHostKey, isHostChallenged, markHostChallenged } from "@/lib/crawl-host-cache";
 import JSON5 from "json5";
 // C-016: ccTLD 切换逻辑移出 crawl-pipeline，改由 country-url-resolver 在 route 层调度
 
@@ -1898,18 +1898,29 @@ export async function buildCrawlCache(
   const STRATEGY_BUDGET_MS = puppeteerProxyUrl ? 160_000 : 90_000;
   const strategyStartedAt = Date.now();
 
+  // D-160 首访 CF/Datadome 早退：challenged 标记原本只由 fetchUrlMeta L0 触发，首访反爬站
+  // （francoisesaget 类）仍走完整五段瀑布把 165s 预算烧满、尾段零产出。现在主策略命中拦截页时：
+  //   ① 立即 markHostChallenged（尾段 sitelink/图片探查 + 后续 job 直接走精简路径）；
+  //   ② HTTP 拦截 → 跳过剩余 HTTP 策略（同一道墙必撞），直上 Puppeteer+代理；
+  //   ③ Puppeteer+代理也拦截 → 跳过剩余 Puppeteer 策略（撞同一硬阻断，各烧 ~75s 是预算杀手）。
+  let httpChallenged = false;
+  let puppeteerChallenged = false;
   for (const strategy of strategies) {
     const elapsed = Date.now() - strategyStartedAt;
     if (elapsed > STRATEGY_BUDGET_MS) {
       console.warn(`[CrawlPipeline] 总时间已达 ${elapsed}ms > ${STRATEGY_BUDGET_MS}ms，跳过剩余策略（已完成质量 score=${crawlQuality.score}）`);
       break;
     }
+    const isPuppeteerStrategy = strategy.name.includes("puppeteer");
+    if ((isPuppeteerStrategy && puppeteerChallenged) || (!isPuppeteerStrategy && httpChallenged)) {
+      console.warn(`[CrawlPipeline] D-160：host 已命中拦截页，跳过同类策略 ${strategy.name}（止损省预算）`);
+      continue;
+    }
     try {
       // 单策略超时：
       //   Puppeteer 策略给 55s —— page.goto 35s + sleep(3s) + scroll + waitForSelector + content
       //     之前 38s 经常在 page.content() 取 HTML 前就被 race 砍断（实测 SPA 站只拿到 17 字文本）
       //   HTTP 策略 22s
-      const isPuppeteerStrategy = strategy.name.includes("puppeteer");
       // Puppeteer 单策略上限：goto 35s + sleep/randomDelay ~5s + waitForSelector 8+5s
       // + SPA hydration 等待 10s + 滚动收尾 8s + content/evaluate 1s ≈ 最坏 72s，给 75s buffer
       const SINGLE_STRATEGY_TIMEOUT_MS = isPuppeteerStrategy ? 75_000 : 22_000;
@@ -1919,6 +1930,14 @@ export async function buildCrawlCache(
           setTimeout(() => reject(new Error(`strategy-timeout-${strategy.name}`)), SINGLE_STRATEGY_TIMEOUT_MS),
         ),
       ]);
+      const blocked = !!result.html && isBlockedPage(result.html);
+      if (blocked) {
+        if (isPuppeteerStrategy) puppeteerChallenged = true;
+        else httpChallenged = true;
+        if (challengedHost) markHostChallenged(challengedHost);
+        console.warn(`[CrawlPipeline] D-160：策略 ${strategy.name} 命中反爬拦截页，标记 host challenged 并跳过同类策略`);
+        continue; // 拦截页不参与质量竞选（其 HTML 是挑战页面，非商家内容）
+      }
       const quality = assessCrawlQuality(result as Parameters<typeof assessCrawlQuality>[0]);
       console.log(`[CrawlPipeline] 策略 ${strategy.name}: score=${quality.score} tier=${quality.tier} issues=[${quality.issues}] elapsed=${Date.now() - strategyStartedAt}ms`);
       if (quality.score > crawlQuality.score) {
