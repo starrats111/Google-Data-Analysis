@@ -3725,6 +3725,58 @@ async function runIntelligentCore(
       console.warn("[D-082] 生成阶段禁止词改写异常（不阻断）：", e instanceof Error ? e.message : e);
     }
 
+    // ── D-161：出厂终检 ──
+    //   Step 8 linter 之后 humanize / D-082 / 截断都会再改动文案且原先不复检，
+    //   违规可能被重新引入 → 提交阶段 H4 大返工。这里在所有改写完成后补一次
+    //   纯正则快检（毫秒级），检出 critical 才走一轮 AI 重写，保证落库即合规。
+    const trademarkPolicy = result.preflight?.trademarkPolicy ?? "block_brand";
+    const allowBrand = trademarkPolicy !== "block_brand";
+    try {
+      const { checkAdCompliance: finalCheck } = await import("@/lib/ad-compliance-checker");
+      const finalOpts = { merchantName, industryProfile: detectedIndustry, allowBrand };
+      const probe = finalCheck(humanizedHeadlines, humanizedDescriptions, finalOpts, humanizedCallouts);
+      if (probe.criticalCount > 0) {
+        console.warn(`[D-161] 出厂终检检出 ${probe.criticalCount} 条 critical（humanize/D-082 后重新引入），触发重写`);
+        const { lintRewriteAndBackfill } = await import("@/lib/intellicenter/ad-creation/compliance-linter");
+        const repaired = await lintRewriteAndBackfill(
+          { headlines: humanizedHeadlines, descriptions: humanizedDescriptions, callouts: humanizedCallouts },
+          {
+            ...finalOpts,
+            industryLabel: detectedIndustry?.label ?? null,
+            targetHeadlines: humanizedHeadlines.length,
+            targetDescriptions: humanizedDescriptions.length,
+          },
+          (prompt: string) =>
+            callAiWithFallback(
+              "ad_creation_intelligent",
+              [
+                { role: "system", content: "You are a senior Google Ads copywriter. Return ONLY valid JSON, no markdown." },
+                { role: "user", content: prompt },
+              ],
+              1024,
+            ),
+        );
+        humanizedHeadlines.splice(0, humanizedHeadlines.length, ...repaired.cleanedHeadlines);
+        humanizedDescriptions.splice(0, humanizedDescriptions.length, ...repaired.cleanedDescriptions);
+        humanizedCallouts.splice(0, humanizedCallouts.length, ...repaired.cleanedCallouts);
+        console.warn(`[D-161] 出厂终检修复完成：rewrote=${repaired.rewroteCount} dropped=${repaired.droppedCount} backfilled=${repaired.backfilledCount}`);
+      }
+    } catch (e) {
+      console.warn("[D-161] 出厂终检异常（不阻断）：", e instanceof Error ? e.message : e);
+    }
+
+    // D-161：把生成阶段的合规上下文（商标策略/行业档）持久化，提交阶段 H4 直接复用，
+    // 避免 H4 重算画像（原实现读不到 pageText，画像退化成通用档，两端规则不一致）
+    try {
+      (cache as any).complianceMeta = {
+        trademarkPolicy,
+        allowBrand,
+        industryId: detectedIndustry?.id ?? null,
+        merchantNameUsed: merchantName,
+        generatedAt: new Date().toISOString(),
+      };
+    } catch {}
+
     // C-116: 主体文案（headlines/descriptions/callouts）先 send + 存库 + 完成日志，
     //   绝不被 sitelink 阻塞 —— 旧逻辑把 `await realSitelinksPromise` 放在 callouts/存库/完成日志之前，
     //   sitelink 慢（爬虫候选不足时走 sitemap/Puppeteer 兜底）会卡住整条 SSE → 前端「一直转、生成不出来」。
@@ -3743,6 +3795,8 @@ async function runIntelligentCore(
             headlines: humanizedHeadlines as any,
             descriptions: humanizedDescriptions as any,
             callouts: humanizedCallouts as any,
+            // D-161：complianceMeta 随 cache 落库（商标策略/行业档，提交 H4 复用）
+            crawl_cache: cache as any,
           },
         });
       } catch (e) {

@@ -27,6 +27,16 @@ const { TextArea } = Input;
 
 const HEADLINE_MAX = 30;
 const DESC_MAX = 90;
+
+// D-161：即时合规快检的规则中文标签（与后端 ad-compliance-checker 规则名对应）
+const LINT_RULE_LABELS: Record<string, string> = {
+  trademark_leak: "含商家品牌名（商标政策风险）",
+  superlative_award: "无出处的最高级/奖项声明",
+  unfair_advantage: "不公平优势用语",
+  inappropriate: "不当内容用语",
+  phone_number: "文案中不能含电话号码",
+  industry_banned: "行业禁词",
+};
 const SITELINK_TITLE_MAX = 25;
 const SITELINK_DESC_MAX = 35;
 const CALLOUT_MAX = 25;
@@ -460,6 +470,33 @@ export default function AdPreviewPage() {
   // 否定关键词
   const [negativeKeywords, setNegativeKeywords] = useState<string[]>([]);
   const [negKwLoading, setNegKwLoading] = useState(false);
+
+  // D-161：手动编辑即时合规快检（与提交 H4 同源规则）——失焦时调 /lint，命中标黄，
+  // 员工当场改掉，避免提交阶段被自动重写（大返工 + 员工不知情）
+  const [lintWarnings, setLintWarnings] = useState<Record<string, string>>({});
+  const lintSeqRef = useRef(0);
+  const runComplianceLint = useCallback(async (hs: string[], ds: string[], cs: string[]) => {
+    const seq = ++lintSeqRef.current;
+    try {
+      const res = await fetch("/api/user/ad-creation/lint", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ campaign_id: campaignId, headlines: hs, descriptions: ds, callouts: cs }),
+      });
+      const json = await res.json();
+      if (seq !== lintSeqRef.current) return; // 只保留最后一次结果
+      if (json.code !== 0) return;
+      const next: Record<string, string> = {};
+      for (const v of (json.data?.violations || []) as Array<{ field: string; index: number; rule: string; severity: string; matchedTerm?: string | null }>) {
+        if (v.severity !== "critical") continue;
+        const ruleKey = v.rule.split(":")[0];
+        const label = LINT_RULE_LABELS[ruleKey] || "触发合规规则";
+        const term = v.matchedTerm ? `「${v.matchedTerm}」` : "";
+        next[`${v.field}#${v.index}`] = `${label}${term}，提交时会被系统自动重写，建议现在改掉`;
+      }
+      setLintWarnings(next);
+    } catch { /* 快检失败不打扰编辑 */ }
+  }, [campaignId]);
 
   // 初始化前轮询查状态，初始化后停止轮询
   // D-055: 生成期间保持 3s 轮询，使后端已写库的扩展数据经 SWR 刷新 + 后到补显副作用即时显示，
@@ -2044,6 +2081,7 @@ export default function AdPreviewPage() {
     setCurrentStep(1);
     setHeadlines(Array(15).fill(""));
     setDescriptions(Array(4).fill(""));
+    setLintWarnings({});
     // D-160 并行触发内容生成（2 个后台 job，callouts 只由 core 生成一份）：
     //    - core: 标题 + 描述 + callouts + 站内链接 + 图片（orchestrator 统一生成，带完整页面上下文）
     //    - promotion + negative_keywords: 爬取促销数据 + AI 否定关键词（原独立 SSE 直连并入本批次，少跑一条流水线）
@@ -2062,6 +2100,7 @@ export default function AdPreviewPage() {
     setCurrentStep(1);
     setHeadlines(Array(15).fill(""));
     setDescriptions(Array(4).fill(""));
+    setLintWarnings({});
     // D-092：自动启动即先置「关键词查询中」，让面板立刻有反馈（不等 keywords_pending 事件抵达）
     if (kwList.length === 0) setKwAutoQuerying(true);
     // D-160：callouts 只由 core 生成一份（消除双生成竞态）；否定关键词并入 optional 批次；
@@ -2214,12 +2253,45 @@ export default function AdPreviewPage() {
 
       if (res.code === 0) {
         const articleSlug = (res.data as any)?.article_slug;
-        if (articleSlug) {
-          message.success("广告已提交到 Google Ads！正在跳转到文章发布确认页...");
-          setTimeout(() => router.push(`/user/articles/publish?slug=${articleSlug}`), 1500);
+        const goNext = () => {
+          if (articleSlug) router.push(`/user/articles/publish?slug=${articleSlug}`);
+          else router.push("/user/data-center");
+        };
+        // D-161：提交阶段 H4 自动修复过文案时，把改动明细展示给员工（原先只有后台日志，员工不知情）
+        const h4Fix = (res.data as any)?.h4_auto_fix as {
+          rules?: string[]; rewroteCount?: number; droppedCount?: number; backfilledCount?: number;
+          removed?: string[]; added?: string[];
+        } | null;
+        if (h4Fix && ((h4Fix.removed?.length ?? 0) > 0 || (h4Fix.added?.length ?? 0) > 0)) {
+          const ruleLabels = (h4Fix.rules || []).map((r) => LINT_RULE_LABELS[r] || r).join("、");
+          modal.info({
+            title: "广告已提交，部分文案被系统自动调整",
+            width: 560,
+            content: (
+              <div style={{ fontSize: 13 }}>
+                <div style={{ marginBottom: 8, color: "#888" }}>
+                  提交前合规检查命中：{ruleLabels || "合规规则"}。以下文案已自动重写后提交：
+                </div>
+                {(h4Fix.removed?.length ?? 0) > 0 && (
+                  <div style={{ marginBottom: 8 }}>
+                    <Text strong>替换前：</Text>
+                    {h4Fix.removed!.map((t, i) => <div key={i} style={{ color: "#cf1322", paddingLeft: 8 }}>− {t}</div>)}
+                  </div>
+                )}
+                {(h4Fix.added?.length ?? 0) > 0 && (
+                  <div>
+                    <Text strong>替换后：</Text>
+                    {h4Fix.added!.map((t, i) => <div key={i} style={{ color: "#389e0d", paddingLeft: 8 }}>+ {t}</div>)}
+                  </div>
+                )}
+              </div>
+            ),
+            okText: "知道了",
+            onOk: goNext,
+          });
         } else {
-          message.success("广告已提交到 Google Ads！");
-          setTimeout(() => router.push("/user/data-center"), 1500);
+          message.success(articleSlug ? "广告已提交到 Google Ads！正在跳转到文章发布确认页..." : "广告已提交到 Google Ads！");
+          setTimeout(goNext, 1500);
         }
       } else if ((res.data as any)?.reason === "landing_unreachable_overridable") {
         // CRAWL-04 / 07-B：落地页可达性硬卡，但属「我们机房/代理到不了」的连接级失败（Akamai/地域封锁等），
@@ -2350,15 +2422,21 @@ export default function AdPreviewPage() {
                   <Text type="secondary" style={{ width: 24, textAlign: "right" }}>{i + 1}.</Text>
                   <Input
                     value={h} onChange={(e) => updateHeadline(i, e.target.value)}
+                    onBlur={() => runComplianceLint(headlines, descriptions, callouts)}
                     maxLength={HEADLINE_MAX + 5} placeholder={`标题 ${i + 1}`}
                     style={{ flex: 1 }}
-                    status={h.length > HEADLINE_MAX ? "error" : undefined}
+                    status={h.length > HEADLINE_MAX ? "error" : lintWarnings[`headline#${i}`] ? "warning" : undefined}
                     suffix={<Text type={h.length > HEADLINE_MAX ? "danger" : "secondary"} style={{ fontSize: 12 }}>{h.length}/{HEADLINE_MAX}</Text>}
                   />
                   {headlines.length > 3 && (
                     <Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={() => removeHeadline(i)} />
                   )}
                 </div>
+                {lintWarnings[`headline#${i}`] && (
+                  <div style={{ marginLeft: 32, marginTop: 2, fontSize: 12, color: "#d48806", lineHeight: "18px" }}>
+                    ⚠ {lintWarnings[`headline#${i}`]}
+                  </div>
+                )}
                 {headlinesZh[i] && (
                   <div style={{ marginLeft: 32, marginTop: 2, fontSize: 12, color: "#999", lineHeight: "18px" }}>
                     {headlinesZh[i]}
@@ -2389,15 +2467,21 @@ export default function AdPreviewPage() {
                   <Text type="secondary" style={{ width: 24, textAlign: "right" }}>{i + 1}.</Text>
                   <TextArea
                     value={d} onChange={(e) => updateDescription(i, e.target.value)}
+                    onBlur={() => runComplianceLint(headlines, descriptions, callouts)}
                     maxLength={DESC_MAX + 10} placeholder={`描述 ${i + 1}`}
                     autoSize={{ minRows: 1, maxRows: 3 }} style={{ flex: 1 }}
-                    status={d.length > DESC_MAX ? "error" : undefined}
+                    status={d.length > DESC_MAX ? "error" : lintWarnings[`description#${i}`] ? "warning" : undefined}
                   />
                   <Text type={d.length > DESC_MAX ? "danger" : "secondary"} style={{ fontSize: 12, whiteSpace: "nowrap" }}>{d.length}/{DESC_MAX}</Text>
                   {descriptions.length > 2 && (
                     <Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={() => removeDescription(i)} />
                   )}
                 </div>
+                {lintWarnings[`description#${i}`] && (
+                  <div style={{ marginLeft: 32, marginTop: 2, fontSize: 12, color: "#d48806", lineHeight: "18px" }}>
+                    ⚠ {lintWarnings[`description#${i}`]}
+                  </div>
+                )}
                 {descriptionsZh[i] && (
                   <div style={{ marginLeft: 32, marginTop: 2, fontSize: 12, color: "#999", lineHeight: "18px" }}>
                     {descriptionsZh[i]}

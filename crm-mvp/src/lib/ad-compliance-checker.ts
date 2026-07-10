@@ -29,6 +29,11 @@ export interface ComplianceViolation {
 export interface ComplianceCheckOptions {
   industryProfile?: IndustryProfile | null;
   merchantName?: string | null;
+  /**
+   * D-161：商标策略对齐 —— 画像判 authorized / own_brand 的商家允许文案带品牌名，
+   * 跳过 trademark_leak 检测（与 policy-preflight 的 trademarkPolicy 同源）。
+   */
+  allowBrand?: boolean;
 }
 
 export interface ComplianceCheckResult {
@@ -264,7 +269,7 @@ function checkOne(
     return out;
   }
 
-  if (brandToken && lower.includes(brandToken)) {
+  if (!options.allowBrand && brandToken && lower.includes(brandToken)) {
     out.push({
       field,
       index: idx,

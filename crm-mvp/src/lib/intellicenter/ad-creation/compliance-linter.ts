@@ -26,6 +26,8 @@ import type { IndustryProfile } from "@/lib/industry-profile";
 export interface LinterContext {
   merchantName: string;
   industryProfile?: IndustryProfile | null;
+  /** D-161：画像判 authorized/own_brand 时允许品牌名，跳过 trademark_leak（与 policy-preflight 同源） */
+  allowBrand?: boolean;
 }
 
 export interface LinterReport {
@@ -61,6 +63,7 @@ export function lintAdCopy(
     {
       merchantName: ctx.merchantName,
       industryProfile: ctx.industryProfile ?? null,
+      allowBrand: ctx.allowBrand,
     },
     callouts,
   );
@@ -146,12 +149,13 @@ function backfill(
     const key = cand.toLowerCase().trim();
     if (!key || seen.has(key)) continue;
     // 兜底项也要过 lint，避免补进违规项
+    const probeOpts = { merchantName: ctx.merchantName, industryProfile: ctx.industryProfile ?? null, allowBrand: ctx.allowBrand };
     const probe =
       field === "headline"
-        ? checkAdCompliance([cand], [], { merchantName: ctx.merchantName, industryProfile: ctx.industryProfile ?? null }, [])
+        ? checkAdCompliance([cand], [], probeOpts, [])
         : field === "description"
-          ? checkAdCompliance([], [cand], { merchantName: ctx.merchantName, industryProfile: ctx.industryProfile ?? null }, [])
-          : checkAdCompliance([], [], { merchantName: ctx.merchantName, industryProfile: ctx.industryProfile ?? null }, [cand]);
+          ? checkAdCompliance([], [cand], probeOpts, [])
+          : checkAdCompliance([], [], probeOpts, [cand]);
     if (probe.criticalCount > 0) continue;
     seen.add(key);
     out.push(cand);
@@ -183,6 +187,7 @@ export async function lintRewriteAndBackfill(
   const opts = {
     merchantName: ctx.merchantName,
     industryProfile: ctx.industryProfile ?? null,
+    allowBrand: ctx.allowBrand,
   };
   let headlines = (input.headlines ?? []).slice();
   let descriptions = (input.descriptions ?? []).slice();

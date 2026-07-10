@@ -712,30 +712,56 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
 
   // ═════════════════════════════════════════════════════════════════
   // D-039 H4(C 模式) — 提交前 final gate
-  //   - critical 违规（不公平优势 / 不当内容 / 电话号码 / 品牌名泄漏 / 行业禁词） → block 让员工先修
+  //   - critical 违规（不公平优势 / 不当内容 / 电话号码 / 品牌名泄漏 / 行业禁词） → 自动修复后放行
   //   - minor 违规（过度大写） → 仅记录警告，不阻断
   //   - 异常时不阻断（避免误伤正常提交）
+  //   D-161：合规上下文（商标策略/行业档/商家名归一化）与生成阶段同源，消除两端规则不一致
   // ═════════════════════════════════════════════════════════════════
+  let h4AutoFix: {
+    criticalCount: number;
+    rules: string[];
+    rewroteCount: number;
+    droppedCount: number;
+    backfilledCount: number;
+    removed: string[];
+    added: string[];
+  } | null = null;
   try {
     const { checkAdCompliance } = await import("@/lib/ad-compliance-checker");
     const { lintRewriteAndBackfill } = await import("@/lib/intellicenter/ad-creation/compliance-linter");
-    const { detectIndustryProfile } = await import("@/lib/industry-profile");
-    let pageTextSnippet = "";
+    const { detectIndustryProfile, INDUSTRY_PROFILES } = await import("@/lib/industry-profile");
+    const { extractBrandRoot } = await import("@/lib/country-url-resolver");
+
+    // D-161 修复：crawl_cache 是 JSON 列（Prisma 返回对象，不是字符串）——旧代码
+    // `typeof === "string"` 永远不成立，pageText 恒为空，行业画像退化成通用档，
+    // 导致提交端与生成端行业禁词表不一致。这里对象/字符串两种形态都兼容。
+    let cacheObj: { pageText?: string; complianceMeta?: { trademarkPolicy?: string; allowBrand?: boolean; industryId?: string | null; merchantNameUsed?: string } } | null = null;
     try {
-      if (adCreative.crawl_cache && typeof adCreative.crawl_cache === "string") {
-        const parsed = JSON.parse(adCreative.crawl_cache) as { pageText?: string };
-        pageTextSnippet = (parsed.pageText || "").slice(0, 2000);
+      if (adCreative.crawl_cache) {
+        cacheObj = typeof adCreative.crawl_cache === "string"
+          ? JSON.parse(adCreative.crawl_cache)
+          : (adCreative.crawl_cache as any);
       }
     } catch {}
-    const industryProfile = detectIndustryProfile({
-      merchantName: submitMerchant.merchant_name || "",
-      category: null,
-      pageText: pageTextSnippet,
-    });
+    const meta = cacheObj?.complianceMeta;
+
+    // 商家名归一化与生成端一致（extractBrandRoot 去国家后缀），避免推导出不同品牌 token
+    const h4MerchantName = meta?.merchantNameUsed || extractBrandRoot(submitMerchant.merchant_name || "");
+    // 行业档优先复用生成阶段结论；无 meta（旧草稿/手动路径）时用修好的 pageText 现场检测
+    const industryProfile = meta?.industryId
+      ? (INDUSTRY_PROFILES.find((p) => p.id === meta.industryId) ?? null)
+      : detectIndustryProfile({
+        merchantName: h4MerchantName,
+        category: null,
+        pageText: (cacheObj?.pageText || "").slice(0, 2000),
+      });
+    // 商标策略与生成端 policy-preflight 同源：画像判 authorized/own_brand 的商家品牌名合法
+    const allowBrand = meta?.allowBrand === true;
+
     const finalGate = checkAdCompliance(
       headlines as string[],
       descriptions as string[],
-      { industryProfile, merchantName: submitMerchant.merchant_name || "" },
+      { industryProfile, merchantName: h4MerchantName, allowBrand },
     );
     if (finalGate.criticalCount > 0) {
       // ═══ C-119：提交无障碍 —— 不再硬阻断让员工去改，智能自动修复后直接放行 ═══
@@ -743,7 +769,12 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
       //   仍违规删除 + 静态模板补足数量，用修复后的文案继续提交（与创建阶段 C-118 同一套闭环）。
       const criticals = finalGate.violations.filter((v) => v.severity === "critical");
       const summary = criticals.slice(0, 5).map((v) => `${v.field}#${v.index}「${v.text.slice(0, 30)}」→ ${v.rule}`).join("；");
-      console.warn(`[AdSubmit] H4 检出 ${finalGate.criticalCount} 条 critical，启动自动修复（不阻断提交）：${summary}`);
+      // D-161 埋点：记录规则分布 + 是否带生成阶段 meta（区分「生成漏检」vs「旧草稿/员工手改」），一周后复盘
+      const ruleDist = [...new Set(criticals.map((v) => v.rule.split(":")[0]))];
+      console.warn(
+        `[AdSubmit] H4 检出 ${finalGate.criticalCount} 条 critical，启动自动修复（不阻断提交）cam=${campaign.id} hasGenMeta=${!!meta} rules=[${ruleDist.join(",")}]：${summary}`,
+      );
+      const beforeSnapshot = new Set([...(headlines as string[]), ...(descriptions as string[]), ...(Array.isArray(callouts) ? callouts as string[] : [])]);
       const rewriteCallAi = async (prompt: string): Promise<string> =>
         callAiWithFallback(
           "ad_creation_intelligent",
@@ -756,9 +787,10 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
       const repaired = await lintRewriteAndBackfill(
         { headlines: headlines as string[], descriptions: descriptions as string[], callouts: callouts as string[] },
         {
-          merchantName: submitMerchant.merchant_name || "",
+          merchantName: h4MerchantName,
           industryProfile,
           industryLabel: industryProfile?.label ?? null,
+          allowBrand,
           // 保持现有数量（创建阶段已满 15/4），删除违规后补回相同数量
           targetHeadlines: (headlines as string[]).length,
           targetDescriptions: (descriptions as string[]).length,
@@ -770,6 +802,17 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
       if (Array.isArray(callouts)) {
         callouts.splice(0, callouts.length, ...repaired.cleanedCallouts);
       }
+      const afterSnapshot = new Set([...(headlines as string[]), ...(descriptions as string[]), ...(Array.isArray(callouts) ? callouts as string[] : [])]);
+      // D-161：改动明细回传前端（员工能看到哪些文案被换掉/换成了什么）
+      h4AutoFix = {
+        criticalCount: finalGate.criticalCount,
+        rules: ruleDist,
+        rewroteCount: repaired.rewroteCount,
+        droppedCount: repaired.droppedCount,
+        backfilledCount: repaired.backfilledCount,
+        removed: [...beforeSnapshot].filter((t) => !afterSnapshot.has(t)).slice(0, 20),
+        added: [...afterSnapshot].filter((t) => !beforeSnapshot.has(t)).slice(0, 20),
+      };
       await prisma.ad_creatives.update({
         where: { id: adCreative.id },
         data: { headlines: headlines as any, descriptions: descriptions as any, callouts: callouts as any },
@@ -2000,6 +2043,7 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
       article_status: article?.status || null,
       skipped_keywords: skippedKeywords,
       image_upload: imageUploadResult,
+      h4_auto_fix: h4AutoFix,
     }), successMsg);
 
   } catch (err) {

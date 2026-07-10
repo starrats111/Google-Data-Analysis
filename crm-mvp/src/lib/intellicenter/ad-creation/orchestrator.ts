@@ -434,12 +434,16 @@ export async function runIntelligentAdCreation(
       ],
       1024,
     );
+  // D-161：商标策略与 Step 4 preflight 同源 —— 画像判 authorized/own_brand（非 block_brand）时
+  // 品牌名是合法产出，Step 8 不再按 trademark_leak 删除/重写（否则 prompt 允许、linter 又删，自相矛盾）
+  const allowBrand = preflight.trademarkPolicy !== "block_brand";
   const linter = await lintRewriteAndBackfill(
     { headlines, descriptions, callouts },
     {
       merchantName: ctx.merchantName,
       industryProfile: ctx.industryProfile ?? null,
       industryLabel: ctx.industryProfile?.label ?? null,
+      allowBrand,
       targetHeadlines,
       targetDescriptions,
     },
