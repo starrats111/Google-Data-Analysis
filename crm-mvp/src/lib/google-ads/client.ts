@@ -45,8 +45,18 @@ function parseRetryDelay(errBody: string): number {
 /** Developer Token 本身不可用（未获批/被禁/无效）——与账号权限问题区分开 */
 function isDevTokenError(errBody: string): boolean {
   return errBody.includes("DEVELOPER_TOKEN_NOT_APPROVED")
-    || errBody.includes("DEVELOPER_TOKEN_PROHIBITED")
     || errBody.includes("DEVELOPER_TOKEN_INVALID");
+}
+
+/**
+ * D-162：token 与本次请求所用 Service Account 的 GCP 项目不配对
+ * （"Developer token is not allowed with project 'xxx'"）。
+ * token 会永久绑定首次使用它的 GCP 项目，换一个配对正确的凭证对即可解决——
+ * 这不是 token 本身失效，不能全局标记 invalid（会误杀好 token 毒化整个池）。
+ * 26-07-06 事故根因即 MCC 自带 token 与 SA JSON 张冠李戴混配触发此错。
+ */
+function isDevTokenProjectMismatch(errBody: string): boolean {
+  return errBody.includes("DEVELOPER_TOKEN_PROHIBITED");
 }
 
 /** 该凭证对当前 login-customer-id（MCC）无访问权限（SA 未被加入该 MCC）——换池中下一个凭证可解 */
@@ -394,6 +404,16 @@ export async function queryGoogleAds(
       }
       throw new Error("Google Ads API 权限错误：Developer Token 仅被批准用于测试账号，无法访问正式广告账号。请在 Google Ads API Center 申请标准访问权限。");
     }
+    if (isDevTokenProjectMismatch(errBody)) {
+      // D-162：token↔GCP 项目不配对（凭证对组装错误），只跳过本次配对换下一个凭证，
+      // 绝不 reportTokenInvalid（token 本身没坏，全局拉黑会毒化池子）
+      triedTokens.add(devToken);
+      if (await hasAlternativeToken(own, credentials.mcc_id, triedTokens)) {
+        console.warn(`[GoogleAds] token ${maskToken(devToken)} 与本次 Service Account 的 GCP 项目不配对（DEVELOPER_TOKEN_PROHIBITED），换池中下一个凭证对重试`);
+        continue;
+      }
+      throw new Error("Google Ads API 凭证配对错误：Developer Token 与 Service Account 所属的 Google Cloud 项目不一致（DEVELOPER_TOKEN_PROHIBITED）。请检查该 MCC / Token 池中 token 与服务账号 JSON 是否来自同一个项目。");
+    }
     if (isMccPermissionError(errBody)) {
       const mccKey = credentials.mcc_id.replace(/-/g, "");
       // 先确认是凭证对 MCC 无权限，还是 CID 自身的问题（后者换凭证无解，且不能标记凭证）
@@ -519,6 +539,15 @@ export async function mutateGoogleAds(
         continue;
       }
       throw new Error("Google Ads API 权限错误：Developer Token 仅被批准用于测试账号，无法访问正式广告账号。请在 Google Ads API Center 申请标准访问权限。");
+    }
+    if (isDevTokenProjectMismatch(errBody)) {
+      // D-162：token↔GCP 项目不配对；权限校验阶段被拒，Google 未执行变更，换凭证对重试安全
+      triedTokens.add(devToken);
+      if (await hasAlternativeToken(own, credentials.mcc_id, triedTokens)) {
+        console.warn(`[GoogleAds] token ${maskToken(devToken)} 与本次 Service Account 的 GCP 项目不配对（DEVELOPER_TOKEN_PROHIBITED），换池中下一个凭证对重试`);
+        continue;
+      }
+      throw new Error("Google Ads API 凭证配对错误：Developer Token 与 Service Account 所属的 Google Cloud 项目不一致（DEVELOPER_TOKEN_PROHIBITED）。请检查该 MCC / Token 池中 token 与服务账号 JSON 是否来自同一个项目。");
     }
     if (isMccPermissionError(errBody)) {
       const mccKey = credentials.mcc_id.replace(/-/g, "");

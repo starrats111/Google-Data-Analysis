@@ -70,6 +70,8 @@ const TRACKER_HOST_PATTERNS: RegExp[] = [
   /(^|\.)webgains\.com$/i, /(^|\.)track\.webgains/i,
   /(^|\.)everflow\.io$/i, /(^|\.)viglink\.com$/i, /(^|\.)redirectingat\.com$/i,
   /(^|\.)linkhaitao\.(cn|com)$/i, /(^|\.)skimresources\.com$/i,
+  // D-162：生产 resolved_final_url 现存脏行里出现的 ad.doubleclick.net（Google 广告跳板）
+  /(^|\.)doubleclick\.net$/i,
 ];
 
 function isTrackerHost(host: string): boolean {
@@ -829,23 +831,30 @@ export async function resolveAffiliateLink(
     r.landingUrl = `${finalParsed.origin}${finalParsed.pathname}`;
     r.trackingLink = finalParsed.search.replace(/^\?/, "").trim() || null;
 
+    // D-162：停在跳板/深链/点击中转域名 = 没跟到广告主落地页。除了判失败，还必须把
+    // landingUrl / trackingLink / finalUrl 全部清空 —— 旧逻辑只改 status，脏 URL 原样
+    // 返回，5 个落库点把跳板链接写进 resolved_final_url（clk.tradedoubler / ojrq.net /
+    // click.linksynergy / ad.doubleclick 共 16 行现存），7 天缓存期内被当落地页复用。
+    // 跳转链保留在 chain 里供排障，数据字段绝不带跳板 URL。
+    const failAtNonLanding = (error: string): ResolveResult => {
+      r.status = "resolve_failed";
+      r.error = error;
+      r.landingUrl = null;
+      r.trackingLink = null;
+      r.finalUrl = null;
+      return r;
+    };
     // 停在 App 深链域名且解不出真实 web 落地 → 判失败
     if (stuckOnDeeplink || isDeeplinkHost(finalParsed.hostname)) {
-      r.status = "resolve_failed";
-      r.error = `停在 App 深链域名 ${finalParsed.hostname}，未解出真实网页落地页`;
-      return r;
+      return failAtNonLanding(`停在 App 深链域名 ${finalParsed.hostname}，未解出真实网页落地页`);
     }
     // 停在跳板/中转域名 → 没跟到广告主落地页
     if (isTrackerHost(finalParsed.hostname)) {
-      r.status = "resolve_failed";
-      r.error = `停在跳板域名 ${finalParsed.hostname}，未跟到广告主落地页（通常需配置对应国家代理）`;
-      return r;
+      return failAtNonLanding(`停在跳板域名 ${finalParsed.hostname}，未跟到广告主落地页（通常需配置对应国家代理）`);
     }
     // 停在联盟发布者点击中转域名，且 url= 参数也解不出广告主 URL → 没跟到广告主，需真实浏览器跟随其 JS 跳转
     if (isNetworkClickHost(finalParsed.hostname)) {
-      r.status = "resolve_failed";
-      r.error = `停在联盟点击中转域名 ${finalParsed.hostname}，未跟到广告主落地页（该网络靠 JS 跳转，需真实浏览器跟随）`;
-      return r;
+      return failAtNonLanding(`停在联盟点击中转域名 ${finalParsed.hostname}，未跟到广告主落地页（该网络靠 JS 跳转，需真实浏览器跟随）`);
     }
 
     let startHost = "";

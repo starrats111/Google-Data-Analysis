@@ -992,13 +992,34 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
         // C-016: 路径级 locale 写回（/en-sg/ → /en-us/）—— LAND-01 锁定时跳过，保留用户落地页
         const localizedUrl = (cache as CrawlCache | null)?.localizedMerchantUrl;
         if (!finalUrlLocked && localizedUrl && localizedUrl !== merchantUrl && adCreativeId) {
-          const prevUrl = merchantUrl;
-          merchantUrl = localizedUrl;
-          await prisma.ad_creatives.update({
-            where: { id: adCreativeId },
-            data: { final_url: localizedUrl },
-          }).catch(() => {});
-          console.log(`[Extensions] 路径级 locale 命中: ${prevUrl} → ${localizedUrl}`);
+          // D-162：本地化 URL 是启发式拼接（站点有 /it/ 不代表有 /us/，epres.com/us/、
+          // brand24.com/us/ 均 404 挡提交），采用前先做一次可达性验证；4xx/5xx/异常
+          // 一律回退商家原 URL——原 URL 是商家给的，永远是安全兜底。
+          let localizedOk = false;
+          try {
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), 8000);
+            const resp = await fetch(localizedUrl, {
+              method: "GET",
+              redirect: "follow",
+              signal: ctrl.signal,
+              headers: { "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36" },
+            });
+            clearTimeout(timer);
+            localizedOk = resp.ok;
+            try { await resp.body?.cancel(); } catch {}
+          } catch { localizedOk = false; }
+          if (localizedOk) {
+            const prevUrl = merchantUrl;
+            merchantUrl = localizedUrl;
+            await prisma.ad_creatives.update({
+              where: { id: adCreativeId },
+              data: { final_url: localizedUrl },
+            }).catch(() => {});
+            console.log(`[Extensions] 路径级 locale 命中: ${prevUrl} → ${localizedUrl}`);
+          } else {
+            console.warn(`[Extensions] D-162 路径级 locale 候选 ${localizedUrl} 不可达（404/异常），保留原 URL ${merchantUrl}`);
+          }
         }
 
         // ─── D-096：ccTLD 切换/落地域校正（修复 coach.com→coach.co.uk 误切）───

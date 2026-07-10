@@ -435,6 +435,41 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
     select: { merchant_name: true },
   });
 
+  // ═════════════════════════════════════════════════════════════════
+  // D-162：政策风险表达（risk-free / 医疗宣称等）硬挡前先 AI 自动重写
+  //   - 与 D-082 禁止词同理：机器能改的先改，改不掉的才落到下方硬挡；
+  //   - 只在启用 enforce_policy_check 时执行（与 collectAiRuleViolations 同一开关）；
+  //   - keywords（SemRush 词池）与 sitelinks 不改写，仍走硬挡。
+  // ═════════════════════════════════════════════════════════════════
+  try {
+    const _profile = normalizeAiRuleProfile(adSettings?.ai_rule_profile);
+    const _persona = getActivePersona(_profile);
+    if (_persona.enforce_policy_check || _profile.enforce_policy_check) {
+      const { autoRewritePolicyRisk } = await import("@/lib/ai-rule-profile");
+      const _merchantName = merchantRec?.merchant_name || "";
+      const _callAi = (prompt: string) =>
+        callAiWithFallback("forbidden_rewrite", [{ role: "user", content: prompt }], 160);
+      const targets: Array<{ arr: unknown; label: string; maxChars: number; caseStyle: "title" | "sentence" }> = [
+        { arr: headlines, label: "ad headline", maxChars: 30, caseStyle: "title" },
+        { arr: descriptions, label: "ad description", maxChars: 90, caseStyle: "sentence" },
+        { arr: callouts, label: "callout", maxChars: 25, caseStyle: "title" },
+      ];
+      for (const t of targets) {
+        if (!Array.isArray(t.arr) || t.arr.length === 0) continue;
+        const r = await autoRewritePolicyRisk(t.arr as string[], {
+          fieldLabel: t.label, maxChars: t.maxChars, caseStyle: t.caseStyle,
+          merchantName: _merchantName, callAi: _callAi,
+        });
+        (t.arr as string[]).splice(0, (t.arr as string[]).length, ...r.items);
+        if (r.rewroteCount > 0 || r.stillViolating.length > 0) {
+          console.warn(`[D-162] 提交阶段政策风险表达改写（${t.label}）：rewrote=${r.rewroteCount} stillViolating=${r.stillViolating.length}`);
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("[D-162] 政策风险表达自动改写异常（不阻断，转下方硬挡）：", e instanceof Error ? e.message : e);
+  }
+
   const aiRuleViolations = collectAiRuleViolations({
     profile: adSettings?.ai_rule_profile,
     merchantName: merchantRec?.merchant_name || "",
@@ -1442,24 +1477,12 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
     }
 
     // ─── 9d. 致电扩展 (Call) ───
-    // 提交前校验电话号码是否匹配目标国家，格式不符则跳过（避免 CALL_PHONE_NUMBER_NOT_SUPPORTED_FOR_COUNTRY）
-    const isPhoneValidForCountry = (phone: string, country: string): boolean => {
-      const digits = phone.replace(/\D/g, "");
-      const cc = (country || "US").toUpperCase();
-      if (cc === "US" || cc === "CA") {
-        // 北美：10位纯数字，或以1开头的11位（+1区号）
-        if (digits.length === 10) return true;
-        if (digits.length === 11 && digits.startsWith("1")) return true;
-        return false;
-      }
-      if (cc === "GB" || cc === "UK") return digits.length >= 10 && digits.length <= 11;
-      if (cc === "DE") return digits.length >= 10 && digits.length <= 12;
-      if (cc === "FR") return digits.length === 9 || digits.length === 10;
-      if (cc === "AU") return digits.length >= 9 && digits.length <= 10;
-      if (cc === "JP") return digits.length >= 10 && digits.length <= 11;
-      // 通用：7-15位即可
-      return digits.length >= 7 && digits.length <= 15;
-    };
+    // D-162：提交前电话校验改为与爬虫端同源（crawl-pipeline.isValidPhoneForCountry，NANP 严格规则）。
+    // 旧实现是独立的宽松版（US 只查位数），价格误提取/假号全放行 → 近14天 60 次
+    // CALL_PHONE_NUMBER_NOT_SUPPORTED_FOR_COUNTRY 拒登，占全部拒登 63%。
+    const { isValidPhoneForCountry } = await import("@/lib/crawl-pipeline");
+    const isPhoneValidForCountry = (phone: string, country: string): boolean =>
+      isValidPhoneForCountry(phone, (country || "US").toUpperCase().replace("UK", "GB"));
     if (callExtension?.phone_number && isPhoneValidForCountry(callExtension.phone_number, countryCode)) {
       const assetTempRn = `customers/${cid}/assets/${assetTempId}`;
       operations.push({

@@ -804,17 +804,27 @@ function extractNavItems(html: string, extraItems?: string[]): string[] {
 }
 
 /**
- * 按目标市场校验电话号码格式（导出供其他模块复用）。
+ * 按目标市场校验电话号码格式（导出供其他模块复用，提交端 submit/route 同源使用）。
  * 去除所有非数字后，对照各国合法位数范围进行硬校验。
  * 不合格的号码一律拒绝，宁可不返回也不填错号码。
+ *
+ * D-162：近14天 60 次 CALL_PHONE_NUMBER_NOT_SUPPORTED_FOR_COUNTRY 拒登（占全部拒登 63%），
+ * 样本里全是价格误提取（200.0310135）、占位假号（0123456789）、无效区号（110xxxxxxx）。
+ * 北美改用 NANP 严格规则：区号与局号首位必须 2-9；全局拒绝顺子/全同数字假号。
  */
 export function isValidPhoneForCountry(raw: string, countryCode: string): boolean {
   const digits = raw.replace(/\D/g, "");
+  // 假号硬拒：全同数字（1111111111）/ 连续顺子（0123456789 / 9876543210 片段）
+  if (/^(\d)\1+$/.test(digits)) return false;
+  if (digits.includes("0123456789") || digits.includes("9876543210") || /^0?1234567/.test(digits)) return false;
   switch (countryCode) {
-    // 北美：10 位本地 或 11 位（1 + 10位）
+    // 北美 NANP：10 位（或 1 + 10 位），区号 [2-9]xx、局号 [2-9]xx
     case "US":
-    case "CA":
-      return digits.length === 10 || (digits.length === 11 && digits[0] === "1");
+    case "CA": {
+      const local = digits.length === 11 && digits[0] === "1" ? digits.slice(1) : digits;
+      if (local.length !== 10) return false;
+      return /^[2-9]\d{2}[2-9]\d{6}$/.test(local);
+    }
     // 英国：9–11 位
     case "GB":
       return digits.length >= 9 && digits.length <= 11;
@@ -869,6 +879,10 @@ function extractPhoneCandidates(html: string, country: string): { country_code: 
     const phoneMatches = textOnly.match(phoneRegex) || [];
     for (const p of phoneMatches) {
       const clean = p.replace(/\s+/g, "").trim();
+      // D-162：小数格式（200.0310135）是价格/型号误提取，不是电话；正文提取的号码
+      // 必须带电话特征（+ 国际前缀 / 括号区号 / - 分隔），纯数字串误报率过高
+      if (/^\d+\.\d+$/.test(clean)) continue;
+      if (!/[+()-]/.test(clean)) continue;
       if (isValidPhoneForCountry(clean, countryCode) && !candidates.includes(clean)) {
         candidates.push(clean);
       }
@@ -2282,12 +2296,16 @@ export async function buildCrawlCache(
           const existingLongMatch = u.pathname.match(/^\/([a-z]{2}[-_][a-z]{2})(\/|$)/i);
           const existingShortMatch = u.pathname.match(/^\/([a-z]{2})(\/|$)/i);
           const existingShort = existingShortMatch && KNOWN_COUNTRY_CODES_SET.has(existingShortMatch[1].toLowerCase()) ? existingShortMatch : null;
+          // D-162：旧写法 slice(matched[0].length - 1) 假设前缀后必有 "/"，但正则 (\/|$) 允许
+          // 无尾斜杠（pathname="/nl"）——此时 matched[0] 不含斜杠，多保留 1 个字符，
+          // 拼出 /nll、/en-usn 之类畸形路径 → 落地页 404 → 提交被可达性闸拦下。
+          // 统一按「捕获组长度」切：剩余部分要么以 "/" 开头要么为空，两种形态都正确。
           if (existingLongMatch) {
             // 替换已有的完整 locale 前缀
-            u.pathname = "/" + localePrefix + u.pathname.slice(existingLongMatch[0].length - 1);
+            u.pathname = "/" + localePrefix + u.pathname.slice(1 + existingLongMatch[1].length);
           } else if (existingShort) {
             // 替换已有的纯国家码前缀
-            u.pathname = "/" + localePrefix + u.pathname.slice(existingShort[0].length - 1);
+            u.pathname = "/" + localePrefix + u.pathname.slice(1 + existingShort[1].length);
           } else {
             // 插入前缀（保留原有路径）
             u.pathname = "/" + localePrefix + (u.pathname === "/" ? "/" : u.pathname);

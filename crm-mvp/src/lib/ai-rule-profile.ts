@@ -375,7 +375,9 @@ export const SYSTEM_ADRIAN_PERSONA: AiPersona = {
     "",
     "  4 条的系统分工：",
     "    · 描述 1 — 代入+解决：我懂你的问题 → 这是我的答案 → 现在行动",
-    "      ✓ 'Tired of chargers that quit mid-day? Ours lasts 18hrs. Try risk-free.'",
+    // D-162：原示例含 'Try risk-free.'，与 BASIC_POLICY_RISK_PATTERNS 的
+    // 「保证结果/零风险承诺」硬规则自相矛盾（prompt 教 AI 写、提交时又硬挡）
+    "      ✓ 'Tired of chargers that quit mid-day? Ours lasts 18hrs. Easy 30-day returns.'",
     "    · 描述 2 — 数据背书：用最硬的数字建立信任",
     "      ✓ 'Rated 4.9★ by 20,000+ buyers. 30-day returns. No questions asked.'",
     "    · 描述 3 — 独特壁垒：一句话让用户感到「只有这个能给我这个」",
@@ -627,9 +629,18 @@ type PolicyRiskRule = {
   brandExemptible?: boolean;
 };
 
+/**
+ * D-162：cure/heal 的医疗语境（不含 cure/heal 本身，否则命中词自证语境恒成立）。
+ * Google 禁的是「治愈疾病」式医疗宣称；3D 打印的 wash & cure（固化）、树脂 curing
+ * 等工业语义属正常表述，裸词匹配会误杀（26-07 实测 2 例 3D 打印机商家被硬挡）。
+ */
+const CURE_DISEASE_CONTEXT_RE = /\b(diseases?|illness(?:es)?|cancer|diabetes|arthritis|acne|eczema|psoriasis|infections?|virus(?:es)?|covid|flu|colds?|pain|aches?|symptoms?|ailments?|wounds?|injur\w+|patients?|medical|medicine|therapy|treatments?|remed(?:y|ies)|pills?|drugs?|supplements?|anxiety|depression|insomnia|allerg\w+|inflammation|hangovers?|skin|body|health)\b|治疗|治愈|疗效|药/i;
+
 const BASIC_POLICY_RISK_PATTERNS: PolicyRiskRule[] = [
   { label: "保证结果/零风险承诺", pattern: /\bguaranteed?\s+results?\b|\bzero\s+risk\b|\brisk[\s-]?free\b|\b100%\s+safe\b|\binstant\s+approval\b/i },
-  { label: "医疗治愈类承诺", pattern: /\bcures?\b|\bheals?\b|治疗|治愈|神药/i, brandExemptible: true },
+  // D-162：英文 cure/heal 需叠加医疗语境（疾病/身体/药物词）才算医疗宣称；中文治愈类词无歧义保持裸匹配
+  { label: "医疗治愈类承诺", pattern: /\bcures?\b|\bheals?\b/i, requiresContext: CURE_DISEASE_CONTEXT_RE, brandExemptible: true },
+  { label: "医疗治愈类承诺", pattern: /治疗|治愈|神药/, brandExemptible: true },
   { label: "医疗治愈类承诺", pattern: /\bmiracle\b/i, requiresContext: MEDICAL_CONTEXT_RE, brandExemptible: true },
   { label: "快速致富类承诺", pattern: /\bmake\s+money\s+fast\b|\bget\s+rich\s+quick\b|快速赚钱|暴富/i },
   { label: "误导性前后对比承诺", pattern: /\bbefore\s+and\s+after\b|\bbefore\/after\b|前后对比/i },
@@ -816,6 +827,87 @@ export async function autoRewriteForbiddenTerms(
     if (!fixed) {
       out.items[i] = original; // 保留原文，交由上层处理
       out.stillViolating.push({ index: i, text: original, term: hit });
+    }
+  }
+
+  return out;
+}
+
+export interface PolicyRiskAutoRewriteResult {
+  items: string[];
+  rewroteCount: number;
+  stillViolating: Array<{ index: number; text: string; label: string }>;
+}
+
+/**
+ * D-162：命中 BASIC_POLICY_RISK_PATTERNS 硬规则的文案先交 AI 改写（最多 maxRounds 轮），
+ * 改不掉的才落到提交硬挡。此前 AI 偶发产出 risk-free 等表达时直接整单打回、员工
+ * 只能手改（近14天 15 次硬挡里 9 次是 risk-free）——与 D-082 禁止词同理，机器能改的先改。
+ */
+export async function autoRewritePolicyRisk(
+  items: string[],
+  opts: {
+    fieldLabel: string;
+    maxChars: number;
+    merchantName?: string | null;
+    caseStyle?: "title" | "sentence";
+    maxRounds?: number;
+    callAi: (prompt: string) => Promise<string>;
+  },
+): Promise<PolicyRiskAutoRewriteResult> {
+  const out: PolicyRiskAutoRewriteResult = {
+    items: (items ?? []).map((s) => String(s ?? "")),
+    rewroteCount: 0,
+    stillViolating: [],
+  };
+  if (out.items.length === 0) return out;
+
+  const maxRounds = opts.maxRounds ?? 2;
+  const caseHint =
+    opts.caseStyle === "sentence"
+      ? "Use sentence case (capitalize only the first word and proper nouns); never ALL CAPS."
+      : "Use Title Case but do NOT capitalize prepositions/articles/conjunctions in the middle; never ALL CAPS.";
+
+  for (let i = 0; i < out.items.length; i++) {
+    const original = out.items[i];
+    if (!original) continue;
+    const rule = matchPolicyRiskRule(original, opts.merchantName);
+    if (!rule) continue;
+    const matched = rule.pattern.exec(original)?.[0] ?? "";
+
+    let current = original;
+    let fixed = false;
+    for (let round = 1; round <= maxRounds; round++) {
+      const prompt = [
+        `You are a Google Ads copywriter. Rewrite the following ${opts.fieldLabel} to REMOVE the policy-risk expression while keeping the same meaning, intent and specificity.`,
+        `Policy risk: "${matched}" (${rule.label}) — Google Ads prohibits unverifiable guarantees / medical claims / get-rich promises. Replace it with a concrete, verifiable benefit (e.g. "30-day returns" instead of "risk-free").`,
+        `Constraints:`,
+        `1. Max length: ${opts.maxChars} characters.`,
+        `2. ${caseHint}`,
+        `3. Do NOT introduce any other guarantee/medical/absolute claim.`,
+        `4. Return ONLY valid JSON, no extra text: {"text":"..."}`,
+        `Original: ${JSON.stringify(current)}`,
+      ].join("\n");
+      try {
+        const raw = await opts.callAi(prompt);
+        const parsed = JSON.parse(extractFirstJsonObject(raw)) as { text?: string };
+        let next = String(parsed.text ?? "").trim();
+        if (next.length > opts.maxChars) next = next.slice(0, opts.maxChars).trim();
+        if (next.length >= 2 && !matchPolicyRiskRule(next, opts.merchantName)) {
+          out.items[i] = next;
+          out.rewroteCount++;
+          fixed = true;
+          break;
+        }
+        current = next.length >= 2 ? next : current;
+      } catch {
+        // 本轮 AI 调用/解析失败 → 进入下一轮重试
+      }
+    }
+
+    if (!fixed) {
+      out.items[i] = original; // 保留原文，交由上层硬挡通知员工
+      out.stillViolating.push({ index: i, text: original, label: rule.label });
     }
   }
 

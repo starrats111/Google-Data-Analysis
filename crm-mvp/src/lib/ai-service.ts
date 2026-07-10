@@ -616,10 +616,22 @@ function getFallbackDescriptionCandidates(
  * 场景无可用配置时直接报错，绝不偷偷调用配置之外的模型。
  */
 async function getSceneModels(scene: string): Promise<AiModelConfig[]> {
-  const models = await prisma.ai_model_configs.findMany({
+  let models = await prisma.ai_model_configs.findMany({
     where: { scene, is_active: 1, is_deleted: 0 },
     orderBy: { priority: "asc" },
   });
+
+  // D-162：场景漏配降级兜底 —— 历史上已 3 次发生「代码新增场景、管理台忘配」
+  // （forbidden_rewrite / extension / sitelink_rewrite），漏配时该链路整体静默失败。
+  // 仍以管理台为唯一真相源（只借用已配置的 ad_copy 模型，不引入配置之外的模型），
+  // 但缺场景不再直接抛错，降级用 ad_copy 场景并告警，等管理台补配后自动切回。
+  if (models.length === 0 && scene !== "ad_copy") {
+    console.warn(`[AI] 场景 ${scene} 未配置模型，降级使用 ad_copy 场景配置（请尽快在 AI 配置中补配该场景）`);
+    models = await prisma.ai_model_configs.findMany({
+      where: { scene: "ad_copy", is_active: 1, is_deleted: 0 },
+      orderBy: { priority: "asc" },
+    });
+  }
 
   if (models.length === 0) {
     throw new Error(`AI 未配置：场景 ${scene} 无可用模型，请在 AI 配置中添加供应商或场景模型`);
