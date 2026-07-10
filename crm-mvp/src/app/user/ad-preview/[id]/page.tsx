@@ -2105,12 +2105,12 @@ export default function AdPreviewPage() {
     setLintWarnings({});
     // D-160 并行触发内容生成（2 个后台 job，callouts 只由 core 生成一份）：
     //    - core: 标题 + 描述 + callouts + 站内链接 + 图片（orchestrator 统一生成，带完整页面上下文）
-    //    - promotion + negative_keywords: 爬取促销数据 + AI 否定关键词（原独立 SSE 直连并入本批次，少跑一条流水线）
-    //    - price / call / snippet 默认不搜索，员工勾选时按需提取
+    //    - negative_keywords: AI 否定关键词（原独立 SSE 直连并入本批次，少跑一条流水线）
+    //    - promotion / price / call / snippet 默认不搜索，员工勾选时按需提取（D-165 促销也砍出默认批次）
     autoNegKwDone.current = true; // 否定关键词已随本批次生成，防 useEffect 再触发一条旧 SSE
     await Promise.allSettled([
       generateExtension("core"),
-      generateExtension("promotion", "negative_keywords"),
+      generateExtension("negative_keywords"),
     ]);
   }, [kwList, setCurrentStep, setHeadlines, setDescriptions, generateExtension, message]);
 
@@ -2125,11 +2125,11 @@ export default function AdPreviewPage() {
     // D-092：自动启动即先置「关键词查询中」，让面板立刻有反馈（不等 keywords_pending 事件抵达）
     if (kwList.length === 0) setKwAutoQuerying(true);
     // D-160：callouts 只由 core 生成一份（消除双生成竞态）；否定关键词并入 optional 批次；
-    // price / call / snippet 默认不搜索，员工勾选对应扩展时才按需提取
+    // promotion / price / call / snippet 默认不搜索，员工勾选对应扩展时才按需提取（D-165 促销也砍出默认批次）
     autoNegKwDone.current = true;
     await Promise.allSettled([
       generateExtension("core"),
-      generateExtension("promotion", "negative_keywords"),
+      generateExtension("negative_keywords"),
     ]);
     setKwAutoQuerying(false);
   }, [setCurrentStep, setHeadlines, setDescriptions, generateExtension, kwList.length]);
@@ -3110,6 +3110,10 @@ export default function AdPreviewPage() {
             <div style={{ marginBottom: 16 }}>
               <Checkbox checked={enablePromotion} onChange={(e) => {
                 setEnablePromotion(e.target.checked);
+                // D-165：默认不搜索促销，勾选时才按需从商家网站提取（提取失败会填空表单供手动输入）
+                if (e.target.checked && !promotion.promotion_target.trim() && !promotionLoading) {
+                  generateExtension("promotion");
+                }
               }}>
                 <Space><TagOutlined /><Text strong>促销 (Promotion)</Text></Space>
               </Checkbox>
