@@ -62,6 +62,44 @@ export function parseCampaignNameFull(name: string): ParsedCampaignName | null {
   };
 }
 
+// ── D-167：平台段非法/缺失时的 MID 回退匹配 ──
+
+/**
+ * 系列名平台段非法（多为漏写平台段，如 K01-525america-US-0709-10831）时，
+ * 按 MID 在候选商家中回退匹配。规则（07 拍板）：
+ *   1. MID 唯一命中 → 采用；
+ *   2. 多命中 → 用系列名第 2 段（漏写平台段时该段实际是商家名）与 merchant_name
+ *      归一化比对决胜（如 aqara ↔ Aqara DTC）；
+ *   3. 再决胜不了 → 优先 claimed 状态唯一者；
+ *   4. 仍歧义 → 返回 null（调用方跳过+告警，绝不猜）。
+ */
+export function resolveMerchantByMidFallback(
+  campaignName: string,
+  mid: string,
+  candidates: { id: bigint; merchant_id: string; merchant_name: string; status: string }[],
+): bigint | null {
+  const byMid = candidates.filter((m) => m.merchant_id === mid);
+  if (byMid.length === 0) return null;
+  if (byMid.length === 1) return byMid[0].id;
+
+  // 漏写平台段时 parts[1] 是商家名段
+  const nameSeg = (campaignName.split(/-+/)[1] || "").trim();
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const seg = norm(nameSeg);
+  if (seg) {
+    const byName = byMid.filter((m) => {
+      const mn = norm(m.merchant_name);
+      return mn === seg || mn.startsWith(seg) || seg.startsWith(mn);
+    });
+    if (byName.length === 1) return byName[0].id;
+  }
+
+  const claimed = byMid.filter((m) => m.status === "claimed");
+  if (claimed.length === 1) return claimed[0].id;
+
+  return null;
+}
+
 // ── 自愈：确保广告系列关联到一个存活商家（孤儿/未匹配自动接回或新建）──
 
 /**
@@ -86,8 +124,19 @@ export async function ensureCampaignMerchant(
 
   const parsed = parseCampaignNameFull(campaign.campaign_name || "");
   if (!parsed) return null;
-  // 平台代码非法（畸形系列名解析出的非标准/超长值）→ 不自建，避免写入非法 platform 列
-  if (!isValidPlatformCode(parsed.platform)) return null;
+  // 平台代码非法（多为漏写平台段）→ D-167 MID 回退匹配，命中才接回，绝不自建
+  if (!isValidPlatformCode(parsed.platform)) {
+    const candidates = await prisma.user_merchants.findMany({
+      where: { user_id: userId, merchant_id: parsed.mid, is_deleted: 0 },
+      select: { id: true, merchant_id: true, merchant_name: true, status: true },
+    });
+    const fallbackId = resolveMerchantByMidFallback(campaign.campaign_name || "", parsed.mid, candidates);
+    if (!fallbackId) return null;
+    if (campaign.user_merchant_id !== fallbackId) {
+      await prisma.campaigns.update({ where: { id: campaign.id }, data: { user_merchant_id: fallbackId } });
+    }
+    return fallbackId;
+  }
 
   const existing = await prisma.user_merchants.findFirst({
     where: { user_id: userId, platform: parsed.platform, merchant_id: parsed.mid, is_deleted: 0 },
@@ -188,7 +237,7 @@ async function autoLinkCampaigns(userId: bigint): Promise<number> {
 
   const userMerchants = await prisma.user_merchants.findMany({
     where: { user_id: userId, is_deleted: 0 },
-    select: { id: true, platform: true, merchant_id: true },
+    select: { id: true, platform: true, merchant_id: true, merchant_name: true, status: true },
   });
   const merchantIndex = new Map<string, { id: bigint; platform: string; merchant_id: string }>(
     userMerchants.map((m) => [
@@ -221,10 +270,28 @@ async function autoLinkCampaigns(userId: bigint): Promise<number> {
     let merchant = merchantIndex.get(key);
 
     if (!merchant) {
-      // 平台代码非法（畸形系列名）→ 不自建，沿用旧行为：警告跳过，避免写入非法 platform 列
+      // 平台代码非法（多为漏写平台段，如 K01-525america-US-0709-10831）
+      // → D-167 MID 回退匹配：唯一命中/商家名决胜/claimed 决胜，仍歧义才跳过告警，绝不自建
       if (!isValidPlatformCode(parsed.platform)) {
+        const fallbackId = resolveMerchantByMidFallback(
+          campaign.campaign_name || "", parsed.mid, userMerchants,
+        );
+        if (fallbackId) {
+          ops.push(
+            prisma.campaigns.update({
+              where: { id: campaign.id },
+              data: { user_merchant_id: fallbackId },
+            })
+          );
+          linked++;
+          console.log(
+            `[MerchantAutoLink] D-167 MID回退关联: "${campaign.campaign_name}" → merchant ${fallbackId}`
+          );
+          if (ops.length >= 5) await Promise.all(ops.splice(0));
+          continue;
+        }
         console.warn(
-          `[MerchantAutoLink] 跳过非法平台: ${key}` +
+          `[MerchantAutoLink] 跳过非法平台(MID回退亦无法唯一定位): ${key}` +
           ` (campaign: "${campaign.campaign_name}")`
         );
         continue;
