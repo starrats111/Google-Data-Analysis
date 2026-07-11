@@ -962,11 +962,15 @@ export default function MerchantsPage() {
     { title: "商家名称", dataIndex: "merchant_name", width: 240, ellipsis: true, render: (v: string) => <span style={{ fontWeight: 600 }}>{v || "-"}</span> },
     { title: "订单数", dataIndex: "orders", width: 90, align: "right" as const, render: (v: number) => Number(v || 0).toLocaleString() },
     { title: "总佣金（含待结算）", dataIndex: "total_all", width: 150, align: "right" as const, render: (v: number, rec: any) => (
-      <Tooltip title={`已结算：$${Number(rec.total_settled || 0).toFixed(2)}（仅展示，不参与拒付率计算）`}>
+      <Tooltip title={`已结算（已批准+已支付）：$${Number(rec.total_settled || 0).toFixed(2)}（仅展示，不参与拒付率计算）`}>
         <span style={{ fontWeight: 600 }}>${Number(v || 0).toFixed(2)}</span>
       </Tooltip>
     ) },
-    { title: "已结算佣金", dataIndex: "total_settled", width: 120, align: "right" as const, render: (v: number) => <span style={{ color: "#999" }}>${Number(v || 0).toFixed(2)}</span> },
+    { title: "已结算佣金", dataIndex: "total_settled", width: 120, align: "right" as const, render: (v: number) => (
+      <Tooltip title="已批准 + 已支付佣金合计（真正结算到手，不含已拒付）">
+        <span style={{ color: "#999" }}>${Number(v || 0).toFixed(2)}</span>
+      </Tooltip>
+    ) },
     { title: "拒付金额", dataIndex: "rejected", width: 120, align: "right" as const, render: (v: number) => <span style={{ color: "#ff4d4f", fontWeight: 600 }}>${Number(v || 0).toFixed(2)}</span> },
     { title: "拒付率", dataIndex: "rate", width: 140, align: "center" as const, render: (v: number) => {
       const n = Number(v || 0);

@@ -61,7 +61,8 @@ export const GET = withUser(async (req: NextRequest) => {
       MAX(merchant_name)                                                       AS merchant_name,
       COUNT(*)                                                                 AS orders,
       ROUND(SUM(CAST(commission_amount AS DECIMAL(14,4))), 2)                  AS total_all,
-      ROUND(SUM(CASE WHEN status IN ('approved','rejected')
+      -- C-019-R1.3（§19.6.9）：已结算佣金 = approved + paid（真正到手），与 settle_rate 分子同口径
+      ROUND(SUM(CASE WHEN status IN ('approved','paid')
                      THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END), 2) AS total_settled,
       ROUND(SUM(CASE WHEN status = 'rejected'
                      THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END), 2) AS rejected,
