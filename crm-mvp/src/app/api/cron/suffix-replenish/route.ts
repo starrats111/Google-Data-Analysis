@@ -33,18 +33,26 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ code: -1, message: '未授权' }, { status: 401 })
   }
 
+  const startedAt = Date.now()
+
+  // 生命周期回收（清过期出口 IP + 回收过期/卡死后缀 + 收敛僵尸告警）与重补货解耦：
+  // 这三项都是轻量 updateMany，必须每轮心跳都跑。若像旧实现那样也压在 isRunning 锁内，
+  // 一旦补货长时间占锁（低配机常态），回收连带被跳过 → 过期后缀持续堆积、被 lease 派发到 live 广告
+  // （LE-03 #10 的连带隐患）。故先无条件回收，再对「重补货」单独判并发锁。
+  const cleanedIps = await cleanupExpiredExitIps()
+  const recycled = await recycleSuffixes()
+  const zombieAlerts = await resolveAlertsForInactiveCampaigns()
+
   if (isRunning) {
-    console.warn('[cron/suffix-replenish] 上一轮仍在执行，本轮跳过')
-    return NextResponse.json({ code: 0, data: { skipped: true } })
+    console.warn('[cron/suffix-replenish] 上一轮补货仍在执行，本轮只做回收、跳过补货')
+    return NextResponse.json({
+      code: 0,
+      data: { skipped: true, cleanedExitIps: cleanedIps, recycled, zombieAlerts },
+    })
   }
   isRunning = true
 
-  const startedAt = Date.now()
   try {
-    // 顺带：清理过期出口 IP 去重记录 + 回收过期/卡死后缀 + 收敛已停投系列的僵尸告警（轻量，复用本 5min cron 心跳）
-    const cleanedIps = await cleanupExpiredExitIps()
-    const recycled = await recycleSuffixes()
-    const zombieAlerts = await resolveAlertsForInactiveCampaigns()
     const result = await replenishLowStock()
     console.log(
       `[cron/suffix-replenish] scanned=${result.scanned} lowStock=${result.lowStock} replenished=${result.replenished}` +
