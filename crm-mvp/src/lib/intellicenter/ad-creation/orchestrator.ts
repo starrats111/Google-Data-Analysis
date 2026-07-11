@@ -93,6 +93,10 @@ export interface OrchestratorContext {
   forceProfileRefresh?: boolean;
   /** 强制 puppeteer 爬虫（promotion 需求） */
   forcePuppeteerCrawl?: boolean;
+  /** 调用方本次请求刚爬完/刷新过 existingCrawlCache 时传 true：Step 2 无条件复用，不再重爬（速度病灶修复） */
+  trustExistingCrawlCache?: boolean;
+  /** Step 2 真的爬到新数据时回调落库（避免重爬结果只活在内存里） */
+  persistCrawlCache?: (cache: CrawlCache) => Promise<void>;
 }
 
 export interface OrchestratorResult {
@@ -193,6 +197,8 @@ export async function runIntelligentAdCreation(
     targetCountry: ctx.targetCountry,
     existingCache: ctx.existingCrawlCache ?? null,
     forcePuppeteer: ctx.forcePuppeteerCrawl,
+    trustExistingCache: ctx.trustExistingCrawlCache,
+    persist: ctx.persistCrawlCache,
   });
   timings.step2_crawl = Date.now() - t2;
   const crawlCache = crawlResult.cache;
@@ -314,7 +320,10 @@ export async function runIntelligentAdCreation(
   let promotion: OrchestratorResult["promotion"] = null;
   const similarity: OrchestratorResult["similarity"] = {};
 
-  for (const task of ctx.tasks) {
+  // 速度病灶修复：任务间无数据依赖（各写各的结果变量），原顺序 await 使总耗时=各任务耗时之和
+  // （3 任务典型 30-90s 串行）。改为 Promise.all 并行，总耗时=最慢任务耗时。
+  // 单任务失败仍只置空该任务（try/catch 移进闭包内），整体不阻断，语义与原实现一致。
+  const runTask = async (task: OrchestratorTask): Promise<void> => {
     try {
       if (task.kind === "headlines") {
         const r = await generateAndScoreBatch({
@@ -413,7 +422,8 @@ export async function runIntelligentAdCreation(
       );
       emit("task_failed", { task: task.kind, message: err instanceof Error ? err.message : String(err) });
     }
-  }
+  };
+  await Promise.all(ctx.tasks.map(runTask));
 
   // ───── Step 8: Compliance Linter（C-118 重写闭环 + 数量补足）─────
   const t8 = Date.now();

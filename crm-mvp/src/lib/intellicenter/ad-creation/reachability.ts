@@ -33,7 +33,7 @@ export interface ReachabilityOptions {
   timeoutMs?: number;
   /** 失败重试次数，默认 3（X3=B 重试 3 次仍失败才警告） */
   maxRetries?: number;
-  /** redirect 最大跳数，默认 5 */
+  /** redirect 最大跳数，默认 10（联盟追踪链 6-15 跳常态，5 跳会误判 too_many_redirects） */
   maxRedirects?: number;
   /** 重试间退避基数 ms，默认 1500（指数退避 1.5s/3s/6s） */
   retryBaseMs?: number;
@@ -61,7 +61,7 @@ export async function checkReachability(
 ): Promise<ReachabilityResult> {
   const timeoutMs = opts.timeoutMs ?? 8000;
   const maxRetries = opts.maxRetries ?? 3;
-  const maxRedirects = opts.maxRedirects ?? 5;
+  const maxRedirects = opts.maxRedirects ?? 10;
   const retryBaseMs = opts.retryBaseMs ?? 1500;
 
   const startedAt = Date.now();
@@ -161,8 +161,9 @@ async function probeViaProxy(
       {
         method: "GET",
         headers: {
+          // UA 与 url-validator 的 UA_POOL[0] 保持一致（Chrome/135），消除两套验证器指纹不一致导致的判定分歧
           "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
           "Accept-Language": "en-US,en;q=0.9",
         },
         signal: ctrl.signal,
@@ -225,9 +226,10 @@ async function singleProbeWithRedirects(
   let hops = 0;
 
   // 与主流浏览器 UA 保持一致，避免被反爬挡：fetch 默认 UA 在 Cloudflare/Akamai 上经常被 403/429
+  // 版本与 url-validator 的 UA_POOL[0] 对齐（Chrome/135），消除两套验证器 UA 不一致导致的判定分歧
   const headers: Record<string, string> = {
     "User-Agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
     Accept:
       "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",

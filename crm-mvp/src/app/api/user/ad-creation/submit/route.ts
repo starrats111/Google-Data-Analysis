@@ -3,7 +3,8 @@ import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { getAdMarketConfig } from "@/lib/ad-market";
-import { sanitizeAdText, isSitelinkLocaleCompatible } from "@/lib/crawl-pipeline";
+import { sanitizeAdText, isSitelinkLocaleCompatible, isBadSitelinkUrl } from "@/lib/crawl-pipeline";
+import { isLowValueSitelink } from "@/lib/sitelink-filter";
 import { tryValidateUrl } from "@/lib/url-validator";
 import { fitAdTextBatch, fitAdTextSync } from "@/lib/ad-text-fit";
 import { collectAiRuleViolations, normalizeAiRuleProfile, getActivePersona, includesForbiddenTerm, autoRewriteForbiddenTerms } from "@/lib/ai-rule-profile";
@@ -213,19 +214,24 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
   //   对 401/403/429（多为反爬/限流，Google 爬虫仍可达）放行，避免误杀正常落地页。
   // ═════════════════════════════════════════════════════════════════
   try {
-    const reach = await checkReachability(finalUrl, { maxRetries: 3, timeoutMs: 8000, country: campaign.target_country || "US" });
+    // 速度病灶修复：maxRetries 3→2（第 3 次重试对确定性失败几乎无增益，却最坏多烧 ~100s）；
+    // maxRedirects 显式 10（联盟追踪链 6-15 跳常态，默认 5 跳会把正常长链误判 too_many_redirects）。
+    const reach = await checkReachability(finalUrl, { maxRetries: 2, timeoutMs: 8000, maxRedirects: 10, country: campaign.target_country || "US" });
     let landingHardBlocked = isHardUnreachable(reach);
     const fr = reach.failureReason || "";
     const isConnLevel = fr.startsWith("network_error") || fr === "timeout" || fr === "server_error";
     const isDead404 = fr === "client_error" && (reach.statusCode === 404 || reach.statusCode === 410);
+    const isBadRedirect = fr === "too_many_redirects" || fr === "redirect_no_location" || fr === "redirect_bad_location";
     // 404 双标修复：直连 HEAD/GET 404 可能是 CDN/WAF 对机房 IP、爬虫指纹的定向拦截（真实浏览器 200，
     //   rad.eu 实证）。硬卡前先用与预览页「验证」按钮同源的 tryValidateUrl 复核一次（浏览器级
     //   header + GET 内容检测 + 目标国代理重试），复核可达即放行——否则会出现「预览页验证全绿、
     //   提交却被 404 硬卡」的两套标准，员工无所适从。
-    if (landingHardBlocked && isDead404) {
+    //   重定向类失败（too_many_redirects 等）同样先复核：tryValidateUrl 走 redirect:"follow"
+    //   （上限 ~20 跳），能吃下 checkReachability 手动跟跳吃不下的联盟长链。
+    if (landingHardBlocked && (isDead404 || isBadRedirect)) {
       const second = await tryValidateUrl(finalUrl).catch(() => null);
       if (second?.ok) {
-        console.warn(`[AdSubmit] D-050 直连探测 404 但浏览器级复核可达（status=${second.status}${second.reason ? `, ${second.reason}` : ""}），放行 ${finalUrl}`);
+        console.warn(`[AdSubmit] D-050 直连探测失败(${fr})但浏览器级复核可达（status=${second.status}${second.reason ? `, ${second.reason}` : ""}），放行 ${finalUrl}`);
         landingHardBlocked = false;
       }
     }
@@ -234,7 +240,8 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
       //   目标站 CDN(Akamai 等)/地域封锁」——我们到不了 ≠ 站点死了，Google 全球爬虫独立可达。
       //   404/410 在代理复核 + tryValidateUrl 双复核仍失败后，同样开放「二次确认覆盖」：反爬手段
       //   五花八门，机器判死 ≠ 真死，用户亲眼确认页面能打开就应放行（仍记日志留痕，责任随确认转移）。
-      const overridable = isConnLevel || isDead404;
+      //   重定向类失败同理可覆盖——5-10 跳上限是我们的探测器限制，不是页面死了的证据。
+      const overridable = isConnLevel || isDead404 || isBadRedirect;
       if (confirmReachable && overridable) {
         console.warn(`[AdSubmit] D-050 落地页硬卡：用户已确认可访问，覆盖放行 ${finalUrl} reason=${fr} status=${reach.statusCode}`);
       } else {
@@ -255,6 +262,32 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
     }
     if (!reach.reachable) {
       console.warn(`[AdSubmit] D-050 落地页可达性存疑（放行，疑似反爬/限流）: ${finalUrl} reason=${reach.failureReason} status=${reach.statusCode}`);
+    } else {
+      // 软 404 补检（审计病灶 #6）：HTTP 200 的「Page Not Found / 链接已失效」页对 checkReachability
+      // 是 reachable，却是联盟落地页最常见的失效形态，Google 照样以 misleading/无效目标拒登。
+      // 用 quickCheckUrl（单 UA 一次 GET + 软404/无效链接文案检测，≤15s）补一道；命中后同样走
+      // confirm_reachable 覆盖通道——文案检测有误报可能（标题含 "404" 的商品页等），不做不可覆盖硬卡。
+      try {
+        const { quickCheckUrl } = await import("@/lib/url-validator");
+        const soft = await quickCheckUrl(finalUrl);
+        const isSoftDead = !soft.ok && soft.status > 0 && soft.status < 400;
+        if (isSoftDead && !confirmReachable) {
+          console.warn(`[AdSubmit] D-050 软404阻断: ${finalUrl} status=${soft.status} reason=${soft.reason}`);
+          return Response.json(
+            {
+              code: -1,
+              message: `落地页返回了正常状态码（HTTP ${soft.status}）但内容疑似失效页（${soft.reason || "含 404/失效链接文案"}）。Google 审核会以「目标无效/误导」拒登。请人工打开 ${soft.finalUrl || finalUrl} 确认内容正常后再提交。`,
+              data: { reason: "landing_unreachable_overridable", finalUrl: soft.finalUrl || finalUrl, failureReason: "soft_404" },
+            },
+            { status: 422 },
+          );
+        }
+        if (isSoftDead && confirmReachable) {
+          console.warn(`[AdSubmit] D-050 软404：用户已确认可访问，覆盖放行 ${finalUrl} reason=${soft.reason}`);
+        }
+      } catch (e) {
+        console.warn(`[AdSubmit] D-050 软404补检异常（放行）: ${e instanceof Error ? e.message : e}`);
+      }
     }
   } catch (e) {
     // 探测本身异常（不应发生，checkReachability 内部已捕获）→ 不阻断，记录日志
@@ -468,8 +501,9 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
         { arr: descriptions, label: "ad description", maxChars: 90, caseStyle: "sentence" },
         { arr: callouts, label: "callout", maxChars: 25, caseStyle: "title" },
       ];
-      for (const t of targets) {
-        if (!Array.isArray(t.arr) || t.arr.length === 0) continue;
+      // 速度病灶修复：三个字段的改写互不依赖，由顺序 await 改为并行（原最坏 3×AI 重写串行）
+      await Promise.all(targets.map(async (t) => {
+        if (!Array.isArray(t.arr) || t.arr.length === 0) return;
         const r = await autoRewritePolicyRisk(t.arr as string[], {
           fieldLabel: t.label, maxChars: t.maxChars, caseStyle: t.caseStyle,
           merchantName: _merchantName, callAi: _callAi,
@@ -478,7 +512,7 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
         if (r.rewroteCount > 0 || r.stillViolating.length > 0) {
           console.warn(`[D-162] 提交阶段政策风险表达改写（${t.label}）：rewrote=${r.rewroteCount} stillViolating=${r.stillViolating.length}`);
         }
-      }
+      }));
     }
   } catch (e) {
     console.warn("[D-162] 政策风险表达自动改写异常（不阻断，转下方硬挡）：", e instanceof Error ? e.message : e);
@@ -573,8 +607,12 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
       return result.items;
     };
 
-    const newHeadlines = await runGate(headlines as string[], "headline", 30, 2);
-    const newDescriptions = await runGate(descriptions as string[], "description", 90, 40);
+    // 速度病灶修复：headline / description 两个闸门互不依赖（各自校验+重写各自的数组），
+    // 原顺序 await 让总耗时 = 两者之和（各自最多 3 轮 AI 重写）。并行后取较慢者。
+    const [newHeadlines, newDescriptions] = await Promise.all([
+      runGate(headlines as string[], "headline", 30, 2),
+      runGate(descriptions as string[], "description", 90, 40),
+    ]);
     // 写回本次 body 使用的变量（submit 后续逻辑会读 headlines/descriptions 本地变量）
     headlines.splice(0, headlines.length, ...newHeadlines);
     descriptions.splice(0, descriptions.length, ...newDescriptions);
@@ -606,13 +644,22 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
     // 严查：站内链接与落地页语言版本一致性。落地页 /en 却配 /fr、/nl（其他语言版首页或子页，
     // rad.eu 实证）会把用户带进另一语言站点、Google 亦可能判 misleading——提交前统一剔除并留痕，
     // 兜住生成阶段修复前已落库的旧草稿/员工手填的错配链接。
+    // 审计病灶 #3 补齐：提交层此前只查 locale，不查发现阶段的垃圾页黑名单
+    // （isBadSitelinkUrl：登录/购物车/政策页等；isLowValueSitelink：低价值标题/URL），
+    // 旧草稿里修复前漏进的垃圾链接会绕过发现阶段直达 Google——这里补成同一套标准。
     {
       const slArr = sitelinks as { finalUrl?: string; title?: string }[];
-      const kept = slArr.filter((sl) => isSitelinkLocaleCompatible((sl.finalUrl || "").trim(), finalUrl));
+      const kept = slArr.filter((sl) => {
+        const slUrl = (sl.finalUrl || "").trim();
+        if (!isSitelinkLocaleCompatible(slUrl, finalUrl)) return false;
+        if (isBadSitelinkUrl(slUrl)) return false;
+        if (isLowValueSitelink(slUrl, sl.title || "")) return false;
+        return true;
+      });
       if (kept.length !== slArr.length) {
         const removed = slArr.filter((sl) => !kept.includes(sl));
         console.warn(
-          `[AdSubmit] 剔除与落地页语言版本不一致的站内链接 ${removed.length} 条（落地页=${finalUrl}）: ${removed.map((r) => `${r.title || "(无标题)"}(${r.finalUrl})`).join("、")}`,
+          `[AdSubmit] 剔除不合格站内链接 ${removed.length} 条（locale/黑名单/低价值，落地页=${finalUrl}）: ${removed.map((r) => `${r.title || "(无标题)"}(${r.finalUrl})`).join("、")}`,
         );
         sitelinks.splice(0, sitelinks.length, ...kept);
       }

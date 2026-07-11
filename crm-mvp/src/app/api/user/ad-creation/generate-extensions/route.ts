@@ -923,7 +923,17 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
             : '缓存促销无有效折扣，重爬';
           console.log(`[Extensions] crawl_cache ${reason}，重新爬取... forcePuppeteer=${cacheNeedsRefreshForPromo}`);
           // 商家 URL 主爬（住宅代理）。超时/失败降级逻辑封装在 runCrawlWithSafety（见 Step 3 头部）。
+          const prevCache = cache;
           const newCache: CrawlCache = await runCrawlWithSafety(merchantUrl, cacheNeedsRefreshForPromo);
+          // 审计病灶 #5 守卫：重爬超时/失败产出的 crawlFailed 空壳不得覆盖已有可用缓存。
+          // 典型触发链：旧缓存质量良好但 sitelinkCandidates<6 → forceRecrawlForSitelinks 重爬 →
+          // 反爬站超时降级空壳 → 旧逻辑无条件 cache=newCache 并落库 → 好缓存被空壳顶掉，
+          // 后续所有生成/提交都拿不到正文，还会因 crawlFailed 触发更多重爬（恶性循环）。
+          const prevUsable = !!prevCache && !prevCache.crawlFailed &&
+            ((prevCache.pageText ?? "").length >= 200 || (prevCache.sitelinkCandidates?.length ?? 0) > 0);
+          if (newCache.crawlFailed && prevUsable) {
+            console.warn(`[Extensions] 重爬失败（${newCache.crawlMethod}），保留已有可用缓存不覆盖（pageText=${(prevCache!.pageText ?? "").length}, sitelinks=${prevCache!.sitelinkCandidates?.length ?? 0}）`);
+          } else {
           const newPromo = newCache.promoRegex as Record<string, unknown> | null;
           const newHasDiscount = (newPromo?.discount_percent ? Number(newPromo.discount_percent) : 0) > 0 ||
             (newPromo?.discount_amount ? Number(newPromo.discount_amount) : 0) > 0;
@@ -945,6 +955,7 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
               console.log(`[Extensions] 保留 DB 中更好的 cache（已有折扣）`);
             }
           }
+          } // 空壳守卫 else 结束
         }
 
         // ─── ccTLD 本地候选兜底（仅当「商家自身 URL」整体爬不通时才触发）───
@@ -3678,6 +3689,18 @@ async function runIntelligentCore(
       targetCountry: country,
       languageName,
       existingCrawlCache: cache,
+      // 速度病灶修复：路由层 Step 3 刚在本请求里确保/刷新过 cache（含降级空壳的情况），
+      // orchestrator Step 2 无条件复用，禁止同请求内第二轮全预算重爬（此前最坏多烧 300s）。
+      trustExistingCrawlCache: true,
+      // orchestrator 若真的爬到新数据（防御路径），回写 ad_creatives.crawl_cache 避免下次重爬
+      persistCrawlCache: adCreativeId
+        ? async (freshCache) => {
+            await prisma.ad_creatives.update({
+              where: { id: adCreativeId },
+              data: { crawl_cache: freshCache as any },
+            });
+          }
+        : undefined,
       candidateKeywords: candidates,
       dailyBudgetUsd,
       maxCpcUsd,

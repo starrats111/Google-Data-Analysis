@@ -1392,6 +1392,11 @@ async function discoverSitelinkCandidates(
             return isSameMerchantSite(u.hostname) && !u.search && l.text.length >= 2;
           } catch { return false; }
         })
+        // 旁路补校验（审计病灶 #3）：navLinks 分支此前不走 isBadSitelinkUrl / locale 校验，
+        // challenged host 的"信任 link.text 直接通过"短路更是零过滤——垃圾页与跨语言链接
+        // 从这里漏进候选（rad.eu /fr /nl 实证路径之一）。在源头统一补上，短路分支同样受益。
+        .filter(l => !isBadSitelinkUrl(l.url))
+        .filter(l => isSitelinkLocaleCompatible(l.url, merchantUrl))
         .slice(0, 20); // CRAWL-06：采用 Puppeteer 真实 nav links 原样，不再 locale 规范化
 
       // D-038b（2026-05-28，方案 G）：删除 D-028 v6 challenged 短路（原会让 challenged host
@@ -1475,6 +1480,10 @@ async function discoverSitelinkCandidates(
         const useMetaText = !isBotBlockRedirect;
         const realUrl = usedRawUrl; // CRAWL-06：真实 URL 原样，不做 locale 规范化
         try { const p = new URL(realUrl).pathname; if (p === "/" || p === "") continue; } catch {}
+        // 旁路补校验（审计病灶 #3）：redirect 后的 finalUrl 可能落到垃圾页或跨语言页，
+        // 与 tryPushCandidate 对齐补 isBadSitelinkUrl + locale 校验
+        if (isBadSitelinkUrl(realUrl)) continue;
+        if (!isSitelinkLocaleCompatible(realUrl, merchantUrl)) { rejectStats.localeMismatch++; continue; }
         const norm = realUrl.replace(/\/$/, "").replace(/^http:/, "https:");
         if (existingNormalized.has(norm)) continue;
         existingNormalized.add(norm);

@@ -20,7 +20,10 @@ import {
 } from "@/lib/crawl-inflight-lock";
 
 const CACHE_FRESHNESS_DAYS = 7;
-const CRAWL_HANG_SAFETY_MS = 300_000; // 5 分钟 hang 兜底（与 generate-extensions 现行一致）
+// 速度病灶修复：300s → 180s。路由层 runCrawlWithSafety 的预算约 165s，桥接层给 300s 意味着
+// 同一请求里第二轮爬取比第一轮还能多挂 135s——第一轮全策略瀑布都失败的站，第二轮同样失败，
+// 多出来的预算纯属排队烧时间。180s 足够跑完整个策略瀑布。
+const CRAWL_HANG_SAFETY_MS = 180_000;
 const LOCK_TIMEOUT_MS = CRAWL_HANG_SAFETY_MS + 10_000;
 
 export interface CrawlerBridgeContext {
@@ -33,6 +36,18 @@ export interface CrawlerBridgeContext {
   forceRefresh?: boolean;
   /** 强制使用 puppeteer 而非 fetch 抓（promotion 需求时传 true） */
   forcePuppeteer?: boolean;
+  /**
+   * 速度病灶修复（同请求三轮爬取 → 一轮）：调用方（generate-extensions 路由层）在本次请求里
+   * 刚刚跑完自己的爬取/刷新逻辑时传 true——existingCache 就是几秒前的最新结果，哪怕它是
+   * crawlFailed 空壳（说明该站全策略瀑布刚失败过），立刻原样重爬一遍也只会再烧 165-300s 后
+   * 同样失败。此时无条件信任传入缓存，不再触发第二/三轮重爬。
+   */
+  trustExistingCache?: boolean;
+  /**
+   * 桥接层真的爬了新数据时回调落库（审计病灶 #4：orchestrator 重爬结果此前只活在内存里，
+   * 下个请求看到的还是 DB 里的旧缓存，同一个站被反复重爬）。
+   */
+  persist?: (cache: CrawlCache) => Promise<void>;
 }
 
 export interface CrawlerBridgeResult {
@@ -50,6 +65,15 @@ export async function ensureCrawlCache(
 ): Promise<CrawlerBridgeResult> {
   const startedAt = Date.now();
   const cached = ctx.existingCache;
+
+  // 见 trustExistingCache 字段注释：路由层刚爬完，无条件复用，杜绝同请求重复爬取
+  if (!ctx.forceRefresh && ctx.trustExistingCache && cached) {
+    return {
+      cache: cached,
+      cacheHit: true,
+      elapsedMs: Date.now() - startedAt,
+    };
+  }
 
   if (!ctx.forceRefresh && cached && cached.crawledAt && !cached.crawlFailed) {
     const ageMs =
@@ -95,6 +119,12 @@ export async function ensureCrawlCache(
       },
       LOCK_TIMEOUT_MS,
     );
+    // 重爬结果落库（不阻断主流程）；空壳失败结果不覆盖已有好缓存
+    if (ctx.persist && !newCache.crawlFailed) {
+      await ctx.persist(newCache).catch((e) =>
+        console.warn(`[CrawlerBridge] 重爬结果落库失败（不阻断）: ${e instanceof Error ? e.message : e}`),
+      );
+    }
     return {
       cache: newCache,
       cacheHit: false,

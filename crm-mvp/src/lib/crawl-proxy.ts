@@ -261,22 +261,31 @@ export async function fetchViaProxy(
       try { parsed = new URL(targetUrl); } catch (e) { return reject(e); }
 
       const isHttps = parsed.protocol === "https:";
+      // gzip 乱码病灶修复：本实现用原生 https.request，不会像 fetch 那样自动解压。
+      // 调用方（crawler/url-validator 的 stealth 头）常带 Accept-Encoding: gzip, deflate, br，
+      // 覆盖默认 identity 后服务器返回压缩体，rawBuf.toString("utf8") 得到二进制乱码——
+      // 代理路径抓取/校验因此长期拿不到有效 HTML。对策：①请求头强制 identity（放在 spread 之后，
+      // 调用方不可覆盖）；②仍收到压缩体（部分 CDN 无视 identity）时按 content-encoding 解压兜底。
+      const mergedHeaders: Record<string, string> = {
+        "Accept": "text/html,application/xhtml+xml,*/*;q=0.9",
+        ...(options.headers || {}),
+      };
+      for (const k of Object.keys(mergedHeaders)) {
+        if (k.toLowerCase() === "accept-encoding") delete mergedHeaders[k];
+      }
+      mergedHeaders["Accept-Encoding"] = "identity";
       const reqOptions = {
         hostname: parsed.hostname,
         port: parsed.port ? parseInt(parsed.port) : (isHttps ? 443 : 80),
         path: parsed.pathname + parsed.search,
         method: options.method || "GET",
-        headers: {
-          "Accept": "text/html,application/xhtml+xml,*/*;q=0.9",
-          "Accept-Encoding": "identity",
-          ...(options.headers || {}),
-        } as Record<string, string>,
+        headers: mergedHeaders,
         agent,
         timeout: 18000,
       };
 
       const mod = isHttps ? https : http;
-      const req = (mod as typeof https).request(reqOptions as Parameters<typeof https.request>[0], (res) => {
+      const req = (mod as typeof https).request(reqOptions as unknown as Parameters<typeof https.request>[0], (res) => {
         const status = res.statusCode || 0;
         const location = res.headers["location"];
 
@@ -291,7 +300,19 @@ export async function fetchViaProxy(
         const chunks: Buffer[] = [];
         res.on("data", (chunk: Buffer) => chunks.push(chunk));
         res.on("end", () => {
-          const rawBuf = Buffer.concat(chunks);
+          let rawBuf = Buffer.concat(chunks);
+          // 兜底解压：见上方 gzip 乱码病灶注释
+          const enc = String(res.headers["content-encoding"] || "").toLowerCase();
+          if (enc && rawBuf.length > 0) {
+            try {
+              const zlib = require("zlib") as typeof import("zlib");
+              if (enc.includes("br")) rawBuf = zlib.brotliDecompressSync(rawBuf);
+              else if (enc.includes("gzip")) rawBuf = zlib.gunzipSync(rawBuf);
+              else if (enc.includes("deflate")) rawBuf = zlib.inflateSync(rawBuf);
+            } catch {
+              // 解压失败保留原始字节（可能本就未压缩）
+            }
+          }
           resolve({
             status,
             url: targetUrl,
