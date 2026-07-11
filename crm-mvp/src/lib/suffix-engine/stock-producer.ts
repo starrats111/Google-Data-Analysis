@@ -527,6 +527,9 @@ export async function replenishLowStock(
 /**
  * 后缀生命周期回收：
  *   1) available 且已过 expires_at → expired（避免投放到失效 clickid/token）
+ *   1b) available 但 expires_at 为空（过期机制生效前入库的历史行）且入库已超 EXPIRE_HOURS
+ *       → expired。否则这类行永远逃逸回收，而 lease 又把「空 expires_at」视为有效并 orderBy
+ *       created_at asc 优先派发——等于把 15 天前的死 clickid 优先塞到 live 广告，换链形同虚设。
  *   2) leased 超 LEASE_STALE_HOURS 仍无回执（Script 没 report）→ expired，释放占坑
  * 供 /api/cron/suffix-replenish 每轮顺带调用。返回各自回收条数。
  */
@@ -542,6 +545,22 @@ export async function recycleSuffixes(): Promise<{ expiredAvailable: number; rec
     expiredAvailable = r1.count
   } catch (e) {
     console.warn('[stock-producer] recycle available 失败:', e instanceof Error ? e.message : e)
+  }
+  // 1b) 兜底回收「expires_at 为空」的历史陈旧行（EXPIRE_HOURS>0 时才启用；=0 表示全局不过期）。
+  if (STOCK_CONFIG.EXPIRE_HOURS > 0) {
+    try {
+      const legacyCutoff = new Date(now.getTime() - STOCK_CONFIG.EXPIRE_HOURS * 3600_000)
+      const r1b = await prisma.suffix_pool.updateMany({
+        where: { status: 'available', is_deleted: 0, expires_at: null, created_at: { lt: legacyCutoff } },
+        data: { status: 'expired' },
+      })
+      if (r1b.count > 0) {
+        expiredAvailable += r1b.count
+        console.log(`[stock-producer] recycle 回收无 expires_at 的历史陈旧库存 ${r1b.count} 条`)
+      }
+    } catch (e) {
+      console.warn('[stock-producer] recycle 空 expiry 历史行失败:', e instanceof Error ? e.message : e)
+    }
   }
   try {
     const staleBefore = new Date(now.getTime() - STOCK_CONFIG.LEASE_STALE_HOURS * 3600_000)
