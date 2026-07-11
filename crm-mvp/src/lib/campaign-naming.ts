@@ -152,7 +152,9 @@ export function campaignNameCleanAndMmdd(merchantName: string): { cleanName: str
 
 /**
  * 根据用户在同一平台下的多个账号连接，解析带账号编号的平台标签（如 PM1, RW2）
- * 编号 = platform_connection 按 id 升序排列的位置（1-based）
+ * D-168：编号 = platform_connections.account_index（07 规则的持久化位次：占位、删号补缺），
+ * 与「系列名平台段序号 → 联盟账号」的归属解析（backfillCampaignConnections）同一套口径。
+ * 旧实现按连接 id 顺序数位置，删号后位次前移，会生成与位次不符的序号（wj04 PM 批量 PM1 的根因）。
  */
 export async function resolvePlatformLabel(
   userId: bigint,
@@ -162,17 +164,20 @@ export async function resolvePlatformLabel(
   if (!platform) return "";
   if (!platformConnectionId) return `${platform}1`;
 
+  const conn = await prisma.platform_connections.findFirst({
+    where: { id: platformConnectionId, user_id: userId, is_deleted: 0 },
+    select: { id: true, account_index: true },
+  });
+  if (conn?.account_index) return `${platform}${conn.account_index}`;
+
+  // account_index 未回填的兜底：按创建顺序数位置（与迁移回填口径一致）
   const connections = await prisma.platform_connections.findMany({
     where: { user_id: userId, platform, is_deleted: 0 },
     select: { id: true },
-    orderBy: { id: "asc" },
+    orderBy: [{ created_at: "asc" }, { id: "asc" }],
   });
-
-  if (connections.length === 0) return `${platform}1`;
-
   const index = connections.findIndex(c => c.id === platformConnectionId);
-  const accountNum = index >= 0 ? index + 1 : 1;
-  return `${platform}${accountNum}`;
+  return `${platform}${index >= 0 ? index + 1 : 1}`;
 }
 
 /* fetchGoogleAdsMaxCampaignSequence 已移除 — 见文件头部说明 */
