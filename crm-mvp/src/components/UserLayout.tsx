@@ -15,7 +15,6 @@ import {
   FormOutlined,
   UnorderedListOutlined,
   TeamOutlined,
-  BulbOutlined,
   RightOutlined,
   BarChartOutlined,
   EyeOutlined,
@@ -53,8 +52,6 @@ const userMenuItems: MenuItem[] = [
       { key: "/user/data-center", icon: <TableOutlined />, label: "数据中心" },
       { key: "/user/data-center/settlement", icon: <AccountBookOutlined />, label: "结算查询" },
       { key: "/user/settlement-report", icon: <BarChartOutlined />, label: "结算报表" },
-      { key: "/user/data-center/insights", icon: <BulbOutlined />, label: "AI 浏览" },
-      { key: "/user/data-center/suggestions", icon: <BulbOutlined />, label: "AI 建议" },
     ],
   },
   {
