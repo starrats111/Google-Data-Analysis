@@ -641,7 +641,7 @@ export default function DataCenterPage() {
               <Tag color="red" style={{ fontSize: 10, margin: 0 }}>CID已移除</Tag>
             </Tooltip>
           )}
-          {v !== "REMOVED" && r.google_campaign_id && (
+          {v !== "REMOVED" && !r.cid_removed && r.google_campaign_id && (
             <Tooltip title={v === "ENABLED" ? "暂停广告" : "启用广告"}>
               <Button
                 type="text" size="small"

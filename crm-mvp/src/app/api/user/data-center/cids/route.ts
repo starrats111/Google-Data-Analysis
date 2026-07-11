@@ -136,6 +136,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    const cancelledCids: string[] = [];
     for (const existing of existingCids) {
       if (!googleCidSet.has(existing.customer_id) && existing.status === "active") {
         await prisma.mcc_cid_accounts.update({
@@ -143,8 +144,17 @@ export async function POST(req: NextRequest) {
           // 批次5：Google 端已消失 = 停用（D），不再标 N（N 语义是"占用中"）
           data: { status: "cancelled", is_available: "D" },
         });
+        cancelledCids.push(existing.customer_id);
         cancelled++;
       }
+    }
+    // CID 停用联动：其下本地 ENABLED 系列同步改判 PAUSED（账号都没了不可能真在投，
+    // 否则数据中心出现「已启用 + CID已移除」的矛盾状态）
+    if (cancelledCids.length > 0) {
+      await prisma.campaigns.updateMany({
+        where: { mcc_id: BigInt(mcc_account_id), customer_id: { in: cancelledCids }, is_deleted: 0, google_status: "ENABLED" },
+        data: { google_status: "PAUSED", status: "paused", last_google_sync_at: new Date() },
+      });
     }
 
     const allCids = await prisma.mcc_cid_accounts.findMany({

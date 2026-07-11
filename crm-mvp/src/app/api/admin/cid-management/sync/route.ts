@@ -57,14 +57,24 @@ export const POST = withAdmin(async (req: NextRequest) => {
       }
     }
     // Google 已不返回的 active CID → 标 cancelled + D（停用终态，同步不会冲回 Y/N）
+    const cancelledCids: string[] = [];
     for (const existing of existingCids) {
       if (!googleCidSet.has(existing.customer_id) && existing.status === "active") {
         await prisma.mcc_cid_accounts.update({
           where: { id: existing.id },
           data: { status: "cancelled", is_available: "D" },
         });
+        cancelledCids.push(existing.customer_id);
         cancelled++;
       }
+    }
+    // CID 停用联动：其下本地 ENABLED 系列同步改判 PAUSED（账号都没了不可能真在投，
+    // 否则数据中心出现「已启用 + CID已移除」的矛盾状态）
+    if (cancelledCids.length > 0) {
+      await prisma.campaigns.updateMany({
+        where: { mcc_id: BigInt(mcc_account_id), customer_id: { in: cancelledCids }, is_deleted: 0, google_status: "ENABLED" },
+        data: { google_status: "PAUSED", status: "paused", last_google_sync_at: new Date() },
+      });
     }
 
     return apiSuccess({ created, updated, cancelled, total: googleCidSet.size });

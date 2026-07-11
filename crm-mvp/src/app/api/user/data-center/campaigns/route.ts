@@ -79,6 +79,27 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // CID 已移除/停用 → 其下系列不可能真在投，本地却可能残留 ENABLED（历史同步路径只标
+  // CID 不动系列）。这里自愈改判 PAUSED，前端不再出现「已启用 + CID已移除」的矛盾状态。
+  if (removedCidSet.size > 0) {
+    try {
+      const healed = await prisma.campaigns.updateMany({
+        where: {
+          user_id: userId,
+          customer_id: { in: [...removedCidSet] },
+          is_deleted: 0,
+          google_status: "ENABLED",
+        },
+        data: { google_status: "PAUSED", status: "paused", last_google_sync_at: new Date() },
+      });
+      if (healed.count > 0) {
+        console.log(`[DataCenter] 自愈：已移除/停用 CID 下 ${healed.count} 条 ENABLED 系列改判 PAUSED（user=${userId}）`);
+      }
+    } catch (e) {
+      console.warn(`[DataCenter] 已移除 CID 系列自愈失败（忽略）: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+
   // 日期范围（默认本月，东八区）
   const cstNow = nowCST();
   const monthStartStr = cstNow.startOf("month").format("YYYY-MM-DD");
