@@ -80,7 +80,7 @@ export const POST = withAdmin(async (req: NextRequest) => {
   // ── 写入数据库 ──
   const existing = await prisma.user_merchants.findMany({
     where: { user_id: uid },
-    select: { id: true, platform: true, merchant_id: true, status: true, is_deleted: true, platform_connection_id: true, connection_campaign_links: true },
+    select: { id: true, platform: true, merchant_id: true, status: true, is_deleted: true, platform_connection_id: true, connection_campaign_links: true, category_manual: true },
   });
 
   // 清理重复数据：按 platform:merchant_id 分组（1 条/平台商家），保留 status=claimed/paused 或 id 最小的一条
@@ -135,7 +135,8 @@ export const POST = withAdmin(async (req: NextRequest) => {
     if (ex) {
       const d: Record<string, unknown> = {};
       if (row.merchant_name) d.merchant_name = row.merchant_name;
-      if (cat) d.category = cat;
+      // D-166：人工修正过主营业务的记录不再被平台同步覆盖
+      if (cat && ex.category_manual !== 1) d.category = cat;
       if (row.commission_rate) d.commission_rate = row.commission_rate;
       if (regions != null) d.supported_regions = regions;
       if (row.site_url) d.merchant_url = row.site_url;

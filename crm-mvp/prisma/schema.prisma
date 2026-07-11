@@ -145,6 +145,8 @@ model user_merchants {
   merchant_url              String?   @db.VarChar(512)
   logo_url                  String?   @db.VarChar(1024)
   category                  String?   @db.VarChar(128)
+  // D-166：1=主营业务被人工修正过（编辑时同域名/同MID全系统同步），平台同步不再覆盖 category
+  category_manual           Int       @default(0) @db.TinyInt
   commission_rate           String?   @db.VarChar(64)
   cookie_duration           Int?      @db.UnsignedInt
   supported_regions         Json?

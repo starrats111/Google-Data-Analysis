@@ -29,6 +29,7 @@ export type AggregateUser_merchants = {
 export type User_merchantsAvgAggregateOutputType = {
   id: number | null
   user_id: number | null
+  category_manual: number | null
   cookie_duration: number | null
   platform_connection_id: number | null
   parent_blacklisted: number | null
@@ -39,6 +40,7 @@ export type User_merchantsAvgAggregateOutputType = {
 export type User_merchantsSumAggregateOutputType = {
   id: bigint | null
   user_id: bigint | null
+  category_manual: number | null
   cookie_duration: number | null
   platform_connection_id: bigint | null
   parent_blacklisted: number | null
@@ -55,6 +57,7 @@ export type User_merchantsMinAggregateOutputType = {
   merchant_url: string | null
   logo_url: string | null
   category: string | null
+  category_manual: number | null
   commission_rate: string | null
   cookie_duration: number | null
   status: string | null
@@ -99,6 +102,7 @@ export type User_merchantsMaxAggregateOutputType = {
   merchant_url: string | null
   logo_url: string | null
   category: string | null
+  category_manual: number | null
   commission_rate: string | null
   cookie_duration: number | null
   status: string | null
@@ -143,6 +147,7 @@ export type User_merchantsCountAggregateOutputType = {
   merchant_url: number
   logo_url: number
   category: number
+  category_manual: number
   commission_rate: number
   cookie_duration: number
   supported_regions: number
@@ -186,6 +191,7 @@ export type User_merchantsCountAggregateOutputType = {
 export type User_merchantsAvgAggregateInputType = {
   id?: true
   user_id?: true
+  category_manual?: true
   cookie_duration?: true
   platform_connection_id?: true
   parent_blacklisted?: true
@@ -196,6 +202,7 @@ export type User_merchantsAvgAggregateInputType = {
 export type User_merchantsSumAggregateInputType = {
   id?: true
   user_id?: true
+  category_manual?: true
   cookie_duration?: true
   platform_connection_id?: true
   parent_blacklisted?: true
@@ -212,6 +219,7 @@ export type User_merchantsMinAggregateInputType = {
   merchant_url?: true
   logo_url?: true
   category?: true
+  category_manual?: true
   commission_rate?: true
   cookie_duration?: true
   status?: true
@@ -256,6 +264,7 @@ export type User_merchantsMaxAggregateInputType = {
   merchant_url?: true
   logo_url?: true
   category?: true
+  category_manual?: true
   commission_rate?: true
   cookie_duration?: true
   status?: true
@@ -300,6 +309,7 @@ export type User_merchantsCountAggregateInputType = {
   merchant_url?: true
   logo_url?: true
   category?: true
+  category_manual?: true
   commission_rate?: true
   cookie_duration?: true
   supported_regions?: true
@@ -434,6 +444,7 @@ export type User_merchantsGroupByOutputType = {
   merchant_url: string | null
   logo_url: string | null
   category: string | null
+  category_manual: number
   commission_rate: string | null
   cookie_duration: number | null
   supported_regions: runtime.JsonValue | null
@@ -504,6 +515,7 @@ export type user_merchantsWhereInput = {
   merchant_url?: Prisma.StringNullableFilter<"user_merchants"> | string | null
   logo_url?: Prisma.StringNullableFilter<"user_merchants"> | string | null
   category?: Prisma.StringNullableFilter<"user_merchants"> | string | null
+  category_manual?: Prisma.IntFilter<"user_merchants"> | number
   commission_rate?: Prisma.StringNullableFilter<"user_merchants"> | string | null
   cookie_duration?: Prisma.IntNullableFilter<"user_merchants"> | number | null
   supported_regions?: Prisma.JsonNullableFilter<"user_merchants">
@@ -551,6 +563,7 @@ export type user_merchantsOrderByWithRelationInput = {
   merchant_url?: Prisma.SortOrderInput | Prisma.SortOrder
   logo_url?: Prisma.SortOrderInput | Prisma.SortOrder
   category?: Prisma.SortOrderInput | Prisma.SortOrder
+  category_manual?: Prisma.SortOrder
   commission_rate?: Prisma.SortOrderInput | Prisma.SortOrder
   cookie_duration?: Prisma.SortOrderInput | Prisma.SortOrder
   supported_regions?: Prisma.SortOrderInput | Prisma.SortOrder
@@ -602,6 +615,7 @@ export type user_merchantsWhereUniqueInput = Prisma.AtLeast<{
   merchant_url?: Prisma.StringNullableFilter<"user_merchants"> | string | null
   logo_url?: Prisma.StringNullableFilter<"user_merchants"> | string | null
   category?: Prisma.StringNullableFilter<"user_merchants"> | string | null
+  category_manual?: Prisma.IntFilter<"user_merchants"> | number
   commission_rate?: Prisma.StringNullableFilter<"user_merchants"> | string | null
   cookie_duration?: Prisma.IntNullableFilter<"user_merchants"> | number | null
   supported_regions?: Prisma.JsonNullableFilter<"user_merchants">
@@ -649,6 +663,7 @@ export type user_merchantsOrderByWithAggregationInput = {
   merchant_url?: Prisma.SortOrderInput | Prisma.SortOrder
   logo_url?: Prisma.SortOrderInput | Prisma.SortOrder
   category?: Prisma.SortOrderInput | Prisma.SortOrder
+  category_manual?: Prisma.SortOrder
   commission_rate?: Prisma.SortOrderInput | Prisma.SortOrder
   cookie_duration?: Prisma.SortOrderInput | Prisma.SortOrder
   supported_regions?: Prisma.SortOrderInput | Prisma.SortOrder
@@ -704,6 +719,7 @@ export type user_merchantsScalarWhereWithAggregatesInput = {
   merchant_url?: Prisma.StringNullableWithAggregatesFilter<"user_merchants"> | string | null
   logo_url?: Prisma.StringNullableWithAggregatesFilter<"user_merchants"> | string | null
   category?: Prisma.StringNullableWithAggregatesFilter<"user_merchants"> | string | null
+  category_manual?: Prisma.IntWithAggregatesFilter<"user_merchants"> | number
   commission_rate?: Prisma.StringNullableWithAggregatesFilter<"user_merchants"> | string | null
   cookie_duration?: Prisma.IntNullableWithAggregatesFilter<"user_merchants"> | number | null
   supported_regions?: Prisma.JsonNullableWithAggregatesFilter<"user_merchants">
@@ -751,6 +767,7 @@ export type user_merchantsCreateInput = {
   merchant_url?: string | null
   logo_url?: string | null
   category?: string | null
+  category_manual?: number
   commission_rate?: string | null
   cookie_duration?: number | null
   supported_regions?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -798,6 +815,7 @@ export type user_merchantsUncheckedCreateInput = {
   merchant_url?: string | null
   logo_url?: string | null
   category?: string | null
+  category_manual?: number
   commission_rate?: string | null
   cookie_duration?: number | null
   supported_regions?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -845,6 +863,7 @@ export type user_merchantsUpdateInput = {
   merchant_url?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   logo_url?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   category?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  category_manual?: Prisma.IntFieldUpdateOperationsInput | number
   commission_rate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   cookie_duration?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   supported_regions?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -892,6 +911,7 @@ export type user_merchantsUncheckedUpdateInput = {
   merchant_url?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   logo_url?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   category?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  category_manual?: Prisma.IntFieldUpdateOperationsInput | number
   commission_rate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   cookie_duration?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   supported_regions?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -939,6 +959,7 @@ export type user_merchantsCreateManyInput = {
   merchant_url?: string | null
   logo_url?: string | null
   category?: string | null
+  category_manual?: number
   commission_rate?: string | null
   cookie_duration?: number | null
   supported_regions?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -986,6 +1007,7 @@ export type user_merchantsUpdateManyMutationInput = {
   merchant_url?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   logo_url?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   category?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  category_manual?: Prisma.IntFieldUpdateOperationsInput | number
   commission_rate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   cookie_duration?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   supported_regions?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -1033,6 +1055,7 @@ export type user_merchantsUncheckedUpdateManyInput = {
   merchant_url?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   logo_url?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   category?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  category_manual?: Prisma.IntFieldUpdateOperationsInput | number
   commission_rate?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   cookie_duration?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   supported_regions?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
@@ -1086,6 +1109,7 @@ export type user_merchantsCountOrderByAggregateInput = {
   merchant_url?: Prisma.SortOrder
   logo_url?: Prisma.SortOrder
   category?: Prisma.SortOrder
+  category_manual?: Prisma.SortOrder
   commission_rate?: Prisma.SortOrder
   cookie_duration?: Prisma.SortOrder
   supported_regions?: Prisma.SortOrder
@@ -1127,6 +1151,7 @@ export type user_merchantsCountOrderByAggregateInput = {
 export type user_merchantsAvgOrderByAggregateInput = {
   id?: Prisma.SortOrder
   user_id?: Prisma.SortOrder
+  category_manual?: Prisma.SortOrder
   cookie_duration?: Prisma.SortOrder
   platform_connection_id?: Prisma.SortOrder
   parent_blacklisted?: Prisma.SortOrder
@@ -1143,6 +1168,7 @@ export type user_merchantsMaxOrderByAggregateInput = {
   merchant_url?: Prisma.SortOrder
   logo_url?: Prisma.SortOrder
   category?: Prisma.SortOrder
+  category_manual?: Prisma.SortOrder
   commission_rate?: Prisma.SortOrder
   cookie_duration?: Prisma.SortOrder
   status?: Prisma.SortOrder
@@ -1187,6 +1213,7 @@ export type user_merchantsMinOrderByAggregateInput = {
   merchant_url?: Prisma.SortOrder
   logo_url?: Prisma.SortOrder
   category?: Prisma.SortOrder
+  category_manual?: Prisma.SortOrder
   commission_rate?: Prisma.SortOrder
   cookie_duration?: Prisma.SortOrder
   status?: Prisma.SortOrder
@@ -1225,6 +1252,7 @@ export type user_merchantsMinOrderByAggregateInput = {
 export type user_merchantsSumOrderByAggregateInput = {
   id?: Prisma.SortOrder
   user_id?: Prisma.SortOrder
+  category_manual?: Prisma.SortOrder
   cookie_duration?: Prisma.SortOrder
   platform_connection_id?: Prisma.SortOrder
   parent_blacklisted?: Prisma.SortOrder
@@ -1243,6 +1271,7 @@ export type user_merchantsSelect<ExtArgs extends runtime.Types.Extensions.Intern
   merchant_url?: boolean
   logo_url?: boolean
   category?: boolean
+  category_manual?: boolean
   commission_rate?: boolean
   cookie_duration?: boolean
   supported_regions?: boolean
@@ -1292,6 +1321,7 @@ export type user_merchantsSelectScalar = {
   merchant_url?: boolean
   logo_url?: boolean
   category?: boolean
+  category_manual?: boolean
   commission_rate?: boolean
   cookie_duration?: boolean
   supported_regions?: boolean
@@ -1330,7 +1360,7 @@ export type user_merchantsSelectScalar = {
   updated_at?: boolean
 }
 
-export type user_merchantsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "platform" | "merchant_id" | "merchant_name" | "merchant_url" | "logo_url" | "category" | "commission_rate" | "cookie_duration" | "supported_regions" | "status" | "claimed_at" | "target_country" | "holiday_name" | "tracking_link" | "campaign_link" | "source" | "listing_status" | "violation_status" | "violation_time" | "recommendation_status" | "recommendation_time" | "policy_status" | "policy_category_code" | "platform_connection_id" | "connection_campaign_links" | "link_status" | "link_checked_at" | "link_check_reason" | "parent_network" | "parent_blacklisted" | "tracking_status" | "resolved_final_url" | "resolve_chain" | "parent_checked_at" | "parent_check_reason" | "kyads_referer_url" | "atc_advertiser_count" | "atc_last_synced_at" | "atc_sync_status" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["user_merchants"]>
+export type user_merchantsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "platform" | "merchant_id" | "merchant_name" | "merchant_url" | "logo_url" | "category" | "category_manual" | "commission_rate" | "cookie_duration" | "supported_regions" | "status" | "claimed_at" | "target_country" | "holiday_name" | "tracking_link" | "campaign_link" | "source" | "listing_status" | "violation_status" | "violation_time" | "recommendation_status" | "recommendation_time" | "policy_status" | "policy_category_code" | "platform_connection_id" | "connection_campaign_links" | "link_status" | "link_checked_at" | "link_check_reason" | "parent_network" | "parent_blacklisted" | "tracking_status" | "resolved_final_url" | "resolve_chain" | "parent_checked_at" | "parent_check_reason" | "kyads_referer_url" | "atc_advertiser_count" | "atc_last_synced_at" | "atc_sync_status" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["user_merchants"]>
 
 export type $user_merchantsPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "user_merchants"
@@ -1344,6 +1374,7 @@ export type $user_merchantsPayload<ExtArgs extends runtime.Types.Extensions.Inte
     merchant_url: string | null
     logo_url: string | null
     category: string | null
+    category_manual: number
     commission_rate: string | null
     cookie_duration: number | null
     supported_regions: runtime.JsonValue | null
@@ -1757,6 +1788,7 @@ export interface user_merchantsFieldRefs {
   readonly merchant_url: Prisma.FieldRef<"user_merchants", 'String'>
   readonly logo_url: Prisma.FieldRef<"user_merchants", 'String'>
   readonly category: Prisma.FieldRef<"user_merchants", 'String'>
+  readonly category_manual: Prisma.FieldRef<"user_merchants", 'Int'>
   readonly commission_rate: Prisma.FieldRef<"user_merchants", 'String'>
   readonly cookie_duration: Prisma.FieldRef<"user_merchants", 'Int'>
   readonly supported_regions: Prisma.FieldRef<"user_merchants", 'Json'>

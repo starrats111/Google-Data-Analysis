@@ -254,6 +254,7 @@ export const User_merchantsScalarFieldEnum = {
   merchant_url: 'merchant_url',
   logo_url: 'logo_url',
   category: 'category',
+  category_manual: 'category_manual',
   commission_rate: 'commission_rate',
   cookie_duration: 'cookie_duration',
   supported_regions: 'supported_regions',

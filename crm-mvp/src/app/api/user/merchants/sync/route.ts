@@ -164,7 +164,7 @@ export async function doSyncInBackground(
     // 2. 写入 user_merchants（去重 + 防止新增重复）
     const existing = await prisma.user_merchants.findMany({
       where: { user_id: userId },
-      select: { id: true, platform: true, merchant_id: true, status: true, is_deleted: true, platform_connection_id: true, connection_campaign_links: true },
+      select: { id: true, platform: true, merchant_id: true, status: true, is_deleted: true, platform_connection_id: true, connection_campaign_links: true, category_manual: true },
     });
 
     // 清理历史重复数据：按 platform:merchant_id 分组（1 条/平台商家），保留 status=claimed 或 id 最小的记录
@@ -233,7 +233,8 @@ export async function doSyncInBackground(
       if (ex) {
         const updateData: Record<string, any> = {};
         if (row.merchant_name) updateData.merchant_name = row.merchant_name;
-        if (cat) updateData.category = cat;
+        // D-166：人工修正过主营业务的记录不再被平台同步覆盖
+        if (cat && ex.category_manual !== 1) updateData.category = cat;
         if (row.commission_rate) updateData.commission_rate = row.commission_rate;
         if (regions != null) updateData.supported_regions = regions;
         if (row.site_url) updateData.merchant_url = row.site_url;
@@ -315,7 +316,7 @@ export async function doSyncInBackground(
             platform: { in: batch.map(op => (op.data as any).platform) },
             merchant_id: { in: batch.map(op => (op.data as any).merchant_id) },
           },
-          select: { id: true, platform: true, merchant_id: true, status: true, is_deleted: true, platform_connection_id: true, connection_campaign_links: true },
+          select: { id: true, platform: true, merchant_id: true, status: true, is_deleted: true, platform_connection_id: true, connection_campaign_links: true, category_manual: true },
         });
         for (const c of created) {
           map.set(`${c.platform}:${c.merchant_id}`, c);

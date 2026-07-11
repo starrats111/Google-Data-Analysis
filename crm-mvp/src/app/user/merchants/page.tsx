@@ -1,7 +1,7 @@
 "use client";
 import { useState, useCallback, useMemo, useEffect } from "react";
-import { Card, Row, Col, Table, Input, Select, Button, Space, Tag, Modal, Form, Typography, Popconfirm, Popover, Switch, InputNumber, Tabs, App, Tooltip, Radio, DatePicker, Slider, Progress, Alert } from "antd";
-import { ShopOutlined, SearchOutlined, CheckOutlined, DollarOutlined, CalendarOutlined, SaveOutlined, SyncOutlined, WarningOutlined, StarOutlined, ReloadOutlined, RobotOutlined, DeleteOutlined, CloseCircleOutlined, ThunderboltOutlined } from "@ant-design/icons";
+import { Card, Row, Col, Table, Input, Select, Button, Space, Tag, Modal, Form, Typography, Popconfirm, Popover, Switch, InputNumber, Tabs, App, Tooltip, Radio, DatePicker, Slider, Progress, Alert, AutoComplete } from "antd";
+import { ShopOutlined, SearchOutlined, CheckOutlined, DollarOutlined, CalendarOutlined, SaveOutlined, SyncOutlined, WarningOutlined, StarOutlined, ReloadOutlined, RobotOutlined, DeleteOutlined, CloseCircleOutlined, ThunderboltOutlined, EditOutlined } from "@ant-design/icons";
 import { PLATFORMS, BIDDING_STRATEGIES, ALL_COUNTRIES } from "@/lib/constants";
 // D-004：使用共享 MerchantNameCell（支持多账号 Popover 修复 BUG-1）
 import MerchantNameCell from "@/components/MerchantNameCell";
@@ -747,6 +747,34 @@ export default function MerchantsPage() {
       onOk: () => { void openClaimModal(m, true); },
     });
   }, [openClaimModal]);
+  // D-166：主营业务人工修正（保存后全系统同域名/同MID同步更正，平台同步不再覆盖）
+  const [catModal, setCatModal] = useState<{ open: boolean; rec: Merchant | null; value: string; saving: boolean }>({ open: false, rec: null, value: "", saving: false });
+  const openCatEdit = useCallback((rec: Merchant) => setCatModal({ open: true, rec, value: rec.category || "", saving: false }), []);
+  const saveCategory = useCallback(async () => {
+    const rec = catModal.rec;
+    const val = (catModal.value || "").trim();
+    if (!rec) return;
+    if (!val) { message.warning("请填写主营业务"); return; }
+    setCatModal(p => ({ ...p, saving: true }));
+    try {
+      const r = await fetch(`/api/user/merchants/${rec.id}/category`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ category: val }),
+      }).then(x => x.json());
+      if (r.code === 0) {
+        message.success(r.message || "已更新");
+        setCatModal({ open: false, rec: null, value: "", saving: false });
+        refreshApi(/\/api\/user\/merchants/);
+      } else { message.error(r.message || "更新失败"); setCatModal(p => ({ ...p, saving: false })); }
+    } catch { message.error("网络异常，请重试"); setCatModal(p => ({ ...p, saving: false })); }
+  }, [catModal, message]);
+  const renderCategoryCol = useCallback((v: string | null, rec: Merchant) => (
+    <Space size={2}>
+      <Tooltip title={v || undefined}><span>{catCn(v)}</span></Tooltip>
+      <Tooltip title="修改主营业务（全系统同域名商家同步更正）">
+        <Button type="text" size="small" icon={<EditOutlined />} style={{ color: "#bfbfbf", padding: "0 2px" }} onClick={() => openCatEdit(rec)} />
+      </Tooltip>
+    </Space>
+  ), [openCatEdit]);
   const doSearch = useCallback(() => { setSearch(searchInput); setPage(1); }, [searchInput]);
   const handleTableChange = useCallback((_p: any, _f: any, sorter: any, extra: any) => {
     if (extra.action === "sort") {
@@ -907,7 +935,7 @@ export default function MerchantsPage() {
     { title: "商家名称", dataIndex: "merchant_name", width: 184, sorter: true, sortOrder: colSortOrder("merchant_name"), render: (_: string, rec: Merchant) => <MerchantNameCell rec={rec} /> },
     { title: "平台", dataIndex: "platform", width: 56, render: (v: string) => <Tag color={PC[v] || "default"} style={{ fontWeight: 600 }}>{v}</Tag> },
     { title: "MID", dataIndex: "merchant_id", width: 74, ellipsis: true },
-    { title: "主营业务", dataIndex: "category", width: 100, ellipsis: true, render: (v: string | null) => catCn(v) },
+    { title: "主营业务", dataIndex: "category", width: 118, ellipsis: true, render: renderCategoryCol },
     { title: "佣金率", dataIndex: "commission_rate", width: 84, sorter: true, sortOrder: colSortOrder("commission_rate"), render: (v: string | null) => <CommissionCell v={v} /> },
     { title: "拒付率", dataIndex: "chargeback_rate", width: 76, align: "center" as const, render: renderChargebackRateCol },
     { title: "结算率", dataIndex: "settlement_rate", width: 76, align: "center" as const, sorter: true, sortOrder: colSortOrder("settlement_rate"), render: renderSettlementRateCol },
@@ -922,7 +950,7 @@ export default function MerchantsPage() {
         <Popconfirm title="确认取消领取？" onConfirm={() => doRelease(rec.id)}><Button size="small" danger>取消领取</Button></Popconfirm>
       </Space>
     ) },
-  ], [doRelease, doRelaunch, showActiveAdv, sortField, sortOrder, renderAtcCompetitionCol, renderChargebackRateCol, renderSettlementRateCol]);
+  ], [doRelease, doRelaunch, showActiveAdv, sortField, sortOrder, renderAtcCompetitionCol, renderChargebackRateCol, renderSettlementRateCol, renderCategoryCol]);
   const availCols = useMemo(() => [
     { title: "商家名称", dataIndex: "merchant_name", width: 188, sorter: true, sortOrder: colSortOrder("merchant_name"), render: (_: string, rec: Merchant) => {
       const hitRate = chargebackHitMap.get(`${rec.platform}-${rec.merchant_id}`);
@@ -939,7 +967,7 @@ export default function MerchantsPage() {
     } },
     { title: "平台", dataIndex: "platform", width: 56, render: (v: string) => <Tag color={PC[v] || "default"} style={{ fontWeight: 600 }}>{v}</Tag> },
     { title: "MID", dataIndex: "merchant_id", width: 74, ellipsis: true },
-    { title: "主营业务", dataIndex: "category", width: 100, ellipsis: true, render: (v: string | null) => catCn(v) },
+    { title: "主营业务", dataIndex: "category", width: 118, ellipsis: true, render: renderCategoryCol },
     { title: "佣金率", dataIndex: "commission_rate", width: 84, sorter: true, sortOrder: colSortOrder("commission_rate"), render: (v: string | null) => <CommissionCell v={v} /> },
     { title: "拒付率", dataIndex: "chargeback_rate", width: 76, align: "center" as const, render: renderChargebackRateCol },
     { title: "结算率", dataIndex: "settlement_rate", width: 76, align: "center" as const, sorter: true, sortOrder: colSortOrder("settlement_rate"), render: renderSettlementRateCol },
@@ -954,7 +982,7 @@ export default function MerchantsPage() {
         {rec.policy_status === "prohibited" ? <Button size="small" disabled>禁止领取</Button> : <Button type="primary" size="small" icon={<CheckOutlined />} onClick={() => doClaim(rec)}>{rec.policy_status === "restricted" ? "领取(限制)" : "领取"}</Button>}
       </Space>
     ) },
-  ], [doClaim, showActiveAdv, sortField, sortOrder, chargebackHitMap, renderAtcCompetitionCol, renderChargebackRateCol, renderSettlementRateCol]);
+  ], [doClaim, showActiveAdv, sortField, sortOrder, chargebackHitMap, renderAtcCompetitionCol, renderChargebackRateCol, renderSettlementRateCol, renderCategoryCol]);
   // C-019 拒付商家 Tab 的列定义
   const chargebackCols = useMemo(() => [
     { title: "平台", dataIndex: "platform", width: 80, render: (v: string) => <Tag color={PC[v] || "default"} style={{ fontWeight: 600 }}>{v}</Tag> },
@@ -1387,6 +1415,35 @@ export default function MerchantsPage() {
       </Form>
     </Modal>
     <Modal title={rTitle} open={rModal} onCancel={() => setRModal(false)} footer={null} width={480}><div style={{ whiteSpace: "pre-wrap", lineHeight: 1.8, padding: "8px 0" }}>{rContent}</div></Modal>
+
+    {/* D-166：主营业务人工修正弹窗 */}
+    <Modal
+      title={`修改主营业务：${catModal.rec?.merchant_name || ""}`}
+      open={catModal.open}
+      confirmLoading={catModal.saving}
+      onOk={saveCategory}
+      onCancel={() => setCatModal({ open: false, rec: null, value: "", saving: false })}
+      okText="保存并全系统同步"
+      width={460}
+    >
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 12 }}
+        message="保存后将同步更正全系统同域名 / 同 MID 的商家记录（含其他成员），且后续平台商家同步不再覆盖此人工修正。"
+      />
+      <AutoComplete
+        style={{ width: "100%" }}
+        value={catModal.value}
+        onChange={(v) => setCatModal(p => ({ ...p, value: v }))}
+        options={Object.entries(CATEGORY_CN).map(([en, cn]) => ({ value: en, label: `${en}（${cn}）` }))}
+        filterOption={(input, option) =>
+          String(option?.value || "").toLowerCase().includes(input.toLowerCase())
+          || String(option?.label || "").toLowerCase().includes(input.toLowerCase())
+        }
+        placeholder="选择预置类目，或直接输入自定义主营业务（英文）"
+      />
+    </Modal>
     <Modal
       title={<><RobotOutlined style={{ color: "#722ed1", marginRight: 8 }} />AI 人设库管理</>}
       open={aiModalOpen}
