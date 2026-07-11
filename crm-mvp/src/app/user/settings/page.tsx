@@ -275,6 +275,12 @@ function PlatformConnectionsTab() {
                         }}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                             <Space size={4}>
+                              {/* D-168：账号位次徽标——系列名平台段序号（如 LH2）按此位次归属到本连接 */}
+                              {conn.account_index ? (
+                                <Tooltip title={`账号位次 ${conn.account_index}：系列名写 ${p.code}${conn.account_index} 即归属本账号`}>
+                                  <Tag color="geekblue" style={{ margin: 0 }}>{p.code}{String(conn.account_index)}</Tag>
+                                </Tooltip>
+                              ) : null}
                               <Tag color={tagColor} style={{ margin: 0 }} icon={
                                 health === "ok" ? <CheckCircleOutlined /> :
                                 health === "error" ? <ExclamationCircleOutlined /> : undefined

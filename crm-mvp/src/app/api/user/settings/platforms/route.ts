@@ -108,20 +108,25 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // 自动生成 account_name（如果未提供）
-  let finalName = providedName;
-  if (!finalName) {
-    const existingCount = await prisma.platform_connections.count({
-      where: { user_id: userId, platform, is_deleted: 0 },
-    });
-    finalName = existingCount === 0 ? `${platform}1` : `${platform}${existingCount + 1}`;
-  }
+  // D-168：账号位次（07 规则）——存活连接占位，新账号补最小空缺（删 2 加第 4 个 → 新账号=2）。
+  // 系列名平台段序号（LH2）按此映射到连接。
+  const aliveConns = await prisma.platform_connections.findMany({
+    where: { user_id: userId, platform, is_deleted: 0 },
+    select: { account_index: true },
+  });
+  const usedIndexes = new Set(aliveConns.map((c) => c.account_index).filter((i): i is number => !!i));
+  let accountIndex = 1;
+  while (usedIndexes.has(accountIndex)) accountIndex++;
+
+  // 自动生成 account_name（如果未提供）：与位次一致（如 LH2）
+  const finalName = providedName || `${platform}${accountIndex}`;
 
   await prisma.platform_connections.create({
     data: {
       user_id: userId,
       platform,
       account_name: finalName,
+      account_index: accountIndex,
       api_key: trimmedKey,
       channel_id: null,
       payee: normalizedPayee || null,

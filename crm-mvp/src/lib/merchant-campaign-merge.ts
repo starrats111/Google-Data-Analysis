@@ -7,22 +7,27 @@
  * 消耗的那条系列上、佣金整坨塞到另一条代表系列上，导致"有佣金却 0 花费 / 有花费却
  * 0 佣金"的分家现象。
  *
- * 现口径：把同一个商家的 花费/点击/展示/佣金 统一汇总到一条【代表广告系列】：
- *   1. 优先选【已启用 ENABLED】的系列；
- *   2. 有多条已启用时，取 created_at 日期最近的一条；
- *   3. 没有已启用时，回退到当前最高优先级状态（PAUSED 优于 REMOVED）里 created_at 最近的一条。
- * 同商家的其余系列（非代表）花费/点击/展示清零、佣金为 0。
+ * D-168 起归集粒度细化为【商家 + 联盟账号】：同一个商家可能被同用户的多个联盟账号
+ * 投放（如 C01 用 LH 1 号账号 wenjun3、K01 用 LH 2 号账号 novanest），旧口径按商家
+ * 整体归集会把两个账号的花费/佣金都塞进一条代表行。现口径：
+ *   1. 按 (user_merchant_id, platform_connection_id) 分组，每组独立选代表行并归集
+ *      本组的 花费/点击/展示；
+ *   2. 代表行选举规则不变：ENABLED 优先 → created_at 最近 → id 大；
+ *   3. 佣金按交易的 (user_merchant_id, platform_connection_id) 精确投给对应组的
+ *      代表行；交易连接在该商家下没有系列组时，回退投给商家级代表行。
  * 无商家（user_merchant_id 为空 / 0）的系列保持各自原始花费，不参与汇总。
  *
  * 注意：本工具只影响【逐行展示】口径；总览合计（totalCost/totalClicks）与按 MCC
- * 的花费分布应继续基于原始 per-campaign 统计，因为汇总只是把金额在同商家内重新
- * 归集，逐行求和后的总量不变。
+ * 的花费分布应继续基于原始 per-campaign 统计，因为汇总只是把金额在组内重新归集，
+ * 逐行求和后的总量不变。
  */
 
 export interface MergeableCampaign {
   id: bigint;
   google_status: string | null;
   user_merchant_id: bigint | null;
+  /** D-168：系列归属的联盟账号；NULL 视为独立分组（连接未知，不与已知账号混并） */
+  platform_connection_id?: bigint | null;
   created_at?: Date | null;
 }
 
@@ -33,9 +38,13 @@ export interface StatEntry {
 }
 
 export interface MerchantMergeResult {
-  /** primaryId(string) -> 该行【展示】用的统计（代表行携带商家汇总，其余同商家行清零） */
+  /** primaryId(string) -> 该行【展示】用的统计（组代表行携带组内汇总，其余行清零） */
   displayStats: Map<string, StatEntry>;
-  /** merchantId(string) -> 接收佣金的代表 primaryId(string) */
+  /**
+   * 佣金投放目标：
+   *   `${merchantId}:${connId}` -> 该 (商家,联盟账号) 组的代表 primaryId
+   *   `${merchantId}`           -> 商家级代表 primaryId（交易连接无对应组时的回退）
+   */
   commissionTarget: Map<string, string>;
   /** 全部代表 primaryId 集合（用于展示过滤时保留携带佣金/花费的代表行） */
   representativeIds: Set<string>;
@@ -66,7 +75,9 @@ export function mergeMerchantCampaigns(
   const commissionTarget = new Map<string, string>();
   const representativeIds = new Set<string>();
 
+  // 商家 → 全部系列（商家级回退代表行用）；(商家,连接) → 组内系列
   const byMerchant = new Map<string, MergeableCampaign[]>();
+  const byGroup = new Map<string, MergeableCampaign[]>();
   for (const c of campaigns) {
     const mid = c.user_merchant_id ? String(c.user_merchant_id) : "";
     if (!mid || mid === "0") {
@@ -77,9 +88,15 @@ export function mergeMerchantCampaigns(
     }
     if (!byMerchant.has(mid)) byMerchant.set(mid, []);
     byMerchant.get(mid)!.push(c);
+
+    // 连接未知（NULL）的系列单独一组，不并入任何已知账号组
+    const gkey = `${mid}|${c.platform_connection_id ? String(c.platform_connection_id) : "null"}`;
+    if (!byGroup.has(gkey)) byGroup.set(gkey, []);
+    byGroup.get(gkey)!.push(c);
   }
 
-  for (const [mid, group] of byMerchant) {
+  // 每个 (商家,连接) 组：组内花费归集到组代表行，其余清零
+  for (const [gkey, group] of byGroup) {
     const rep = pickRepresentative(group);
     const repId = String(rep.id);
     const agg: StatEntry = { cost: 0, clicks: 0, impressions: 0 };
@@ -95,9 +112,53 @@ export function mergeMerchantCampaigns(
       const pid = String(c.id);
       displayStats.set(pid, pid === repId ? agg : { cost: 0, clicks: 0, impressions: 0 });
     }
-    commissionTarget.set(mid, repId);
+    const [mid, connPart] = gkey.split("|");
+    if (connPart !== "null") commissionTarget.set(`${mid}:${connPart}`, repId);
     representativeIds.add(repId);
   }
 
+  // 商家级回退代表行（交易连接在该商家下无系列组时投这里）
+  for (const [mid, group] of byMerchant) {
+    const rep = pickRepresentative(group);
+    commissionTarget.set(mid, String(rep.id));
+    representativeIds.add(String(rep.id));
+  }
+
   return { displayStats, commissionTarget, representativeIds };
+}
+
+/** 交易佣金组（按 商家+联盟账号 聚合后的一组） */
+export interface CommissionGroup {
+  merchantId: string;
+  /** 交易的 platform_connection_id；null 表示未知连接 */
+  connId: string | null;
+  commission: number;
+  rejected: number;
+  approved: number;
+  orders: number;
+}
+
+/**
+ * D-168：把按 (商家,连接) 聚合的佣金组投放到具体展示行。
+ * 精确命中 (商家,连接) 组代表行 → 投该行；否则回退商家级代表行；多组落同行时累加。
+ * 返回 rowId(string) → 佣金聚合。
+ */
+export function routeCommissionToRows(
+  groups: CommissionGroup[],
+  commissionTarget: Map<string, string>,
+): Map<string, { commission: number; rejected: number; approved: number; orders: number }> {
+  const byRow = new Map<string, { commission: number; rejected: number; approved: number; orders: number }>();
+  for (const g of groups) {
+    const target =
+      (g.connId ? commissionTarget.get(`${g.merchantId}:${g.connId}`) : undefined) ??
+      commissionTarget.get(g.merchantId);
+    if (!target) continue;
+    const entry = byRow.get(target) ?? { commission: 0, rejected: 0, approved: 0, orders: 0 };
+    entry.commission += g.commission;
+    entry.rejected += g.rejected;
+    entry.approved += g.approved;
+    entry.orders += g.orders;
+    byRow.set(target, entry);
+  }
+  return byRow;
 }

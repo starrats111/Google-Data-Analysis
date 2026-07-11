@@ -15,12 +15,14 @@
  */
 
 import prisma from "@/lib/prisma";
-import { normalizePlatformCode, isValidPlatformCode } from "@/lib/constants";
+import { normalizePlatformCode, isValidPlatformCode, parsePlatformSegment } from "@/lib/constants";
 
 // ── 命名解析 ──
 
 export interface ParsedCampaignName {
   platform: string;
+  /** D-168：平台段账号位次（LH2 → 2；LH → null=默认 1 号账号）。映射 platform_connections.account_index */
+  accountIndex: number | null;
   mid: string;
   merchantName: string;
   country: string;
@@ -54,8 +56,10 @@ export function parseCampaignNameFull(name: string): ParsedCampaignName | null {
     merchantName = parts.slice(2, parts.length - 3).join("-").trim() || merchantName;
   }
 
+  const seg = parsePlatformSegment(rawPlatform);
   return {
-    platform: normalizePlatformCode(rawPlatform),
+    platform: seg.code,
+    accountIndex: seg.index,
     mid,
     merchantName,
     country,
@@ -192,8 +196,83 @@ export async function syncMerchantStatusForUser(userId: bigint): Promise<{
   merchantsUpdated: number;
 }> {
   const linked = await autoLinkCampaigns(userId);
+  await backfillCampaignConnections(userId);
   const merchantsUpdated = await forceUpdateMerchantStatus(userId);
   return { linked, merchantsUpdated };
+}
+
+// ── D-168: 按系列名平台段序号回填广告系列的联盟账号 ──
+
+/**
+ * 系列名平台段带账号位次（07 规则：LH1=该平台第 1 个账号、LH2=第 2 个，删号补位），
+ * 据此把 platform_connection_id 为空的系列自动归属到具体联盟连接：
+ *   - LH2 → account_index=2 的 LH 存活连接；
+ *   - LH（无序号）→ account_index=1（默认 1 号账号）；
+ *   - 找不到对应位次的连接 → 保持 NULL 并告警，绝不猜。
+ * 只填空值，绝不覆盖已有归属（保护手工回填/发布时写入的归属）。
+ */
+export async function backfillCampaignConnections(userId: bigint): Promise<number> {
+  const candidates = await prisma.campaigns.findMany({
+    where: {
+      user_id: userId,
+      is_deleted: 0,
+      platform_connection_id: null,
+      google_campaign_id: { not: null },
+    },
+    select: { id: true, campaign_name: true },
+    take: 2000,
+  });
+  if (candidates.length === 0) return 0;
+
+  const conns = await prisma.platform_connections.findMany({
+    where: { user_id: userId, is_deleted: 0 },
+    select: { id: true, platform: true, account_index: true },
+    orderBy: [{ created_at: "asc" }, { id: "asc" }],
+  });
+  // platform → (账号位次 → connId)。account_index 未回填的老连接按创建顺序补最小空缺位次
+  const byPlatform = new Map<string, Map<number, bigint>>();
+  for (const c of conns) {
+    const p = normalizePlatformCode(c.platform);
+    if (!byPlatform.has(p)) byPlatform.set(p, new Map());
+    const m = byPlatform.get(p)!;
+    let idx = c.account_index ?? 0;
+    if (!idx || m.has(idx)) {
+      idx = 1;
+      while (m.has(idx)) idx++;
+    }
+    m.set(idx, c.id);
+  }
+
+  let filled = 0;
+  const ops: Promise<unknown>[] = [];
+  for (const c of candidates) {
+    const parsed = parseCampaignNameFull(c.campaign_name || "");
+    if (!parsed || !isValidPlatformCode(parsed.platform)) continue;
+    const idxMap = byPlatform.get(parsed.platform);
+    if (!idxMap) continue;
+    const idx = parsed.accountIndex ?? 1;
+    const connId = idxMap.get(idx);
+    if (!connId) {
+      console.warn(
+        `[ConnBackfill] D-168 无位次 ${parsed.platform}${idx} 的存活连接，跳过: "${c.campaign_name}"`,
+      );
+      continue;
+    }
+    ops.push(
+      prisma.campaigns.update({
+        where: { id: c.id },
+        data: { platform_connection_id: connId },
+      }),
+    );
+    filled++;
+    if (ops.length >= 5) await Promise.all(ops.splice(0));
+  }
+  if (ops.length > 0) await Promise.all(ops);
+
+  if (filled > 0) {
+    console.log(`[ConnBackfill] D-168 按系列名账号位次回填 ${filled} 条系列的联盟连接`);
+  }
+  return filled;
 }
 
 // ── Step 1: 自动关联未绑定的广告系列 ──

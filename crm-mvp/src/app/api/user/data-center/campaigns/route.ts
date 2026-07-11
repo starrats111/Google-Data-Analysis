@@ -5,7 +5,7 @@ import prisma from "@/lib/prisma";
 import { cachedQuery, cacheDelete } from "@/lib/cache";
 import { nowCST, isTodayCST, dateColumnStart, dateColumnEndExclusive, dateColumnTodayEndExclusive, parseTxnDateStart, parseTxnDateEndExclusive, txnStartOfMonthUTC } from "@/lib/date-utils";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
-import { mergeMerchantCampaigns } from "@/lib/merchant-campaign-merge";
+import { mergeMerchantCampaigns, routeCommissionToRows, type CommissionGroup } from "@/lib/merchant-campaign-merge";
 
 /**
  * GET /api/user/data-center/campaigns
@@ -145,6 +145,7 @@ export async function GET(req: NextRequest) {
       target_country: true,
       last_google_sync_at: true,
       user_merchant_id: true,
+      platform_connection_id: true,
       created_at: true,
     },
   });
@@ -209,9 +210,11 @@ export async function GET(req: NextRequest) {
           _sum: { cost: true, clicks: true, impressions: true },
         })
       : [],
+    // D-168：加 platform_connection_id 维度——同商家被多个联盟账号投放时，佣金按交易归属的账号精确投行
     prisma.$queryRawUnsafe<
       {
         user_merchant_id: bigint;
+        platform_connection_id: bigint | null;
         merchant_name: string;
         total_commission: number;
         rejected_commission: number;
@@ -223,6 +226,7 @@ export async function GET(req: NextRequest) {
     >(`
       SELECT
         user_merchant_id,
+        platform_connection_id,
         MAX(merchant_name) as merchant_name,
         SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission,
         SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as rejected_commission,
@@ -234,7 +238,7 @@ export async function GET(req: NextRequest) {
       WHERE user_id = ? AND is_deleted = 0
         AND transaction_time >= ? AND transaction_time < ?
         AND ${sqlAffiliateTxnValidPlatformConnection("affiliate_transactions")}
-      GROUP BY user_merchant_id
+      GROUP BY user_merchant_id, platform_connection_id
     `, userId, txnStart, txnEnd),
   ]);
 
@@ -266,10 +270,8 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  const commissionByMerchant = new Map<string, {
-    commission: number; rejected: number; approved: number;
-    paid: number; pending: number; orders: number; merchantName: string;
-  }>();
+  // D-168：佣金按 (商家, 联盟账号) 分组，投放到对应账号组的代表行
+  const commissionGroups: CommissionGroup[] = [];
   let totalCommissionFromTxn = 0;
   let totalRejectedFromTxn = 0;
   let totalApprovedFromTxn = 0;
@@ -277,15 +279,13 @@ export async function GET(req: NextRequest) {
   let totalPendingFromTxn = 0;
 
   for (const r of commissionAgg) {
-    const key = String(r.user_merchant_id);
-    commissionByMerchant.set(key, {
+    commissionGroups.push({
+      merchantId: String(r.user_merchant_id),
+      connId: r.platform_connection_id ? String(r.platform_connection_id) : null,
       commission: Number(r.total_commission || 0),
       rejected: Number(r.rejected_commission || 0),
       approved: Number(r.approved_commission || 0),
-      paid: Number(r.paid_commission || 0),
-      pending: Number(r.pending_commission || 0),
       orders: Number(r.order_count || 0),
-      merchantName: r.merchant_name || "",
     });
     totalCommissionFromTxn += Number(r.total_commission || 0);
     totalRejectedFromTxn += Number(r.rejected_commission || 0);
@@ -294,10 +294,12 @@ export async function GET(req: NextRequest) {
     totalPendingFromTxn += Number(r.pending_commission || 0);
   }
 
-  // 同商家汇总：把同一个商家的 花费/点击/展示/佣金 统一汇总到一条【代表广告系列】
+  // 同商家+同联盟账号汇总（D-168）：把同一 (商家,账号) 组的花费/点击/展示/佣金归集到组代表行
   //（已启用优先 → 多条已启用取 created_at 最近 → 无已启用回退到最高优先级状态里最近的一条）。
+  // 交易连接在该商家下无系列组时回退商家级代表行。
   // 仅影响逐行展示；总览合计与按 MCC 花费分布继续基于原始 per-campaign 统计（allStatsMap）。
   const merge = mergeMerchantCampaigns(dedupedCampaigns, allStatsMap);
+  const commissionByRow = routeCommissionToRows(commissionGroups, merge.commissionTarget);
 
   // ─── 全量计算总览 summary 和 costByMcc ───
   let totalCost = 0, totalClicks = 0, totalImpressions = 0;
@@ -464,16 +466,12 @@ export async function GET(req: NextRequest) {
     const impressions = s?.impressions || 0;
     const avgCpc = clicks > 0 ? Number((cost / clicks).toFixed(4)) : 0;
 
-    const merchantId = String(c.user_merchant_id);
-    let commission = 0, rejectedComm = 0, approvedComm = 0, orders = 0;
-    if (merchantId && merchantId !== "0" && commissionByMerchant.has(merchantId)
-        && merge.commissionTarget.get(merchantId) === String(c.id)) {
-      const comm = commissionByMerchant.get(merchantId)!;
-      commission = comm.commission;
-      rejectedComm = comm.rejected;
-      approvedComm = comm.approved;
-      orders = comm.orders;
-    }
+    // D-168：佣金已按 (商家,联盟账号) 预投放到行
+    const rowComm = commissionByRow.get(String(c.id));
+    const commission = rowComm?.commission || 0;
+    const rejectedComm = rowComm?.rejected || 0;
+    const approvedComm = rowComm?.approved || 0;
+    const orders = rowComm?.orders || 0;
 
     const roi = cost > 0 ? Number(((commission - rejectedComm - cost) / cost).toFixed(2)) : 0;
 

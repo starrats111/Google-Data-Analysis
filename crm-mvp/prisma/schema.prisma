@@ -112,6 +112,9 @@ model platform_connections {
   user_id              BigInt    @db.UnsignedBigInt
   platform             String    @db.VarChar(8)
   account_name         String    @default("") @db.VarChar(32) // 账号名称，如 RW1, RW2
+  // D-168：账号位次（07 规则）——同用户同平台第 1 个账号=1、第 2 个=2；删除释放位次，
+  // 新账号补最小空缺（删 2 加第 4 个 → 新账号=2）。系列名平台段序号（LH2）按此映射到连接。
+  account_index        Int?      @db.UnsignedInt
   api_key              String?   @db.Text
   channel_id           String?   @db.VarChar(64) // 历史遗留（AD 平台已下线），保留不再使用
   payee                String?   @db.VarChar(64) // D-077：该账号打款的收款人（如 张文俊 / 龚建成）。R-01 起弃用，改用 payment_method_id

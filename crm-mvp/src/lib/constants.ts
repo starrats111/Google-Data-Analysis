@@ -99,6 +99,19 @@ export function isValidPlatformCode(code: string): boolean {
   return VALID_CODES.has(code);
 }
 
+/**
+ * D-168：解析系列名平台段的「账号位次」（07 规则）。
+ * LH1/LH2/lh2 → { code: "LH", index: 1/2 }；LH（无数字）→ { code: "LH", index: null }。
+ * index 对应 platform_connections.account_index（同用户同平台第 1 个账号=1、第 2 个=2，删号补位）。
+ * 无法识别平台时 code 原样返回、index 为 null。
+ */
+export function parsePlatformSegment(raw: string): { code: string; index: number | null } {
+  const code = normalizePlatformCode(raw);
+  if (!isValidPlatformCode(code)) return { code, index: null };
+  const m = (raw || "").trim().match(/(\d+)$/);
+  return { code, index: m ? parseInt(m[1], 10) : null };
+}
+
 // 商家状态
 export const MERCHANT_STATUS = {
   AVAILABLE: "available",

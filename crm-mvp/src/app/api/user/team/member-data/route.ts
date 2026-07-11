@@ -5,7 +5,7 @@ import { withLeader } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
 import { nowCST, isTodayCST, dateColumnStart, dateColumnEndExclusive, dateColumnTodayEndExclusive, parseTxnDateStart, parseTxnDateEndExclusive, txnStartOfMonthUTC } from "@/lib/date-utils";
-import { mergeMerchantCampaigns } from "@/lib/merchant-campaign-merge";
+import { mergeMerchantCampaigns, routeCommissionToRows, type CommissionGroup } from "@/lib/merchant-campaign-merge";
 
 /**
  * 获取指定组员的详细数据（组长专用）
@@ -58,6 +58,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       campaign_name: true,
       google_status: true,
       user_merchant_id: true,
+      platform_connection_id: true,
       created_at: true,
     },
   });
@@ -112,11 +113,13 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
           _sum: { cost: true, clicks: true, impressions: true },
         })
       : [],
+    // D-168：加 platform_connection_id 维度，与 data-center/campaigns 口径一致
     prisma.$queryRawUnsafe<
-      { user_merchant_id: bigint; total_commission: number; rejected_commission: number; approved_commission: number; order_count: number }[]
+      { user_merchant_id: bigint; platform_connection_id: bigint | null; total_commission: number; rejected_commission: number; approved_commission: number; order_count: number }[]
     >(`
       SELECT
         user_merchant_id,
+        platform_connection_id,
         SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission,
         SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as rejected_commission,
         SUM(CASE WHEN status = 'approved' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as approved_commission,
@@ -125,7 +128,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       WHERE user_id = ? AND is_deleted = 0
         AND transaction_time >= ? AND transaction_time < ?
         AND ${sqlAffiliateTxnValidPlatformConnection("affiliate_transactions")}
-      GROUP BY user_merchant_id
+      GROUP BY user_merchant_id, platform_connection_id
     `, targetId, txnStart, txnEnd),
   ]);
 
@@ -158,15 +161,17 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     }
   }
 
-  const commissionByMerchant = new Map<string, { commission: number; rejected: number; approved: number; orders: number }>();
+  // D-168：佣金按 (商家, 联盟账号) 分组，投放到对应账号组的代表行
+  const commissionGroups: CommissionGroup[] = [];
   let totalCommissionFromTxn = 0;
   let totalRejectedFromTxn = 0;
   let totalOrdersFromTxn = 0;
   for (const r of commissionAgg) {
-    const key = String(r.user_merchant_id);
     const comm = Number(r.total_commission || 0);
     const rej = Number(r.rejected_commission || 0);
-    commissionByMerchant.set(key, {
+    commissionGroups.push({
+      merchantId: String(r.user_merchant_id),
+      connId: r.platform_connection_id ? String(r.platform_connection_id) : null,
       commission: comm,
       rejected: rej,
       approved: Number(r.approved_commission || 0),
@@ -177,10 +182,10 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     totalOrdersFromTxn += Number(r.order_count || 0);
   }
 
-  // 同商家汇总：把同一个商家的 花费/点击/展示/佣金 统一汇总到一条【代表广告系列】
-  //（已启用优先 → 多条已启用取 created_at 最近 → 无已启用回退到最高优先级状态里最近的一条）。
-  // 这样避免"有佣金却 0 花费 / 有花费却 0 佣金"的分家现象；总览合计不受影响（同商家内重新归集）。
+  // 同商家+同联盟账号汇总（D-168）：同 (商家,账号) 组的花费/佣金归集到组代表行，
+  // 交易连接无对应系列组时回退商家级代表行；总览合计不受影响（组内重新归集）。
   const merge = mergeMerchantCampaigns(campaigns, statsMap);
+  const commissionByRow = routeCommissionToRows(commissionGroups, merge.commissionTarget);
 
   // 展示排序：ENABLED→PAUSED→REMOVED，同状态内按广告系列名称中的序号升序
   const STATUS_ORDER: Record<string, number> = { ENABLED: 0, PAUSED: 1, REMOVED: 2 };
@@ -205,15 +210,11 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     const clicks = s?.clicks || 0;
     const impressions = s?.impressions || 0;
 
-    const merchantId = String(c.user_merchant_id);
-    let commission = 0, rejectedComm = 0, orders = 0;
-    if (merchantId && merchantId !== "0" && commissionByMerchant.has(merchantId)
-        && merge.commissionTarget.get(merchantId) === String(c.id)) {
-      const comm = commissionByMerchant.get(merchantId)!;
-      commission = comm.commission;
-      rejectedComm = comm.rejected;
-      orders = comm.orders;
-    }
+    // D-168：佣金已按 (商家,联盟账号) 预投放到行
+    const rowComm = commissionByRow.get(String(c.id));
+    const commission = rowComm?.commission || 0;
+    const rejectedComm = rowComm?.rejected || 0;
+    const orders = rowComm?.orders || 0;
 
     const net = commission - rejectedComm - cost;
     const roi = cost > 0 ? (net / cost) * 100 : 0;
