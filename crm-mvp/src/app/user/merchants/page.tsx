@@ -767,13 +767,17 @@ export default function MerchantsPage() {
       } else { message.error(r.message || "更新失败"); setCatModal(p => ({ ...p, saving: false })); }
     } catch { message.error("网络异常，请重试"); setCatModal(p => ({ ...p, saving: false })); }
   }, [catModal, message]);
+  // D-166-R1：长类目（如 Clothing & Accessories）会把铅笔挤出被 ellipsis 截断的单元格导致"无法修改"，
+  // 改 flex 布局：文本区自行省略（minWidth:0），铅笔固定占位永远可点
   const renderCategoryCol = useCallback((v: string | null, rec: Merchant) => (
-    <Space size={2}>
-      <Tooltip title={v || undefined}><span>{catCn(v)}</span></Tooltip>
-      <Tooltip title="修改主营业务（全系统同域名商家同步更正）">
-        <Button type="text" size="small" icon={<EditOutlined />} style={{ color: "#bfbfbf", padding: "0 2px" }} onClick={() => openCatEdit(rec)} />
+    <div style={{ display: "flex", alignItems: "center", gap: 2, width: "100%" }}>
+      <Tooltip title={v || undefined}>
+        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{catCn(v)}</span>
       </Tooltip>
-    </Space>
+      <Tooltip title="修改主营业务（全系统同域名商家同步更正）">
+        <Button type="text" size="small" icon={<EditOutlined />} style={{ flex: "none", color: "#bfbfbf", padding: "0 2px" }} onClick={() => openCatEdit(rec)} />
+      </Tooltip>
+    </div>
   ), [openCatEdit]);
   const doSearch = useCallback(() => { setSearch(searchInput); setPage(1); }, [searchInput]);
   const handleTableChange = useCallback((_p: any, _f: any, sorter: any, extra: any) => {
