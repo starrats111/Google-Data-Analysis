@@ -45,7 +45,7 @@ export interface ComplianceCheckResult {
 
 // Rule 9 不公平优势字词（D-039 H1 NON-NEGOTIABLE RULES 9 落地检测）
 // 注意：这里只保留「无论是否有出处都不该出现」的硬违规词。
-// 「最高级/奖项」类（best / bestseller / awarded / #1 / award-winning ...）已迁移到
+// 「最高级/奖项」类（best brand / awarded / #1 / award-winning ...）已迁移到
 // 下方 SUPERLATIVE_AWARD_TERMS 做「证据感知」判定（C-118）—— 有具体年份/出处可降级放行。
 const UNFAIR_ADVANTAGE_TERMS: Array<{ term: string; severity: ViolationSeverity }> = [
   { term: "trusted by millions", severity: "critical" },
@@ -73,10 +73,11 @@ const UNFAIR_ADVANTAGE_TERMS: Array<{ term: string; severity: ViolationSeverity 
 //   - 这些词若【裸用】(无具体年份/出处) → critical（Google Ads 判 unverifiable unfair advantage，必须重写）
 //   - 若同句含具体年份(19xx/20xx) 视为有第三方出处线索 → 降为 minor（放行，例 "2025 Beauty Shortlist Winner"）
 // 07 铁律：真实有依据的奖项要保留（有文采），无依据的裸最高级要避障。
+// 注意：bestseller / best seller(s) 不在此列——它是零售品类词（热销品，德语同形），
+// 指商家自身销量事实而非「比同行更好」的优越性声明，Google unfair advantage 政策不覆盖；
+// 且系统别处（ai-rule-profile 正面示例、crawl-pipeline Best Sellers 站内链接）本就在推荐该词，
+// 曾入表导致「25% auf Bestseller」被误标重写（矫枉过正实证）。
 const SUPERLATIVE_AWARD_TERMS = [
-  "best seller",
-  "best-seller",
-  "bestseller",
   "best brand",
   "best natural",
   "best in class",

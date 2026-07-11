@@ -109,7 +109,7 @@ ${rejectionBlock ? `\n# Past rejection lessons (CRITICAL — these ads were ALRE
 2. NEVER use: all-caps words, double exclamation "!!", emojis, "guaranteed", "100%", "#1", "best ever", "miracle".
 3. NEVER use the merchant brand name if policy block_brand applies (see Policy constraints above).
 4. SUPERLATIVE / AWARD policy (Google Ads "unfair advantage" — read carefully):
-   - Bare superlatives are BANNED: do NOT write "Best", "Best Brand", "Bestseller", "Top-Rated", "#1", "Award-Winning", "Voted #1", "Awarded", "Awards Won" on their own — Google disapproves unverifiable superiority claims.
+   - Bare superlatives are BANNED: do NOT write "Best", "Best Brand", "Top-Rated", "#1", "Award-Winning", "Voted #1", "Awarded", "Awards Won" on their own — Google disapproves unverifiable superiority claims. ("Bestseller"/"Best Sellers" as a retail category word — e.g. "25% Off Bestsellers" — is fine; it states the merchant's own sales fact, not superiority over competitors.)
    - ONLY if the evidence explicitly contains a real, named award/ranking/certification, you MAY cite it in a SPECIFIC, verifiable form that names the issuer and/or year. Example: if evidence shows "2025 Beauty Shortlist Award", write "2025 Beauty Shortlist Winner" (NOT "Best Natural Brand"); if evidence shows "Certified Organic by Demeter", write "Demeter Certified Organic" (NOT "Certified" alone).
    - If you cannot point to a specific named award/cert in the evidence, drop the claim and use a concrete product/benefit fact instead.
 5. Length: each output MUST be ≤ ${opts.maxLen} characters${opts.minLen ? ` and ≥ ${opts.minLen} characters` : ""}.
