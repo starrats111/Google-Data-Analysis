@@ -62,7 +62,7 @@ export async function POST(req: NextRequest) {
   const adCreative = adGroup
     ? await prisma.ad_creatives.findFirst({
       where: { ad_group_id: adGroup.id, is_deleted: 0 },
-      select: { crawl_cache: true },
+      select: { crawl_cache: true, final_url: true },
     })
     : null;
 
@@ -89,10 +89,22 @@ export async function POST(req: NextRequest) {
       pageText: (cacheObj?.pageText || "").slice(0, 2000),
     });
 
+  // 品牌自有站推定：meta.allowBrand 是生成时的快照（AI 画像默认 unauthorized 常误判为 false），
+  // 品牌词=落地域名且无商标类拒登记录时按 true 处理，存量草稿立即摆脱 trademark_leak 误报
+  let allowBrand = meta?.allowBrand === true;
+  if (!allowBrand) {
+    const { shouldAllowBrandByOwnDomain } = await import("@/lib/intellicenter/ad-creation/policy-preflight");
+    allowBrand = await shouldAllowBrandByOwnDomain(
+      campaign.user_merchant_id,
+      merchantName,
+      adCreative?.final_url || "",
+    );
+  }
+
   const result = checkAdCompliance(headlines, descriptions, {
     merchantName,
     industryProfile,
-    allowBrand: meta?.allowBrand === true,
+    allowBrand,
   }, callouts);
 
   return apiSuccess({

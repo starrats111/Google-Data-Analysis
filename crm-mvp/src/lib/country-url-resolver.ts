@@ -256,6 +256,32 @@ export function extractBrandRoot(merchantName: string): string {
 }
 
 /**
+ * 品牌自有站推定：商家品牌名与落地页注册域名主体一致 → 广告落在该品牌自己的官网上。
+ * 联盟场景下给品牌官网导流用品牌词是常态（Google 只在商标持有人主动投诉限制时才按商标拒登），
+ * 此时不应把品牌词当「蹭别人商标」拦截（Wellfit 实证：AI 画像默认 unauthorized 导致品牌词被误杀）。
+ *
+ * 归一化：小写 + 去除非字母数字（"Well-Fit US" → "wellfit"），互相包含即判定匹配：
+ *   isBrandOwnDomain("Wellfit", "https://www.wellfit.com/en") → true
+ *   isBrandOwnDomain("Rad Power Bikes", "https://www.rad.eu/en") → true（rad ⊆ radpowerbikes）
+ *   isBrandOwnDomain("Wellfit", "https://nike.com") → false
+ * 双方 token 均要求 ≥3 字符，避免过短词误配。
+ */
+export function isBrandOwnDomain(merchantName: string, finalUrl: string): boolean {
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const brand = norm(extractBrandRoot(merchantName || ""));
+  if (brand.length < 3) return false;
+  let host = "";
+  try {
+    host = new URL((finalUrl || "").trim()).hostname;
+  } catch {
+    return false;
+  }
+  const hostLabel = norm(extractHostBrandLabel(host));
+  if (hostLabel.length < 3) return false;
+  return hostLabel === brand || hostLabel.includes(brand) || brand.includes(hostLabel);
+}
+
+/**
  * 构造候选 host：保持同品牌 label，把 TLD 换成目标国 ccTLD
  */
 function buildCandidateHosts(originalHost: string, country: string): string[] {

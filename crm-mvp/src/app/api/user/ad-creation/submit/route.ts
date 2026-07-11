@@ -820,8 +820,18 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
         category: null,
         pageText: (cacheObj?.pageText || "").slice(0, 2000),
       });
-    // 商标策略与生成端 policy-preflight 同源：画像判 authorized/own_brand 的商家品牌名合法
-    const allowBrand = meta?.allowBrand === true;
+    // 商标策略与生成端 policy-preflight 同源：画像判 authorized/own_brand 的商家品牌名合法。
+    // 叠加品牌自有站推定（Wellfit 实证）：meta.allowBrand 是生成时快照（AI 画像默认
+    // unauthorized 常误判 false），品牌词=落地域名且近 90 天无商标类拒登 → 按 true 处理，
+    // 避免 H4 把品牌官网导流单的品牌词自动重写掉。
+    let allowBrand = meta?.allowBrand === true;
+    if (!allowBrand) {
+      const { shouldAllowBrandByOwnDomain } = await import("@/lib/intellicenter/ad-creation/policy-preflight");
+      allowBrand = await shouldAllowBrandByOwnDomain(campaign.user_merchant_id, h4MerchantName, finalUrl);
+      if (allowBrand) {
+        console.log(`[AdSubmit] H4 品牌自有站推定放行品牌词：merchant=${h4MerchantName} url=${finalUrl}`);
+      }
+    }
 
     const finalGate = checkAdCompliance(
       headlines as string[],

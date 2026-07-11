@@ -3750,8 +3750,21 @@ async function runIntelligentCore(
     //   Step 8 linter 之后 humanize / D-082 / 截断都会再改动文案且原先不复检，
     //   违规可能被重新引入 → 提交阶段 H4 大返工。这里在所有改写完成后补一次
     //   纯正则快检（毫秒级），检出 critical 才走一轮 AI 重写，保证落库即合规。
-    const trademarkPolicy = result.preflight?.trademarkPolicy ?? "block_brand";
-    const allowBrand = trademarkPolicy !== "block_brand";
+    let trademarkPolicy = result.preflight?.trademarkPolicy ?? "block_brand";
+    let allowBrand = trademarkPolicy !== "block_brand";
+    // 品牌自有站推定兜底（preflight 未跑到 / 旧路径时）：品牌词=落地域名且无商标类拒登 → 放行品牌词
+    if (!allowBrand) {
+      try {
+        const { shouldAllowBrandByOwnDomain } = await import("@/lib/intellicenter/ad-creation/policy-preflight");
+        if (await shouldAllowBrandByOwnDomain(merchant.id, merchantName, merchantUrl)) {
+          allowBrand = true;
+          trademarkPolicy = "free";
+          console.log(`[D-161] 品牌自有站推定放行品牌词：merchant=${merchantName} url=${merchantUrl}`);
+        }
+      } catch (e) {
+        console.warn("[D-161] 品牌自有站推定异常（忽略，维持严格模式）：", e instanceof Error ? e.message : e);
+      }
+    }
     try {
       const { checkAdCompliance: finalCheck } = await import("@/lib/ad-compliance-checker");
       const finalOpts = { merchantName, industryProfile: detectedIndustry, allowBrand };

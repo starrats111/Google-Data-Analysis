@@ -22,6 +22,7 @@
 
 import prisma from "@/lib/prisma";
 import { matchProhibitedBusinessCategory } from "@/lib/ai-rule-profile";
+import { isBrandOwnDomain } from "@/lib/country-url-resolver";
 import type {
   MerchantIntelligenceProfile,
   IndustryCategory,
@@ -189,13 +190,33 @@ export async function policyPreflight(
   }
 
   // 3) 商标策略
-  const trademarkPolicy: PreflightResult["trademarkPolicy"] =
+  // 矫枉过正修复（Wellfit 实证）：画像的 trademark_authorization_status 是 AI 猜的且默认
+  // unauthorized，导致「落地页就是品牌官网」的常规联盟单也被 block_brand 误杀。
+  // 改用两个确定性信号取代 AI 猜测：
+  //   ① 近 90 天有商标类真实拒登记录 → 无条件 block_brand（真实信号最高优先级）
+  //   ② 无商标拒登 且 品牌词=落地域名（isBrandOwnDomain）→ free（品牌自有站推定）
+  //   ③ 其余维持画像判定（第三方品牌词照旧拦截）
+  const trademarkRejections = await countRecentTrademarkRejections(ctx.merchantId);
+  const brandOwnDomain = isBrandOwnDomain(ctx.merchantName, ctx.finalUrl);
+  const profileTrademarkPolicy: PreflightResult["trademarkPolicy"] =
     ctx.profile.trademark_authorization_status === "authorized" ||
     ctx.profile.trademark_authorization_status === "own_brand"
       ? "free"
       : ctx.profile.trademark_authorization_status === "pending"
         ? "allow_with_authz"
         : "block_brand";
+  let trademarkPolicy = profileTrademarkPolicy;
+  if (trademarkRejections > 0) {
+    trademarkPolicy = "block_brand";
+    warnings.push(
+      `该商家近 ${REJECTED_HISTORY_DAYS} 天有 ${trademarkRejections} 次商标类拒登记录，本次文案禁用品牌名。`,
+    );
+  } else if (profileTrademarkPolicy === "block_brand" && brandOwnDomain) {
+    trademarkPolicy = "free";
+    warnings.push(
+      `品牌名「${ctx.merchantName}」与落地页域名一致（品牌自有站），文案允许使用品牌词；若日后出现商标拒登将自动回到严格模式。`,
+    );
+  }
 
   if (trademarkPolicy === "block_brand") {
     constraintsParts.push(
@@ -297,4 +318,48 @@ export async function policyPreflight(
     trademarkPolicy,
     recentRejectionCount,
   };
+}
+
+/**
+ * 近 90 天该商家商标类拒登数（policy_name 如 "trademark_in_ad_text"、
+ * external_policy_name 如 "Trademarks"；MySQL 默认 CI 排序规则，contains 大小写不敏感）。
+ * 查询失败按 0 处理（与主流程 policy_violations 查询同样的容错口径）。
+ */
+export async function countRecentTrademarkRejections(
+  merchantId: bigint,
+): Promise<number> {
+  const since = new Date(Date.now() - REJECTED_HISTORY_DAYS * 24 * 60 * 60 * 1000);
+  try {
+    return await prisma.policy_violations.count({
+      where: {
+        user_merchant_id: merchantId,
+        submitted_at: { gte: since },
+        OR: [
+          { policy_name: { contains: "trademark" } },
+          { external_policy_name: { contains: "trademark" } },
+        ],
+      },
+    });
+  } catch (e) {
+    console.warn(
+      `[PolicyPreflight] trademark violations query failed (merchant=${merchantId}): ${e instanceof Error ? e.message : e}`,
+    );
+    return 0;
+  }
+}
+
+/**
+ * 读取侧（lint 快检 / 提交 H4 / 生成兜底）的品牌词放行推定，与 policyPreflight 第 3 步同源：
+ * 品牌词=落地域名（品牌自有站）且近 90 天无商标类拒登 → 允许品牌词。
+ * 用于覆盖 crawl_cache.complianceMeta 里生成时写死的 allowBrand=false 旧快照，
+ * 让存量草稿不用重新生成即可摆脱 trademark_leak 误报。
+ */
+export async function shouldAllowBrandByOwnDomain(
+  merchantId: bigint | null | undefined,
+  merchantName: string,
+  finalUrl: string,
+): Promise<boolean> {
+  if (!isBrandOwnDomain(merchantName, finalUrl)) return false;
+  if (merchantId == null) return true;
+  return (await countRecentTrademarkRejections(merchantId)) === 0;
 }
