@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withLeader } from "@/lib/api-handler";
 import ExcelJS from "exceljs";
-import { buildTeamMonthlySummary } from "@/lib/monthly-report";
+import { buildTeamMonthlySummary, getMonthlyAvgUsdToCny } from "@/lib/monthly-report";
 import { buildFengduMonthSheet } from "@/lib/monthly-report-xlsx";
 
 export const dynamic = "force-dynamic";
@@ -20,12 +20,14 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   }
 
   const summary = await buildTeamMonthlySummary(BigInt(user.teamId), BigInt(user.userId), month);
+  const avgUsdToCny = await getMonthlyAvgUsdToCny(month);
 
   const wb = new ExcelJS.Workbook();
   wb.creator = "CRM System";
   wb.created = new Date();
   // R-06：单 sheet，与「丰度收支统计表」月份 sheet 完全同版式（合计公式块 + 每成员一个 12 列块）
-  buildFengduMonthSheet(wb, summary.memberReports, `${parseInt(month.slice(5), 10)}月份`);
+  // R-09：人民币按月平均汇率统一换算成美金（核算广告费保持人民币）
+  buildFengduMonthSheet(wb, summary.memberReports, `${parseInt(month.slice(5), 10)}月份`, avgUsdToCny);
 
   const buffer = await wb.xlsx.writeBuffer();
   const filename = encodeURIComponent(`团队收支月报-${month}.xlsx`);

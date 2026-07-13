@@ -233,6 +233,28 @@ export async function getReportRate(month: string): Promise<{
 }
 
 /**
+ * 月平均汇率（USD→CNY）：当月全部每日快照的算术平均（当月进行中 = 截至今日的平均）。
+ * 用于导出报表的人民币→美金统一换算（R-09）。无快照时回退报表统一汇率。
+ */
+export async function getMonthlyAvgUsdToCny(month: string): Promise<number> {
+  const snaps = await prisma.exchange_rate_snapshots.findMany({
+    where: {
+      currency: "CNY",
+      date: { gte: dateColumnStart(`${month}-01`), lt: dateColumnStart(nextMonthStart(month)) },
+    },
+    select: { rate_to_usd: true },
+  });
+  const rates = snaps
+    .map((s) => Number(s.rate_to_usd))
+    .filter((r) => r > 0)
+    .map((r) => 1 / r);
+  if (rates.length === 0) {
+    return (await getReportRate(month)).usdToCny;
+  }
+  return rates.reduce((s, r) => s + r, 0) / rates.length;
+}
+
+/**
  * 打款日汇率查找器：取目标日当日或其前最近的 CNY 快照，返回 usdToCny。
  * 一次查询覆盖整月 + 向前回溯（周末/缺口用之前最近一天）。
  */
@@ -473,13 +495,13 @@ export async function buildMemberMonthlyReport(
         where: { team_id: user.team_id, is_deleted: 0, role: "user" },
         select: { id: true },
       });
-      const halves = await resolveBankBatchHalves(bankEntries, teamMembers.map((m) => m.id));
+      const resolveHalf = await buildBankHalfResolver(bankEntries, teamMembers.map((m) => m.id));
       for (const e of bankEntries) {
         let items: { userId?: unknown; account?: unknown; amount?: unknown }[] = [];
         try { items = e.breakdown ? JSON.parse(e.breakdown) : []; } catch { /* 脏数据跳过 */ }
         if (!Array.isArray(items) || items.length === 0) continue;
         const fees = apportionFee(items.map((i) => Number(i.amount || 0)), Number(e.fee || 0));
-        const half = bankEntryHalf(e, halves);
+        const half = resolveHalf(e);
         items.forEach((it, idx) => {
           if (String(it.userId ?? "") !== String(userId)) return;
           const net = Number(it.amount || 0) - fees[idx];
@@ -777,55 +799,110 @@ async function buildMccSections(
 // 银行流水归半月（R-07）
 // 流水核对按 paid_date 走（prefill），但并入报表时半月必须按「请求时间」口径：
 // 通过 source_date（平台显示打款日）反查该批打款单的 request_date 判批。
+//
+// R-09 修复（2026-07-13，6月对账发现"默认实收"多算 ~5.7 万）：
+// 1) 旧版按 paid_date 精确等值反查批次，PM 等平台 paid_date 带时分秒导致反查失败，
+//    回退"到账日就近"把 5号批(H1) 的钱判进 H2——上半月汇率估算未被替换、下半月
+//    又计银行净额，同一笔钱双计。现改为只比对 paid_date 的日期部分。
+// 2) 手工登记的流水（无 source_date）旧版只能按到账日就近兜底，5号批实际 16号前后
+//    才到账，同样误判 H2。现改为在到账日 ±7 天窗口内、限定明细涉及的员工，
+//    反查打款单请求日按金额占比判批；反查不到才落回日期就近兜底。
 // ─────────────────────────────────────────────────────────────
 
-type BankEntryLite = { platform: string; txn_at: Date; amount: unknown; source_date: Date | null };
+type BankEntryLite = {
+  platform: string;
+  txn_at: Date;
+  amount: unknown;
+  source_date: Date | null;
+  breakdown?: string | null;
+};
 
-/** 反查各批次（platform×source_date）对应打款单的请求日，返回 `platform|YYYY-MM-DD` → H1/H2。
- *  同批出现多个请求日时取金额占比最大的。 */
-async function resolveBankBatchHalves(
+/**
+ * 构建流水归半月解析器：一次性拉取相关打款单，返回同步判批函数。
+ * 判批优先级：批次日(source_date)反查 > 到账日±7天窗口（限明细员工）反查 > 日期就近兜底。
+ */
+async function buildBankHalfResolver(
   entries: BankEntryLite[],
   memberIds: bigint[],
-): Promise<Map<string, "H1" | "H2">> {
-  const result = new Map<string, "H1" | "H2">();
-  const dates = [...new Set(entries.filter((e) => e.source_date).map((e) => e.source_date!.toISOString().slice(0, 10)))];
-  if (dates.length === 0 || memberIds.length === 0) return result;
+): Promise<(e: BankEntryLite) => "H1" | "H2"> {
+  // 兜底：按打款/到账日就近（5号批顺延最晚 ~13号入账，15号批最早 ~16号）
+  const dayHeuristic = (e: BankEntryLite): "H1" | "H2" => {
+    const base = e.source_date ?? e.txn_at;
+    const day = new Date(base.getTime() + 8 * 3600 * 1000).getUTCDate();
+    return day <= 13 ? "H1" : "H2";
+  };
+  if (entries.length === 0 || memberIds.length === 0) return dayHeuristic;
+
+  const DAY = 86400000;
+  let minT = Infinity;
+  let maxT = -Infinity;
+  for (const e of entries) {
+    const times = [e.txn_at.getTime()];
+    if (e.source_date) times.push(e.source_date.getTime());
+    for (const t of times) {
+      if (t < minT) minT = t;
+      if (t > maxT) maxT = t;
+    }
+  }
   const rows = await prisma.affiliate_payments.findMany({
     where: {
       user_id: { in: memberIds }, is_deleted: 0,
       status: { in: ["paid", "processing"] },
       platform: { in: [...new Set(entries.map((e) => e.platform))] },
-      paid_date: { in: dates.map((d) => new Date(`${d}T00:00:00Z`)) },
+      paid_date: { gte: new Date(minT - 8 * DAY), lt: new Date(maxT + 9 * DAY) },
     },
-    select: { platform: true, paid_date: true, request_date: true, amount: true },
+    select: { platform: true, paid_date: true, request_date: true, amount: true, user_id: true },
   });
-  const byBatch = new Map<string, Map<number, number>>(); // 批次 → 请求日 → 金额合计
+  type PayRow = { userId: string; paidDay: string; paidTime: number; half: "H1" | "H2"; amount: number };
+  const byPlatform = new Map<string, PayRow[]>();
   for (const r of rows) {
     if (!r.paid_date || !r.request_date) continue;
-    const key = `${r.platform}|${r.paid_date.toISOString().slice(0, 10)}`;
-    let m = byBatch.get(key);
-    if (!m) { m = new Map(); byBatch.set(key, m); }
-    const d = r.request_date.getUTCDate();
-    m.set(d, (m.get(d) || 0) + Number(r.amount || 0));
+    let list = byPlatform.get(r.platform);
+    if (!list) { list = []; byPlatform.set(r.platform, list); }
+    const paidDay = r.paid_date.toISOString().slice(0, 10);
+    list.push({
+      userId: String(r.user_id),
+      paidDay,
+      paidTime: new Date(`${paidDay}T00:00:00Z`).getTime(),
+      half: r.request_date.getUTCDate() <= HALF_SPLIT_DAY ? "H1" : "H2",
+      amount: Number(r.amount || 0),
+    });
   }
-  for (const [key, m] of byBatch) {
-    let bestDay = 0, bestAmt = -1;
-    for (const [d, amt] of m) if (amt > bestAmt) { bestAmt = amt; bestDay = d; }
-    result.set(key, bestDay <= HALF_SPLIT_DAY ? "H1" : "H2");
-  }
-  return result;
-}
+  const dominant = (list: PayRow[]): "H1" | "H2" | null => {
+    if (list.length === 0) return null;
+    let h1 = 0, h2 = 0;
+    for (const r of list) {
+      if (r.half === "H1") h1 += r.amount;
+      else h2 += r.amount;
+    }
+    return h1 >= h2 ? "H1" : "H2";
+  };
 
-/** 单条流水归半月：优先批次请求日；反查不到时按打款/到账日就近兜底
- *（5号批顺延最晚 ~13号入账，15号批最早 ~16号）。 */
-function bankEntryHalf(e: BankEntryLite, batchHalves: Map<string, "H1" | "H2">): "H1" | "H2" {
-  if (e.source_date) {
-    const h = batchHalves.get(`${e.platform}|${e.source_date.toISOString().slice(0, 10)}`);
+  return (e: BankEntryLite): "H1" | "H2" => {
+    const list = byPlatform.get(e.platform) || [];
+    // 1) 有批次日：该批（platform×打款日）打款单请求日按金额占比判批（只比日期部分）
+    if (e.source_date) {
+      const key = e.source_date.toISOString().slice(0, 10);
+      const h = dominant(list.filter((r) => r.paidDay === key));
+      if (h) return h;
+    }
+    // 2) 到账日 ±7 天窗口，限定流水明细涉及的员工
+    let userIds: Set<string> | null = null;
+    if (e.breakdown) {
+      try {
+        const items = JSON.parse(e.breakdown) as { userId?: unknown }[];
+        if (Array.isArray(items) && items.length > 0) {
+          userIds = new Set(items.map((i) => String(i.userId ?? "")));
+        }
+      } catch { /* 脏数据忽略，退化为全员窗口 */ }
+    }
+    const baseT = (e.source_date ?? e.txn_at).getTime();
+    const h = dominant(list.filter(
+      (r) => Math.abs(r.paidTime - baseT) <= 7 * DAY && (!userIds || userIds.has(r.userId)),
+    ));
     if (h) return h;
-  }
-  const base = e.source_date ?? e.txn_at;
-  const day = new Date(base.getTime() + 8 * 3600 * 1000).getUTCDate();
-  return day <= 13 ? "H1" : "H2";
+    return dayHeuristic(e);
+  };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -887,12 +964,12 @@ export async function buildTeamMonthlySummary(
   // 反查不到时才退回到账日就近判断。银行流水核对本身仍按 paid_date 走（prefill 不变）。
   const bankEntries = await prisma.bank_flow_entries.findMany({
     where: { team_id: teamId, month, is_deleted: 0 },
-    select: { platform: true, txn_at: true, amount: true, source_date: true },
+    select: { platform: true, txn_at: true, amount: true, source_date: true, breakdown: true },
   });
-  const bankHalfByBatch = await resolveBankBatchHalves(bankEntries, members.map((m) => m.id));
+  const resolveTeamBankHalf = await buildBankHalfResolver(bankEntries, members.map((m) => m.id));
   const bankCnyByPlat = new Map<string, { H1: number; H2: number; hasH1: boolean; hasH2: boolean }>();
   for (const e of bankEntries) {
-    const half = bankEntryHalf(e, bankHalfByBatch);
+    const half = resolveTeamBankHalf(e);
     let b = bankCnyByPlat.get(e.platform);
     if (!b) { b = { H1: 0, H2: 0, hasH1: false, hasH2: false }; bankCnyByPlat.set(e.platform, b); }
     if (half === "H1") { b.H1 += Number(e.amount || 0); b.hasH1 = true; }
@@ -1322,12 +1399,12 @@ export async function buildTeamAnnualReport(
   // 归半月同月度口径：source_date 反查批次 request_date 判批，兜底按日期就近
   const bankRows = await prisma.bank_flow_entries.findMany({
     where: { team_id: teamId, is_deleted: 0, month: { startsWith: `${year}-` } },
-    select: { month: true, platform: true, txn_at: true, amount: true, source_date: true },
+    select: { month: true, platform: true, txn_at: true, amount: true, source_date: true, breakdown: true },
   });
-  const bankBatchHalves = await resolveBankBatchHalves(bankRows, memberIds);
+  const resolveAnnualBankHalf = await buildBankHalfResolver(bankRows, memberIds);
   const bankCnyMonthPlat = new Map<string, Map<string, { H1?: number; H2?: number }>>();
   for (const e of bankRows) {
-    const half = bankEntryHalf(e, bankBatchHalves);
+    const half = resolveAnnualBankHalf(e);
     let byPlat = bankCnyMonthPlat.get(e.month);
     if (!byPlat) { byPlat = new Map(); bankCnyMonthPlat.set(e.month, byPlat); }
     const entry = byPlat.get(e.platform) || {};

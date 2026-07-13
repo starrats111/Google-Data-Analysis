@@ -150,8 +150,22 @@ const fdNv = (n: number): number | string => (Math.abs(n) >= 0.005 ? +n.toFixed(
  * 月度收支表 sheet（丰度模板 1:1）：
  * A/B 标签列 + C..M 合计块（SUMIF/SUM 公式，随成员数动态定界）+ 每成员 12 列块。
  * 组长导出传全员 memberReports；组员导出传 [自己的报表]。
+ *
+ * R-09（2026-07-13）：导出统一美金化——
+ * - 实收佣金原为人民币，改为按「月平均汇率」换算成美金展示（员工报表不再出现人民币佣金）；
+ * - 人民币 MCC 广告费列同样按月平均汇率折美金（列名改「美金(折算)」）；
+ * - 「核算广告费」保持人民币口径：=(美金广告费+折算广告费)×月平均汇率；
+ * - 可分配利润改为美金：实收美金合计 − 全部广告费(美金)。
+ * avgUsdToCny 由调用方传入（getMonthlyAvgUsdToCny）；<=0 时回退报表统一汇率。
  */
-export function buildFengduMonthSheet(wb: ExcelJS.Workbook, reports: MemberMonthlyReport[], sheetName?: string) {
+export function buildFengduMonthSheet(
+  wb: ExcelJS.Workbook,
+  reports: MemberMonthlyReport[],
+  sheetName?: string,
+  avgUsdToCny?: number,
+) {
+  const avgRate = (avgUsdToCny && avgUsdToCny > 0 ? avgUsdToCny : 0) || reports[0]?.rate.usdToCny || 0;
+  const cnyToUsd = (cny: number): number => (avgRate > 0 ? cny / avgRate : 0);
   const month = reports[0]?.month || "";
   const monthNum = parseInt(month.slice(5), 10) || 0;
   const ws = wb.addWorksheet(sheetName || `${monthNum}月份`);
@@ -205,7 +219,7 @@ export function buildFengduMonthSheet(wb: ExcelJS.Workbook, reports: MemberMonth
   fdCell(ws, 9, 2, "5号", { fill: FD.G4, bold: true });
   fdCell(ws, 10, 2, "15号", { fill: FD.G6, bold: true });
   fdCell(ws, 11, 2, "合计", { fill: FD.GREEN, bold: true });
-  merge(12, 1, 14, 1, "实收佣金（人民币）", { bold: true });
+  merge(12, 1, 14, 1, "实收佣金（美金）", { bold: true });
   fdCell(ws, 12, 2, "10号", { fill: FD.G4, bold: true });
   fdCell(ws, 13, 2, "20号", { fill: FD.G6, bold: true });
   fdCell(ws, 14, 2, "合计", { fill: FD.GREEN, bold: true });
@@ -213,24 +227,27 @@ export function buildFengduMonthSheet(wb: ExcelJS.Workbook, reports: MemberMonth
   label(16, 16, 1, 2, "收款卡号");
   label(17, 17, 1, 2, "可分配利润（实收佣金-广告费）");
 
-  // ── 行1 黄条（C..last，无左右框线，与模板一致） ──
+  // ── 行1 黄条（C..last，无左右框线，与模板一致）；C1 标注换算用月平均汇率 ──
   for (let c = 3; c <= lastCol; c++) fdCell(ws, 1, c, "", { fill: FD.YELLOW, bold: true, tbOnly: true });
+  fdCell(ws, 1, 3, `月平均汇率 USD→CNY ${avgRate.toFixed(4)}（人民币均按此换算成美金；核算广告费为人民币）`, {
+    fill: FD.YELLOW, bold: true, tbOnly: true, hDefault: true,
+  });
 
   // ── C..M 合计块（公式动态定界到最后一个成员块） ──
   merge(2, 3, 2, 13, "合计", { bold: true });
 
   merge(3, 3, 3, 5, "美金", { fill: FD.GREEN });
-  merge(3, 6, 3, 8, "人民币", { fill: FD.GREEN });
-  // R-08：人民币后加「核算广告费」（美金广告费×报表汇率+人民币广告费），在跑广告量右移
-  merge(3, 9, 3, 10, "核算广告费", { fill: FD.GREEN });
+  // R-09：人民币 MCC 广告费按月平均汇率折美金展示
+  merge(3, 6, 3, 8, "美金(折算)", { fill: FD.GREEN });
+  // R-08：「核算广告费」保持人民币 =(美金广告费+折算广告费)×月平均汇率，在跑广告量右移
+  merge(3, 9, 3, 10, "核算广告费(人民币)", { fill: FD.GREEN });
   merge(3, 11, 3, 13, "在跑广告量", { fill: FD.GREEN });
 
   const sumifRow = (row: number, keyCell: string) =>
     ({ formula: `SUMIF($N$3:$${lastL}$3,${keyCell},$N${row}:$${lastL}${row})` });
-  const rateUsdToCny = reports[0]?.rate.usdToCny || 0;
   merge(4, 3, 4, 5, sumifRow(4, "C$3"), { numFmt: FD_NUM_AD });
   merge(4, 6, 4, 8, sumifRow(4, "F$3"), { numFmt: FD_NUM_AD });
-  merge(4, 9, 4, 10, { formula: `ROUND(C4*${rateUsdToCny.toFixed(6)}+F4,2)` }, { numFmt: FD_NUM_AD });
+  merge(4, 9, 4, 10, { formula: `ROUND((C4+F4)*${avgRate.toFixed(6)},2)` }, { numFmt: FD_NUM_AD });
   merge(4, 11, 4, 13, sumifRow(4, "K$3"), { numFmt: FD_NUM_AD });
 
   P.forEach((p, i) => fdCell(ws, 5, 3 + i, p, { fill: FD.GREEN }));
@@ -273,8 +290,8 @@ export function buildFengduMonthSheet(wb: ExcelJS.Workbook, reports: MemberMonth
   }
   fdCell(ws, 17, 3, "", { hDefault: true });
   for (let c = 4; c <= 12; c++) fdCell(ws, 17, c, "", { numFmt: FD_NUM_PROFIT, hDefault: true });
-  // 利润 = 实收¥合计 − 核算广告费(I4)（原模板 M14-C4 是人民币减美金广告费，量纲错误，已矫正）
-  fdCell(ws, 17, 13, { formula: "M14-I4" }, { numFmt: FD_NUM_PROFIT, hDefault: true });
+  // R-09：利润改美金口径 = 实收$合计 − 全部广告费$（美金 + 人民币MCC折算）
+  fdCell(ws, 17, 13, { formula: "M14-C4-F4" }, { numFmt: FD_NUM_PROFIT, hDefault: true });
 
   // ── 每成员 12 列块 ──
   reports.forEach((rep, mi) => {
@@ -285,16 +302,16 @@ export function buildFengduMonthSheet(wb: ExcelJS.Workbook, reports: MemberMonth
 
     merge(2, c0, 2, cCnt, rep.displayName || rep.username, {});
 
-    // 行3 币种：前 9 列美金、第 10 列留空（模板如此）、人民币、在跑广告量
+    // 行3 币种：前 9 列美金、第 10 列留空（模板如此）、美金(折算)（原人民币列）、在跑广告量
     for (let i = 0; i < NP - 1; i++) fdCell(ws, 3, c0 + i, "美金", { fill: FD.GREEN });
     fdCell(ws, 3, c0 + NP - 1, "", { fill: FD.GREEN });
-    fdCell(ws, 3, cCny, "人民币", { fill: FD.GREEN });
+    fdCell(ws, 3, cCny, "美金(折算)", { fill: FD.GREEN });
     fdCell(ws, 3, cCnt, "在跑广告量", { fill: FD.GREEN });
 
-    // 行4 广告费
+    // 行4 广告费（人民币 MCC 按月平均汇率折美金）
     fdCell(ws, 4, c0, fdNv(rep.adCostTotalUsd), { numFmt: FD_NUM_AD });
     for (let i = 1; i < NP; i++) fdCell(ws, 4, c0 + i, "", { numFmt: FD_NUM_AD });
-    fdCell(ws, 4, cCny, fdNv(rep.adCostTotalCny), { numFmt: FD_NUM_AD });
+    fdCell(ws, 4, cCny, fdNv(cnyToUsd(rep.adCostTotalCny)), { numFmt: FD_NUM_AD });
     fdCell(ws, 4, cCnt, rep.enabledCampaigns || "", {});
 
     // 行5 平台 / 行6 账号名称
@@ -319,8 +336,9 @@ export function buildFengduMonthSheet(wb: ExcelJS.Workbook, reports: MemberMonth
     valueRow(9, (c) => c.recvH1, FD.G4);
     valueRow(10, (c) => c.recvH2, FD.G6);
     valueRow(11, () => 0, FD.GREEN); // 模板成员块合计行留空（合计在 C..M 公式区）
-    valueRow(12, (c) => c.paidCnyH1, FD.G4);
-    valueRow(13, (c) => c.paidCnyH2, FD.G6);
+    // R-09：实收佣金按月平均汇率换算成美金（原为人民币）
+    valueRow(12, (c) => cnyToUsd(c.paidCnyH1), FD.G4);
+    valueRow(13, (c) => cnyToUsd(c.paidCnyH2), FD.G6);
     valueRow(14, () => 0, FD.GREEN);
 
     // 行15/16 收款人、卡号
