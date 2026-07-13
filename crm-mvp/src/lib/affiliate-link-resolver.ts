@@ -21,6 +21,7 @@ import { getProxyUrlForCountry, ensureCountryEgressHttpProxy } from "@/lib/crawl
 import { acquirePuppeteerSlot } from "@/lib/puppeteer-semaphore";
 import { probeExitIp } from "@/lib/suffix-engine/exit-ip";
 import { pickMobileUserAgent } from "@/lib/mobile-user-agents";
+import { registerBrowser, closeBrowserSafely, getStealthLauncher } from "@/lib/puppeteer-browser-registry";
 
 export type LinkStatus = "ok" | "no_tracking" | "forbidden_network" | "resolve_failed";
 
@@ -591,17 +592,14 @@ async function resolveViaBrowser(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let launcher: any;
     try {
-      const puppeteerExtra = await import("puppeteer-extra");
-      const StealthPlugin = await import("puppeteer-extra-plugin-stealth");
-      const stealthMod = StealthPlugin as unknown as { default?: () => unknown };
-      const stealthFn = stealthMod.default || (StealthPlugin as unknown as () => unknown);
-      (puppeteerExtra.default as unknown as { use: (p: unknown) => void }).use(stealthFn());
-      launcher = puppeteerExtra.default;
+      // 2026-07-13：改用全局单例，避免每次调用都往 puppeteer-extra 追加一个 Stealth 插件实例
+      launcher = await getStealthLauncher();
     } catch {
       const puppeteerCore = await import("puppeteer-core");
       launcher = puppeteerCore.default || puppeteerCore;
     }
     browser = await launcher.launch({ executablePath: browserPath, headless: "new", args });
+    registerBrowser(browser, "affiliateResolver");
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const page: any = await browser.newPage();
     if (proxyAuth) {
@@ -689,7 +687,9 @@ async function resolveViaBrowser(
   } catch (e) {
     return { finalUrl: "", chain, error: e instanceof Error ? e.message.slice(0, 200) : String(e) };
   } finally {
-    if (browser) await browser.close().catch(() => {});
+    // 裸 browser.close() 在 swap 颠簸时可能永久挂起 → release() 永不执行、槽位泄漏。
+    // 换用带 8s 超时 + SIGKILL 的安全关闭，保证槽位一定归还。
+    await closeBrowserSafely(browser);
     release();
   }
 }

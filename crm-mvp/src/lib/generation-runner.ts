@@ -69,6 +69,11 @@ function payloadSignature(p: GenerationRequestPayload): string {
   });
 }
 
+// 2026-07-13：创建互斥。findMany(检查)→create(创建) 不是原子操作——双击/前端重试
+// 两个请求同时通过"无活跃 job"检查后各建一个 job，两条完整流水线（爬虫+AI）并行烧资源。
+// 用 campaignId+签名 的进程内 promise 链把 check-and-create 串行化（单实例部署下即全局互斥）。
+const _jobCreateChain = new Map<string, Promise<unknown>>();
+
 /**
  * 幂等创建/复用一个生成 job。
  * 复用规则：同 campaign + 相同请求签名 存在 queued|running 且心跳/创建新鲜的 job → 直接复用（防重复点击多开）。
@@ -81,7 +86,25 @@ export async function createOrReuseGenerationJob(args: {
 }): Promise<{ id: bigint; reused: boolean }> {
   const { campaignId, userId, payload } = args;
   const sig = payloadSignature(payload);
+  const mutexKey = `${campaignId}:${sig}`;
 
+  const prev = _jobCreateChain.get(mutexKey) ?? Promise.resolve();
+  const task = prev
+    .catch(() => {}) // 前一个失败不影响后续
+    .then(() => createOrReuseGenerationJobInner(campaignId, userId, payload, sig));
+  _jobCreateChain.set(mutexKey, task);
+  task.finally(() => {
+    if (_jobCreateChain.get(mutexKey) === task) _jobCreateChain.delete(mutexKey);
+  }).catch(() => {});
+  return task;
+}
+
+async function createOrReuseGenerationJobInner(
+  campaignId: bigint,
+  userId: bigint,
+  payload: GenerationRequestPayload,
+  sig: string,
+): Promise<{ id: bigint; reused: boolean }> {
   const actives = await prisma.ad_generation_jobs.findMany({
     where: { campaign_id: campaignId, status: { in: ["queued", "running"] } },
     orderBy: { id: "desc" },

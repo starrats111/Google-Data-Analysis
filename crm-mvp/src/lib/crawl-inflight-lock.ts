@@ -44,7 +44,7 @@
 
 const LOCK_TIMEOUT_MS = 360_000; // D-038b：60s → 360s（覆盖 buildCrawlCache 5min hang_safety + 60s safety）
 
-const _inflight = new Map<string, { promise: Promise<unknown>; startedAt: number }>();
+const _inflight = new Map<string, { promise: Promise<unknown>; startedAt: number; timeoutMs: number }>();
 
 function isDisabled(): boolean {
   return process.env.CRAWL_INFLIGHT_LOCK_OFF === "1";
@@ -52,6 +52,10 @@ function isDisabled(): boolean {
 
 /**
  * 规范化 key：小写 + 去 fragment/query + 去尾部斜杠，加国家后缀。
+ *
+ * 2026-07-13 补归一化：http/https 与 www 变体折叠为同一 key。
+ * 此前 `http://foo.com`、`https://www.foo.com` 各持一把锁，同一商家照样并行爬两轮
+ * （不同入口路由传入的 URL 写法不一致时必现），锁形同虚设。
  */
 export function buildCrawlKey(merchantUrl: string, country: string): string {
   let normalized = merchantUrl.trim().toLowerCase();
@@ -59,6 +63,8 @@ export function buildCrawlKey(merchantUrl: string, country: string): string {
     const u = new URL(merchantUrl);
     u.hash = "";
     u.search = "";
+    if (u.protocol === "http:") u.protocol = "https:";
+    if (u.hostname.startsWith("www.")) u.hostname = u.hostname.slice(4);
     normalized = u.toString().replace(/\/$/, "");
   } catch {
     normalized = normalized.replace(/[?#].*$/, "").replace(/\/$/, "");
@@ -90,8 +96,12 @@ export async function withCrawlInflightLock<T>(
     // D-038b（方案 B）：删除 D-028 v4 引入的 challenged host 跳过复用分支。
     // 统一所有 host 走 await existing.promise 复用路径，避免并发 caller 各自跑
     // 独立 producer 制造 puppeteer slot 瓜分 + CPU 雪崩。
-    if (age < timeoutMs) {
-      console.warn(`[CrawlInflightLock] 命中去重：key=${key} age=${age}ms 复用现有 Promise（最长等锁 ${timeoutMs}ms 强制释放，D-038b 统一复用）`);
+    //
+    // 2026-07-13：过期判定改用 entry 自己创建时的 timeoutMs，而非当前 caller 传的。
+    // 此前 producer 用 360s 建锁、某 caller 传 30s 进来，会把才跑了 40s 的健康锁
+    // 误判"过期"并再起一个 producer——新旧两轮对同一 URL 并行爬，正是并行重跑的来源之一。
+    if (age < existing.timeoutMs) {
+      console.warn(`[CrawlInflightLock] 命中去重：key=${key} age=${age}ms 复用现有 Promise（最长等锁 ${existing.timeoutMs}ms 强制释放，D-038b 统一复用）`);
       // D-028 v7：直接 await 原 promise，不再 race 超时也不 fail-fast。
       // 原因：v5 fail-fast 在用户首次访问商家时 cache=null 导致 SSE 流崩溃，比原版还差。
       // 原 promise 最坏在 timeoutMs (360s) 时被锁的 setTimeout 强制清理 map（虽然原 promise
@@ -99,7 +109,7 @@ export async function withCrawlInflightLock<T>(
       return existing.promise as Promise<T>;
     }
     // 过期则强制清理，重新发起
-    console.warn(`[CrawlInflightLock] 发现过期 in-flight (${age}ms > ${timeoutMs}ms)，丢弃并重启：key=${key}`);
+    console.warn(`[CrawlInflightLock] 发现过期 in-flight (${age}ms > ${existing.timeoutMs}ms)，丢弃并重启：key=${key}`);
     _inflight.delete(key);
   }
 
@@ -110,7 +120,7 @@ export async function withCrawlInflightLock<T>(
     }
   });
 
-  _inflight.set(key, { promise, startedAt: Date.now() });
+  _inflight.set(key, { promise, startedAt: Date.now(), timeoutMs });
 
   // 硬性超时防御：若 producer 超过 timeoutMs 仍未 settle，强制从 Map 删除；
   //   但返回给当前调用方的仍是原 promise（不会中断），只是不让后续请求卡死。

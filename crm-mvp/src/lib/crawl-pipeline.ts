@@ -1200,6 +1200,12 @@ async function discoverSitelinkCandidates(
       rejectStats.localeMismatch++;
       return false;
     }
+    // 2026-07-13：黑名单要查**重定向后的真实 URL**——来源 link.url 干净但 301 落到
+    // /cart、/login 之类的坏页时，旧逻辑只查过来源，坏 finalUrl 照样入候选
+    if (isBadSitelinkUrl(realUrl)) {
+      rejectStats.notOk++;
+      return false;
+    }
     const normalizedUrl = realUrl.replace(/\/$/, "").replace(/^http:/, "https:");
     if (usedFinalUrls.has(normalizedUrl)) {
       rejectStats.duplicate++;
@@ -1943,8 +1949,10 @@ export async function buildCrawlCache(
     // ══════════════════════════════════════════════════════
     const hasProxy = !!(options?.forcePuppeteer || proxyUrl || puppeteerProxyUrl);
     const pushHttp = () => {
-      strategies.push({ name: "http_root", run: () => crawlPage(merchantUrl, country) });
-      if (localeUrlShort) strategies.push({ name: "http_locale_short", run: () => crawlPage(localeUrlShort!, country) });
+      // httpOnly：禁止 crawlPage 内部的 Puppeteer 兜底偷跑——外层 race 只给 22s，
+      // 内部 goto 就 35s，race 输掉后 Chrome 变孤儿；且瀑布后面本就有 puppeteer_* 策略
+      strategies.push({ name: "http_root", run: () => crawlPage(merchantUrl, country, { httpOnly: true }) });
+      if (localeUrlShort) strategies.push({ name: "http_locale_short", run: () => crawlPage(localeUrlShort!, country, { httpOnly: true }) });
     };
     const pushPuppeteerProxy = () => {
       // 全量 puppeteer+代理：root → locale_short（ccTLD 未匹配时）→ 直连兜底（代理彻底挂时）
@@ -2080,7 +2088,10 @@ export async function buildCrawlCache(
   // sitemap / backend API 路径爬取成功但 html 为空，补发一次 HTTP fetch 用于数据提取
   if (!crawlFailed && !html && merchantUrl) {
     try {
-      const fetchTarget = localeUrl ?? merchantUrl;
+      // 2026-07-13：补救 fetch 改打真实的 merchantUrl。此前优先 localeUrl（/en-us/ 等
+      // **推断出来的**路径），站点若无该路径直接 404 → 补救失败 → sitemap-only 结果
+      // 永远 pageText=0 → 下游缓存新鲜度判死 → 永久重爬循环。
+      const fetchTarget = merchantUrl;
       const fallbackResp = await fetch(fetchTarget, {
         signal: AbortSignal.timeout(10000),
         headers: {
@@ -2117,7 +2128,8 @@ export async function buildCrawlCache(
 
     // 截断可能导致遗漏了页面后半段（footer/newsletter 区域）的促销信息
     // 补：对主页做一次专项 HTTP fetch，不截断，专门用于促销提取
-    const promoFetchUrl = localeUrl ?? merchantUrl;
+    // 2026-07-13：同补救 fetch，改打真实 merchantUrl 而非推断的 localeUrl（可能 404）
+    const promoFetchUrl = merchantUrl;
     if (promoFetchUrl) {
       try {
         const fullResp = await fetch(promoFetchUrl, {
@@ -2411,9 +2423,25 @@ export async function buildCrawlCache(
 
   // ─── 检测爬取到的实际语言（优先于国家默认配置） ───
   // 适用场景：比利时（BE）→ 荷兰语/法语由网站实际内容决定，而非国家默认
-  const detectedLanguageCode = detectPageLanguage(html, localizedMerchantUrl ?? crawlResult.method !== "failed" ? (localeUrl ?? merchantUrl) : undefined);
+  //
+  // 2026-07-13 修优先级 bug：原写法 `a ?? cond ? b : c` 因 ?? 优先级高于 ?:，实际解析成
+  // `(a ?? cond) ? (localeUrl ?? merchantUrl) : undefined`——只要能走到这里就恒取
+  // **捏造的 localeUrl（/de-de/ 等推断路径，可能从未被爬到）**。而 detectPageLanguage 把
+  // URL 前缀当第一优先级，等于语言检测被目标国默认值污染，页面真实语言（html lang）反被无视。
+  // 修正：URL 线索只用真实存在的地址——已本地化的落地页或原始商家 URL。
+  const detectedLanguageCode = detectPageLanguage(html, localizedMerchantUrl ?? merchantUrl);
   if (detectedLanguageCode) {
     console.log(`[CrawlPipeline] 检测到页面实际语言: ${detectedLanguageCode}（来源: HTML lang 属性或 URL 路径）`);
+  }
+
+  // ─── 2026-07-13：质量分与实际可用文本对齐 ───
+  // sitemap-only / 补救 fetch 失败的结果：链接多（score 可到 55+）但 pageText≈0。
+  // 此前 score 落库很高、pageText 却为空，crawler-bridge 的新鲜度检查（pageText≥200）
+  // 判它不合格 → 每次生成都重爬；而路由层看 score 又觉得缓存挺好 → 不主动修复。
+  // 两套判断打架 = 永久重爬循环。这里把空文本的分数压到 40 以下，让所有下游一致视为弱缓存。
+  if (!crawlFailed && pageText.trim().length < 200 && crawlQuality.score >= 40) {
+    console.warn(`[CrawlPipeline] pageText 仅 ${pageText.trim().length} 字符，质量分 ${crawlQuality.score} → 35（empty_page_text）`);
+    crawlQuality = { score: 35, tier: "poor", issues: [...crawlQuality.issues, "empty_page_text"] };
   }
 
   // D-059: 把 JSON-LD 产品图（extractProducts 已提取但此前未并入 images）合并为图片兜底候选，

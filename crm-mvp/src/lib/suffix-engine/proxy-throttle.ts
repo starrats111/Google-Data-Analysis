@@ -35,23 +35,57 @@ async function getCap(): Promise<number> {
 }
 
 let active = 0
-const waiters: Array<() => void> = []
+
+type Waiter = { resolve: () => void; reject: (e: Error) => void; timer: NodeJS.Timeout }
+const waiters: Waiter[] = []
+
+/** 排队等待上限：超过说明代理已严重拥塞，快速失败比无限堆积（内存泄漏+全部超时）好 */
+const MAX_QUEUE = 200
+/** 单次排队超时：粘性会话 5 分钟才释放，等太久的请求上游早已超时，白占队列 */
+const QUEUE_TIMEOUT_MS = 45_000
+
+function wakeNext() {
+  const next = waiters.shift()
+  if (next) {
+    clearTimeout(next.timer)
+    next.resolve()
+  }
+}
 
 /**
  * 在「代理会话名额」内执行 fn。名额满时排队等待，释放时唤醒一个等待者（FIFO）。
  * 保证同时在飞的代理会话数 ≤ 上限，避免撞 kookeey 子账号并发上限。
+ *
+ * 竞态修复（2026-07-13）：旧实现 `if (active >= cap) await ...; active++` 中，
+ * `await getCap()` 已让出事件循环——N 个并发调用可同时通过 `active >= cap` 检查再各自 +1，
+ * 上限形同虚设（正是压不住 kookeey 并发、鉴权失败爆发的原因之一）。
+ * 现改为唤醒后循环重查，并给队列加超时与长度上限，防无限堆积。
  */
 export async function withProxySlot<T>(fn: () => Promise<T>): Promise<T> {
-  const cap = await getCap()
-  if (active >= cap) {
-    await new Promise<void>((resolve) => waiters.push(resolve))
+  let cap = await getCap()
+  while (active >= cap) {
+    if (waiters.length >= MAX_QUEUE) {
+      throw new Error(`proxy slot queue overflow (${waiters.length} waiting, cap=${cap})`)
+    }
+    await new Promise<void>((resolve, reject) => {
+      const entry: Waiter = {
+        resolve,
+        reject,
+        timer: setTimeout(() => {
+          const i = waiters.indexOf(entry)
+          if (i >= 0) waiters.splice(i, 1)
+          reject(new Error(`proxy slot queue timeout after ${QUEUE_TIMEOUT_MS}ms (cap=${cap})`))
+        }, QUEUE_TIMEOUT_MS),
+      }
+      waiters.push(entry)
+    })
+    cap = await getCap()
   }
   active++
   try {
     return await fn()
   } finally {
     active--
-    const next = waiters.shift()
-    if (next) next()
+    wakeNext()
   }
 }

@@ -4,6 +4,7 @@ import { acquirePuppeteerSlot, acquireMainCrawlSlot, puppeteerSemaphoreStats } f
 import { normalizeImageUrl } from "@/lib/image-url-normalize";
 import { getHostKey, isHostChallenged, markHostChallenged } from "@/lib/crawl-host-cache";
 import { matchParkedTextSignal } from "@/lib/country-url-resolver";
+import { registerBrowser, closeBrowserSafely, closePageSafely, getStealthLauncher } from "@/lib/puppeteer-browser-registry";
 
 export interface PuppeteerPageData {
   html: string;
@@ -14,34 +15,10 @@ export interface PuppeteerPageData {
   categoryNames: string[];
 }
 
-/**
- * D-067：带超时 + 强杀的安全关闭。
- *
- * 真因（生产实证）：所有 Puppeteer 路径的 finally 都是 `try { await browser.close(); } catch {}`
- * 然后才 `releasePuppeteerSlot()`。在 2C/3.7G 服务器 swap 颠簸时，`browser.close()` 可能
- * **永久挂起**（既不 resolve 也不 reject）→ 后面的 `releasePuppeteerSlot()` 永远执行不到 →
- * Puppeteer 槽位被永久占用、Chrome 进程变僵尸；累积到 3 个槽全占死后整个爬取子系统死锁，
- * 所有爬取 `active=3/3` 超时返回 null（UI 表现为"爬取失败/广告生成失败"）。
- *
- * 本助手给 close 加 8s 上限，超时则直接 SIGKILL 掉 Chrome 进程，保证调用方的槽位释放一定执行。
- */
-async function closeBrowserSafely(browser: any): Promise<void> {
-  if (!browser) return;
-  try {
-    await Promise.race([
-      browser.close(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("browser.close timeout")), 8000)),
-    ]);
-  } catch {
-    // close 挂起或失败 → 强制杀掉 Chrome 进程，避免僵尸进程 + 槽位泄漏
-    try {
-      const proc = typeof browser.process === "function" ? browser.process() : null;
-      if (proc && typeof proc.kill === "function") proc.kill("SIGKILL");
-    } catch {
-      /* noop */
-    }
-  }
-}
+// D-067 closeBrowserSafely（带超时+强杀的安全关闭）已抽到 puppeteer-browser-registry.ts 公共模块，
+// 并叠加孤儿收割器：所有 launch 均登记，超龄 180s 无论有没有人在 await 一律 SIGKILL，
+// 兜住五层 Promise.race 输掉后没人关的 Chrome。
+
 
 // ══════════════════════════════════════════════════════
 // 浏览器路径发现
@@ -1202,12 +1179,8 @@ export async function batchFetchMetaViaPuppeteer(
   let browser: any = null;
   try {
     try {
-      const puppeteerExtra = await import("puppeteer-extra");
-      const StealthPlugin = await import("puppeteer-extra-plugin-stealth");
-      const stealthMod = StealthPlugin as any;
-      const stealthFn = stealthMod.default || stealthMod;
-      puppeteerExtra.default.use(stealthFn());
-      browser = await puppeteerExtra.default.launch({
+      const stealthLauncher = await getStealthLauncher();
+      browser = await stealthLauncher.launch({
         executablePath: browserPath,
         headless: "new" as any,
         args: launchArgs,
@@ -1221,13 +1194,17 @@ export async function batchFetchMetaViaPuppeteer(
         args: launchArgs,
       });
     }
+    registerBrowser(browser, "batchFetchMeta");
 
     const SOFT_404_SIGNALS = [
       "page not found", "page introuvable", "seite nicht gefunden",
       "página no encontrada", "pagina non trovata",
-      "404", "not found", "does not exist", "n'existe pas",
+      "not found", "does not exist", "n'existe pas",
       "nichts gefunden",
     ];
+    // 2026-07-13：裸 "404" 从子串匹配改词边界——原写法把标题含 SKU"P4041"、
+    // 型号"40-404"之类的正常页全误杀成 soft404（sitelink 被无辜拒收）
+    const BARE_404_RE = /\b404\b/;
 
     // C-015 §2：Cloudflare / Datadome / PerimeterX 挑战页标题黑名单
     // 命中则视为「未能验证页面内容」（ok=false），但 **不等于 soft404**——
@@ -1290,7 +1267,7 @@ export async function batchFetchMetaViaPuppeteer(
 
         const titleLower = data.title.toLowerCase();
         const isChallenge = CHALLENGE_TITLES.some((s) => titleLower.includes(s));
-        const isSoft404 = !isChallenge && SOFT_404_SIGNALS.some((s) => titleLower.includes(s));
+        const isSoft404 = !isChallenge && (SOFT_404_SIGNALS.some((s) => titleLower.includes(s)) || BARE_404_RE.test(titleLower));
         const ok = !isChallenge && !!data.title && data.title.length >= 2;
         result.set(url, {
           title: isChallenge ? "" : data.title,
@@ -1304,7 +1281,7 @@ export async function batchFetchMetaViaPuppeteer(
       } catch (e) {
         result.set(url, { title: "", description: "", finalUrl: url, ok: false, isSoft404: false });
       } finally {
-        try { if (page) await page.close(); } catch {}
+        await closePageSafely(page);
       }
     };
 
@@ -1416,12 +1393,8 @@ export async function fetchImagesViaPuppeteerBatch(
   let browser: any = null;
   try {
     try {
-      const puppeteerExtra = await import("puppeteer-extra");
-      const StealthPlugin = await import("puppeteer-extra-plugin-stealth");
-      const stealthMod = StealthPlugin as any;
-      const stealthFn = stealthMod.default || stealthMod;
-      puppeteerExtra.default.use(stealthFn());
-      browser = await puppeteerExtra.default.launch({
+      const stealthLauncher = await getStealthLauncher();
+      browser = await stealthLauncher.launch({
         executablePath: browserPath,
         headless: "new" as any,
         args: launchArgs,
@@ -1435,6 +1408,7 @@ export async function fetchImagesViaPuppeteerBatch(
         args: launchArgs,
       });
     }
+    registerBrowser(browser, "fetchImagesBatch");
 
     const page = await browser.newPage();
     try {
@@ -1524,7 +1498,7 @@ export async function fetchImagesViaPuppeteerBatch(
         result.set(u, { buffer: buf, contentType: ct });
       }
     } finally {
-      try { await page.close(); } catch {}
+      await closePageSafely(page);
     }
   } catch (e) {
     console.warn("[Crawler] fetchImagesViaPuppeteerBatch 异常:", e instanceof Error ? e.message : e);
@@ -1612,12 +1586,8 @@ export async function harvestImagesFromPagesWithPuppeteer(
   let browser: any = null;
   try {
     try {
-      const puppeteerExtra = await import("puppeteer-extra");
-      const StealthPlugin = await import("puppeteer-extra-plugin-stealth");
-      const stealthMod = StealthPlugin as any;
-      const stealthFn = stealthMod.default || stealthMod;
-      puppeteerExtra.default.use(stealthFn());
-      browser = await puppeteerExtra.default.launch({
+      const stealthLauncher = await getStealthLauncher();
+      browser = await stealthLauncher.launch({
         executablePath: browserPath,
         headless: "new" as any,
         args: launchArgs,
@@ -1631,6 +1601,7 @@ export async function harvestImagesFromPagesWithPuppeteer(
         args: launchArgs,
       });
     }
+    registerBrowser(browser, "harvestImages");
 
     for (const url of urls) {
       let page: any = null;
@@ -1734,7 +1705,7 @@ export async function harvestImagesFromPagesWithPuppeteer(
         result.set(url, []);
         console.warn(`[HarvestImages] ${url} 失败: ${e instanceof Error ? e.message : e}`);
       } finally {
-        try { if (page) await page.close(); } catch {}
+        await closePageSafely(page);
       }
     }
   } catch (e) {
@@ -1817,12 +1788,8 @@ export async function crawlWithPuppeteerFull(
   let browser: any = null;
   try {
     try {
-      const puppeteerExtra = await import("puppeteer-extra");
-      const StealthPlugin = await import("puppeteer-extra-plugin-stealth");
-      const stealthMod = StealthPlugin as any;
-      const stealthFn = stealthMod.default || stealthMod;
-      puppeteerExtra.default.use(stealthFn());
-      browser = await puppeteerExtra.default.launch({
+      const stealthLauncher = await getStealthLauncher();
+      browser = await stealthLauncher.launch({
         executablePath: browserPath,
         headless: "new" as any,
         args: launchArgs,
@@ -1837,6 +1804,7 @@ export async function crawlWithPuppeteerFull(
         args: launchArgs,
       });
     }
+    registerBrowser(browser, "crawlWithPuppeteer");
 
     const page = await browser.newPage();
     // 设置代理认证（必须在 goto 之前）
@@ -2434,7 +2402,13 @@ export function extractPageMeta(html: string): { title: string; description: str
 // ══════════════════════════════════════════════════════
 // 主爬虫入口（优化策略顺序 + 难度自适应）
 // ══════════════════════════════════════════════════════
-export async function crawlPage(url: string, country?: string): Promise<CrawlResult> {
+/**
+ * @param opts.httpOnly 只走 HTTP + Sitemap，禁用内部 Puppeteer 兜底。
+ *   供 buildCrawlCache 策略瀑布的 http_* 策略使用：瀑布外层 race 只给 22s，
+ *   而内部 Puppeteer 兜底单次 goto 就 35s——race 输掉后 Chrome 照跑成孤儿，
+ *   且瀑布本身就有独立的 puppeteer_* 策略，这里再起浏览器纯属重复消耗。
+ */
+export async function crawlPage(url: string, country?: string, opts: { httpOnly?: boolean } = {}): Promise<CrawlResult> {
   const proxyUrl = country ? await getProxyUrlForCountry(country) : null;
   if (proxyUrl) console.log(`[Crawler] 使用 ${country} 代理爬取: ${url}`);
   else if (country) {
@@ -2498,29 +2472,31 @@ export async function crawlPage(url: string, country?: string): Promise<CrawlRes
     return { html: "", links: sitemapResult.links, images: sitemapResult.images, method: "sitemap" };
   }
 
-  // 3. Puppeteer 渲染（处理 JS 动态站点）
-  // 注意：必须传入 proxyUrl，否则 Chromium 走服务器本地 DNS，对部分国际域名会 SERVFAIL 挂死
-  const difficulty = httpResult?.difficulty || "medium";
-  console.log(`[Crawler] 站点难度: ${difficulty}，启用 Puppeteer 渲染${proxyUrl ? "（代理）" : ""}`);
+  // 3. Puppeteer 渲染（处理 JS 动态站点）——httpOnly 模式下禁用（见函数注释）
+  if (!opts.httpOnly) {
+    // 注意：必须传入 proxyUrl，否则 Chromium 走服务器本地 DNS，对部分国际域名会 SERVFAIL 挂死
+    const difficulty = httpResult?.difficulty || "medium";
+    console.log(`[Crawler] 站点难度: ${difficulty}，启用 Puppeteer 渲染${proxyUrl ? "（代理）" : ""}`);
 
-  const puppeteerHtml = await crawlPageWithPuppeteer(url, 35000, proxyUrl ?? undefined);
-  if (puppeteerHtml) {
-    const { links, images } = extractLinksAndImages(puppeteerHtml, url);
-    if (links.length > 0 || images.length > 0) {
-      console.log(`[Crawler] Puppeteer 成功: ${links.length} 链接, ${images.length} 图片`);
-      return { html: puppeteerHtml.slice(0, 150000), links, images, method: "puppeteer" };
-    }
-  }
-
-  // 困难站点：Puppeteer 重试一次（增加超时）
-  if (difficulty === "hard") {
-    console.log("[Crawler] Puppeteer 首次无结果，困难站点增加超时重试...");
-    const retryHtml = await crawlPageWithPuppeteer(url, 50000, proxyUrl ?? undefined);
-    if (retryHtml) {
-      const { links, images } = extractLinksAndImages(retryHtml, url);
+    const puppeteerHtml = await crawlPageWithPuppeteer(url, 35000, proxyUrl ?? undefined);
+    if (puppeteerHtml) {
+      const { links, images } = extractLinksAndImages(puppeteerHtml, url);
       if (links.length > 0 || images.length > 0) {
-        console.log(`[Crawler] Puppeteer 重试成功: ${links.length} 链接, ${images.length} 图片`);
-        return { html: retryHtml.slice(0, 150000), links, images, method: "puppeteer" };
+        console.log(`[Crawler] Puppeteer 成功: ${links.length} 链接, ${images.length} 图片`);
+        return { html: puppeteerHtml.slice(0, 150000), links, images, method: "puppeteer" };
+      }
+    }
+
+    // 困难站点：Puppeteer 重试一次（增加超时）
+    if (difficulty === "hard") {
+      console.log("[Crawler] Puppeteer 首次无结果，困难站点增加超时重试...");
+      const retryHtml = await crawlPageWithPuppeteer(url, 50000, proxyUrl ?? undefined);
+      if (retryHtml) {
+        const { links, images } = extractLinksAndImages(retryHtml, url);
+        if (links.length > 0 || images.length > 0) {
+          console.log(`[Crawler] Puppeteer 重试成功: ${links.length} 链接, ${images.length} 图片`);
+          return { html: retryHtml.slice(0, 150000), links, images, method: "puppeteer" };
+        }
       }
     }
   }
@@ -2666,9 +2642,11 @@ export async function fetchUrlMeta(
   const SOFT_404_SIGNALS = [
     "page not found", "page introuvable", "seite nicht gefunden",
     "página no encontrada", "pagina non trovata",
-    "404", "not found", "does not exist", "n'existe pas",
+    "not found", "does not exist", "n'existe pas",
     "nichts gefunden", "no results", "aucun résultat",
   ];
+  // 2026-07-13：裸 "404" 改词边界匹配，避免 SKU/型号（P4041、40-404）误判 soft404
+  const BARE_404_RE = /\b404\b/;
 
   let lastFinalUrl = url;
   let wasBlocked = false;
@@ -2716,6 +2694,7 @@ export async function fetchUrlMeta(
           // 软 404 检测：标题或内容包含"not found"等
           const titleLower = (meta.title || "").toLowerCase();
           const isSoft404 = SOFT_404_SIGNALS.some((s) => titleLower.includes(s))
+            || BARE_404_RE.test(titleLower)
             || (html.length < 5000 && SOFT_404_SIGNALS.some((s) => html.toLowerCase().includes(s)));
 
           if (meta.title) {
@@ -2964,6 +2943,30 @@ export function assessCrawlQuality(result: CrawlResult): {
 
   let score = 100;
   const issues: string[] = [];
+
+  // 2026-07-13：拦截/挑战页硬判失败。此前 Cloudflare "Just a moment..." 之类的挑战页
+  // 字节数够大（CF 挑战页 100k+）、偶有链接，能拿 70+ 分入缓存 → AI 对着验证码文案生成广告。
+  // 特征：标题/正文命中挑战关键词 且 可见正文极短（真实商城页正文远超 2500 字符）。
+  if (result.html) {
+    const head = result.html.slice(0, 4000).toLowerCase();
+    const CHALLENGE_SIGNALS = [
+      "just a moment", "checking your browser", "attention required",
+      "verify you are human", "verifying you are human", "ddos protection by",
+      "cf-challenge", "cf_chl_", "_cf_chl", "turnstile", "hcaptcha", "g-recaptcha",
+      "access denied", "request unsuccessful", "incapsula", "perimeterx", "px-captcha",
+    ];
+    if (CHALLENGE_SIGNALS.some((s) => head.includes(s))) {
+      const textOnly = result.html
+        .replace(/<script[\s\S]*?<\/script>/gi, " ")
+        .replace(/<style[\s\S]*?<\/style>/gi, " ")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (textOnly.length < 2500) {
+        return { score: 0, tier: "failed", issues: ["blocked_page"] };
+      }
+    }
+  }
 
   // 链接质量（权重最高：links=0 意味着 splash 页/被封，所有下游提取均失败）
   if (result.links.length === 0)       { score -= 40; issues.push("no_links"); }

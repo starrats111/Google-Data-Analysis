@@ -32,16 +32,22 @@ export async function getProxyUrlForCountry(
   const isExchange = opts.exchange === true || (opts.userId != null && opts.userId > BigInt(0));
 
   // 1) 换链接代理供应商（动态导入避免与 proxy-provider 循环依赖）
-  try {
-    const { getProviderProxyUrl } = await import("@/lib/suffix-engine/proxy-provider");
-    const providerUrl = await getProviderProxyUrl(country, { userId: opts.userId });
-    if (providerUrl) return providerUrl;
-  } catch {
-    // 供应商不可用时继续兜底
+  // 出口隔离补全（2026-07-13）：此前这一步**不分路径**先查供应商池——AI 爬虫（无 userId）也会
+  // pickHealthyGlobal() 拿到 kookeey 代理并直接 return，管理台配的 crawl_proxy_template(arxlabs)
+  // 形同虚设。后果：爬虫的每次代理复核/重试都在开 kookeey 粘性会话（5 分钟不释放），
+  // 挤占换链接/刷点击的并发配额，是「Socks5 Authentication failed」的推手之一。
+  // 7-04 的隔离只改了 HTTP(Puppeteer) 方向，这里把 SOCKS 方向对齐：仅换链接路径查供应商池。
+  if (isExchange) {
+    try {
+      const { getProviderProxyUrl } = await import("@/lib/suffix-engine/proxy-provider");
+      const providerUrl = await getProviderProxyUrl(country, { userId: opts.userId });
+      if (providerUrl) return providerUrl;
+    } catch {
+      // 供应商不可用时落到下方 return null
+    }
+    // 换链接路径到此为止：宁可无代理（上层重试/降级），也不串用 AI 的 arxlabs 出口。
+    return null;
   }
-
-  // 换链接路径到此为止：宁可无代理（上层重试/降级），也不串用 AI 的 arxlabs 出口。
-  if (isExchange) return null;
 
   try {
     // 2) 从 DB 读取模板（管理台可配置），兜底读 env var —— 仅 AI 路径

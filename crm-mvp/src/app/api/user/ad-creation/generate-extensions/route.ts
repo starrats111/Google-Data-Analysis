@@ -19,6 +19,7 @@ import {
   decodeHtmlEntities,
   sanitizeAdText,
   isBadSitelinkUrl,
+  isSitelinkLocaleCompatible,
 } from "@/lib/crawl-pipeline";
 import { buildCrawlKey, withCrawlInflightLock } from "@/lib/crawl-inflight-lock";
 import { fitAdTextBatch, fitAdTextSync } from "@/lib/ad-text-fit";
@@ -2306,6 +2307,10 @@ async function generateSitelinksOnly(
     const unique: typeof expanded = [];
     const seen = new Set<string>();
     for (const s of expanded) {
+      // 2026-07-13：此路径此前完全没有黑名单/locale/低价值过滤（旧缓存候选直通 AI），
+      // 与 buildRealSitelinks 对齐，堵住"仅重生成 sitelinks"时坏链接复活的口子
+      if (isBadSitelinkUrl(s.url)) continue;
+      if (!isSitelinkLocaleCompatible(s.url, merchantUrl)) continue;
       const norm = s.url.replace(/\/$/, "").replace(/^http:/, "https:").toLowerCase();
       if (seen.has(norm)) continue;
       seen.add(norm);
@@ -2334,7 +2339,8 @@ async function generateSitelinksOnly(
       country,
       languageCode: adLanguageCode || market.languageCode,
     });
-    const final = written.slice(0, 6);
+    // 2026-07-13：与 buildRealSitelinks 对齐——AI 输出后再过一遍低价值黑名单
+    const final = written.filter((s) => !isLowValueSitelink(s.url, s.title)).slice(0, 6);
 
     send("sitelinks", final);
     if (adCreativeId) {
@@ -3546,8 +3552,13 @@ async function buildRealSitelinks(opts: {
   const unique: typeof expanded = [];
   const seen = new Set<string>();
   let crossSiteDropped = 0;
+  let localeDropped = 0;
   for (const s of expanded) {
     if (!isSameSite(s.url)) { crossSiteDropped++; continue; }
+    // 2026-07-13：locale 闸统一兜底——旧缓存 sitelinkCandidates 是 locale 过滤上线前生成的，
+    // 从这里直通 AI 会复现 rad.eu 落地页 /en 配 /fr、/nl sitelink 的事故；黑名单同理补一道。
+    if (isBadSitelinkUrl(s.url)) continue;
+    if (!isSitelinkLocaleCompatible(s.url, merchantUrl)) { localeDropped++; continue; }
     const norm = s.url.replace(/\/$/, "").replace(/^http:/, "https:").toLowerCase();
     if (seen.has(norm)) continue;
     seen.add(norm);
@@ -3556,6 +3567,9 @@ async function buildRealSitelinks(opts: {
   }
   if (crossSiteDropped > 0) {
     console.warn(`[Intellicenter] buildRealSitelinks D-094：剔除 ${crossSiteDropped} 条与落地页(${merchantOriginHost})不同域的站内链接候选`);
+  }
+  if (localeDropped > 0) {
+    console.warn(`[Intellicenter] buildRealSitelinks：剔除 ${localeDropped} 条与落地页 locale 不符的候选`);
   }
   if (unique.length === 0) {
     console.warn(`[Intellicenter] buildRealSitelinks: 无真实候选（merchantUrl=${merchantUrl}），返回空`);

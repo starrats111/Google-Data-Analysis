@@ -114,9 +114,11 @@ async function doCrawl(opts: {
     if (signal.aborted) throw new Error("crawl aborted");
 
     const { crawlPage, fetchPageImages, searchMerchantImages, extractPageMeta } = await import("@/lib/crawler");
+    const { buildCrawlKey, withCrawlInflightLock } = await import("@/lib/crawl-inflight-lock");
 
+    // 2026-07-13：补 inflight 锁，避免与广告生成/文章触发的同商家主爬并行重跑
     const [crawlResult, pageImgs, searchImgs] = await Promise.allSettled([
-      crawlPage(targetUrl),
+      withCrawlInflightLock(buildCrawlKey(targetUrl, ""), () => crawlPage(targetUrl)),
       fetchPageImages(targetUrl),
       searchMerchantImages(targetUrl, merchantName),
     ]);

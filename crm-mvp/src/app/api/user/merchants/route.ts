@@ -1116,12 +1116,15 @@ async function triggerArticleGeneration(
     let crawledLogoUrl = "";
     try {
       const { fetchPageImages, searchMerchantImages, crawlPage } = await import("@/lib/crawler");
+      const { buildCrawlKey, withCrawlInflightLock } = await import("@/lib/crawl-inflight-lock");
       console.log(`[Article] 开始爬取商家网站: ${targetUrl}`);
 
+      // 2026-07-13：文章生成的主爬补 inflight 锁——此前绕过锁直接 crawlPage，
+      // 与广告生成同时触发同一商家时两条全量爬取并行（Puppeteer 槽位 ×2 白烧）
       const [pageImgs, searchImgs, crawlResult] = await Promise.allSettled([
         fetchPageImages(targetUrl),
         searchMerchantImages(targetUrl, merchantName),
-        crawlPage(targetUrl),
+        withCrawlInflightLock(buildCrawlKey(targetUrl, country || ""), () => crawlPage(targetUrl)),
       ]);
 
       // 从 crawlPage 结果获取图片
