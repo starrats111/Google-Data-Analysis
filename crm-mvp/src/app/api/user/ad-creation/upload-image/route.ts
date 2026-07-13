@@ -56,14 +56,21 @@ export async function POST(req: NextRequest) {
       await mkdir(UPLOAD_DIR, { recursive: true });
     }
 
-    const ext = file.name.split(".").pop() || "jpg";
+    const buffer = Buffer.from(await file.arrayBuffer());
+
+    // 2026-07-13（第七轮）：不再信客户端 file.type / 扩展名——按文件头魔数验真实格式，
+    // 扩展名也由嗅探结果决定（防伪装 MIME 上传非图片内容）。
+    const { sniffImageFormat } = await import("@/lib/image-guard");
+    const sniffed = sniffImageFormat(buffer);
+    if (sniffed !== "jpeg" && sniffed !== "png") {
+      return apiError("文件内容不是有效的 JPG/PNG 图片（Google Ads 仅支持这两种格式）");
+    }
+    const ext = sniffed === "jpeg" ? "jpg" : "png";
     const hash = crypto.randomBytes(8).toString("hex");
     const filename = `${Date.now()}-${hash}.${ext}`;
     const filePath = path.join(UPLOAD_DIR, filename);
 
-    const buffer = Buffer.from(await file.arrayBuffer());
-
-    const dimensions = getImageDimensions(buffer, file.type);
+    const dimensions = getImageDimensions(buffer, sniffed === "jpeg" ? "image/jpeg" : "image/png");
     if (dimensions) {
       const { width, height } = dimensions;
       if (width < MIN_DIMENSION || height < MIN_DIMENSION) {

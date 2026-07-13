@@ -37,7 +37,10 @@ export async function POST(req: NextRequest) {
         if (!existsSync(filePath)) return apiError("图片文件不存在");
         imageBuffer = await readFile(filePath);
       } else {
-        // 远程图片
+        // 远程图片（2026-07-13 第七轮：过 SSRF 阀，禁止用 OCR 接口探测内网）
+        const { assertPublicImageUrl } = await import("@/lib/image-guard");
+        const ssrfReason = await assertPublicImageUrl(String(url));
+        if (ssrfReason) return apiError(`图片 URL 不允许: ${ssrfReason}`);
         const resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
         if (!resp.ok) return apiError(`图片下载失败: HTTP ${resp.status}`);
         imageBuffer = Buffer.from(await resp.arrayBuffer());

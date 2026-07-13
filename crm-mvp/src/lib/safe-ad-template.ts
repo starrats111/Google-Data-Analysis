@@ -13,6 +13,7 @@
  */
 
 import { getAdMarketConfig } from "@/lib/ad-market";
+import { googleAdsTextWidth, truncateByWidth } from "@/lib/ad-text-width";
 
 type Lang = "en" | "de" | "fr" | "nl" | "it" | "es" | "pt" | "sv" | "no" | "da" | "fi" | "pl" | "ja" | "ko" | "zh" | "zh-TW";
 
@@ -241,9 +242,11 @@ function pickPack(languageCode?: string, country?: string): SafeLangPack {
   return PACK_EN;
 }
 
+// 2026-07-13（第七轮）：改用 Google Ads 显示宽度（CJK 双宽）+ 码点安全截断，
+// 旧 slice 口径对 ja/ko/zh 模板会产出超宽文本被 Google 拒。
 function ensureMaxLen(text: string, maxLen: number): string {
-  if (text.length <= maxLen) return text;
-  return text.slice(0, maxLen).replace(/[\s,\.\-·|]+$/, "").trim();
+  if (googleAdsTextWidth(text) <= maxLen) return text;
+  return truncateByWidth(text, maxLen).replace(/[\s,\.\-·|]+$/, "").trim();
 }
 
 // ─── 主入口 ────────────────────────────────────────────
@@ -265,10 +268,10 @@ export function fillSafeDescription(brandRoot: string, country?: string, languag
   const pack = pickPack(languageCode, country);
   const arr = pack.descriptions(brandRoot || "Official");
   let picked = arr[index % arr.length];
-  if (picked.length > 90) picked = ensureMaxLen(picked, 90);
-  // 确保最低 50 字符：如不足，追加通用词
-  if (picked.length < 50) {
-    picked = `${picked} Learn more about ${brandRoot}.`.slice(0, 90);
+  if (googleAdsTextWidth(picked) > 90) picked = ensureMaxLen(picked, 90);
+  // 确保最低 50 显示单位：如不足，追加通用词
+  if (googleAdsTextWidth(picked) < 50) {
+    picked = truncateByWidth(`${picked} Learn more about ${brandRoot}.`, 90);
   }
   return picked;
 }

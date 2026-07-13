@@ -355,6 +355,20 @@ export default function AdPreviewPage() {
   const autoFetchKwDone = useRef(false);   // 防止重复触发 SemRush 自动拉取
   const autoNegKwDone = useRef(false);     // 防止重复触发否定关键词自动生成
   const generationInflightRef = useRef<Set<string>>(new Set()); // 防止同类型生成任务重复发起（→ nginx 499）
+  // 2026-07-13（第七轮）P0：kwList 最新值引用。generateExtension 的 useCallback 依赖数组
+  // 不含 kwList（含则关键词每次增删都重建回调、连锁重触发自动生成 effect），闭包里捕获的
+  // kwList 是回调创建那一刻的旧值——员工手动加完关键词再点生成，发给后端的还是旧关键词。
+  const kwListRef = useRef<KeywordItem[]>([]);
+  useEffect(() => { kwListRef.current = kwList; }, [kwList]);
+  // 2026-07-13（第七轮）：组件卸载时中止所有仍在跑的生成轮询（离开页面后轮询循环
+  // 继续 setState 报 React 警告且白耗请求）
+  const activeGenAbortsRef = useRef<Set<AbortController>>(new Set());
+  useEffect(() => {
+    const aborts = activeGenAbortsRef.current;
+    return () => { for (const a of aborts) { try { a.abort(); } catch { /* noop */ } } };
+  }, []);
+  // 接续后台 job 时置 true：pollJob 第一轮 tick 对纯提示类事件静默回放（不重播 toast）
+  const resumeSilentReplayRef = useRef(false);
 
   // 落地页 URL 编辑
   const [editingFinalUrl, setEditingFinalUrl] = useState(false);
@@ -1562,6 +1576,7 @@ export default function AdPreviewPage() {
       }
     };
 
+    let genAbortForCleanup: AbortController | null = null;
     try {
       // core → 发送 types: ["core"]
       // optional → 发送 types: ["optional"], optionalTypes: [...]
@@ -1570,7 +1585,8 @@ export default function AdPreviewPage() {
       const coreTypes = new Set(["sitelinks", "images"]);
       const needsCore = isCore || requestedTypes.some((t) => coreTypes.has(t));
       if (needsCore) {
-        const confirmedKeywords = kwList
+        // 读 ref 而非闭包捕获的 kwList（后者是回调创建时的旧值，见 kwListRef 定义处注释）
+        const confirmedKeywords = kwListRef.current
           .map((k) => k.text)
           .filter(Boolean)
           .slice(0, 10);
@@ -1601,6 +1617,8 @@ export default function AdPreviewPage() {
       const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
       const MAX_POLL_MS = 720000; // D-160：6→12 分钟封顶（后端排队 600s+爬取 165s 可超 6 分钟）；超时后台任务仍在跑，重进页面会自动接续
       const genAbort = new AbortController();
+      genAbortForCleanup = genAbort;
+      activeGenAbortsRef.current.add(genAbort);
       const genTimeout = setTimeout(() => genAbort.abort(), MAX_POLL_MS);
 
       // 旧 SSE 链路（灰度回滚 fallback）：与重构前逐字节一致
@@ -1636,10 +1654,18 @@ export default function AdPreviewPage() {
       };
 
       // 后台任务轮询：按事件优先级对「新出现/变化」的事件调用 handleEvent
-      const APPLY_ORDER = ["queued", "crawl_pending", "crawl_status", "detected_language", "keywords_pending", "keywords", "keywords_failed", "policy_blocked", "merchant_url_parked", "context_insufficient", "headlines", "descriptions", "core_done", "callouts", "structured_snippet", "promotion", "price_items", "call", "negative_keywords", "sitelinks", "images", "compliance_auto_fix", "compliance_warnings", "compliance_policy_fix"];
+      // 2026-07-13（第七轮）：补全 affiliate_resolved / rejection_feedback_loaded /
+      // alignment_rewrite / language_rewrite——不在序表的事件会被排到最末（999），
+      // 改写类提示晚于 compliance 事件应用，顺序错乱。
+      const APPLY_ORDER = ["queued", "crawl_pending", "affiliate_resolved", "crawl_status", "detected_language", "rejection_feedback_loaded", "keywords_pending", "keywords", "keywords_failed", "policy_blocked", "merchant_url_parked", "context_insufficient", "headlines", "descriptions", "alignment_rewrite", "language_rewrite", "core_done", "callouts", "structured_snippet", "promotion", "price_items", "call", "negative_keywords", "sitelinks", "images", "compliance_auto_fix", "compliance_warnings", "compliance_policy_fix"];
       const pollJob = async (jobId: string) => {
         const applied: Record<string, string> = {};
         const startedAt = Date.now();
+        // 2026-07-13（第七轮）：接续已存在的 job 时，第一轮 tick 是历史事件回放——
+        // 纯提示类事件（合规修正/改写 toast）不重播，只静默标记 applied；内容事件照常应用水合 UI。
+        const TOAST_ONLY_EVENTS = new Set(["compliance_auto_fix", "compliance_warnings", "compliance_policy_fix", "alignment_rewrite", "language_rewrite", "keywords_failed"]);
+        let silentReplayTick = resumeSilentReplayRef.current;
+        resumeSilentReplayRef.current = false;
         // D-093 自适应轮询：有新事件落地（文案/扩展正在流式产出）→ 快轮询(800ms)让 UI 即时跟手；
         // 长时间无变化（多在等爬虫 60-90s）→ 退到 2500ms 省请求；中间态 1500ms。
         // 比原固定 2500ms 平均快 ~1.5s 看到结果，且不在爬虫静默期空转打 DB。
@@ -1669,8 +1695,10 @@ export default function AdPreviewPage() {
               if (applied[t] === js) continue;
               applied[t] = js;
               changedThisTick = true;
+              if (silentReplayTick && TOAST_ONLY_EVENTS.has(t)) continue;
               try { await handleEvent(t, events[t]); } catch {}
             }
+            silentReplayTick = false;
             if (sd.status === "done" || sd.status === "failed") {
               if (sd.status === "failed") {
                 message.error(sd.error || (typeof events.error === "string" ? events.error : "生成失败，请重试"));
@@ -1716,6 +1744,7 @@ export default function AdPreviewPage() {
         }));
       }
     } finally {
+      if (genAbortForCleanup) activeGenAbortsRef.current.delete(genAbortForCleanup);
       generationInflightRef.current.delete(inflightKey);
       if (isCore) {
         setCoreGenerating(false);
@@ -1754,6 +1783,7 @@ export default function AdPreviewPage() {
         const t = req.types || [];
         message.info("检测到正在进行的生成任务，正在接续进度…", 3);
         setCurrentStep(1);
+        resumeSilentReplayRef.current = true;
         if (t.includes("core")) {
           generateExtension("core");
         } else if (t.includes("optional") && (req.optionalTypes?.length ?? 0) > 0) {

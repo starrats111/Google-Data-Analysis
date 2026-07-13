@@ -23,26 +23,48 @@ import path from "path";
 
 const AD_IMAGE_DIR = path.join(process.cwd(), ".uploads", "ad-images");
 
-async function loadImageAsBase64(imageUrl: string): Promise<{ data: string; name: string } | null> {
+// 2026-07-13（第七轮）P0 重写：
+//   ① 远程下载不再裸 fetch——预览页靠 Referer/代理才拿到的图，裸 fetch 必 403，
+//      员工预览看得到、提交后图片却静默丢失。改用与 image-proxy 同策略的
+//      downloadImageWithFallback（浏览器头 + Referer 推断 + 出口代理兜底）。
+//   ② 远程 URL 过 SSRF 阀（内网 IP/metadata 端点拦截）。
+//   ③ 上传给 Google 前统一 prepareImageForGoogleAds：魔数嗅探 + 解码校验 +
+//      WebP/AVIF/SVG 转码 + 最小边 300px + ≤5MB。一张坏图会让整个 asset 批次
+//      mutate 失败（其余好图陪葬），必须在提交前拦住。
+async function loadImageAsBase64(imageUrl: string, country?: string): Promise<{ data: string; name: string } | null> {
   try {
+    let raw: Buffer | null = null;
+    let name = "image";
     if (imageUrl.startsWith("/api/user/ad-creation/upload-image/")) {
       const filename = imageUrl.split("/").pop();
       if (!filename) return null;
       const filePath = path.join(AD_IMAGE_DIR, filename);
       if (!existsSync(filePath)) return null;
-      const buffer = await readFile(filePath);
-      if (buffer.length > 5 * 1024 * 1024) return null;
-      return { data: buffer.toString("base64"), name: filename };
+      raw = await readFile(filePath);
+      name = filename;
+    } else if (imageUrl.startsWith("http://") || imageUrl.startsWith("https://")) {
+      const { assertPublicImageUrl, downloadImageWithFallback } = await import("@/lib/image-guard");
+      const ssrfReason = await assertPublicImageUrl(imageUrl);
+      if (ssrfReason) {
+        console.warn(`[AdSubmit] 图片 URL 被 SSRF 阀拦截: ${imageUrl.slice(0, 100)} (${ssrfReason})`);
+        return null;
+      }
+      raw = await downloadImageWithFallback(imageUrl, { country });
+      name = (imageUrl.split("/").pop()?.split("?")[0] || "image").slice(0, 50);
+    } else {
+      return null;
     }
-    if (imageUrl.startsWith("http://") || imageUrl.startsWith("https://")) {
-      const resp = await fetch(imageUrl, { signal: AbortSignal.timeout(10000) });
-      if (!resp.ok) return null;
-      const buffer = Buffer.from(await resp.arrayBuffer());
-      if (buffer.length > 5 * 1024 * 1024) return null;
-      const urlName = imageUrl.split("/").pop()?.split("?")[0] || "image";
-      return { data: buffer.toString("base64"), name: urlName.slice(0, 50) };
+    if (!raw) return null;
+    const { prepareImageForGoogleAds } = await import("@/lib/image-guard");
+    const prepared = await prepareImageForGoogleAds(raw);
+    if (!prepared) {
+      console.warn(`[AdSubmit] 图片不符合 Google Ads 素材要求（格式/尺寸/大小），已跳过: ${imageUrl.slice(0, 100)}`);
+      return null;
     }
-    return null;
+    if (prepared.transcoded) {
+      console.log(`[AdSubmit] 图片已转码为 ${prepared.format} (${prepared.width}x${prepared.height}): ${imageUrl.slice(0, 80)}`);
+    }
+    return { data: prepared.buffer.toString("base64"), name };
   } catch (err) {
     console.warn("[AdSubmit] 图片加载失败:", imageUrl, err);
     return null;
@@ -1015,24 +1037,42 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
   const countryCode = campaignFresh.target_country?.toUpperCase() || "US";
   const market = getAdMarketConfig(countryCode);
 
+  // GAQL 字符串字面量转义（单引号）
+  const gaqlEscapedName = campaignNameToUse.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+
   // 清理同名冲突的辅助函数（使用 remove 操作而非 update status）
+  // 2026-07-13（第七轮）P0 加固：
+  //   ① GAQL 按名精确过滤（原全表扫在大 CID 下慢且可能漏行）；
+  //   ② 查询异常直接 throw——绝不允许在"看不见对方"的情况下进入删除流程；
+  //   ③ 只删「本 CRM 记录在案（DB 有该 google_campaign_id）」或「PAUSED 状态」的同名系列；
+  //     ENABLED 且非本 CRM 创建的在投系列绝不动（可能是别的团队/手工建的），抛错转人工。
   async function removeDuplicateCampaigns() {
     const allCampaigns = await queryGoogleAds(credentials, customerId, `
       SELECT campaign.id, campaign.name, campaign.status
       FROM campaign
-      WHERE campaign.status != 'REMOVED'
+      WHERE campaign.status != 'REMOVED' AND campaign.name = '${gaqlEscapedName}'
     `);
     for (const row of allCampaigns) {
       const c = row.campaign as Record<string, unknown> | undefined;
       const name = String(c?.name ?? "");
       const existingId = String(c?.id ?? "");
-      if (name === campaignNameToUse && existingId) {
-        const rn = `customers/${cid}/campaigns/${existingId}`;
-        await mutateGoogleAds(credentials, customerId, [{
-          campaign_operation: { remove: rn },
-        }]);
-        console.log(`[AdSubmit] 已移除同名旧广告: ${name} (ID: ${existingId})`);
+      if (name !== campaignNameToUse || !existingId) continue;
+      const status = String(c?.status ?? "");
+      const ownedByCrm = await prisma.campaigns.findFirst({
+        where: { google_campaign_id: existingId },
+        select: { id: true },
+      }).catch(() => null);
+      if (!ownedByCrm && status === "ENABLED") {
+        throw new Error(
+          `Google Ads 上已存在同名且在投的广告系列「${name}」(ID: ${existingId})，但它不是本系统创建的，` +
+          `为避免误删他人广告已中止提交。请修改广告系列名后重试。`,
+        );
       }
+      const rn = `customers/${cid}/campaigns/${existingId}`;
+      await mutateGoogleAds(credentials, customerId, [{
+        campaign_operation: { remove: rn },
+      }]);
+      console.log(`[AdSubmit] 已移除同名旧广告: ${name} (ID: ${existingId}, status=${status}, ownedByCrm=${!!ownedByCrm})`);
     }
   }
 
@@ -1040,12 +1080,14 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
   // 用于 mutate 失败后的"状态对账"：很多"CRM 报失败但 Google 已建"的根因是跨草稿重复提交、
   // 或原子批次服务端已 commit 但客户端拿到错误的竞态——只要 Google 端已存在同名系列，
   // 就说明广告其实已提交成功，应采纳同步而非误报失败或删旧重建。
-  async function findExistingGoogleCampaign(): Promise<{ id: string; status: string } | null> {
+  // 2026-07-13（第七轮）：opts.strict=true 时查询异常改为上抛（供 DUPLICATE 分支用——
+  // "查不到"和"查失败"必须区分，后者绝不能当"不存在"处理）。
+  async function findExistingGoogleCampaign(opts: { strict?: boolean } = {}): Promise<{ id: string; status: string } | null> {
     try {
       const rows = await queryGoogleAds(credentials, customerId, `
         SELECT campaign.id, campaign.name, campaign.status
         FROM campaign
-        WHERE campaign.status != 'REMOVED'
+        WHERE campaign.status != 'REMOVED' AND campaign.name = '${gaqlEscapedName}'
       `);
       for (const row of rows) {
         const c = row.campaign as Record<string, unknown> | undefined;
@@ -1054,6 +1096,7 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
         }
       }
     } catch (e) {
+      if (opts.strict) throw e;
       console.warn("[AdSubmit] 核对已存在广告系列失败（不阻断）:", e instanceof Error ? e.message : e);
     }
     return null;
@@ -1066,6 +1109,8 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
   async function reconcileIfExistsInGoogle() {
     const existingCampaign = await findExistingGoogleCampaign();
     if (!existingCampaign) return null;
+    // 2026-07-13（第七轮）：google_status 写 Google 真实状态而非硬编码 ENABLED
+    //（对账命中的可能是已 PAUSED 的旧系列，硬写 ENABLED 会让数据中心显示与实际脱节）
     await prisma.campaigns.update({
       where: { id: campaignFresh!.id },
       data: {
@@ -1073,9 +1118,27 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
         customer_id: cid,
         mcc_id: mccAccount!.id,
         platform_connection_id: submitMerchant?.platform_connection_id ?? null,
-        google_status: "ENABLED",
+        google_status: existingCampaign.status || "ENABLED",
       },
     }).catch(() => {});
+    // 2026-07-13（第七轮）：对账补全 ad_group 映射——旧逻辑只补 campaign id，
+    // ad_groups.google_ad_group_id 缺失导致后续关键词同步/数据中心按组统计全部失联。
+    try {
+      const agRows = await queryGoogleAds(credentials, customerId, `
+        SELECT ad_group.id, ad_group.name, ad_group.status
+        FROM ad_group
+        WHERE campaign.id = ${existingCampaign.id} AND ad_group.status != 'REMOVED'
+      `);
+      const firstAg = agRows?.[0]?.ad_group as Record<string, unknown> | undefined;
+      if (firstAg?.id) {
+        await prisma.ad_groups.updateMany({
+          where: { campaign_id: campaignFresh!.id, google_ad_group_id: null },
+          data: { google_ad_group_id: String(firstAg.id) },
+        });
+      }
+    } catch (e) {
+      console.warn("[AdSubmit] 对账补全 ad_group 映射失败（不阻断）:", e instanceof Error ? e.message : e);
+    }
     try {
       const { syncMerchantStatusForUser } = await import("@/lib/campaign-merchant-link");
       await syncMerchantStatusForUser(userId);
@@ -1113,10 +1176,14 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
     });
 
     // ─── 2. Campaign ───
+    // 2026-07-13（第七轮）P0：TARGET_CPA 不再拿 max_cpc_limit×10 编造 CPA 目标——
+    // 「最高 CPC 0.3」被放大成「目标 CPA 3.00」提交给 Google，出价语义完全错误。
+    // DB 无独立 CPA 目标字段，改用 maximize_conversions（不设目标，Google 自动学习），
+    // 与「转化导向自动出价」的用户意图一致且不注入虚构数字。
     const biddingConfig = bidding_strategy === "MANUAL_CPC"
       ? { manual_cpc: { enhanced_cpc_enabled: true } }
       : bidding_strategy === "TARGET_CPA"
-        ? { target_cpa: { target_cpa_micros: String(dollarsToMicros(max_cpc_limit * 10)) } }
+        ? { maximize_conversions: {} }
         : { target_spend: { cpc_bid_ceiling_micros: String(dollarsToMicros(max_cpc_limit)) } };
 
     const euPoliticalValue = eu_political_ad === 1
@@ -1709,7 +1776,16 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
       }
 
       if (errMsg.includes("DUPLICATE_CAMPAIGN_NAME")) {
-        console.log("[AdSubmit] 检测到同名冲突，强制清理后重试...");
+        // 2026-07-13（第七轮）P0：进入清理前先用 strict 模式二次核对。
+        // Google 既然报 DUPLICATE，同名系列必然存在——上方 reconcile 没找到只可能是
+        // 查询失败/瞬时不一致。strict 查询失败直接上抛（绝不盲删）；查到了就走采纳。
+        console.log("[AdSubmit] 检测到同名冲突，strict 二次核对...");
+        const strictExisting = await findExistingGoogleCampaign({ strict: true });
+        if (strictExisting) {
+          const reconciledStrict = await reconcileIfExistsInGoogle();
+          if (reconciledStrict) return reconciledStrict;
+        }
+        console.log("[AdSubmit] strict 核对未命中（瞬时不一致），进入受控清理后重试...");
         await removeDuplicateCampaigns();
         try {
           result = await mutateGoogleAds(credentials, customerId, operations) as Record<string, unknown>;
@@ -1825,10 +1901,16 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
             const aiFixNotes: string[] = [];
             let lastParsed: ParsedPolicyError | null = parsedPolicyError;
             let aiFixed = false;
+            // 2026-07-13（第七轮）：下标对齐修复——Google 报的「标题N/描述N」指向的是
+            // **实际提交的 fitted+去重后数组**（headlineAssets/descriptionAssets），不是请求体
+            // 原始 headlines/descriptions（fit/去重会移位）。旧逻辑喂原始数组，AI 可能改错行。
+            // 这里跟踪「当前已提交版本」，每轮以它为改写基准。
+            let submittedH: string[] = headlineAssets.map((h: { text: string }) => h.text);
+            let submittedD: string[] = descriptionAssets.map((d: { text: string }) => d.text);
             for (let round = 1; round <= MAX_AI_POLICY_ROUNDS && !result!; round++) {
               const rw = await rewriteAdCopyForPolicy({
-                headlines: headlines as string[],
-                descriptions: descriptions as string[],
+                headlines: submittedH,
+                descriptions: submittedD,
                 parsed: lastParsed,
                 merchantName: (submitMerchant as { merchant_name?: string })?.merchant_name || campaign.campaign_name || "",
                 languageName: adTextLang,
@@ -1840,10 +1922,13 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
               aiFixNotes.push(...rw.notes);
 
               // 用改写后的文案重建 RSA 操作（贴合限长 + 去重，与首次构造同口径）
-              const rhFit = await fitAdTextBatch((headlines as string[]).slice(0, 15).map((h) => sanitizeAdText(h, { allowExclamation: true })), 30, adTextLang);
+              const rhFit = await fitAdTextBatch(rw.headlines.slice(0, 15).map((h) => sanitizeAdText(h, { allowExclamation: true })), 30, adTextLang);
               const rhAssets = rhFit.map((text: string) => ({ text })).filter((h, i, arr) => h.text.length > 0 && arr.findIndex((x) => x.text.toLowerCase() === h.text.toLowerCase()) === i);
-              const rdFit = await fitAdTextBatch((descriptions as string[]).slice(0, 4).map((d) => sanitizeAdText(d, { allowExclamation: true })), 90, adTextLang);
+              const rdFit = await fitAdTextBatch(rw.descriptions.slice(0, 4).map((d) => sanitizeAdText(d, { allowExclamation: true })), 90, adTextLang);
               const rdAssets = rdFit.map((text: string) => ({ text })).filter((d, i, arr) => d.text.length > 0 && arr.findIndex((x) => x.text.toLowerCase() === d.text.toLowerCase()) === i);
+              // 下一轮（若仍被拒）以本轮实际提交版本为基准
+              submittedH = rhAssets.map((h) => h.text);
+              submittedD = rdAssets.map((d) => d.text);
               const newRsaInfo: Record<string, unknown> = { ...rsaInfo, headlines: rhAssets, descriptions: rdAssets };
               // 同时丢弃其它非 RSA 的违规操作（关键词/资源），与 filteredOps 同策略；
               // 被丢弃的均在 index>5（关键词/扩展在 RSA 之后 push），不影响 0~5 的响应解析顺序。
@@ -2009,7 +2094,7 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
         const urls = (image_urls as string[]).slice(0, MAX_IMAGES);
         const imgLoadDeadline = new Promise<null>((resolve) => setTimeout(() => resolve(null), 30_000));
         const loadedImgs = await Promise.all(
-          urls.map((u) => Promise.race([loadImageAsBase64(u).catch(() => null), imgLoadDeadline])),
+          urls.map((u) => Promise.race([loadImageAsBase64(u, countryCode).catch(() => null), imgLoadDeadline])),
         );
         for (const img of loadedImgs) {
           if (!img) continue;
@@ -2074,65 +2159,76 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
     }
 
     // ─── 更新数据库记录 ───
-    await prisma.campaigns.update({
-      where: { id: campaignFresh.id },
-      data: {
-        google_campaign_id: googleCampaignId,
-        customer_id: cid,
-        mcc_id: mccAccount.id,
-        // 该广告归属的联盟账号 = 本次选链接/命名(CGx)所用的商家主连接。写死在广告行，
-        // 后续换链/刷点击/订单归属都以此为准，不再随商家主连接漂移（wj02 CG1/CG2 串号根治点）。
-        platform_connection_id: submitMerchant.platform_connection_id ?? null,
-        daily_budget: daily_budget,
-        bidding_strategy: bidding_strategy,
-        max_cpc_limit: max_cpc_limit,
-        language_id: ad_language || null,
-        network_search: network_search ? 1 : 0,
-        network_partners: network_partners ? 1 : 0,
-        network_display: network_display ? 1 : 0,
-        google_status: "ENABLED",
-      },
-    });
-
-    await prisma.ad_groups.update({
-      where: { id: adGroup.id },
-      data: { google_ad_group_id: googleAdGroupId },
-    });
-
-    // 根治③：把本次实际提交给 Google 的关键字回写 keywords 表，让 DB 成为可信真相来源
-    //   （历史上关键字多只走「SSE→内存→随提交发 Google」而未落库，导致 DB 关键字大面积为空、
-    //   无法用于兜底/审计）。剔除政策重试阶段被丢弃的词（skippedKeywords）。
+    // 2026-07-13（第七轮）P0：campaigns / ad_groups / keywords / ad_creatives 四步回写
+    // 合并进单个事务。旧逻辑串行独立写，任一步失败（DB 瞬断/约束冲突）后前面已提交、
+    // 后面全丢——出现 google_campaign_id 有值但组/关键字/创意失联的永久半残行。
+    // 事务整体失败时由外层 catch 的 reconcileIfExistsInGoogle 兜底（Google 端已建成功）。
     let keywordPersistFailed = false;
+    const persistRows = submittedKeywords
+      .filter((k) => k.text.trim().length > 0 && !skippedKeywords.includes(k.text))
+      .map((k) => ({
+        ad_group_id: adGroup.id,
+        keyword_text: k.text.trim(),
+        match_type: (k.matchType || "PHRASE").toUpperCase(),
+      }));
+    const writebackOps = [
+      prisma.campaigns.update({
+        where: { id: campaignFresh.id },
+        data: {
+          google_campaign_id: googleCampaignId,
+          customer_id: cid,
+          mcc_id: mccAccount.id,
+          // 该广告归属的联盟账号 = 本次选链接/命名(CGx)所用的商家主连接。写死在广告行，
+          // 后续换链/刷点击/订单归属都以此为准，不再随商家主连接漂移（wj02 CG1/CG2 串号根治点）。
+          platform_connection_id: submitMerchant.platform_connection_id ?? null,
+          daily_budget: daily_budget,
+          bidding_strategy: bidding_strategy,
+          max_cpc_limit: max_cpc_limit,
+          language_id: ad_language || null,
+          network_search: network_search ? 1 : 0,
+          network_partners: network_partners ? 1 : 0,
+          network_display: network_display ? 1 : 0,
+          google_status: "ENABLED",
+        },
+      }),
+      prisma.ad_groups.update({
+        where: { id: adGroup.id },
+        data: { google_ad_group_id: googleAdGroupId },
+      }),
+      // 根治③：把本次实际提交给 Google 的关键字回写 keywords 表，让 DB 成为可信真相来源
+      ...(persistRows.length > 0
+        ? [
+            prisma.keywords.deleteMany({ where: { ad_group_id: adGroup.id } }),
+            prisma.keywords.createMany({ data: persistRows, skipDuplicates: true }),
+          ]
+        : []),
+      prisma.ad_creatives.update({
+        where: { id: adCreative.id },
+        data: {
+          headlines: headlines as any,
+          descriptions: descriptions as any,
+          sitelinks: sitelinks.length > 0 ? sitelinks as any : undefined,
+          callouts: callouts.length > 0 ? callouts as any : undefined,
+          image_urls: image_urls.length > 0 ? image_urls as any : undefined,
+        },
+      }),
+    ];
     try {
-      const persistRows = submittedKeywords
-        .filter((k) => k.text.trim().length > 0 && !skippedKeywords.includes(k.text))
-        .map((k) => ({
-          ad_group_id: adGroup.id,
-          keyword_text: k.text.trim(),
-          match_type: (k.matchType || "PHRASE").toUpperCase(),
-        }));
-      if (persistRows.length > 0) {
-        await prisma.$transaction([
-          prisma.keywords.deleteMany({ where: { ad_group_id: adGroup.id } }),
-          prisma.keywords.createMany({ data: persistRows, skipDuplicates: true }),
-        ]);
-      }
-    } catch (e) {
-      // D-163⑦：失败不再纯静默，成功消息里带警告，避免「提交成功但数据中心看不到关键字」的困惑
+      await prisma.$transaction(writebackOps);
+    } catch (txErr) {
+      // 事务整体失败：Google 已建成功，绝不能报失败误导员工重复提交。
+      // 重试一次「最小关键回写」（campaign 映射），其余交给对账/同步兜底。
+      console.error("[AdSubmit] DB 回写事务失败，降级为最小回写:", txErr instanceof Error ? txErr.message : txErr);
       keywordPersistFailed = true;
-      console.warn("[AdSubmit] 关键字回写 DB 失败（不影响广告投放）:", e instanceof Error ? e.message : e);
+      await prisma.campaigns.update({
+        where: { id: campaignFresh.id },
+        data: { google_campaign_id: googleCampaignId, customer_id: cid, mcc_id: mccAccount.id, google_status: "ENABLED" },
+      }).catch((e2) => console.error("[AdSubmit] 最小回写也失败（等待对账兜底）:", e2 instanceof Error ? e2.message : e2));
+      await prisma.ad_groups.update({
+        where: { id: adGroup.id },
+        data: { google_ad_group_id: googleAdGroupId },
+      }).catch(() => {});
     }
-
-    await prisma.ad_creatives.update({
-      where: { id: adCreative.id },
-      data: {
-        headlines: headlines as any,
-        descriptions: descriptions as any,
-        sitelinks: sitelinks.length > 0 ? sitelinks as any : undefined,
-        callouts: callouts.length > 0 ? callouts as any : undefined,
-        image_urls: image_urls.length > 0 ? image_urls as any : undefined,
-      },
-    });
 
     // 查询关联的文章记录
     const article = await prisma.articles.findFirst({

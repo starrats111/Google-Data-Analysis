@@ -51,6 +51,14 @@ export async function createOrReuseSubmitJob(args: {
   const existing = actives[0];
   if (existing) {
     if (isJobFresh(existing, Date.now(), STALE_MS)) {
+      // 2026-07-13（第七轮）P0：复用 queued job 时用最新 payload 覆盖——
+      // 用户改完文案再点提交却复用旧 payload，会把改前的旧文案发到 Google。
+      // running 状态的 job 已在执行，payload 无法中途替换，只能原样复用。
+      if (existing.status === "queued") {
+        await prisma.ad_submit_jobs
+          .update({ where: { id: existing.id }, data: { payload: payload as object } })
+          .catch(() => {});
+      }
       return { id: existing.id, reused: true };
     }
     // 僵死的旧 running/queued job（进程可能已重启）：标记 failed，重建新的。
@@ -68,6 +76,19 @@ export async function createOrReuseSubmitJob(args: {
       heartbeat_at: new Date(),
     },
   });
+
+  // 2026-07-13（第七轮）P0：并发双击竞态双检——两个 POST 同时走到「无活跃 job」后各建一行。
+  // 建完再查一次：若存在比自己更早的活跃 job，废弃自己、复用更早那个（双击场景 payload 相同）。
+  const race = await prisma.ad_submit_jobs.findFirst({
+    where: { campaign_id: campaignId, status: { in: ["queued", "running"] }, id: { lt: job.id } },
+    orderBy: { id: "asc" },
+  });
+  if (race && isJobFresh(race, Date.now(), STALE_MS)) {
+    await prisma.ad_submit_jobs
+      .update({ where: { id: job.id }, data: { status: "failed", error: "并发重复提交，已合并到更早的任务" } })
+      .catch(() => {});
+    return { id: race.id, reused: true };
+  }
   return { id: job.id, reused: false };
 }
 
@@ -89,12 +110,40 @@ export async function runSubmitJobById(jobId: bigint): Promise<void> {
   if (!job) return;
   if (job.status === "done" || job.status === "failed") return;
 
-  await prisma.ad_submit_jobs
-    .update({
-      where: { id: jobId },
-      data: { status: "running", attempt: { increment: 1 }, heartbeat_at: new Date() },
-    })
-    .catch(() => {});
+  // 2026-07-13（第七轮）P0：同 campaign 已有另一个心跳新鲜的 running job → 本 job 先不跑
+  //（保持 queued，等 sweeper 下个周期再看）。防止恢复/扫队与正常执行对同一 campaign 并发 mutate。
+  const staleBefore = new Date(Date.now() - STALE_MS);
+  const sibling = await prisma.ad_submit_jobs.findFirst({
+    where: {
+      campaign_id: job.campaign_id,
+      status: "running",
+      id: { not: jobId },
+      heartbeat_at: { gte: staleBefore },
+    },
+    select: { id: true },
+  }).catch(() => null);
+  if (sibling) {
+    console.warn(`[SubmitRunner] job=${jobId} 同 campaign 已有 running job=${sibling.id}，本次跳过`);
+    return;
+  }
+
+  // 2026-07-13（第七轮）P0：CAS 认领——只允许「queued → running」或「僵死 running 再认领」。
+  // 旧逻辑无条件 update，两个进程（启动恢复 + cron 扫队）可同时把同一 job 置 running 并双跑。
+  const claimed = await prisma.ad_submit_jobs.updateMany({
+    where: {
+      id: jobId,
+      OR: [
+        { status: "queued" },
+        { status: "running", heartbeat_at: { lt: staleBefore } },
+        { status: "running", heartbeat_at: null },
+      ],
+    },
+    data: { status: "running", attempt: { increment: 1 }, heartbeat_at: new Date() },
+  }).catch(() => ({ count: 0 }));
+  if (claimed.count === 0) {
+    console.warn(`[SubmitRunner] job=${jobId} 已被其他进程认领（心跳新鲜），本次跳过`);
+    return;
+  }
 
   // 运行期心跳：长任务期间定期 bump，避免被 createOrReuse 误判僵死而重复建 job。
   const hb = setInterval(() => {
@@ -114,9 +163,10 @@ export async function runSubmitJobById(jobId: bigint): Promise<void> {
     } catch {
       result = { code: -1, message: "提交结果解析失败" };
     }
+    // 终态 CAS：仅 queued/running 可写 done，避免僵尸执行流覆盖已被外部标 failed 的 job
     await prisma.ad_submit_jobs
-      .update({
-        where: { id: jobId },
+      .updateMany({
+        where: { id: jobId, status: { in: ["queued", "running"] } },
         data: {
           status: "done",
           http_status: resp.status,
@@ -136,9 +186,10 @@ export async function runSubmitJobById(jobId: bigint): Promise<void> {
 }
 
 async function finalizeFailed(jobId: bigint, message: string): Promise<void> {
+  // CAS：已 done 的 job 不允许再被标 failed（恢复/扫队与正常完成竞态时保护终态）
   await prisma.ad_submit_jobs
-    .update({
-      where: { id: jobId },
+    .updateMany({
+      where: { id: jobId, status: { in: ["queued", "running"] } },
       data: {
         status: "failed",
         http_status: 500,

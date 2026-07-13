@@ -318,6 +318,16 @@ export async function GET(req: NextRequest) {
     return new NextResponse("Only http(s) allowed", { status: 400 });
   }
 
+  // 2026-07-13（第七轮）P0：SSRF 阀——本路由替用户拉任意 URL，此前可用来探测内网/云 metadata
+  {
+    const { assertPublicImageUrl } = await import("@/lib/image-guard");
+    const ssrfReason = await assertPublicImageUrl(url);
+    if (ssrfReason) {
+      console.warn(`[ImageProxy] SSRF 拦截: ${url.slice(0, 100)} (${ssrfReason})`);
+      return new NextResponse("Forbidden target", { status: 403 });
+    }
+  }
+
   // -------- L-cache：进程内 LRU --------
   const cached = getImageCache(url);
   if (cached) {

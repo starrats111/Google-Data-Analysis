@@ -61,12 +61,18 @@ export async function logPolicyViolations(
       };
 
       // 先查是否已存在（手动 upsert，因为唯一约束含 nullable 字段时 Prisma upsert 不可靠）
+      // 2026-07-13（第七轮）P0：campaign_id 为 null（提交前 final gate）时，仅靠
+      // policy_name+field+index 会让不同商家的违规互相碰撞覆盖（时间戳被别家刷新，
+      // countRecentTrademarkRejections 统计随之失真）。此时补 user_merchant_id 收窄归属。
       const existing = await prisma.policy_violations.findFirst({
         where: {
           campaign_id: dedupKey.campaign_id,
           policy_name: dedupKey.policy_name,
           evidence_field: dedupKey.evidence_field,
           evidence_index: dedupKey.evidence_index,
+          ...(dedupKey.campaign_id == null
+            ? { user_merchant_id: context.user_merchant_id != null ? BigInt(context.user_merchant_id) : null }
+            : {}),
         },
         select: { id: true },
       });
@@ -107,13 +113,16 @@ export async function logPolicyViolations(
       };
 
       if (existing) {
-        // 已存在 → 仅更新最新时间和 raw json（保留首次记录的修复进度）
+        // 已存在 → 更新最新时间和 raw json（保留首次记录的修复进度）
+        // 2026-07-13（第七轮）P1：违规再次发生 = 并没有真正修复，清掉 resolved_at，
+        // 否则 admin 看板把正在发生的违规显示为"已解决"。
         await prisma.policy_violations.update({
           where: { id: existing.id },
           data: {
             google_raw_error_json: rawJson,
             submitted_at: submittedAt,
             message: v.message,
+            resolved_at: null,
           },
         });
       } else {

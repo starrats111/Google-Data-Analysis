@@ -165,10 +165,20 @@ export function parsePolicyError(errBody: string): ParsedPolicyError {
       const trigger = triggerVal != null ? String(triggerVal) : null;
 
       // ── isCascade 判断 ──
+      // 2026-07-13（第七轮）：不再依赖 "Resource was not found" 精确串匹配——Google 的
+      // 措辞有变体（"was not found"/"Resource not found"/"references ... which does not exist"）。
+      // 级联错误的本质特征：trigger 是纯数字资源 ID（临时负数 -2/-3 或真实 ID），且
+      // 错误码/消息指向资源缺失类，而非政策/文本类。
+      const lowMsg = message.toLowerCase();
+      const resourceMissing =
+        lowMsg.includes("not found")
+        || lowMsg.includes("does not exist")
+        || lowMsg.includes("resource was removed")
+        || /\bRESOURCE_NOT_FOUND\b|\bINVALID_RESOURCE_NAME\b/i.test(errorCode);
       const isCascade =
         !!trigger
         && CASCADE_TRIGGER_RE.test(trigger.trim())
-        && message.includes("Resource was not found");
+        && resourceMissing;
 
       // ── fieldPath 解析 ──
       const location = (e?.location || {}) as Record<string, unknown>;

@@ -12,6 +12,7 @@
 
 import { callAiWithFallback } from "@/lib/ai-service";
 import { extractJsonFromAi } from "@/lib/crawl-pipeline";
+import { googleAdsTextWidth } from "@/lib/ad-text-width";
 import type { ParsedPolicyError } from "./error-parser";
 
 const HEADLINE_MAX = 30;
@@ -102,7 +103,10 @@ Hard rules:
   if (!Array.isArray(parsed)) return out;
   for (let i = 0; i < items.length && i < parsed.length; i++) {
     const repl = String(parsed[i] ?? "").trim();
-    if (repl.length >= minLen && repl.length <= maxLen && repl.toLowerCase() !== items[i].text.toLowerCase()) {
+    // 2026-07-13（第七轮）：改用 Google Ads 显示宽度（CJK 双宽）校验——
+    // repl.length 会让 CJK 文本通过内部检查却被 Google 再次拒登（LINE_TOO_LONG）。
+    const width = googleAdsTextWidth(repl);
+    if (width >= minLen && width <= maxLen && repl.toLowerCase() !== items[i].text.toLowerCase()) {
       out.set(items[i].index, repl);
     }
   }

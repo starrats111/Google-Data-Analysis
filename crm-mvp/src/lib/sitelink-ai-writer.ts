@@ -18,6 +18,7 @@ import { callAiWithFallback } from "@/lib/ai-service";
 import { resolveLanguageName, getAdMarketConfig } from "@/lib/ad-market";
 import { sanitizeAdText, smartTruncate, titleFromUrlPath, decodeHtmlEntities, extractJsonFromAi } from "@/lib/crawl-pipeline";
 import { enforceLanguageConsistency, targetLanguageScript } from "@/lib/ad-language-guard";
+import { googleAdsTextWidth } from "@/lib/ad-text-width";
 
 export interface SitelinkInput {
   url: string;
@@ -237,20 +238,23 @@ function buildOne(
   ai: { title?: string; desc1?: string; desc2?: string } | undefined,
   brand: string,
 ): SitelinkOutput {
+  // 2026-07-13（第七轮）：采纳门槛改用 Google Ads 显示宽度（CJK 双宽）——
+  // 旧 .length 口径下 CJK 标题 25 字（宽度 50）会先过门再被 smartTruncate 砍成半截，
+  // 不如直接走 fallback 拿完整短语。
   const aiTitle = ai?.title && typeof ai.title === "string" ? cleanTitle(ai.title) : "";
   const title =
-    aiTitle.length >= 2 && aiTitle.length <= 25 && !isAllCapsLike(aiTitle)
-      ? smartTruncate(aiTitle, 25)
+    aiTitle.length >= 2 && googleAdsTextWidth(aiTitle) <= 25 && !isAllCapsLike(aiTitle)
+      ? aiTitle
       : pickFallbackTitle(c);
 
   const aiDesc1 = ai?.desc1 && typeof ai.desc1 === "string" ? cleanDesc(ai.desc1) : "";
   const desc1 =
-    aiDesc1.length >= 2 && aiDesc1.length <= 45
+    aiDesc1.length >= 2 && googleAdsTextWidth(aiDesc1) <= 45
       ? smartTruncate(aiDesc1, 35)
       : smartTruncate(cleanDesc(c.pageDescription) || brand, 35);
 
   const aiDesc2 = ai?.desc2 && typeof ai.desc2 === "string" ? cleanDesc(ai.desc2) : "";
-  const desc2Check = aiDesc2.length >= 2 && aiDesc2.length <= 45 && aiDesc2.toLowerCase() !== aiDesc1.toLowerCase();
+  const desc2Check = aiDesc2.length >= 2 && googleAdsTextWidth(aiDesc2) <= 45 && aiDesc2.toLowerCase() !== aiDesc1.toLowerCase();
   const desc2Raw =
     desc2Check
       ? smartTruncate(aiDesc2, 35)

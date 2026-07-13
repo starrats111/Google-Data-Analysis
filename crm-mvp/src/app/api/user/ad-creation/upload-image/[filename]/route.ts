@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getUserFromRequest } from "@/lib/auth";
 import { readFile } from "fs/promises";
 import { existsSync } from "fs";
 import path from "path";
@@ -15,9 +16,13 @@ const MIME_MAP: Record<string, string> = {
  * 提供已上传图片的访问
  */
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ filename: string }> },
 ) {
+  // 2026-07-13（第七轮）：补鉴权——此前无登录也可枚举/读取所有已上传广告图
+  const user = getUserFromRequest(req);
+  if (!user) return new NextResponse("Unauthorized", { status: 401 });
+
   const { filename } = await params;
   if (!filename || filename.includes("..") || filename.includes("/") || filename.includes("\\")) {
     return new NextResponse("Not found", { status: 404 });

@@ -76,6 +76,17 @@ function payloadSignature(p: GenerationRequestPayload): string {
   });
 }
 
+// 2026-07-13（第七轮）P0：泳道签名——只看 types/optionalTypes。
+// 同泳道（如都是 core 生成）但参数不同（改了关键词/语言/勾了重新爬取）的两个 job
+// 绝不能并行跑（两条完整爬虫+AI 流水线互相竞争、烧双份资源、结果互相覆盖）。
+// 互斥粒度用泳道，复用判定仍用完整签名：参数变了 → 旧 job 让位、新 job 接管。
+function laneSignature(p: GenerationRequestPayload): string {
+  return JSON.stringify({
+    t: [...(p.types || [])].sort(),
+    o: [...(p.optionalTypes || [])].sort(),
+  });
+}
+
 // 2026-07-13：创建互斥。findMany(检查)→create(创建) 不是原子操作——双击/前端重试
 // 两个请求同时通过"无活跃 job"检查后各建一个 job，两条完整流水线（爬虫+AI）并行烧资源。
 // 用 campaignId+签名 的进程内 promise 链把 check-and-create 串行化（单实例部署下即全局互斥）。
@@ -93,7 +104,8 @@ export async function createOrReuseGenerationJob(args: {
 }): Promise<{ id: bigint; reused: boolean }> {
   const { campaignId, userId, payload } = args;
   const sig = payloadSignature(payload);
-  const mutexKey = `${campaignId}:${sig}`;
+  // 互斥粒度 = 泳道（types/optionalTypes），防止同泳道不同参数的 job 并行双跑
+  const mutexKey = `${campaignId}:${laneSignature(payload)}`;
 
   const prev = _jobCreateChain.get(mutexKey) ?? Promise.resolve();
   const task = prev
@@ -112,18 +124,27 @@ async function createOrReuseGenerationJobInner(
   payload: GenerationRequestPayload,
   sig: string,
 ): Promise<{ id: bigint; reused: boolean }> {
+  const laneSig = laneSignature(payload);
   const actives = await prisma.ad_generation_jobs.findMany({
     where: { campaign_id: campaignId, status: { in: ["queued", "running"] } },
     orderBy: { id: "desc" },
     take: 10,
   });
-  const existing = actives.find((j) => {
+  const safeSig = (j: { types: unknown }) => {
     try {
-      return payloadSignature((j.types ?? {}) as unknown as GenerationRequestPayload) === sig;
+      return payloadSignature((j.types ?? {}) as unknown as GenerationRequestPayload);
     } catch {
-      return false;
+      return "";
     }
-  });
+  };
+  const safeLane = (j: { types: unknown }) => {
+    try {
+      return laneSignature((j.types ?? {}) as unknown as GenerationRequestPayload);
+    } catch {
+      return "";
+    }
+  };
+  const existing = actives.find((j) => safeSig(j) === sig);
   if (existing) {
     if (isJobFresh(existing, Date.now(), STALE_MS)) {
       return { id: existing.id, reused: true };
@@ -132,6 +153,16 @@ async function createOrReuseGenerationJobInner(
     await prisma.ad_generation_jobs
       .update({ where: { id: existing.id }, data: { status: "failed", error: "任务僵死，已重建" } })
       .catch(() => {});
+  }
+
+  // 2026-07-13（第七轮）P0：同泳道但参数不同的活跃 job（改关键词/语言/重新爬取后再点生成）
+  // 一律标 failed 让位——否则两条完整流水线并行双跑、互相覆盖结果。
+  const laneRivals = actives.filter((j) => j.id !== existing?.id && safeLane(j) === laneSig);
+  for (const rival of laneRivals) {
+    await prisma.ad_generation_jobs
+      .update({ where: { id: rival.id }, data: { status: "failed", error: "生成参数已变更，任务被新请求取代" } })
+      .catch(() => {});
+    console.warn(`[GenRunner] 同泳道旧 job=${rival.id} 已让位（参数变更）`);
   }
 
   const job = await prisma.ad_generation_jobs.create({
@@ -171,12 +202,25 @@ export async function runGenerationJobById(jobId: bigint): Promise<void> {
 
   const payload = (job.types ?? {}) as unknown as GenerationRequestPayload;
 
-  await prisma.ad_generation_jobs
-    .update({
-      where: { id: jobId },
-      data: { status: "running", attempt: { increment: 1 }, heartbeat_at: new Date() },
-    })
-    .catch(() => {});
+  // 2026-07-13（第七轮）P0：CAS 认领——只允许「queued → running」或「僵死 running 再认领」。
+  // 旧逻辑无条件置 running：启动恢复 + cron 扫队 + 正常入队三方可对同一 job 并发置 running
+  // 双跑整条流水线（爬虫+AI 全双份）。心跳新鲜的 running job 一律不抢。
+  const staleBefore = new Date(Date.now() - STALE_MS);
+  const claimed = await prisma.ad_generation_jobs.updateMany({
+    where: {
+      id: jobId,
+      OR: [
+        { status: "queued" },
+        { status: "running", heartbeat_at: { lt: staleBefore } },
+        { status: "running", heartbeat_at: null },
+      ],
+    },
+    data: { status: "running", attempt: { increment: 1 }, heartbeat_at: new Date() },
+  }).catch(() => ({ count: 0 }));
+  if (claimed.count === 0) {
+    console.warn(`[GenRunner] job=${jobId} 已被其他进程认领（心跳新鲜），本次跳过`);
+    return;
+  }
 
   try {
     // 动态导入，避免与 route 模块形成静态循环依赖
@@ -313,9 +357,12 @@ async function consumeStreamIntoJob(jobId: bigint, stream: ReadableStream): Prom
   const hasContent = CONTENT_EVENT_KEYS.some((k) => k in events);
   const finalStatus = sawError && !hasContent ? "failed" : "done";
 
-  await prisma.ad_generation_jobs
-    .update({
-      where: { id: jobId },
+  // 2026-07-13（第七轮）P0：终态写入 CAS 化——仅当 job 仍处 queued/running 时写终态。
+  // 旧逻辑无条件 update：job 若已被 generate-start 判僵死标 failed 并重建，僵尸流跑完
+  // 会把 failed 覆盖回 done，与重建的新 job 互相踩踏（前端看到结果反复横跳）。
+  const finalized = await prisma.ad_generation_jobs
+    .updateMany({
+      where: { id: jobId, status: { in: ["queued", "running"] } },
       data: {
         result: { events, seq } as unknown as object,
         stage: finalStatus === "done" ? "done" : stage ?? undefined,
@@ -325,15 +372,22 @@ async function consumeStreamIntoJob(jobId: bigint, stream: ReadableStream): Prom
         heartbeat_at: new Date(),
       },
     })
-    .catch((e) => console.warn(`[GenRunner] job=${jobId} 终态写入失败:`, e instanceof Error ? e.message : e));
+    .catch((e) => {
+      console.warn(`[GenRunner] job=${jobId} 终态写入失败:`, e instanceof Error ? e.message : e);
+      return { count: -1 };
+    });
+  if (finalized && finalized.count === 0) {
+    console.warn(`[GenRunner] job=${jobId} 终态未写入（已被外部标记 failed/done，本流为僵尸流）`);
+  }
 
   console.warn(`[GenRunner] job=${jobId} 完成 status=${finalStatus} seq=${seq} hasContent=${hasContent}`);
 }
 
 async function finalizeFailed(jobId: bigint, message: string): Promise<void> {
+  // CAS：已 done 的 job 不允许再被标 failed（如恢复路径与正常完成竞态）
   await prisma.ad_generation_jobs
-    .update({
-      where: { id: jobId },
+    .updateMany({
+      where: { id: jobId, status: { in: ["queued", "running"] } },
       data: { status: "failed", error: (message || "生成失败").slice(0, 1000), heartbeat_at: new Date() },
     })
     .catch(() => {});

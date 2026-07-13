@@ -18,7 +18,7 @@ import * as http from "node:http";
 import { existsSync } from "node:fs";
 import prisma from "@/lib/prisma";
 import { getProxyUrlForCountry, ensureCountryEgressHttpProxy } from "@/lib/crawl-proxy";
-import { acquirePuppeteerSlot } from "@/lib/puppeteer-semaphore";
+import { acquireExchangeSlot } from "@/lib/puppeteer-semaphore";
 import { probeExitIp } from "@/lib/suffix-engine/exit-ip";
 import { pickMobileUserAgent } from "@/lib/mobile-user-agents";
 import { registerBrowser, closeBrowserSafely, getStealthLauncher } from "@/lib/puppeteer-browser-registry";
@@ -597,7 +597,9 @@ async function resolveViaBrowser(
   ];
   if (proxyAuth) args.push(`--proxy-server=${proxyAuth.server}`);
 
-  const release = await acquirePuppeteerSlot(30000).catch(() => null);
+  // D-172：换链接专用快车道（可借主爬预留余量、唤醒优先于 normal 队列），
+  // 不再与 sitelinks 兜底/图片代理的长批量同挤 normal 池被饿死。
+  const release = await acquireExchangeSlot(30000).catch(() => null);
   if (!release) {
     console.warn(`[AffiliateResolver] 浏览器兜底失败：30s 内未抢到 puppeteer 槽位（no_puppeteer_slot） url=${startUrl.slice(0, 120)}`);
     return { finalUrl: "", chain, error: "no_puppeteer_slot" };
@@ -664,6 +666,17 @@ async function resolveViaBrowser(
     } catch {
       /* 跳转中断属正常 */
     }
+    // D-172：导航落在 chrome-error://（代理隧道断连/网关瞬时故障最常见）→ 同会话立即重导航一次。
+    // 轮换住宅网关下新建连接即换出口节点，实测这类瞬时故障重试一次多半即恢复；
+    // 复用已启动的 browser + slot，重试成本仅一次 goto，远低于整条生成失败后等下轮 cron。
+    if (String(page.url()).startsWith("chrome-error://")) {
+      console.warn(`[AffiliateResolver] 浏览器兜底导航落在 chrome-error（代理/网络瞬时故障），同会话重试一次 url=${startUrl.slice(0, 120)}`);
+      try {
+        await page.goto(startUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+      } catch {
+        /* 跳转中断属正常 */
+      }
+    }
     // 跳板/中转页（LH lhdeal、awin、webgains 等）常靠「延迟 JS 跳转」把用户带到广告主落地页：
     // 单纯 waitForNetworkIdle 会在 JS 跳转触发前（跳板页此刻已网络空闲）提前返回，把 page.url() 快照在
     // 跳板域名上 → 误判 resolve_failed 并丢弃浏览器结果（这正是 LH 商家被大量误报 no_tracking 的根因）。
@@ -698,6 +711,13 @@ async function resolveViaBrowser(
     const finalUrl = page.url();
     chain.push(finalUrl);
     const dedup = chain.filter((u, i) => i === 0 || u !== chain[i - 1]);
+    // D-172：终态仍是非 http(s)（chrome-error:// / about:blank 等）= 导航彻底失败，
+    // 必须按错误返回而不是把 chrome-error 当 finalUrl 交给上层——旧行为会被 evaluate 判成
+    // no_tracking「伪结果」，既污染判定又掩盖真实失败原因。
+    if (!/^https?:\/\//i.test(finalUrl)) {
+      console.warn(`[AffiliateResolver] 浏览器兜底重试后终态仍非 http（${finalUrl.slice(0, 60)}），按导航失败返回 url=${startUrl.slice(0, 120)}`);
+      return { finalUrl: "", chain: dedup, error: `browser_nav_error: ${finalUrl.slice(0, 80)}` };
+    }
     // 探本次浏览器出口 IP：复用同一 http 代理 URL（会话粘性期内出口 IP 稳定），即为浏览器实际点击出口。
     // 失败/无代理返回 null（不阻断换链）。让上层把「真实点击出口 IP」准确落库，修复浏览器兜底路径 exit_ip 丢失。
     const exitIp = httpProxy ? await probeExitIp(httpProxy) : null;
@@ -780,6 +800,14 @@ export async function resolveAffiliateLink(
     // 浏览器兜底路径的 page.url() 也可能带未展开的 ${...} 字面量（浏览器会照样导航过去），统一在此清洗
     let finalUrl = res.finalUrl ? stripUnexpandedTemplateVars(res.finalUrl) : res.finalUrl;
     let chain = res.chain;
+    // D-172 防御：非 http(s) 终态（chrome-error:// 等浏览器内部页）一律判解析失败，
+    // 绝不能流进 landingUrl/trackingLink 判定被误判成 no_tracking「伪结果」。
+    if (finalUrl && !/^https?:\/\//i.test(finalUrl)) {
+      r.status = "resolve_failed";
+      r.error = `导航终态非 http 页面：${finalUrl.slice(0, 80)}`;
+      r.finalUrl = null;
+      return r;
+    }
     if (finalUrl) {
       try {
         const fHost = new URL(finalUrl).hostname;

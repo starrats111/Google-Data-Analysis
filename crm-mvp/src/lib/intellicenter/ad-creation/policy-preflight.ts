@@ -330,10 +330,14 @@ export async function countRecentTrademarkRejections(
 ): Promise<number> {
   const since = new Date(Date.now() - REJECTED_HISTORY_DAYS * 24 * 60 * 60 * 1000);
   try {
+    // 2026-07-13（第七轮）：排除已解决（resolved_at 非空）的记录——
+    // 一条 90 天前已处理完的商标拒登不该继续把品牌自有站压在 block_brand 模式里
+    // （配合 violation-logger：违规复发时会清空 resolved_at 重新计入）。
     return await prisma.policy_violations.count({
       where: {
         user_merchant_id: merchantId,
         submitted_at: { gte: since },
+        resolved_at: null,
         OR: [
           { policy_name: { contains: "trademark" } },
           { external_policy_name: { contains: "trademark" } },
