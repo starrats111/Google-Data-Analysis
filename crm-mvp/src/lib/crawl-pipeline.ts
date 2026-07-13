@@ -8,6 +8,7 @@ import {
   assessCrawlQuality, isQualityImageUrl, isBlockedPage,
   harvestImagesFromPagesWithPuppeteer, getAcceptLanguage,
   dedupeByImageStem, capImagesPerDirectory,
+  deduplicateCdnImages, upgradeCdnThumbnails,
 } from "@/lib/crawler";
 import { dedupeByVisualHash } from "@/lib/image-phash";
 import { getAdMarketConfig } from "@/lib/ad-market";
@@ -564,8 +565,11 @@ export function extractPromotionInfo(html: string, sourceUrl: string, country: s
 
   // ─── 步骤2：搜索金额折扣（$X off / save $X） ───
   if (!result.discount_type) {
+    // 2026-07-13：货币符号由可选改**必选**。旧正则 `[$€£]?` 会把 "Get 2 free samples"、
+    // "Save 100s of styles" 提取成"立减 $2/$100"——凭空捏造 MONETARY 促销扩展，
+    // 且此正则路径的结果不经 AI 数字校验直接入缓存。
     const moneyMatch =
-      plainText.match(/(?:save|get|rabatt|remise|sconto|descuento)\s*[$€£]?\s*(\d{1,4})/i) ||
+      plainText.match(/(?:save|get|rabatt|remise|sconto|descuento)\s*[$€£]\s*(\d{1,4})/i) ||
       plainText.match(/[$€£](\d{1,4})\s*(?:off|rabatt|remise|sconto|descuento)/i);
     if (moneyMatch) {
       const amt = parseInt(moneyMatch[1], 10);
@@ -688,6 +692,34 @@ export function extractPromotionInfo(html: string, sourceUrl: string, country: s
   return Object.keys(result).length > 1 ? result : null;
 }
 
+/**
+ * 2026-07-13：区域感知的价格数字解析。
+ * 旧逻辑 `parseFloat(str.replace(",", ""))` 只替换第一个逗号且把逗号一律当千分位——
+ * 欧陆格式 "29,99" 被解析成 2999（百倍膨胀），"1.299"（欧式千分位）被解析成 1.299。
+ * 价格附加信息直接展示错误金额，属投放事故级 bug。
+ */
+export function parsePriceNumber(raw: string): number {
+  let s = String(raw).trim().replace(/\s/g, "");
+  const lastComma = s.lastIndexOf(",");
+  const lastDot = s.lastIndexOf(".");
+  if (lastComma >= 0 && lastDot >= 0) {
+    // 两种符号都有：靠后的是小数分隔符，靠前的是千分位
+    if (lastComma > lastDot) s = s.replace(/\./g, "").replace(/,/g, ".");
+    else s = s.replace(/,/g, "");
+  } else if (lastComma >= 0) {
+    // 只有逗号：后跟 3 位视为千分位（1,299），否则是欧式小数（29,99）
+    const frac = s.length - lastComma - 1;
+    if (frac === 3) s = s.replace(/,/g, "");
+    else s = s.replace(/,/g, ".");
+  } else if (lastDot >= 0) {
+    // 只有点：后跟 3 位视为欧式千分位（1.299，电商价格三位小数极罕见），否则是小数（29.99）
+    const frac = s.length - lastDot - 1;
+    if (frac === 3) s = s.replace(/\./g, "");
+  }
+  const n = parseFloat(s);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
 export function extractPriceInfo(html: string, country: string, sourceUrl?: string): { header: string; description: string; price: number; currency: string; url: string }[] {
   if (!html) return [];
   const items: { header: string; description: string; price: number; currency: string; url: string }[] = [];
@@ -727,7 +759,7 @@ export function extractPriceInfo(html: string, country: string, sourceUrl?: stri
       const priceMatch = block.match(/(?:[$€£¥]|(?:USD|EUR|GBP)\s*)\s*([\d,.]+)/i)
         || block.match(/([\d,.]+)\s*(?:[$€£¥]|(?:USD|EUR|GBP))/i);
       if (!priceMatch) continue;
-      const price = parseFloat(priceMatch[1].replace(",", ""));
+      const price = parsePriceNumber(priceMatch[1]);
       if (price <= 0 || price >= 100000) continue;
 
       let productName = "";
@@ -823,7 +855,7 @@ export function extractProducts(html: string, sourceUrl: string, country: string
       const priceMatch = block.match(/(?:[$€£¥])\s*([\d,.]+)/i)
         || block.match(/([\d,.]+)\s*(?:[$€£¥])/i);
       if (priceMatch) {
-        const parsed = parseFloat(priceMatch[1].replace(",", ""));
+        const parsed = parsePriceNumber(priceMatch[1]);
         if (parsed > 0 && parsed < 100000) price = parsed;
       }
 
@@ -1435,17 +1467,39 @@ async function discoverSitelinkCandidates(
       // navLinks 分支也走 Puppeteer 兜底
       if (navDeferred.length < 6 && navHttpFailed.length > 0) {
         if (merchantHostChallenged) {
-          // D-028 v3：challenged host 跳过 navLinks puppeteer 兜底，信任 link.text
+          // D-028 v3：challenged host 跳过 navLinks puppeteer 兜底。
+          // 2026-07-13：不再无条件捏造 meta.ok=true（死链借道混到提交层才被拒，
+          // 表现为"生成 N 条提交只剩 M 条"）。有目标国代理时先做一次轻量 GET 探活
+          // （challenged 挡的是机房直连，住宅代理大多能过），明确 4xx/5xx 才剔除；
+          // 代理自身异常/无代理保持旧 fail-open 语义，信任 link.text。
+          const trustCandidates = navHttpFailed.slice(0, 6 - navDeferred.length);
+          let probeResults: boolean[] = trustCandidates.map(() => true);
+          if (puppeteerProxyUrl && trustCandidates.length > 0) {
+            try {
+              const { fetchViaProxy } = await import("@/lib/crawl-proxy");
+              probeResults = await Promise.all(trustCandidates.map(async (link) => {
+                try {
+                  const resp = await fetchViaProxy(link.url, {
+                    method: "GET",
+                    headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36" },
+                    signal: AbortSignal.timeout(8000),
+                  }, puppeteerProxyUrl, 5);
+                  return resp.status >= 200 && resp.status < 400;
+                } catch { return true; }
+              }));
+            } catch { /* 代理模块异常 → 全量 fail-open */ }
+          }
           let added = 0;
-          for (const link of navHttpFailed) {
+          for (let pi = 0; pi < trustCandidates.length; pi++) {
             if (navDeferred.length >= 6) break;
+            if (!probeResults[pi]) continue;
             navDeferred.push({
-              link,
-              meta: { title: "", description: "", ok: true, finalUrl: link.url, isSoft404: false },
+              link: trustCandidates[pi],
+              meta: { title: "", description: "", ok: true, finalUrl: trustCandidates[pi].url, isSoft404: false },
             });
             added++;
           }
-          console.warn(`[Sitelinks] navLinks host 已 challenged，跳过 Puppeteer 兜底，信任 link.text 直接通过 ${added} 条`);
+          console.warn(`[Sitelinks] navLinks host 已 challenged，代理探活后通过 ${added}/${trustCandidates.length} 条（${puppeteerProxyUrl ? "已探活" : "无代理 fail-open"}）`);
         } else {
           const needed = Math.min(navHttpFailed.length, 6);
           const retryUrls = navHttpFailed.slice(0, needed).map(l => l.url);
@@ -2400,9 +2454,32 @@ export async function buildCrawlCache(
             // 插入前缀（保留原有路径）
             u.pathname = "/" + localePrefix + (u.pathname === "/" ? "/" : u.pathname);
           }
-          localizedMerchantUrl = u.toString();
-          if (localizedMerchantUrl !== merchantUrl) {
-            console.log(`[CrawlPipeline] 检测到 locale 站点，落地页本地化: ${merchantUrl} → ${localizedMerchantUrl}`);
+          const candidateLocalized = u.toString();
+          if (candidateLocalized !== merchantUrl) {
+            // 2026-07-13：这个 URL 是**拼出来的推测地址**（站点有 /fr/ 链接 ≠ 一定有 /de-de/），
+            // 此前不验证直接写入 crawl_cache，下游拿去当 final_url / 语言检测线索，
+            // 404 的捏造地址一路污染到投放。落库前 GET 探一次，4xx 一律丢弃。
+            try {
+              const probe = await fetch(candidateLocalized, {
+                redirect: "follow",
+                signal: AbortSignal.timeout(8000),
+                headers: {
+                  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+                  "Accept": "text/html,application/xhtml+xml,*/*;q=0.9",
+                },
+              });
+              if (probe.status < 400) {
+                localizedMerchantUrl = candidateLocalized;
+                console.log(`[CrawlPipeline] 检测到 locale 站点，落地页本地化（已探活 ${probe.status}）: ${merchantUrl} → ${candidateLocalized}`);
+              } else {
+                console.warn(`[CrawlPipeline] 本地化候选 ${candidateLocalized} 探活返回 ${probe.status}，丢弃（保留原 URL）`);
+              }
+            } catch {
+              // 探活异常（超时/网络）：无法确认存在性，宁缺勿假——不写入捏造地址
+              console.warn(`[CrawlPipeline] 本地化候选 ${candidateLocalized} 探活异常，丢弃（保留原 URL）`);
+            }
+          } else {
+            localizedMerchantUrl = candidateLocalized;
           }
         } catch {}
       }
@@ -2461,24 +2538,36 @@ export async function buildCrawlCache(
   // BUG-13：原 4/目录 对 Shopify(/cdn/shop/files/)、Magento(/media/catalog/product/) 这类
   //   「全站图片都在同一个目录」的电商站过严——会把几十张不同产品图直接砍到 4 张（实证 Ashworth Golf）。
   //   真正的「同图/视觉重复」已由下方 BUG-02 D 感知哈希去重兜住，这里放宽到 15/目录，给足候选。
-  const afterStem = dedupeByImageStem(mergedImagesRaw);
+  // 2026-07-13：CDN 参数去重 + 缩略图升级统一在此处执行。此前只在 extractLinksAndImages
+  // （HTTP 路径）里做，Puppeteer 主导的爬取（collectImages/JSON-LD 产品图）拿到的是
+  // _300x300 缩略图原样入库 → 广告素材低清。挪到汇总点后所有来源统一升级。
+  const afterCdn = upgradeCdnThumbnails(deduplicateCdnImages(mergedImagesRaw));
+  const afterStem = dedupeByImageStem(afterCdn);
   let mergedImages = capImagesPerDirectory(afterStem, 15);
   if (mergedImages.length < mergedImagesRaw.length) {
-    console.log(`[CrawlPipeline] BUG-02 去同质：${mergedImagesRaw.length} → 词干去重 ${afterStem.length} → 目录配额 ${mergedImages.length}`);
+    console.log(`[CrawlPipeline] BUG-02 去同质：${mergedImagesRaw.length} → CDN 去重/升级 ${afterCdn.length} → 词干去重 ${afterStem.length} → 目录配额 ${mergedImages.length}`);
   }
 
   // BUG-02 D（设计方案.md §四点五）：感知哈希视觉去重——去掉「不同 URL 但视觉相同」的图。
   // 带并发上限 + 单图超时 + 总预算 + URL 缓存；任何失败/超预算都优雅降级（保留原图）。
-  try {
-    const beforeV = mergedImages.length;
-    mergedImages = await dedupeByVisualHash(mergedImages, {
-      maxImages: 40, concurrency: 3, perImageTimeoutMs: 4000, totalBudgetMs: 15000, threshold: 6,
-    });
-    if (mergedImages.length < beforeV) {
-      console.log(`[CrawlPipeline] BUG-02 D 视觉去重：${beforeV} → ${mergedImages.length}`);
+  // 2026-07-13：预算改为受尾段截止时间约束——固定 15s 不看剩余预算，慢站尾段已烧到
+  // 150s+ 时这 15s 恰好把总时长顶过外层 165s hang-safety，整个 buildCrawlCache 被当
+  // 失败丢弃。剩余预算不足 3s 时直接跳过（去重是锦上添花，保图更重要）。
+  const visualBudgetMs = Math.min(15_000, TAIL_DEADLINE_AT - Date.now());
+  if (visualBudgetMs >= 3_000) {
+    try {
+      const beforeV = mergedImages.length;
+      mergedImages = await dedupeByVisualHash(mergedImages, {
+        maxImages: 40, concurrency: 3, perImageTimeoutMs: 4000, totalBudgetMs: visualBudgetMs, threshold: 6,
+      });
+      if (mergedImages.length < beforeV) {
+        console.log(`[CrawlPipeline] BUG-02 D 视觉去重：${beforeV} → ${mergedImages.length}（预算 ${visualBudgetMs}ms）`);
+      }
+    } catch (e) {
+      console.warn("[CrawlPipeline] BUG-02 D 视觉去重跳过：", e instanceof Error ? e.message : e);
     }
-  } catch (e) {
-    console.warn("[CrawlPipeline] BUG-02 D 视觉去重跳过：", e instanceof Error ? e.message : e);
+  } else {
+    console.warn(`[CrawlPipeline] 尾段剩余预算不足（${visualBudgetMs}ms），跳过视觉去重`);
   }
 
   return {

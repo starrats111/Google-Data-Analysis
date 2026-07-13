@@ -446,14 +446,16 @@ async function crawlWithHttp(url: string, country?: string, proxyUrl?: string): 
     }
 
     // Googlebot UA 作为额外尝试
+    // 2026-07-13：配置了目标国代理时也必须走代理。此前这条恒直连——即使主路径全程
+    // 用德国代理，这里仍从本机（新加坡）出口；若它质量分达标会**直接胜出返回**，
+    // 错市场 HTML 进缓存（/en-sg/ 错链接的又一温床）。
     try {
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), 15000);
-      const res = await fetch(tryUrl, {
-        signal: ctrl.signal,
-        headers: { "User-Agent": GOOGLEBOT_UA, "Accept": "text/html,*/*;q=0.8" },
-        redirect: "follow",
-      });
+      const gbHeaders = { "User-Agent": GOOGLEBOT_UA, "Accept": "text/html,*/*;q=0.8" };
+      const res = proxyUrl
+        ? await fetchViaProxy(tryUrl, { headers: gbHeaders, signal: ctrl.signal }, proxyUrl)
+        : await fetch(tryUrl, { signal: ctrl.signal, headers: gbHeaders, redirect: "follow" });
       clearTimeout(t);
       const html = await res.text();
       const score = contentQualityScore(html);
@@ -709,6 +711,14 @@ export function isQualityImageUrl(url: string, allowedDomain?: string): boolean 
   const validExts = [".jpg", ".jpeg", ".png", ".webp", ".avif"];
   const hasValidExt = validExts.some(ext => lower.endsWith(ext));
 
+  // 过滤极小缩略图（width/w/size ≤ 120 的 CDN 参数，如头像、星标、Scene7 ?size=16 追踪像素）
+  // D-085：补 size 参数——lululemon 等 Adobe Scene7 站点用 ?size=16 输出 16px 占位/追踪图，
+  // 旧正则只认 width/w 漏掉它们，导致大量 16px 垃圾图进入候选 → 前端显示为加载失败占位。
+  // 2026-07-13：此检查上移到「同域早退」之前——同域小像素（brand.com/pixel.png?size=16）
+  // 此前借同域快速通道绕过尺寸过滤，照样混进候选。
+  const widthParam = url.match(/[?&](?:width|w|size)=(\d+)/i);
+  if (widthParam && parseInt(widthParam[1], 10) <= 120) return false;
+
   // 同域图片 + 有效扩展名：直接放行（适用于 SPA 构建产物、自建图床等）
   if (hasValidExt && allowedDomain) {
     try {
@@ -719,12 +729,6 @@ export function isQualityImageUrl(url: string, allowedDomain?: string): boolean 
       }
     } catch { /* ignore */ }
   }
-
-  // 过滤极小缩略图（width/w/size ≤ 120 的 CDN 参数，如头像、星标、Scene7 ?size=16 追踪像素）
-  // D-085：补 size 参数——lululemon 等 Adobe Scene7 站点用 ?size=16 输出 16px 占位/追踪图，
-  // 旧正则只认 width/w 漏掉它们，导致大量 16px 垃圾图进入候选 → 前端显示为加载失败占位。
-  const widthParam = url.match(/[?&](?:width|w|size)=(\d+)/i);
-  if (widthParam && parseInt(widthParam[1], 10) <= 120) return false;
 
   if (!hasValidExt) {
     const cdnPatterns = [
@@ -761,7 +765,7 @@ export function isQualityImageUrl(url: string, allowedDomain?: string): boolean 
 // ══════════════════════════════════════════════════════
 // CDN 去重 & 缩略图升级（照搬后端）
 // ══════════════════════════════════════════════════════
-function deduplicateCdnImages(images: string[]): string[] {
+export function deduplicateCdnImages(images: string[]): string[] {
   const FORMAT_PRIORITY: Record<string, number> = { jpg: 0, jpeg: 0, pjpg: 0, png: 1, webp: 2, webply: 2 };
   const baseMap = new Map<string, { priority: [number, number]; url: string }>();
   const result: string[] = [];
@@ -871,7 +875,7 @@ export function capImagesPerDirectory(images: string[], maxPerDir = 4): string[]
   return out;
 }
 
-function upgradeCdnThumbnails(images: string[]): string[] {
+export function upgradeCdnThumbnails(images: string[]): string[] {
   const upgraded: string[] = [];
   for (const rawUrl of images) {
     // C-030：先把 Shopify Liquid 模板占位符 {width}/{height} 替换成具体尺寸，
@@ -972,20 +976,42 @@ export async function fetchPageImages(pageUrl: string): Promise<string[]> {
         if (resolved) imgs.push(resolved);
       }
 
-      // <img> tags (enhanced: more lazy-load attributes)
-      const imgTagRe = /<img[^>]+(?:src|data-src|data-lazy-src|data-original|data-hi-res-src|data-full-src|data-zoom-image)=["']([^"']+)["'][^>]*>/gi;
+      // <img> tags：逐标签解析属性，懒加载属性优先于 src。
+      // 2026-07-13：旧正则按属性在标签内**出现顺序**取第一个命中——懒加载站的 src 是
+      // 1x1 占位/base64，真图在 data-src，旧逻辑常收进一堆占位图。
+      const imgTagRe = /<img\b[^>]*>/gi;
+      const IMG_SRC_ATTRS = ["data-src", "data-lazy-src", "data-original", "data-hi-res-src", "data-full-src", "data-zoom-image", "src"];
       let im;
       while ((im = imgTagRe.exec(html)) !== null && imgs.length < 30) {
-        const resolved = resolve(im[1]);
-        if (resolved) imgs.push(resolved);
+        const tag = im[0];
+        for (const attr of IMG_SRC_ATTRS) {
+          const am = tag.match(new RegExp(`(?:^|[\\s"'])${attr}=["']([^"']+)["']`, "i"));
+          if (am?.[1] && !am[1].startsWith("data:")) {
+            const resolved = resolve(am[1]);
+            if (resolved) { imgs.push(resolved); break; }
+          }
+        }
       }
 
       // srcset 提取最大图
+      // 2026-07-13：旧逻辑取 split(",").pop()（最后一项）——srcset 顺序无规范，
+      // 降序写法（800w, 400w, 200w）会恰好取到最小图。改为解析 w/x 描述符取真最大。
+      const pickLargestFromSrcset = (srcset: string): string | null => {
+        let best: { url: string; w: number } | null = null;
+        for (const part of srcset.split(",")) {
+          const bits = part.trim().split(/\s+/);
+          if (!bits[0]) continue;
+          const wm = (bits[1] || "").match(/^([\d.]+)[wx]$/i);
+          const w = wm ? parseFloat(wm[1]) : 0;
+          if (!best || w > best.w) best = { url: bits[0], w };
+        }
+        return best?.url ?? null;
+      };
       const srcsetRe = /<img[^>]+srcset=["']([^"']+)["'][^>]*>/gi;
       let sm;
       while ((sm = srcsetRe.exec(html)) !== null && imgs.length < 30) {
-        const last = sm[1].split(",").map(s => s.trim().split(/\s+/)[0]).filter(Boolean).pop();
-        if (last) { const r = resolve(last); if (r) imgs.push(r); }
+        const largest = pickLargestFromSrcset(sm[1]);
+        if (largest) { const r = resolve(largest); if (r) imgs.push(r); }
       }
 
       // JSON-LD
@@ -2239,19 +2265,29 @@ export function extractLinksAndImages(
     const tag = match[0];
     let imgSrc = "";
 
-    for (const attr of ["src", "data-src", "data-lazy-src", "data-original",
+    // 2026-07-13：懒加载属性优先于 src（src 常为 1x1 占位/base64，真图在 data-src），
+    // 且 `${attr}=` 正则补前界，防 "src=" 误匹配 "data-src=" 的尾部
+    for (const attr of ["data-src", "data-lazy-src", "data-original",
       "data-hi-res-src", "data-full-src", "data-zoom-image",
-      "data-bg-src", "data-image", "data-poster", "data-large-file"]) {
-      const am = tag.match(new RegExp(`${attr}=["']([^"']+)["']`, "i"));
+      "data-bg-src", "data-image", "data-poster", "data-large-file", "src"]) {
+      const am = tag.match(new RegExp(`(?:^|[\\s"'])${attr}=["']([^"']+)["']`, "i"));
       if (am?.[1] && !am[1].startsWith("data:")) { imgSrc = am[1]; break; }
     }
 
     if (!imgSrc) {
       for (const sa of ["srcset", "data-srcset"]) {
-        const sm = tag.match(new RegExp(`${sa}=["']([^"']+)["']`, "i"));
+        const sm = tag.match(new RegExp(`(?:^|[\\s"'])${sa}=["']([^"']+)["']`, "i"));
         if (sm?.[1]) {
-          const last = sm[1].split(",").map(s => s.trim().split(/\s+/)[0]).filter(Boolean).pop();
-          if (last) { imgSrc = last; break; }
+          // 2026-07-13：srcset 解析 w/x 描述符取真最大，不再赌"最后一项是最大"
+          let best: { url: string; w: number } | null = null;
+          for (const part of sm[1].split(",")) {
+            const bits = part.trim().split(/\s+/);
+            if (!bits[0]) continue;
+            const wm = (bits[1] || "").match(/^([\d.]+)[wx]$/i);
+            const w = wm ? parseFloat(wm[1]) : 0;
+            if (!best || w > best.w) best = { url: bits[0], w };
+          }
+          if (best?.url) { imgSrc = best.url; break; }
         }
       }
     }

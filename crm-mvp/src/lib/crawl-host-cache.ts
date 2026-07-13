@@ -21,7 +21,9 @@ const challengedHosts = new Map<string, number>();
 
 export function getHostKey(url: string): string | null {
   try {
-    return new URL(url).hostname.toLowerCase();
+    // 2026-07-13：剥 www.——此前 www.brand.com 与 brand.com 是两个 key，
+    // 一边标了 challenged 另一边照走 L0 HTTP，同站行为随入口 URL 写法漂移
+    return new URL(url).hostname.toLowerCase().replace(/^www\./, "");
   } catch {
     return null;
   }

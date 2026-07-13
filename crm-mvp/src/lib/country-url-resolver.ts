@@ -573,6 +573,24 @@ export async function resolveCountryUrl(merchantUrl: string, country: string): P
       // 切 URL：保留 path/query/hash，只换 host
       const newUrl = new URL(merchantUrl);
       newUrl.hostname = candidateHost;
+      // 2026-07-13 路径探活：根域 DNS/TCP 通过 ≠ 原 path 在新站存在——
+      // /products/x 的 slug、集合页路径各国站经常不同，切完 host 带旧 path 直接 404
+      // 落地页。非根路径先 GET 探一次，明确 404/410 才回退根路径；探活失败保持原行为。
+      if (newUrl.pathname !== "/" || newUrl.search) {
+        try {
+          const probe = await fetch(newUrl.toString(), {
+            redirect: "follow",
+            signal: AbortSignal.timeout(PARKED_PROBE_TIMEOUT_MS),
+            headers: { "User-Agent": BROWSER_UA_RESOLVER, Accept: "text/html,application/xhtml+xml" },
+          });
+          if (probe.status === 404 || probe.status === 410) {
+            console.warn(`[CountryUrlResolver] 路径探活：${newUrl.pathname} 在 ${candidateHost} 返回 ${probe.status}，回退根路径`);
+            newUrl.pathname = "/";
+            newUrl.search = "";
+            newUrl.hash = "";
+          }
+        } catch { /* 无法确认 → 不阻断，保留 path */ }
+      }
       const result: ResolveResult = {
         finalUrl: newUrl.toString(),
         brandRoot,

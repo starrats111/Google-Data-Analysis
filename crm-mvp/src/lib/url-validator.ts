@@ -64,8 +64,9 @@ function checkSoft404(html: string): { isSoft404: boolean; reason?: string } {
   const title = extractTitle(html).toLowerCase();
   const lower = html.toLowerCase();
 
-  if (title.includes("404") || title.includes("not found") || title.includes("page not found")) {
-    return { isSoft404: true, reason: `页面标题含"${title.includes("404") ? "404" : "not found"}"（软 404）` };
+  // 2026-07-13：裸 "404" 改词边界，SKU/型号（P4041、40-404）不再误判软 404（与 crawler.ts 对齐）
+  if (/\b404\b/.test(title) || title.includes("not found") || title.includes("page not found")) {
+    return { isSoft404: true, reason: `页面标题含"${/\b404\b/.test(title) ? "404" : "not found"}"（软 404）` };
   }
 
   for (const s of SOFT_404_SIGNALS) {
@@ -107,8 +108,12 @@ function checkInvalidLink(html: string): { isInvalid: boolean; reason?: string }
 function isCloudflareChallenge(html: string): boolean {
   if (!html || html.length < 20) return false;
   const lower = html.toLowerCase();
+  // 2026-07-13 收紧：原先裸 "cloudflare"/"cf-ray" 子串命中——页脚 "Powered by Cloudflare"、
+  // 任何经 CF 代理的正常页都会被当挑战页宽松放行（ok:true），软 404/死链借道混过校验。
+  // 只认挑战页强特征。
   return lower.includes("just a moment") || lower.includes("cf_chl_opt") ||
-    lower.includes("cloudflare") || lower.includes("cf-ray");
+    lower.includes("challenge-platform") || lower.includes("checking your browser") ||
+    lower.includes("cf-turnstile") || lower.includes("attention required");
 }
 
 function isValidPageContent(html: string): boolean {
@@ -259,9 +264,19 @@ export async function tryValidateUrl(url: string): Promise<UrlCheckResult> {
           }
         } catch {}
 
-        const getResult = await getAndCheck(url, ua);
+        // 2026-07-13：GET 复核改打 HEAD 跟完重定向后的**最终 URL**（短链/联盟链场景复核对象才正确）
+        const getResult = await getAndCheck(finalUrl, ua);
         if (getResult.type === "ok") return getResult;
-        return { ok: true, status: res.status, finalUrl };
+        if (getResult.type === "cloudflare") {
+          // HEAD 已 2xx + GET 撞 CF 挑战：真实浏览器可过，保守放行（宁放勿杀）
+          return { ok: true, status: res.status, finalUrl };
+        }
+        // 2026-07-13 修假绿灯：原逻辑 GET 复核 failed（超时/4xx 垃圾内容）也 return ok:true，
+        // 软 404/死链只要 HEAD 通过就能拿绿灯。改为换 UA 再试，全灭则落入代理重试段。
+        lastDirectFailReason = "HEAD 通过但 GET 复核失败";
+        lastDirectFailStatus = res.status;
+        if (i < UA_POOL.length - 1) continue;
+        break;
       }
 
       if (res.status === 404 || res.status === 410) {

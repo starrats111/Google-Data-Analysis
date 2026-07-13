@@ -121,7 +121,11 @@ export async function checkReachability(
     const fr = lastResult.failureReason || "";
     const isConnLevel = fr.startsWith("network_error") || fr === "timeout" || fr === "server_error";
     const isDeadClientError = fr === "client_error" && (lastResult.statusCode === 404 || lastResult.statusCode === 410);
-    if (isConnLevel || isDeadClientError) {
+    // 2026-07-13：403/429 也走代理复核，与 tryValidateUrl 对齐。此前二者对 403 的处理相反
+    // （校验器代理重试、可达性不重试），同一链接"预览绿、生成黄"分裂；403 本就是
+    // 地理封锁/机房 IP 拦截的高发状态码，目标国住宅代理复核是最直接的证伪手段。
+    const isGeoBlockSuspect = fr === "client_error" && (lastResult.statusCode === 403 || lastResult.statusCode === 429);
+    if (isConnLevel || isDeadClientError || isGeoBlockSuspect) {
       // 代理链路比直连慢（实测 SOCKS5 取 rcwilley ~6.3s），给更宽松超时避免临界误判
       const viaProxy = await probeViaProxy(url, opts.country, Math.max(timeoutMs, 15000), maxRedirects).catch(() => null);
       if (viaProxy && viaProxy.reachable) {

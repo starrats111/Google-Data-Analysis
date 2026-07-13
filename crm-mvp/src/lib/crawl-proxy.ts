@@ -243,7 +243,8 @@ export async function fetchViaProxy(
     signal?: AbortSignal;
   },
   proxyUrl: string,
-  maxRedirects = 8,
+  // 2026-07-13：8 → 10，与 checkReachability/url-validator 统一（联盟链 9-10 跳时三套组件结论打架）
+  maxRedirects = 10,
 ): Promise<ProxyFetchResponse> {
   // 动态加载代理 agent（SOCKS5 用 socks-proxy-agent，HTTP 用 https-proxy-agent）
   let agent: unknown;
@@ -259,9 +260,19 @@ export async function fetchViaProxy(
   // （超限会被 kookeey 拒绝、表现为 Socks5 Authentication failed）。整个重定向链共用一个名额。
   const { withProxySlot } = await import("@/lib/suffix-engine/proxy-throttle");
 
-  const doRequest = (targetUrl: string, redirectCount: number): Promise<ProxyFetchResponse> => {
+  // 2026-07-13 资源护栏：
+  //   ① 链级总超时——此前只有每跳 18s socket 超时，10 跳理论可拖 180s，整条链一直占着代理名额；
+  //   ② body 上限 3MB——此前 chunks 无限 push，异常站返回 GB 级响应直接 OOM。
+  //     调用方最多取 150KB HTML，3MB 截断无损业务；截断的压缩体不解压（保原始字节）。
+  const CHAIN_DEADLINE_MS = 45_000;
+  const MAX_BODY_BYTES = 3 * 1024 * 1024;
+  const chainDeadline = Date.now() + CHAIN_DEADLINE_MS;
+
+  const doRequest = (targetUrl: string, redirectCount: number, method: string): Promise<ProxyFetchResponse> => {
     return new Promise((resolve, reject) => {
       if (options.signal?.aborted) return reject(new Error("Aborted"));
+      const remainingMs = chainDeadline - Date.now();
+      if (remainingMs <= 0) return reject(new Error("Proxy redirect chain deadline exceeded"));
 
       let parsed: URL;
       try { parsed = new URL(targetUrl); } catch (e) { return reject(e); }
@@ -284,10 +295,11 @@ export async function fetchViaProxy(
         hostname: parsed.hostname,
         port: parsed.port ? parseInt(parsed.port) : (isHttps ? 443 : 80),
         path: parsed.pathname + parsed.search,
-        method: options.method || "GET",
+        method,
         headers: mergedHeaders,
         agent,
-        timeout: 18000,
+        // 单跳 socket 超时不得超过链级剩余预算
+        timeout: Math.min(18000, remainingMs),
       };
 
       const mod = isHttps ? https : http;
@@ -298,18 +310,36 @@ export async function fetchViaProxy(
         if ([301, 302, 303, 307, 308].includes(status) && location) {
           if (redirectCount >= maxRedirects) return reject(new Error(`Too many redirects`));
           res.resume();
-          const nextUrl = new URL(String(location), targetUrl).toString();
-          doRequest(nextUrl, redirectCount + 1).then(resolve).catch(reject);
+          const locRaw = Array.isArray(location) ? location[0] : location;
+          const nextUrl = new URL(String(locRaw), targetUrl).toString();
+          // 303（及历史惯例的 302+POST）后续跳一律转 GET，对齐浏览器/fetch 行为
+          const nextMethod = status === 303 || (status === 302 && method !== "GET" && method !== "HEAD") ? "GET" : method;
+          doRequest(nextUrl, redirectCount + 1, nextMethod).then(resolve).catch(reject);
           return;
         }
 
         const chunks: Buffer[] = [];
-        res.on("data", (chunk: Buffer) => chunks.push(chunk));
-        res.on("end", () => {
+        let received = 0;
+        let truncated = false;
+        res.on("data", (chunk: Buffer) => {
+          if (truncated) return;
+          received += chunk.length;
+          if (received > MAX_BODY_BYTES) {
+            truncated = true;
+            // 已超上限：保留已收字节，销毁连接防继续吸流量
+            res.destroy();
+            return;
+          }
+          chunks.push(chunk);
+        });
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
           let rawBuf = Buffer.concat(chunks);
-          // 兜底解压：见上方 gzip 乱码病灶注释
+          // 兜底解压：见上方 gzip 乱码病灶注释。截断的压缩体解压必失败，保原始字节。
           const enc = String(res.headers["content-encoding"] || "").toLowerCase();
-          if (enc && rawBuf.length > 0) {
+          if (enc && rawBuf.length > 0 && !truncated) {
             try {
               const zlib = require("zlib") as typeof import("zlib");
               if (enc.includes("br")) rawBuf = zlib.brotliDecompressSync(rawBuf);
@@ -327,8 +357,11 @@ export async function fetchViaProxy(
             buffer: () => Promise.resolve(rawBuf),
             headers: res.headers as Record<string, string | string[]>,
           });
-        });
-        res.on("error", reject);
+        };
+        res.on("end", finish);
+        // 截断时 res.destroy() 不会触发 end，只会触发 close——用已收字节完成响应，防 Promise 悬挂
+        res.on("close", () => { if (truncated) finish(); });
+        res.on("error", (e) => { if (truncated) finish(); else reject(e); });
       });
 
       req.on("error", reject);
@@ -341,5 +374,5 @@ export async function fetchViaProxy(
     });
   };
 
-  return withProxySlot(() => doRequest(url, 0));
+  return withProxySlot(() => doRequest(url, 0, options.method || "GET"));
 }
