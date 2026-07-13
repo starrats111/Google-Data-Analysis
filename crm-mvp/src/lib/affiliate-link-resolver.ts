@@ -599,9 +599,14 @@ async function resolveViaBrowser(
 
   // D-172：换链接专用快车道（可借主爬预留余量、唤醒优先于 normal 队列），
   // 不再与 sitelinks 兜底/图片代理的长批量同挤 normal 池被饿死。
-  const release = await acquireExchangeSlot(30000).catch(() => null);
+  let slotErr = "";
+  const release = await acquireExchangeSlot(30000).catch((e) => {
+    slotErr = e instanceof Error ? e.message : String(e);
+    return null;
+  });
   if (!release) {
-    console.warn(`[AffiliateResolver] 浏览器兜底失败：30s 内未抢到 puppeteer 槽位（no_puppeteer_slot） url=${startUrl.slice(0, 120)}`);
+    // 错误信息带信号量瞬时状态（active/mainQ/exchangeQ/normalQ），用于区分「池满」vs「exchange 自排队（cap=1）」
+    console.warn(`[AffiliateResolver] 浏览器兜底失败：30s 内未抢到 puppeteer 槽位（no_puppeteer_slot）${slotErr ? ` [${slotErr}]` : ""} url=${startUrl.slice(0, 120)}`);
     return { finalUrl: "", chain, error: "no_puppeteer_slot" };
   }
 
