@@ -558,12 +558,21 @@ async function resolveViaBrowser(
 ): Promise<BrowserChainResult> {
   const chain: string[] = [];
   const browserPath = findBrowserPath();
-  if (!browserPath) return { finalUrl: "", chain, error: "no_browser" };
+  if (!browserPath) {
+    console.warn(`[AffiliateResolver] 浏览器兜底失败：未找到可用 Chrome/Edge（no_browser） url=${startUrl.slice(0, 120)}`);
+    return { finalUrl: "", chain, error: "no_browser" };
+  }
 
   // Chrome 只支持 http 代理 + 账号认证，用按出口国校验的 http 代理。
   // 本函数只服务换链接（resolveAffiliateLink 的所有调用方均为换链接场景）→ 强制 exchange:true，
   // 一律走 kookeey 的 http 代理（1000 端口双协议），绝不借用 AI 出口(arxlabs)；userId 仅用于选该用户分配的供应商。
-  const httpProxy = await ensureCountryEgressHttpProxy(country, { userId, exchange: true }).catch(() => null);
+  const httpProxy = await ensureCountryEgressHttpProxy(country, { userId, exchange: true }).catch((e) => {
+    // 无代理仍会继续（直连出口国不对，多半跟不到目标国落地页）→ 必须留痕，否则兜底静默失败无从排查
+    console.warn(
+      `[AffiliateResolver] 浏览器兜底取 ${country} http 代理失败，将无代理直连: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`,
+    );
+    return null;
+  });
   let proxyAuth: { server: string; username: string; password: string } | null = null;
   if (httpProxy) {
     try {
@@ -589,7 +598,10 @@ async function resolveViaBrowser(
   if (proxyAuth) args.push(`--proxy-server=${proxyAuth.server}`);
 
   const release = await acquirePuppeteerSlot(30000).catch(() => null);
-  if (!release) return { finalUrl: "", chain, error: "no_puppeteer_slot" };
+  if (!release) {
+    console.warn(`[AffiliateResolver] 浏览器兜底失败：30s 内未抢到 puppeteer 槽位（no_puppeteer_slot） url=${startUrl.slice(0, 120)}`);
+    return { finalUrl: "", chain, error: "no_puppeteer_slot" };
+  }
 
   // 动态加载的 puppeteer 类型用 any（与 crawler.ts 一致），避免 puppeteer-extra/core 类型分叉
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -691,7 +703,9 @@ async function resolveViaBrowser(
     const exitIp = httpProxy ? await probeExitIp(httpProxy) : null;
     return { finalUrl, chain: dedup, exitIp };
   } catch (e) {
-    return { finalUrl: "", chain, error: e instanceof Error ? e.message.slice(0, 200) : String(e) };
+    const msg = e instanceof Error ? e.message.slice(0, 200) : String(e);
+    console.warn(`[AffiliateResolver] 浏览器兜底异常: ${msg} url=${startUrl.slice(0, 120)} chainLen=${chain.length}`);
+    return { finalUrl: "", chain, error: msg };
   } finally {
     // 裸 browser.close() 在 swap 颠簸时可能永久挂起 → release() 永不执行、槽位泄漏。
     // 换用带 8s 超时 + SIGKILL 的安全关闭，保证槽位一定归还。
@@ -931,7 +945,13 @@ export async function resolveAffiliateLink(
         (result.error.startsWith("停在跳板域名") || result.error.startsWith("停在联盟点击中转域名"))))
   ) {
     const br = await resolveViaBrowser(affiliateUrl, cc, opts.userId).catch(
-      () => ({ finalUrl: "", chain: [] as string[], exitIp: null }) as BrowserChainResult,
+      (e) =>
+        ({
+          finalUrl: "",
+          chain: [] as string[],
+          exitIp: null,
+          error: `fallback_rejected: ${e instanceof Error ? e.message.slice(0, 150) : String(e)}`,
+        }) as BrowserChainResult,
     );
     if (br.finalUrl) {
       const r2 = await evaluate(br, false, true);
@@ -939,7 +959,15 @@ export async function resolveAffiliateLink(
       if (r2.status === "ok" || r2.status === "forbidden_network") {
         result = r2;
         browserExitIp = br.exitIp ?? null;
+      } else {
+        console.warn(
+          `[AffiliateResolver] 浏览器兜底结果未被采用（status=${r2.status} err=${r2.error ?? "-"} finalUrl=${(br.finalUrl || "").slice(0, 120)}），保留首次 HTTP 结果（status=${result.status}）`,
+        );
       }
+    } else {
+      console.warn(
+        `[AffiliateResolver] 浏览器兜底未产出最终 URL（err=${br.error ?? "-"}），保留首次 HTTP 结果（status=${result.status} err=${result.error ?? "-"}） url=${affiliateUrl.slice(0, 120)}`,
+      );
     }
   }
 
