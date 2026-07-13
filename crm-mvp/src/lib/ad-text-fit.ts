@@ -12,16 +12,18 @@
  */
 import { callAiWithFallback } from "@/lib/ai-service";
 import { smartTruncate, extractJsonFromAi } from "@/lib/crawl-pipeline";
+import { googleAdsTextWidth, truncateByWidth } from "@/lib/ad-text-width";
 
 /**
  * 同步兜底：保证 ≤maxLen 且按词边界（不半截词）。无 AI、确定性、永不阻断。
+ * 2026-07-13（第六轮）：长度判定改 Google Ads 显示宽度（CJK 计 2），码点安全。
  */
 export function fitAdTextSync(text: string, maxLen: number): string {
   const t = (text ?? "").trim();
-  if (t.length <= maxLen) return t;
+  if (googleAdsTextWidth(t) <= maxLen) return t;
   const cut = smartTruncate(t, maxLen);
   // 极端兜底：smartTruncate 理论上恒 ≤maxLen，这里再保险一次
-  return cut.length <= maxLen ? cut : cut.slice(0, maxLen).trimEnd();
+  return googleAdsTextWidth(cut) <= maxLen ? cut : truncateByWidth(cut, maxLen);
 }
 
 /**
@@ -37,24 +39,26 @@ export async function fitAdTextBatch(
   languageName: string,
 ): Promise<string[]> {
   const result = items.map((i) => (i ?? "").trim());
+  // 2026-07-13（第六轮）：超长判定改显示宽度（CJK 双宽），prompt 明确告知 CJK 计 2 单位
   const overlong = result
     .map((t, idx) => ({ idx, t }))
-    .filter((o) => o.t.length > maxLen);
+    .filter((o) => googleAdsTextWidth(o.t) > maxLen);
   if (overlong.length === 0) return result;
 
   try {
-    const prompt = `Rewrite each Google Ads text into a semantically COMPLETE phrase within ${maxLen} characters (count every character including spaces and punctuation). Keep the same language (${languageName}). Preserve brand names, numbers and key selling points. NEVER truncate mid-word or mid-idea — rephrase to fit.
+    const prompt = `Rewrite each Google Ads text into a semantically COMPLETE phrase within ${maxLen} display units. IMPORTANT: CJK / full-width characters (Chinese, Japanese, Korean) count as 2 units each; all other characters (including spaces and punctuation) count as 1. Keep the same language (${languageName}). Preserve brand names, numbers and key selling points. NEVER truncate mid-word or mid-idea — rephrase to fit.
 
-${overlong.map((o, i) => `${i + 1}. "${o.t}" (${o.t.length} chars → MUST be ≤${maxLen})`).join("\n")}
+${overlong.map((o, i) => `${i + 1}. "${o.t}" (${googleAdsTextWidth(o.t)} units → MUST be ≤${maxLen})`).join("\n")}
 
-Return ONLY a JSON array of ${overlong.length} strings in the SAME order. Every string MUST be ≤${maxLen} characters.`;
+Return ONLY a JSON array of ${overlong.length} strings in the SAME order. Every string MUST be ≤${maxLen} display units.`;
     const raw = await callAiWithFallback("ad_copy", [{ role: "user", content: prompt }], 1024);
+    // 2026-07-13：JSON.parse 改 parseAiJsonLoose 同源的 extractJsonFromAi + 宽松清洗
     const parsed = JSON.parse(extractJsonFromAi(raw));
     if (Array.isArray(parsed)) {
       for (let i = 0; i < overlong.length; i++) {
         const c = String(parsed[i] ?? "").trim().replace(/^["']|["']$/g, "");
         result[overlong[i].idx] =
-          c.length >= 2 && c.length <= maxLen ? c : fitAdTextSync(overlong[i].t, maxLen);
+          c.length >= 2 && googleAdsTextWidth(c) <= maxLen ? c : fitAdTextSync(overlong[i].t, maxLen);
       }
       return result;
     }

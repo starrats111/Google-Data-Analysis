@@ -17,6 +17,7 @@ import { getProxyUrlForCountry, getHttpProxyUrlForCountry, ensureCountryEgressHt
 import { isLowValueSitelink } from "@/lib/sitelink-filter";
 import { hostMatchesCountryTld } from "@/lib/country-url-resolver";
 import { getHostKey, isHostChallenged, markHostChallenged } from "@/lib/crawl-host-cache";
+import { googleAdsTextWidth, truncateByWidth } from "@/lib/ad-text-width";
 import JSON5 from "json5";
 // C-016: ccTLD 切换逻辑移出 crawl-pipeline，改由 country-url-resolver 在 route 层调度
 
@@ -247,23 +248,31 @@ export function isSitelinkLocaleCompatible(candidateUrl: string, landingUrl: str
   return true;
 }
 
+// 2026-07-13（第六轮）修正：
+//   ① 数字实体 fromCharCode → fromCodePoint（&#128512; 这类增补面 emoji 原先解出半个代理对乱码）；
+//   ② &amp; 移到最后解——原先先解 &amp; 导致双重编码 "&amp;quot;" 变成 "&quot;" 字面量残留，
+//     现在 "&amp;quot;" → "&quot;"（先解不动）→ 最后 &amp;→& 得到正确单层解码；
+//   ③ 补 &euro;/&pound;/&yen;（价格高频，与 htmlToText 对齐）。
 export function decodeHtmlEntities(str: string): string {
   return str
-    .replace(/&amp;/gi, "&").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, '"').replace(/&#39;/gi, "'").replace(/&apos;/gi, "'")
+    .replace(/&#(\d+);/g, (_, n) => { try { return String.fromCodePoint(parseInt(n, 10)); } catch { return " "; } })
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => { try { return String.fromCodePoint(parseInt(h, 16)); } catch { return " "; } })
+    .replace(/&lt;/gi, "<").replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"').replace(/&apos;/gi, "'")
     .replace(/&ndash;/gi, "\u2013").replace(/&mdash;/gi, "\u2014").replace(/&nbsp;/gi, " ")
     .replace(/&laquo;/gi, "\u00AB").replace(/&raquo;/gi, "\u00BB")
+    .replace(/&euro;/gi, "\u20AC").replace(/&pound;/gi, "\u00A3").replace(/&yen;/gi, "\u00A5")
     .replace(/&copy;/gi, "\u00A9").replace(/&reg;/gi, "\u00AE").replace(/&trade;/gi, "\u2122")
-    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)));
+    .replace(/&amp;/gi, "&");
 }
 
+// 2026-07-13（第六轮）P0：改为 Google Ads 显示宽度口径 + 码点安全。
+// 旧实现按 string.length + slice：① CJK 全按 1 计，日/韩/中文案本地全绿、Google 按
+// 双宽整批拒；② slice 会把 emoji/增补字符的代理对切成半个（乱码/拒登）；
+// ③ CJK 无空格直接 slice 硬切。纯 ASCII 文本行为与旧版一致。
 export function smartTruncate(text: string, maxLen: number): string {
-  if (text.length <= maxLen) return text;
-  const truncated = text.slice(0, maxLen);
-  const lastSpace = truncated.lastIndexOf(" ");
-  if (lastSpace > maxLen * 0.5) return truncated.slice(0, lastSpace).replace(/[,.\-\u2013\u2014:;]+$/, "").trim();
-  return truncated.replace(/[,.\-\u2013\u2014:;\s]+$/, "").trim();
+  if (googleAdsTextWidth(text) <= maxLen) return text;
+  return truncateByWidth(text, maxLen);
 }
 
 const BLOCKED_PAGE_TITLES = [
@@ -437,7 +446,10 @@ function repairAiJson(text: string): string {
 
 export function extractMerchantFeatures(html: string, extraFeatures?: string[]): string[] {
   const features: string[] = [];
-  const lower = html.toLowerCase();
+  // 2026-07-13（第六轮）：特征正则只扫**可见文本**。此前对全量 HTML .test()，
+  // JS 配置（"freeShippingThreshold":9999）、CSS 类名（.gift-card-icon）、注释里的
+  // 关键词全都命中 → "Detected features" 大量假阳性，AI 拿着不存在的卖点写文案。
+  const lower = htmlToText(html.slice(0, 400_000)).toLowerCase();
 
   const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);
   if (titleMatch?.[1]) features.push(`Page title: ${decodeHtmlEntities(titleMatch[1].trim())}`);
@@ -751,35 +763,72 @@ export function parsePriceNumber(raw: string): number {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
+// ─── 2026-07-13（第六轮）：JSON-LD 统一解析 ───
+// 此前两处各自 JSON.parse + `p["@type"] === "Product"` 严格比较：
+//   ① @type 是数组（["Product","Thing"]，Shopify/WooCommerce 常见）→ 全部漏抓；
+//   ② @graph 嵌套（Yoast SEO 全站标准输出）→ extractPriceInfo 完全不看；
+//   ③ CDATA 包裹 / 尾逗号 / 换行控制字符 → JSON.parse 抛错被 catch{} 静默吞掉。
+// 统一：宽松清洗 → JSON.parse → JSON5 兜底；@graph/数组递归展平；@type 数组兼容。
+export function isJsonLdType(node: unknown, type: string): boolean {
+  if (!node || typeof node !== "object") return false;
+  const t = (node as Record<string, unknown>)["@type"];
+  if (typeof t === "string") return t === type;
+  if (Array.isArray(t)) return t.includes(type);
+  return false;
+}
+
+export function parseJsonLdBlocks(html: string): Record<string, unknown>[] {
+  const nodes: Record<string, unknown>[] = [];
+  const jsonLdRegex = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let m: RegExpExecArray | null;
+  const pushFlat = (data: unknown): void => {
+    if (!data || typeof data !== "object") return;
+    if (Array.isArray(data)) { data.forEach(pushFlat); return; }
+    const obj = data as Record<string, unknown>;
+    nodes.push(obj);
+    if (Array.isArray(obj["@graph"])) (obj["@graph"] as unknown[]).forEach(pushFlat);
+  };
+  while ((m = jsonLdRegex.exec(html)) !== null) {
+    const raw = m[1].trim()
+      .replace(/^<!\[CDATA\[/, "").replace(/\]\]>$/, "")
+      .replace(/^<!--/, "").replace(/-->$/, "")
+      .trim();
+    if (!raw) continue;
+    // 字符串外的裸换行/控制字符是 JSON.parse 常见死因，JSON5 也处理不了字符串内裸换行，
+    // 这里不做全局替换（会破坏合法内容），仅靠双解析兜底
+    try {
+      pushFlat(JSON.parse(raw));
+    } catch {
+      try { pushFlat(JSON5.parse(raw)); } catch { /* 真坏块放弃 */ }
+    }
+  }
+  return nodes;
+}
+
 export function extractPriceInfo(html: string, country: string, sourceUrl?: string): { header: string; description: string; price: number; currency: string; url: string }[] {
   if (!html) return [];
   const items: { header: string; description: string; price: number; currency: string; url: string }[] = [];
   const market = getAdMarketConfig(country);
 
-  const jsonLdRegex = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
-  let jsonLdMatch;
-  while ((jsonLdMatch = jsonLdRegex.exec(html)) !== null) {
-    try {
-      const data = JSON.parse(jsonLdMatch[1]);
-      const products = Array.isArray(data) ? data : [data];
-      for (const p of products) {
-        if (p["@type"] === "Product" && p.name && p.offers) {
-          const offers = Array.isArray(p.offers) ? p.offers : [p.offers];
-          for (const o of offers) {
-            const price = parseFloat(o.price || o.lowPrice || "0");
-            if (price > 0 && items.length < 8) {
-              // 不在提取层截断，route.ts 会做 AI 精简
-              const fullName = String(p.name).trim();
-              items.push({
-                header: fullName,
-                description: String(p.description || p.name).slice(0, 80),
-                price, currency: o.priceCurrency || market.currencyCode, url: o.url || p.url || sourceUrl || "",
-              });
-            }
+  {
+    const products = parseJsonLdBlocks(html);
+    for (const p of products as any[]) {
+      if (isJsonLdType(p, "Product") && p.name && p.offers) {
+        const offers = Array.isArray(p.offers) ? p.offers : [p.offers];
+        for (const o of offers) {
+          const price = parseFloat(o.price || o.lowPrice || "0");
+          if (price > 0 && items.length < 8) {
+            // 不在提取层截断，route.ts 会做 AI 精简
+            const fullName = String(p.name).trim();
+            items.push({
+              header: fullName,
+              description: String(p.description || p.name).slice(0, 80),
+              price, currency: o.priceCurrency || market.currencyCode, url: o.url || p.url || sourceUrl || "",
+            });
           }
         }
       }
-    } catch {}
+    }
   }
 
   if (items.length === 0) {
@@ -826,34 +875,30 @@ export function extractProducts(html: string, sourceUrl: string, country: string
   const market = getAdMarketConfig(country);
 
   // 1. JSON-LD Product（最可靠）
-  const jsonLdRegex = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
-  let jsonLdMatch;
-  while ((jsonLdMatch = jsonLdRegex.exec(html)) !== null) {
-    try {
-      const data = JSON.parse(jsonLdMatch[1]);
-      const items = Array.isArray(data) ? data : data["@graph"] ? data["@graph"] : [data];
-      for (const p of items) {
-        if (p["@type"] !== "Product" || !p.name) continue;
-        const name = String(p.name).trim();
-        if (name.length < 2 || seenNames.has(name.toLowerCase())) continue;
-        seenNames.add(name.toLowerCase());
+  // 2026-07-13（第六轮）：改用 parseJsonLdBlocks/isJsonLdType（@type 数组 + @graph 递归 + JSON5 兜底）
+  {
+    const items = parseJsonLdBlocks(html);
+    for (const p of items as any[]) {
+      if (!isJsonLdType(p, "Product") || !p.name) continue;
+      const name = String(p.name).trim();
+      if (name.length < 2 || seenNames.has(name.toLowerCase())) continue;
+      seenNames.add(name.toLowerCase());
 
-        const offers = p.offers ? (Array.isArray(p.offers) ? p.offers : [p.offers]) : [];
-        const firstOffer = offers[0] || {};
-        const price = parseFloat(firstOffer.price || firstOffer.lowPrice || "0");
-        const img = p.image ? (Array.isArray(p.image) ? p.image[0] : (typeof p.image === "string" ? p.image : p.image?.url)) : undefined;
+      const offers = p.offers ? (Array.isArray(p.offers) ? p.offers : [p.offers]) : [];
+      const firstOffer = offers[0] || {};
+      const price = parseFloat(firstOffer.price || firstOffer.lowPrice || "0");
+      const img = p.image ? (Array.isArray(p.image) ? p.image[0] : (typeof p.image === "string" ? p.image : p.image?.url)) : undefined;
 
-        products.push({
-          name: name.slice(0, 80),
-          url: firstOffer.url || p.url || sourceUrl,
-          price: price > 0 ? price : undefined,
-          currency: firstOffer.priceCurrency || market.currencyCode,
-          description: p.description ? String(p.description).slice(0, 120) : undefined,
-          imageUrl: img || undefined,
-        });
-        if (products.length >= 20) break;
-      }
-    } catch {}
+      products.push({
+        name: name.slice(0, 80),
+        url: firstOffer.url || p.url || sourceUrl,
+        price: price > 0 ? price : undefined,
+        currency: firstOffer.priceCurrency || market.currencyCode,
+        description: p.description ? String(p.description).slice(0, 120) : undefined,
+        imageUrl: (typeof img === "string" ? img : (img as any)?.url) || undefined,
+      });
+      if (products.length >= 20) break;
+    }
   }
 
   // 2. 从商品卡片 DOM 结构提取（仅当 JSON-LD 不足时）
@@ -909,15 +954,23 @@ export function extractProducts(html: string, sourceUrl: string, country: string
 
 function extractNavItems(html: string, extraItems?: string[]): string[] {
   const navItems: string[] = [];
-  const navRegex = /<nav[^>]*>([\s\S]*?)<\/nav>/gi;
-  let navMatch;
-  while ((navMatch = navRegex.exec(html)) !== null) {
+  const collectLinks = (block: string): void => {
     const linkRegex = /<a[^>]*>([^<]{2,30})<\/a>/gi;
     let linkMatch;
-    while ((linkMatch = linkRegex.exec(navMatch[1])) !== null) {
+    while ((linkMatch = linkRegex.exec(block)) !== null) {
       const text = decodeHtmlEntities(linkMatch[1].trim());
       if (text.length >= 2 && text.length <= 25 && !navItems.includes(text)) navItems.push(text);
     }
+  };
+  const navRegex = /<nav[^>]*>([\s\S]*?)<\/nav>/gi;
+  let navMatch;
+  while ((navMatch = navRegex.exec(html)) !== null) collectLinks(navMatch[1]);
+  // 2026-07-13（第六轮）：<nav> 未命中时兜底扫常见菜单容器（Magento/WordPress 的
+  // ul.menu / .navigation / .main-menu 等此前完全漏抓 → navItems=[]）
+  if (navItems.length === 0) {
+    const menuRegex = /<(?:ul|div)[^>]*class=["'][^"']*(?:main-menu|mega-menu|navigation|nav-menu|site-nav|primary-menu|header-nav)[^"']*["'][^>]*>([\s\S]*?)<\/(?:ul|div)>/gi;
+    let menuMatch;
+    while ((menuMatch = menuRegex.exec(html)) !== null && navItems.length < 30) collectLinks(menuMatch[1]);
   }
   if (extraItems && extraItems.length > 0) {
     for (const item of extraItems) {
@@ -1475,6 +1528,7 @@ async function discoverSitelinkCandidates(
       const puppeteerMetas = await batchFetchMetaViaPuppeteer(retryUrls, puppeteerProxyUrl, {
         concurrency: 2,
         perPageTimeoutMs: 12000,
+        country,
       });
       const linkByUrl = new Map(httpFailedLinks.map(l => [l.url, l]));
       let puppeteerOk = 0;
@@ -1591,7 +1645,7 @@ async function discoverSitelinkCandidates(
           console.log(`[Sitelinks] navLinks HTTP L0 失败 ${navHttpFailed.length} 条，Puppeteer 兜底前 ${needed} 条`);
           try {
             // D-028 v2：单条 timeout 25s → 12s（同 pageLinks 分支）
-            const puppeteerMetas = await batchFetchMetaViaPuppeteer(retryUrls, puppeteerProxyUrl, { concurrency: 2, perPageTimeoutMs: 12000 });
+            const puppeteerMetas = await batchFetchMetaViaPuppeteer(retryUrls, puppeteerProxyUrl, { concurrency: 2, perPageTimeoutMs: 12000, country });
             const linkByUrl = new Map(navHttpFailed.map(l => [l.url, l]));
             for (const [url, meta] of puppeteerMetas.entries()) {
               const link = linkByUrl.get(url);
@@ -2028,7 +2082,7 @@ export async function buildCrawlCache(
   // 后面 sitelinks/collectImages 全按挑战页数据跑。现在拦截页不覆盖缓存。
   const runPuppeteer = async (url: string): Promise<CrawlResultType> => {
     // D-027：主爬走预留 slot，避免被 image proxy / sitelinks 兜底饿死
-    const pageData = await crawlWithPuppeteerFull(url, PUPPETEER_INNER_TIMEOUT, puppeteerProxyUrl ?? undefined, { useMainCrawlSlot: true });
+    const pageData = await crawlWithPuppeteerFull(url, PUPPETEER_INNER_TIMEOUT, puppeteerProxyUrl ?? undefined, { useMainCrawlSlot: true, country });
     if (!pageData) throw new Error("Puppeteer 返回空 HTML");
     if (!isBlockedPage(pageData.html)) puppeteerCache = pageData;
     // CrawlResultType 只需 html/links/images：links 用 nav/header 提取的更精准，images 直接复用
@@ -2183,8 +2237,11 @@ export async function buildCrawlCache(
       //     之前 38s 经常在 page.content() 取 HTML 前就被 race 砍断（实测 SPA 站只拿到 17 字文本）
       //   HTTP 策略 22s
       // Puppeteer 单策略上限：goto 35s + sleep/randomDelay ~5s + waitForSelector 8+5s
-      // + SPA hydration 等待 10s + 滚动收尾 8s + content/evaluate 1s ≈ 最坏 72s，给 75s buffer
-      const SINGLE_STRATEGY_TIMEOUT_MS = isPuppeteerStrategy ? 75_000 : 22_000;
+      // + SPA hydration 等待 10s + 滚动收尾 8s + content/evaluate 1s ≈ 最坏 72s。
+      // 2026-07-13（第六轮）：75s → 90s。CF 挑战循环最坏再 +18s（内部已按自身 deadline 提前
+      // 收口，见 crawlWithPuppeteerFull pptrDeadlineAt），此前 75s race 在挑战站上必输，
+      // Chrome 成孤儿烧槽位；90s 与内部 deadline(timeoutMs+45s≈80s) 对齐并留 buffer。
+      const SINGLE_STRATEGY_TIMEOUT_MS = isPuppeteerStrategy ? 90_000 : 22_000;
       // 2026-07-13：race 赢家出来后清掉输家的 timer（此前每策略泄漏一个挂起 setTimeout）
       let strategyTimer: NodeJS.Timeout | undefined;
       const result = await Promise.race([

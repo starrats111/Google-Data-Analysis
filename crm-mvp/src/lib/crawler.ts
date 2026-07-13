@@ -4,7 +4,7 @@ import { acquirePuppeteerSlot, acquireMainCrawlSlot, puppeteerSemaphoreStats } f
 import { normalizeImageUrl } from "@/lib/image-url-normalize";
 import { getHostKey, isHostChallenged, markHostChallenged } from "@/lib/crawl-host-cache";
 import { matchParkedTextSignal } from "@/lib/country-url-resolver";
-import { registerBrowser, closeBrowserSafely, closePageSafely, getStealthLauncher } from "@/lib/puppeteer-browser-registry";
+import { registerBrowser, closeBrowserSafely, closePageSafely, getStealthLauncher, refreshBrowserAge } from "@/lib/puppeteer-browser-registry";
 
 export interface PuppeteerPageData {
   html: string;
@@ -1095,11 +1095,24 @@ export async function fetchPageImages(pageUrl: string): Promise<string[]> {
 // ══════════════════════════════════════════════════════
 // 策略 3: Puppeteer + Stealth（大幅增强反检测）
 // ══════════════════════════════════════════════════════
-const PUPPETEER_ANTI_DETECT_SCRIPT = `
+// 2026-07-13（第六轮）：反检测脚本参数化——此前固定 platform:'Win32' + languages:['en-US','en']，
+// 与随机到的 Mac UA、目标国 Accept-Language 头三者互相矛盾（CF/DataDome 一致性检测直接命中）。
+// 现按所选 UA 推导 platform、按目标国推导 navigator.languages，与 HTTP 头保持同一套指纹。
+function buildAntiDetectScript(ua?: string, country?: string): string {
+  const platform = ua && /Macintosh|Mac OS X/i.test(ua) ? "MacIntel"
+    : ua && /Linux/i.test(ua) && !/Android/i.test(ua) ? "Linux x86_64"
+    : "Win32";
+  // 从 Accept-Language 串推导 languages 数组（如 "de,en;q=0.8" → ['de','en']）
+  const langs = getAcceptLanguage(country)
+    .split(",")
+    .map((s) => s.split(";")[0].trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  return `
   // --- Webdriver & automation detection ---
   Object.defineProperty(navigator,'webdriver',{get:()=>undefined});
   delete navigator.__proto__.webdriver;
-  Object.defineProperty(navigator,'languages',{get:()=>['en-US','en']});
+  Object.defineProperty(navigator,'languages',{get:()=>${JSON.stringify(langs)}});
   Object.defineProperty(navigator,'plugins',{get:()=>[
       {name:'Chrome PDF Plugin',filename:'internal-pdf-viewer'},
       {name:'Chrome PDF Viewer',filename:'mhjfbmdgcfjbbpaeojofohoefgiehjai'},
@@ -1108,7 +1121,10 @@ const PUPPETEER_ANTI_DETECT_SCRIPT = `
   Object.defineProperty(navigator,'maxTouchPoints',{get:()=>0});
   Object.defineProperty(navigator,'hardwareConcurrency',{get:()=>8});
   Object.defineProperty(navigator,'deviceMemory',{get:()=>8});
-  Object.defineProperty(navigator,'platform',{get:()=>'Win32'});
+  Object.defineProperty(navigator,'platform',{get:()=>'${platform}'});` + PUPPETEER_ANTI_DETECT_TAIL;
+}
+
+const PUPPETEER_ANTI_DETECT_TAIL = `
 
   // --- Chrome runtime ---
   window.chrome = {runtime: {}, loadTimes: function(){return{}}, csi: function(){return{}}};
@@ -1153,7 +1169,7 @@ export async function crawlPageWithPuppeteer(url: string, timeoutMs = 35000, pro
 export async function batchFetchMetaViaPuppeteer(
   urls: string[],
   proxyUrl?: string,
-  options: { concurrency?: number; perPageTimeoutMs?: number } = {},
+  options: { concurrency?: number; perPageTimeoutMs?: number; country?: string } = {},
 ): Promise<Map<string, { title: string; description: string; finalUrl: string; ok: boolean; isSoft404: boolean }>> {
   const result = new Map<string, { title: string; description: string; finalUrl: string; ok: boolean; isSoft404: boolean }>();
   if (urls.length === 0) return result;
@@ -1258,18 +1274,24 @@ export async function batchFetchMetaViaPuppeteer(
     const fetchOne = async (url: string) => {
       let page: any = null;
       try {
+        refreshBrowserAge(browser); // 批量 meta 合法长跑，按活动时间而非 launch 时间计龄
         page = await browser.newPage();
         if (proxyAuth) await page.authenticate(proxyAuth);
-        await page.setUserAgent(randomDesktopUA());
+        const pageUa = randomDesktopUA();
+        await page.setUserAgent(pageUa);
         await page.setViewport({ width: 1366, height: 900 });
-        await page.evaluateOnNewDocument(PUPPETEER_ANTI_DETECT_SCRIPT);
+        await page.evaluateOnNewDocument(buildAntiDetectScript(pageUa, options.country));
+        // 2026-07-13（第六轮）：代理出口=目标国时补 Accept-Language，与 HTTP 路径 CRAWL-06 对齐
+        if (proxyUrl && options.country) {
+          await page.setExtraHTTPHeaders({ "Accept-Language": getAcceptLanguage(options.country) }).catch(() => {});
+        }
         await page.setRequestInterception(true);
         page.on("request", (req: any) => {
           const t = req.resourceType();
-          if (t === "image" || t === "media" || t === "font" || t === "stylesheet") return req.abort();
+          if (t === "image" || t === "media" || t === "font" || t === "stylesheet") return req.abort().catch(() => {});
           const u = req.url().toLowerCase();
-          if (/analytics|gtag|fbevents|hotjar|segment|mixpanel|doubleclick|googlesyndication/.test(u)) return req.abort();
-          req.continue();
+          if (/analytics|gtag|fbevents|hotjar|segment|mixpanel|doubleclick|googlesyndication/.test(u)) return req.abort().catch(() => {});
+          req.continue().catch(() => {});
         });
 
         try {
@@ -1448,9 +1470,10 @@ export async function fetchImagesViaPuppeteerBatch(
     const page = await browser.newPage();
     try {
       if (proxyAuth) await page.authenticate(proxyAuth);
-      await page.setUserAgent(randomDesktopUA());
+      const pageUa = randomDesktopUA();
+      await page.setUserAgent(pageUa);
       await page.setViewport({ width: 1366, height: 900 });
-      await page.evaluateOnNewDocument(PUPPETEER_ANTI_DETECT_SCRIPT);
+      await page.evaluateOnNewDocument(buildAntiDetectScript(pageUa));
 
       // 不开 setRequestInterception —— 拿 cookie 阶段不需要 abort，且后续 page.evaluate
       // 里的 fetch 走的是浏览器 fetch API，不会被这里的 interception 影响
@@ -1562,7 +1585,7 @@ export async function fetchImagesViaPuppeteerBatch(
 export async function harvestImagesFromPagesWithPuppeteer(
   urls: string[],
   proxyUrl?: string,
-  options: { perPageTimeoutMs?: number; maxImagesPerPage?: number } = {},
+  options: { perPageTimeoutMs?: number; maxImagesPerPage?: number; country?: string } = {},
 ): Promise<Map<string, string[]>> {
   const result = new Map<string, string[]>();
   if (urls.length === 0) return result;
@@ -1638,23 +1661,37 @@ export async function harvestImagesFromPagesWithPuppeteer(
     }
     registerBrowser(browser, "harvestImages");
 
+    // 2026-07-13（第六轮）：批量 harvest 补总时限。6 页 × 40s goto + 滚动 ≈ 300s，
+    // 远超收割器 180s / 槽位看门狗 150s——第 4 页前后浏览器被强杀、槽位被抢释放，
+    // 后半批全空还造成计数超卖。总预算 120s，超了就带着已采集的部分提前返回；
+    // 每页完成后刷新收割器年龄，页内合法慢速不再被误杀。
+    const HARVEST_DEADLINE_AT = Date.now() + 120_000;
     for (const url of urls) {
+      if (Date.now() > HARVEST_DEADLINE_AT) {
+        console.warn(`[HarvestImages] 总预算 120s 用尽，剩余 ${urls.length - result.size} 页跳过`);
+        break;
+      }
+      refreshBrowserAge(browser);
       let page: any = null;
       try {
         page = await browser.newPage();
         if (proxyAuth) await page.authenticate(proxyAuth);
-        await page.setUserAgent(randomDesktopUA());
+        const pageUa = randomDesktopUA();
+        await page.setUserAgent(pageUa);
         await page.setViewport({ width: 1920, height: 1080 });
-        await page.evaluateOnNewDocument(PUPPETEER_ANTI_DETECT_SCRIPT);
+        await page.evaluateOnNewDocument(buildAntiDetectScript(pageUa, options.country));
+        if (proxyUrl && options.country) {
+          await page.setExtraHTTPHeaders({ "Accept-Language": getAcceptLanguage(options.country) }).catch(() => {});
+        }
 
         await page.setRequestInterception(true);
         page.on("request", (req: any) => {
           const t = req.resourceType();
           // 图片采集不需要实际加载图片字节，只要 DOM/srcset 即可
-          if (t === "image" || t === "media" || t === "font") return req.abort();
+          if (t === "image" || t === "media" || t === "font") return req.abort().catch(() => {});
           const u = req.url().toLowerCase();
-          if (/analytics|gtag|fbevents|hotjar|segment|mixpanel|doubleclick|googlesyndication/.test(u)) return req.abort();
-          req.continue();
+          if (/analytics|gtag|fbevents|hotjar|segment|mixpanel|doubleclick|googlesyndication/.test(u)) return req.abort().catch(() => {});
+          req.continue().catch(() => {});
         });
 
         try {
@@ -1757,7 +1794,7 @@ export async function crawlWithPuppeteerFull(
   url: string,
   timeoutMs = 30000,
   proxyUrl?: string,
-  options: { useMainCrawlSlot?: boolean } = {},
+  options: { useMainCrawlSlot?: boolean; country?: string } = {},
 ): Promise<PuppeteerPageData | null> {
   const browserPath = findBrowserPath();
   if (!browserPath) {
@@ -1821,6 +1858,11 @@ export async function crawlWithPuppeteerFull(
   }
 
   let browser: any = null;
+  // 2026-07-13（第六轮）：内部总截止时间。goto(35s)+CF 挑战循环(最长 42s)+consent+hydration
+  // 最坏可到 120s，而外层策略 race 只给 75-90s——race 输掉后本函数成孤儿继续烧槽位。
+  // 现在各可变长等待段（CF 循环/hydration）都对照该截止时间提前退出，保证在外层砍断前
+  // 带着已有内容正常返回。
+  const pptrDeadlineAt = Date.now() + Math.max(timeoutMs + 45_000, 80_000);
   try {
     try {
       const stealthLauncher = await getStealthLauncher();
@@ -1850,16 +1892,25 @@ export async function crawlWithPuppeteerFull(
     await page.setUserAgent(ua);
     await page.setViewport({ width: 1920, height: 1080 });
 
-    await page.evaluateOnNewDocument(PUPPETEER_ANTI_DETECT_SCRIPT);
+    await page.evaluateOnNewDocument(buildAntiDetectScript(ua, options.country));
+    // 2026-07-13（第六轮）：代理出口=目标国时补 Accept-Language（HTTP 路径 CRAWL-06 早已如此，
+    // Puppeteer 一直没带 → Shopify 等按 IP+语言路由的站拿错市场页/错 navLinks）
+    if (proxyUrl && options.country) {
+      await page.setExtraHTTPHeaders({ "Accept-Language": getAcceptLanguage(options.country) }).catch(() => {});
+    }
+    // 2026-07-13（第六轮）：dialog（alert/confirm）自动关闭——个别站 onload 弹 alert 会把
+    // evaluate/goto 挂到超时；popup tab 由 reaper 随浏览器一起回收，不单独处理
+    page.on("dialog", (d: any) => { d.dismiss().catch(() => {}); });
 
     // 拦截常见追踪/分析脚本加速加载
+    // 2026-07-13：continue/abort 补 .catch——导航中断后调用会 reject 产生 unhandledRejection
     await page.setRequestInterception(true);
     page.on("request", (req: any) => {
       const reqUrl = req.url().toLowerCase();
       if (/analytics|gtag|fbevents|hotjar|segment|mixpanel|doubleclick|googlesyndication/.test(reqUrl)) {
-        req.abort();
+        req.abort().catch(() => {});
       } else {
-        req.continue();
+        req.continue().catch(() => {});
       }
     });
 
@@ -1881,6 +1932,7 @@ export async function crawlWithPuppeteerFull(
     if (["checking your browser", "just a moment", "verify you are human"].some(s => bodyLower.includes(s))) {
       console.log("[Crawler] Puppeteer: 检测到 Cloudflare 挑战页，等待...");
       for (let i = 0; i < 12; i++) {
+        if (Date.now() > pptrDeadlineAt - 20_000) break; // 留 20s 给后续提取，别把预算全烧在挑战页
         await sleep(1500);
         const bt: string = await page.evaluate(() => document.body?.innerText?.toLowerCase() || "");
         if (!["checking your browser", "just a moment", "verify you are human"].some(s => bt.includes(s))) break;
@@ -1981,9 +2033,10 @@ export async function crawlWithPuppeteerFull(
       if (earlyBodyLen < 600) {
         console.log(`[Crawler] body 仅 ${earlyBodyLen} 字，疑似 SPA hydration 未完成，等待最多 12s...`);
         try {
+          const hydrationWaitMs = Math.max(1_000, Math.min(12_000, pptrDeadlineAt - 15_000 - Date.now()));
           await page.waitForFunction(
             () => (document.body?.innerText?.length ?? 0) >= 600,
-            { timeout: 12000, polling: 500 },
+            { timeout: hydrationWaitMs, polling: 500 },
           );
           const finalBodyLen: number = await page.evaluate(() => (document.body?.innerText?.length ?? 0));
           console.log(`[Crawler] SPA hydration 完成: body=${finalBodyLen} 字`);
@@ -2161,6 +2214,14 @@ export async function crawlWithPuppeteerFull(
     // 代理连接失败时自动降级到直连重试（避免因代理故障丢失整个 Puppeteer 结果）
     if (proxyUrl && /SOCKS|proxy|ERR_PROXY|ERR_SOCKS|connection failed/i.test(msg)) {
       console.log("[Crawler] 代理不可用，降级到 Puppeteer 直连重试...");
+      // 2026-07-13（第六轮）P0：递归前必须先关浏览器+还槽。旧逻辑在 finally 释放槽位
+      // **之前**递归，内层再抢槽——生产 3 槽全满时外层占槽等内层、内层排队等槽，
+      // 整个 Puppeteer 子系统永久死锁。先释放再递归，并把 release 置空防 finally 双还。
+      await closeBrowserSafely(browser);
+      browser = null;
+      const releaseOnce = releasePuppeteerSlot;
+      releasePuppeteerSlot = () => {};
+      releaseOnce();
       return crawlWithPuppeteerFull(url, timeoutMs, undefined, options); // 不传 proxyUrl = 直连，保留 useMainCrawlSlot
     }
     return null;

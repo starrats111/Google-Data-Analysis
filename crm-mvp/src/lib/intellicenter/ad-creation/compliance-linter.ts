@@ -21,6 +21,7 @@ import {
   type ComplianceViolation,
 } from "@/lib/ad-compliance-checker";
 import { smartTruncate } from "@/lib/crawl-pipeline";
+import { googleAdsTextWidth } from "@/lib/ad-text-width";
 import type { IndustryProfile } from "@/lib/industry-profile";
 
 export interface LinterContext {
@@ -109,9 +110,11 @@ export function lintAdCopy(
 
 const MAX = { headline: 30, description: 90, callout: 25 } as const;
 
+// 2026-07-13（第六轮）：改显示宽度口径（CJK 计 2）；去掉 .slice(0, max) 双保险——
+// 它会把 smartTruncate 的词边界结果再按码元硬切（可切半个代理对），宽度校验交给 truncateByWidth
 function clampLen(arr: string[], max: number): string[] {
   return (arr ?? [])
-    .map((s) => (typeof s === "string" && s.length > max ? smartTruncate(s, max).slice(0, max) : s))
+    .map((s) => (typeof s === "string" && googleAdsTextWidth(s) > max ? smartTruncate(s, max) : s))
     .filter((s) => typeof s === "string" && s.trim().length > 0);
 }
 

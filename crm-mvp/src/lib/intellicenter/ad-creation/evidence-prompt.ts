@@ -72,7 +72,7 @@ export interface AdGenerationPromptOpts {
  */
 export function buildEvidencePrompt(opts: AdGenerationPromptOpts): string {
   const taskInstructions = TASK_INSTRUCTIONS[opts.task](opts);
-  const evidenceBlock = buildEvidenceBlock(opts.merchantName, opts.evidence);
+  const evidenceBlock = buildEvidenceBlock(opts.merchantName, opts.evidence, opts.preflight.trademarkPolicy === "block_brand");
   const keywordsBlock = buildKeywordsBlock(opts.keywords);
   const profileBlock = buildProfileBlock(opts.profile);
   const policyBlock = buildPolicyBlock(opts.preflight, opts.merchantName);
@@ -163,7 +163,7 @@ const TONE_INSTRUCTIONS: Record<PreflightResult["recommendedTone"], string> = {
     "Energetic tone. Action-driven language welcome (e.g. 'discover', 'unlock', 'level up'). Still factual.",
 };
 
-function buildEvidenceBlock(merchantName: string, ev: EvidenceContext): string {
+function buildEvidenceBlock(merchantName: string, ev: EvidenceContext, blockBrand = false): string {
   const parts: string[] = [];
   if (ev.pageText) {
     // 2026-07-13（第五轮）：prompt 入口净化。新缓存的 pageText 已在爬取侧净化，
@@ -193,9 +193,16 @@ function buildEvidenceBlock(merchantName: string, ev: EvidenceContext): string {
     );
   }
   if (ev.semrushTitles && ev.semrushTitles.length > 0) {
+    // 2026-07-13（第六轮）：block_brand 时 SemRush 标题里的品牌词脱敏为 [brand]。
+    // 此前政策块喊「品牌词 BANNED」、证据块却成排注入含品牌词的原标题——AI 面对
+    // 互相矛盾的指令时经常照抄证据，商标违规照样出现。
+    let titles = ev.semrushTitles.slice(0, 8);
+    if (blockBrand && merchantName.trim().length >= 3) {
+      const brandRe = new RegExp(merchantName.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+      titles = titles.map((t) => t.replace(brandRe, "[brand]"));
+    }
     parts.push(
-      `## SemRush organic titles (real SEO content)\n${ev.semrushTitles
-        .slice(0, 8)
+      `## SemRush organic titles (real SEO content)\n${titles
         .map((t) => `- ${t}`)
         .join("\n")}`,
     );

@@ -64,6 +64,18 @@ export function registerBrowser(browser: any, label: string): () => void {
 }
 
 /**
+ * 2026-07-13（第六轮）：合法长批量任务（逐页 harvest/批量 meta）每完成一页调用一次，
+ * 刷新登记时间——收割器只看「距上次活动 180s」而非「距 launch 180s」。
+ * 此前 6 页 harvest 正常要跑 250s+，第 4 页前后必被收割器误杀，后半批全空。
+ * 真孤儿（race 输掉没人 await）不会有人刷新，仍会被收割。
+ */
+export function refreshBrowserAge(browser: any): void {
+  for (const entry of registry) {
+    if (entry.browser === browser) entry.startedAt = Date.now();
+  }
+}
+
+/**
  * 2026-07-13：stealth launcher 单例。
  * 此前 crawler.ts 4 处 + affiliate-link-resolver 1 处，每次 launch 前都
  * `puppeteerExtra.use(StealthPlugin())`——puppeteer-extra 的 use 是往共享插件数组 append，
@@ -93,13 +105,19 @@ export async function getStealthLauncher(): Promise<any> {
  */
 export async function closePageSafely(page: any): Promise<void> {
   if (!page) return;
+  let timer: NodeJS.Timeout | undefined;
   try {
     await Promise.race([
       page.close(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("page.close timeout")), 5000)),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("page.close timeout")), 5000);
+        timer.unref?.();
+      }),
     ]);
   } catch {
     // 放弃等待；页面随浏览器关闭/强杀一并回收
+  } finally {
+    clearTimeout(timer); // 2026-07-13：close 先成功时清掉输家 timer，防 orphan rejection
   }
 }
 
@@ -109,12 +127,18 @@ export async function closeBrowserSafely(browser: any): Promise<void> {
   for (const entry of registry) {
     if (entry.browser === browser) registry.delete(entry);
   }
+  let timer: NodeJS.Timeout | undefined;
   try {
     await Promise.race([
       browser.close(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("browser.close timeout")), 8000)),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("browser.close timeout")), 8000);
+        timer.unref?.();
+      }),
     ]);
   } catch {
     killBrowser(browser);
+  } finally {
+    clearTimeout(timer);
   }
 }

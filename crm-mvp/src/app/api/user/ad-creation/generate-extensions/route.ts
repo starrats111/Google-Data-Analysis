@@ -3648,7 +3648,8 @@ async function runIntelligentCore(
   dbKeywordsForFallback: string[] = [],
 ): Promise<void> {
   const market = getAdMarketConfig(country);
-  const languageName = resolveLanguageName(adLanguageCode || market.languageCode);
+  // 2026-07-13：修正实参错位——旧写法把语言码塞进 country 位（resolveLanguageName(country, adLanguageCode)）
+  const languageName = resolveLanguageName(country, adLanguageCode);
 
   // ─── 1. 多源候选关键词 ───
   const candidates: KeywordCandidate[] = [];
@@ -3659,10 +3660,17 @@ async function runIntelligentCore(
   for (const k of dbKeywordsForFallback.slice(0, 12)) {
     candidates.push({ text: k, source: "history", sourcePriority: 1 });
   }
-  // SemRush 标题中的关键词（C-112 Step 5 5 源融合的 SemRush 入口）
-  if (Array.isArray(cache.semrushTitles)) {
+  // 2026-07-13（第六轮）P0：semrushTitles 退出关键词候选。
+  // 它们是竞品**广告标题**（整句、30 字符长文案），不是关键词——此前被当候选喂给
+  // runKeywordIntelligence，文案围绕"标题句"生成，而真实定向词是 D-091 选出的 phrase
+  // （已经过 confirmedKeywords/DB 兜底进入 priority 0/1），两套真相源分叉。
+  // 仅当员工确认词与 DB 词全空时，才从标题里抢救出短语级候选兜底（≤4 词 ≤40 字符）。
+  if (confirmedKeywords.length === 0 && dbKeywordsForFallback.length === 0 && Array.isArray(cache.semrushTitles)) {
     for (const t of cache.semrushTitles.slice(0, 12)) {
-      candidates.push({ text: t.toLowerCase(), source: "semrush", sourcePriority: 2 });
+      const phrase = t.toLowerCase().trim();
+      if (phrase.length <= 40 && phrase.split(/\s+/).length <= 4) {
+        candidates.push({ text: phrase, source: "semrush", sourcePriority: 2 });
+      }
     }
   }
   // 爬虫提取的 features（关键词候选）
@@ -3786,22 +3794,23 @@ async function runIntelligentCore(
     }
 
     // 反 AI / 人性化（保留 D-039 humanize 兜底）
-    // D-047/C-116: 硬截断到 Google Ads 长度上限 —— humanizeAdCopyBatch 遇超长会「返回原文不截断」
-    //   （保语义设计），导致 AI 偶发输出 27 字符 callout（限 25）漏到前端标红甚至被 Google 拒登。
-    //   这里统一兜底：超长项用 smartTruncate 在词边界截断 + 硬 slice 保证 ≤max，空项剔除。
-    const clampLen = (arr: string[], max: number): string[] =>
-      (arr || [])
-        .map((s) => (typeof s === "string" && s.length > max ? smartTruncate(s, max).slice(0, max) : s))
-        .filter((s) => typeof s === "string" && s.trim().length > 0);
+    // 2026-07-13（第六轮）：Intellicenter 主路径出厂改走 fitAdTextBatch（AI 语义压缩，
+    // C-148 同款）——此前只有 smartTruncate+硬 slice，超长文案被词边界硬截后直接落库/预览，
+    // 与旧 generateCore 路径（早已走 fit）双标。fit 内部：不超长零开销、AI 失败自动回退
+    // 词边界截断，且现已按 Google 显示宽度（CJK 计 2）判定。
+    const clampLen = async (arr: string[], max: number): Promise<string[]> => {
+      const fitted = await fitAdTextBatch((arr || []).filter((s) => typeof s === "string"), max, languageName);
+      return fitted.filter((s) => s.trim().length > 0);
+    };
 
     const humanizedHeadlines = result.headlines.length > 0
-      ? clampLen(humanizeAdCopyBatch(result.headlines, 2, 30), 30)
+      ? await clampLen(humanizeAdCopyBatch(result.headlines, 2, 30), 30)
       : [];
     const humanizedDescriptions = result.descriptions.length > 0
-      ? clampLen(humanizeAdCopyBatch(result.descriptions, 40, 90), 90)
+      ? await clampLen(humanizeAdCopyBatch(result.descriptions, 40, 90), 90)
       : [];
     const humanizedCallouts = result.callouts.length > 0
-      ? clampLen(humanizeAdCopyBatch(result.callouts, 2, 25), 25)
+      ? await clampLen(humanizeAdCopyBatch(result.callouts, 2, 25), 25)
       : [];
 
     // ── D-082：禁止词自动避障（生成阶段，预览不出现禁止词）──

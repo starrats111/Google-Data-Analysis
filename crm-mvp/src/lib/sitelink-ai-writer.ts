@@ -251,9 +251,6 @@ function buildOne(
 
   const aiDesc2 = ai?.desc2 && typeof ai.desc2 === "string" ? cleanDesc(ai.desc2) : "";
   const desc2Check = aiDesc2.length >= 2 && aiDesc2.length <= 45 && aiDesc2.toLowerCase() !== aiDesc1.toLowerCase();
-  // #region agent log
-  console.warn(`[bc879e][buildOne] url=${c.url} brand=${JSON.stringify(brand)} aiDesc2=${JSON.stringify(aiDesc2)} aiDesc2Len=${aiDesc2.length} desc2Check=${desc2Check} failReason=${!desc2Check?(aiDesc2.length<2?'too_short':aiDesc2.length>45?'too_long':'dup_desc1'):'ok'} aiDesc1=${JSON.stringify(aiDesc1)}`);
-  // #endregion
   const desc2Raw =
     desc2Check
       ? smartTruncate(aiDesc2, 35)

@@ -1263,7 +1263,14 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
     // 记录真正进入 operations 的关键字，供成功后回写 DB（让 keywords 表成为可信真相来源）
     const submittedKeywords: { text: string; matchType: string }[] = [];
     for (const kw of effectiveKeywords) {
-      const text = typeof kw === "string" ? kw : kw.text;
+      // 2026-07-13（第六轮）：Google Ads 关键词非法字符清洗（! @ % ^ 等一个字符就能让
+      // 整批 mutate 被 KeywordPlanError/CRITERION_ERROR 拒绝）。清洗后过短的直接跳过。
+      const rawText = typeof kw === "string" ? kw : kw.text;
+      const text = rawText.replace(/[!@%^*;~`<>()[\]{}|\\"=,?]/g, " ").replace(/\s+/g, " ").trim();
+      if (text.length < 2) {
+        console.warn(`[AdSubmit] 关键词清洗后过短，跳过: "${rawText}"`);
+        continue;
+      }
       if (isPolicyRiskKeyword(text)) {
         console.warn(`[AdSubmit] 拦截政策风险关键词，不提交: "${text}"`);
         continue;
@@ -1636,10 +1643,32 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
     }
 
     // ─── 9f. 否定关键词 (Negative Keywords) — 系列级别 ───
+    // 2026-07-13（第六轮）：
+    //   ① 剔除 Google Ads 关键词非法字符（! @ % ^ 等，API 会整批 mutate 拒绝）；
+    //   ② 品牌保护——AI 否定词若命中商家品牌词根，直接丢弃（否掉自家品牌 = 自断流量）；
+    //   ③ 正选词保护——否定词是任一正选关键词的子串/相等时丢弃（BROAD 否定含正选词
+    //     的子词会把自己的正选流量全部拦死）。
+    const { extractBrandRoot: extractBrandRootForNeg } = await import("@/lib/country-url-resolver");
+    const brandRootForNeg = extractBrandRootForNeg(submitMerchant?.merchant_name || "").toLowerCase();
+    const positiveKwTexts = effectiveKeywords
+      .map((k) => (typeof k === "string" ? k : k.text || "").trim().toLowerCase())
+      .filter(Boolean);
     const validNegativeKws: string[] = Array.isArray(negative_keywords)
       ? negative_keywords
-          .map((k: string) => String(k || "").trim().toLowerCase())
+          .map((k: string) => String(k || "").replace(/[!@%^*;~`<>()[\]{}|\\"=]/g, " ").replace(/\s+/g, " ").trim().toLowerCase())
           .filter((k: string) => k.length >= 2 && k.length <= 80)
+          .filter((k: string) => {
+            if (brandRootForNeg && brandRootForNeg.length >= 3 && (k.includes(brandRootForNeg) || brandRootForNeg.includes(k))) {
+              console.warn(`[AdSubmit] 否定词命中品牌保护，剔除: "${k}" (brand=${brandRootForNeg})`);
+              return false;
+            }
+            const hit = positiveKwTexts.find((p) => p === k || p.includes(k));
+            if (hit) {
+              console.warn(`[AdSubmit] 否定词与正选关键词冲突，剔除: "${k}" (positive="${hit}")`);
+              return false;
+            }
+            return true;
+          })
           .slice(0, 20)
       : [];
     for (const kwText of validNegativeKws) {

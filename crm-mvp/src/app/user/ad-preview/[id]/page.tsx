@@ -2257,6 +2257,11 @@ export default function AdPreviewPage() {
       if (enableSnippet && snippetValues.some((v) => v.trim())) {
         submitBody.structured_snippet = { header: snippetHeader, values: snippetValues.filter((v) => v.trim()) };
       }
+      // 2026-07-13（第六轮）P0：否定关键词此前从未随提交发出——后端 9f 一直支持，
+      // 前端却漏传，整个功能等于只在 UI 上转一圈。现在随提交带上（后端还有品牌/正选词保护闸）。
+      if (negativeKeywords.length > 0) {
+        submitBody.negative_keywords = negativeKeywords.filter((k) => k.trim().length > 0);
+      }
 
       const startRes = await mutateApi("/api/user/ad-creation/submit", {
         method: "POST",
@@ -2362,7 +2367,7 @@ export default function AdPreviewPage() {
       message.destroy("ad-submit");
       setSubmitting(false);
     }
-  }, [headlines, descriptions, kwList, budget, maxCpc, biddingStrategy, networkSearch, networkPartners, networkDisplay, campaignId, message, modal, router, sitelinks, imageUrls, enableCallouts, callouts, selectedCid, selectedMccId, adLanguage, euPoliticalAd, fetchAndValidateSitelink, enablePromotion, promotion, enablePrice, priceItems, priceType, enableCall, callPhoneNumber, callCountryCode, enableSnippet, snippetHeader, snippetValues, campaignNameDraft]);
+  }, [headlines, descriptions, kwList, budget, maxCpc, biddingStrategy, networkSearch, networkPartners, networkDisplay, campaignId, message, modal, router, sitelinks, imageUrls, enableCallouts, callouts, selectedCid, selectedMccId, adLanguage, euPoliticalAd, fetchAndValidateSitelink, enablePromotion, promotion, enablePrice, priceItems, priceType, enableCall, callPhoneNumber, callCountryCode, enableSnippet, snippetHeader, snippetValues, campaignNameDraft, negativeKeywords]);
 
   if (isLoading && !preview) {
     return <div style={{ textAlign: "center", padding: 80 }}><Spin size="large" tip="加载中..." /></div>;
