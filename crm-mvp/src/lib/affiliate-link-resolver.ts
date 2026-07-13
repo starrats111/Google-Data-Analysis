@@ -262,8 +262,14 @@ export function extractClientRedirect(body: string, baseUrl: string): string | n
     sample.match(/location(?:\.href)?\s*=\s*([A-Za-z_$][\w$]*)\s*[;\n]/i) ||
     sample.match(/location\.(?:replace|assign)\(\s*([A-Za-z_$][\w$]*)\s*\)/i);
   if (locVar) {
-    const ident = locVar[1];
-    const v = sample.match(new RegExp(`(?:var|let|const)?\\s*${ident}\\s*=\\s*["'](https?://[^"']+)["']`, "i"));
+    const ident = locVar[1].replace(/\$/g, "\\$");
+    // ident 赋值查找必须「词界锚定 + 大小写敏感」：旧版无锚定且带 i 标志，`location = url`（Google Ads
+    // gtag_report_conversion 回调里的标准片段，Shopify 商家页普遍存在）会把 `Shopify.shopJsCdnBaseUrl =
+    // "https://cdn.shopify.com/shopifycloud/shop-js"` 尾部的 Url 误当变量 url 的赋值 → 把 CDN 基址当客户端
+    // 跳转跟过去，丢掉带追踪参数的真实落地页（piquelife 案例：换链接总跟不到直链的根因）。
+    const v = sample.match(
+      new RegExp(`(?:^|[^\\w$.])(?:var\\s+|let\\s+|const\\s+)?${ident}\\s*=\\s*["'](https?://[^"']+)["']`),
+    );
     if (v) return abs(v[1]);
   }
   return null;
