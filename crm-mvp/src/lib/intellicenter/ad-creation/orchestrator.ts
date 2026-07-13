@@ -423,7 +423,24 @@ export async function runIntelligentAdCreation(
       emit("task_failed", { task: task.kind, message: err instanceof Error ? err.message : String(err) });
     }
   };
-  await Promise.all(ctx.tasks.map(runTask));
+  // 2026-07-13（第五轮）：任务级总超时。Promise.all 等最慢者——单个 AI 任务卡住
+  // （上游限流/网络挂起，内部重试链最坏可 5 分钟+）会拖死整轮生成且无降级。
+  // 超时的任务按「失败置空」处理（与 catch 分支同语义），其余任务结果照常采用。
+  // 注意：race 不会取消底层 AI 调用，但结果变量不会再被写入错误轮次——闭包只在
+  // 任务自身完成时赋值，超时轮已返回的整体结果不受迟到赋值影响（下游在 await 后立即读取）。
+  const TASK_TIMEOUT_MS = 120_000;
+  await Promise.all(ctx.tasks.map((task) => {
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        console.warn(`[Orchestrator] task=${task.kind} 超时 ${TASK_TIMEOUT_MS}ms，按失败置空继续`);
+        emit("task_failed", { task: task.kind, message: `timeout after ${TASK_TIMEOUT_MS}ms` });
+        resolve();
+      }, TASK_TIMEOUT_MS);
+      timer.unref?.();
+    });
+    return Promise.race([runTask(task), timeout]).finally(() => clearTimeout(timer));
+  }));
 
   // ───── Step 8: Compliance Linter（C-118 重写闭环 + 数量补足）─────
   const t8 = Date.now();

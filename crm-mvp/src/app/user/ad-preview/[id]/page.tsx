@@ -1579,6 +1579,9 @@ export default function AdPreviewPage() {
           types: ["core"],
           ad_language: adLanguage || undefined,
           keywords: confirmedKeywords.length > 0 ? confirmedKeywords : undefined,
+          // 2026-07-13：「重新爬取」按钮（requestedTypes=sitelinks/images 而非 core）显式强制重爬。
+          // 此前候选 ≥6 条时后端只重跑 AI 文案不重爬，员工以为刷新了链接实际没有。
+          forceRecrawl: !isCore || undefined,
         };
       } else {
         const optionalSet = new Set(["callouts", "promotion", "price", "call", "snippet", "negative_keywords"]);

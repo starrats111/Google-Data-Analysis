@@ -26,6 +26,7 @@
     "google-ads-api": "^23.0.0",
     "google-auth-library": "^10.6.2",
     "https-proxy-agent": "^9.0.0",
+    "iconv-lite": "^0.7.3",
     "json5": "^2.2.3",
     "jsonwebtoken": "^9.0.3",
     "mariadb": "^3.5.2",

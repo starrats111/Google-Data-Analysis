@@ -11,6 +11,7 @@ import {
   deduplicateCdnImages, upgradeCdnThumbnails,
 } from "@/lib/crawler";
 import { dedupeByVisualHash } from "@/lib/image-phash";
+import { decodeResponseText } from "@/lib/response-decoder";
 import { getAdMarketConfig } from "@/lib/ad-market";
 import { getProxyUrlForCountry, getHttpProxyUrlForCountry, ensureCountryEgressHttpProxy } from "@/lib/crawl-proxy";
 import { isLowValueSitelink } from "@/lib/sitelink-filter";
@@ -81,6 +82,36 @@ export interface CrawlCache {
    * 供 `discoverSitelinkCandidates` 作为 Sitelinks 候选来源之一。
    */
   navLinks?: { url: string; text: string }[];
+  /**
+   * 2026-07-13（第五轮）：爬取时的目标投放国与来源 URL。
+   * 缓存不记录这两项时，campaign 改投放国（US→DE）或 final_url 被 ccTLD 校正后，
+   * 旧国家/旧域名的 pageText、语言检测、sitelink 仍被复用。读取侧据此判定缓存失效。
+   */
+  crawledForCountry?: string;
+  crawledFromUrl?: string;
+}
+
+/**
+ * 2026-07-13（第五轮）：并发/顺带写入 crawl_cache 前的质量比较。
+ * 用于 orchestrator 防御性重爬回写、认领预收集等**非主动刷新**路径——
+ * 此前一律 last-write-wins，慢完成的 35 分 sitemap-only 结果会覆盖先前 80 分好缓存。
+ * 主动刷新（路由 Step 3 判定过期/变更后的重爬）不走此比较，新结果直接采用。
+ */
+export function isBetterCrawlCache(
+  incoming: CrawlCache | null | undefined,
+  existing: CrawlCache | null | undefined,
+): boolean {
+  if (!incoming || incoming.crawlFailed) return false;
+  if (!existing || existing.crawlFailed || !existing.crawledAt) return true;
+  // 旧缓存超过 7 天：新鲜度优先，新结果直接胜出
+  if (Date.now() - new Date(existing.crawledAt).getTime() > 7 * 24 * 60 * 60 * 1000) return true;
+  const inScore = incoming.crawlQualityScore ?? 0;
+  const exScore = existing.crawlQualityScore ?? 0;
+  if (inScore !== exScore) return inScore > exScore;
+  const inText = (incoming.pageText ?? "").length;
+  const exText = (existing.pageText ?? "").length;
+  if (inText !== exText) return inText > exText;
+  return (incoming.sitelinkCandidates?.length ?? 0) >= (existing.sitelinkCandidates?.length ?? 0);
 }
 
 // ─── 共享常量和工具函数 ───
@@ -1019,19 +1050,71 @@ function htmlToText(html: string): string {
   text = removeTagBlocks(text, "noscript");
   text = removeTagBlocks(text, "style");
   text = removeTagBlocks(text, "svg");
+  // 2026-07-13（第五轮）加固：
+  //   ① 补剔 <template>/<iframe>/<object>/<embed>——SPA 的 <template> 内是整段未渲染
+  //     组件源码，此前原样混进 pageText 挤占 9000 字额度；
+  //   ② 剔 HTML 注释（含条件注释，可达数 KB）。
+  text = removeTagBlocks(text, "template");
+  text = removeTagBlocks(text, "iframe");
+  text = removeTagBlocks(text, "object");
+  text = removeTagBlocks(text, "embed");
+  text = text.replace(/<!--[\s\S]*?-->/g, " ");
   // 移除所有剩余 HTML 标签
   text = text.replace(/<[^>]+>/g, " ");
   // 解码常见 HTML 实体，折叠空白
+  // 2026-07-13：货币/版权等常用命名实体显式解码（此前 &euro;/&pound; 被替成空格，
+  // 价格正则漏匹配、AI 又凭残文编造金额）；数字实体按码点还原；
+  // &lt;/&gt; 解码后立即二次剥尖括号，防文本节点里的转义标签变回字面 HTML 入库。
   text = text
     .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
     .replace(/&nbsp;/gi, " ")
     .replace(/&quot;/gi, '"')
-    .replace(/&#\d+;|&[a-z]{2,8};/gi, " ")
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&euro;/gi, "€")
+    .replace(/&pound;/gi, "£")
+    .replace(/&yen;/gi, "¥")
+    .replace(/&cent;/gi, "¢")
+    .replace(/&copy;/gi, "©")
+    .replace(/&reg;/gi, "®")
+    .replace(/&trade;/gi, "™")
+    .replace(/&deg;/gi, "°")
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => { try { return String.fromCodePoint(parseInt(h, 16)); } catch { return " "; } })
+    .replace(/&#(\d+);/g, (_, n) => { try { return String.fromCodePoint(Number(n)); } catch { return " "; } })
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&[a-z]{2,8};/gi, " ");
+  text = text
+    .replace(/<[^>]*>/g, " ") // 解码后二次剥标签（原文本节点里的 &lt;script&gt; 等）
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, " ") // 剥控制字符
     .replace(/\s+/g, " ")
     .trim();
   return text;
+}
+
+/**
+ * 2026-07-13（第五轮）：爬取文本入库/进 prompt 前的净化 + 乱码检测。
+ * - 剥控制字符、折叠 U+FFFD；
+ * - 折叠超长无空格 token（webpack runtime/base64/RSC payload 残留）；
+ * - 乱码率过高（替换字符 >5% 或不可读字符占比异常）返回空串，宁缺勿脏——
+ *   AI 对着乱码会"脑补"出不存在的折扣与认证。
+ */
+export function sanitizeCrawlText(s: string | null | undefined): string {
+  if (!s) return "";
+  let t = String(s)
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, " ")
+    .replace(/\uFFFD{2,}/g, "\uFFFD")
+    // 超过 120 字符的无空格 token 基本是代码/哈希/base64 残留，直接删
+    .replace(/\S{120,}/g, " ")
+    // 折叠空白但保留换行（metaText 的 "Title:/H1:" 行结构供 AI prompt 切片）
+    .replace(/[ \t\f\v]+/g, " ")
+    .replace(/\s*\n\s*/g, "\n")
+    .trim();
+  if (!t) return "";
+  const bad = (t.match(/\uFFFD/g) || []).length;
+  if (bad / t.length > 0.05) return "";
+  return t;
 }
 
 /**
@@ -1307,13 +1390,15 @@ async function discoverSitelinkCandidates(
     const fetchWithLinkTimeout = async (link: { url: string; text: string }, timeoutMs?: number) => {
       try {
         const p = fetchUrlMeta(link.url, proxyUrl, country);
+        let probeTimer: NodeJS.Timeout | undefined;
         const meta = timeoutMs
           ? await Promise.race([
               p,
-              new Promise<never>((_, reject) =>
-                setTimeout(() => reject(new Error("probe-timeout")), timeoutMs),
-              ),
-            ])
+              new Promise<never>((_, reject) => {
+                probeTimer = setTimeout(() => reject(new Error("probe-timeout")), timeoutMs);
+                probeTimer.unref?.();
+              }),
+            ]).finally(() => clearTimeout(probeTimer))
           : await p;
         return { link, meta };
       } catch {
@@ -1590,7 +1675,7 @@ async function discoverSitelinkCandidates(
           signal: AbortSignal.timeout(8000),
         });
         if (!res.ok) continue;
-        const html = await res.text();
+        const html = await decodeResponseText(res);
 
         // 从二级页面提取内部 <a href> 链接
         const depth1Links: { url: string; text: string }[] = [];
@@ -1938,12 +2023,14 @@ export async function buildCrawlCache(
   // 已删除补充段，改由主策略 runPuppeteer 跑成功时一次性填充，节省 40s 重复抓取。
   // 注：用 `as` 拓宽类型，否则闭包内赋值不会让 TS 在外层 narrow 出 union 类型（会卡死在 null/never）。
   let puppeteerCache = null as import("@/lib/crawler").PuppeteerPageData | null;
+  // 2026-07-13（第五轮）：puppeteerCache 改「采纳制」——此前 runPuppeteer 无条件先赋值再返回，
+  // 拦截页（isBlockedPage）在策略循环里被拒绝后，puppeteerCache 仍留着挑战页的 navLinks/images，
+  // 后面 sitelinks/collectImages 全按挑战页数据跑。现在拦截页不覆盖缓存。
   const runPuppeteer = async (url: string): Promise<CrawlResultType> => {
     // D-027：主爬走预留 slot，避免被 image proxy / sitelinks 兜底饿死
     const pageData = await crawlWithPuppeteerFull(url, PUPPETEER_INNER_TIMEOUT, puppeteerProxyUrl ?? undefined, { useMainCrawlSlot: true });
     if (!pageData) throw new Error("Puppeteer 返回空 HTML");
-    // 把完整 PageData 缓存供后续 sitelinks/collectImages 使用（仅当策略最终被采纳时才覆盖）
-    puppeteerCache = pageData;
+    if (!isBlockedPage(pageData.html)) puppeteerCache = pageData;
     // CrawlResultType 只需 html/links/images：links 用 nav/header 提取的更精准，images 直接复用
     return {
       html: pageData.html.slice(0, PUPPETEER_HTML_SLICE),
@@ -1957,13 +2044,33 @@ export async function buildCrawlCache(
     // D-027：主爬走预留 slot
     const pageData = await crawlWithPuppeteerFull(url, PUPPETEER_INNER_TIMEOUT, undefined, { useMainCrawlSlot: true });
     if (!pageData) throw new Error("Puppeteer 直连返回空 HTML");
-    puppeteerCache = pageData;
+    if (!isBlockedPage(pageData.html)) puppeteerCache = pageData;
     return {
       html: pageData.html.slice(0, PUPPETEER_HTML_SLICE),
       links: pageData.navLinks,
       images: pageData.images,
       method: "puppeteer",
     };
+  };
+
+  // 2026-07-13（第五轮）：locale_short（/us/ 等启发式拼接 URL）探活。
+  // 此前根路径全挂时，locale_short 策略拿到 soft-404/硬 404 页也可能被采纳入缓存。
+  // 起跑前 6s 快探一次：4xx 直接放弃该策略（root 策略不受影响）。
+  const probeLocaleAlive = async (url: string): Promise<void> => {
+    try {
+      const res = await fetch(url, {
+        method: "GET",
+        signal: AbortSignal.timeout(6000),
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36" },
+        redirect: "follow",
+      });
+      if (res.status >= 400 && res.status < 500 && res.status !== 403 && res.status !== 429) {
+        throw new Error(`locale-short-probe-${res.status}`);
+      }
+    } catch (e) {
+      if (e instanceof Error && e.message.startsWith("locale-short-probe-")) throw e;
+      // 网络错/超时不拦：可能是 geo 屏蔽直连，交给代理策略验证
+    }
   };
 
   // ══════════════════════════════════════════════════════
@@ -2006,12 +2113,12 @@ export async function buildCrawlCache(
       // httpOnly：禁止 crawlPage 内部的 Puppeteer 兜底偷跑——外层 race 只给 22s，
       // 内部 goto 就 35s，race 输掉后 Chrome 变孤儿；且瀑布后面本就有 puppeteer_* 策略
       strategies.push({ name: "http_root", run: () => crawlPage(merchantUrl, country, { httpOnly: true }) });
-      if (localeUrlShort) strategies.push({ name: "http_locale_short", run: () => crawlPage(localeUrlShort!, country, { httpOnly: true }) });
+      if (localeUrlShort) strategies.push({ name: "http_locale_short", run: () => probeLocaleAlive(localeUrlShort!).then(() => crawlPage(localeUrlShort!, country, { httpOnly: true })) });
     };
     const pushPuppeteerProxy = () => {
       // 全量 puppeteer+代理：root → locale_short（ccTLD 未匹配时）→ 直连兜底（代理彻底挂时）
       strategies.push({ name: "puppeteer_root+proxy", run: () => runPuppeteer(merchantUrl) });
-      if (localeUrlShort) strategies.push({ name: "puppeteer_locale_short+proxy", run: () => runPuppeteer(localeUrlShort!) });
+      if (localeUrlShort) strategies.push({ name: "puppeteer_locale_short+proxy", run: () => probeLocaleAlive(localeUrlShort!).then(() => runPuppeteer(localeUrlShort!)) });
       strategies.push({ name: "puppeteer_direct_fallback", run: () => runPuppeteerDirect(merchantUrl) });
     };
     if (hasProxy) {
@@ -2033,7 +2140,7 @@ export async function buildCrawlCache(
       // 无代理：HTTP 先 + Puppeteer 直连兜底（root + locale_short）
       if (!options?.forcePuppeteer) pushHttp();
       strategies.push({ name: "puppeteer_root", run: () => runPuppeteer(merchantUrl) });
-      if (localeUrlShort) strategies.push({ name: "puppeteer_locale_short", run: () => runPuppeteer(localeUrlShort!) });
+      if (localeUrlShort) strategies.push({ name: "puppeteer_locale_short", run: () => probeLocaleAlive(localeUrlShort!).then(() => runPuppeteer(localeUrlShort!)) });
     }
   }
 
@@ -2078,12 +2185,15 @@ export async function buildCrawlCache(
       // Puppeteer 单策略上限：goto 35s + sleep/randomDelay ~5s + waitForSelector 8+5s
       // + SPA hydration 等待 10s + 滚动收尾 8s + content/evaluate 1s ≈ 最坏 72s，给 75s buffer
       const SINGLE_STRATEGY_TIMEOUT_MS = isPuppeteerStrategy ? 75_000 : 22_000;
+      // 2026-07-13：race 赢家出来后清掉输家的 timer（此前每策略泄漏一个挂起 setTimeout）
+      let strategyTimer: NodeJS.Timeout | undefined;
       const result = await Promise.race([
         strategy.run(),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`strategy-timeout-${strategy.name}`)), SINGLE_STRATEGY_TIMEOUT_MS),
-        ),
-      ]);
+        new Promise<never>((_, reject) => {
+          strategyTimer = setTimeout(() => reject(new Error(`strategy-timeout-${strategy.name}`)), SINGLE_STRATEGY_TIMEOUT_MS);
+          strategyTimer.unref?.();
+        }),
+      ]).finally(() => clearTimeout(strategyTimer));
       const blocked = !!result.html && isBlockedPage(result.html);
       if (blocked) {
         if (isPuppeteerStrategy) puppeteerChallenged = true;
@@ -2118,9 +2228,11 @@ export async function buildCrawlCache(
   if (merchantUrl && crawlResult.links.length === 0) {
     try {
       console.log(`[CrawlPipeline] links=0，尝试 Sitemap 补充链接和图片: ${merchantUrl}`);
-      const sitemapRes = await crawlViaSitemap(merchantUrl);
+      const sitemapRes = await crawlViaSitemap(merchantUrl, country);
       if (sitemapRes) {
-        const newLinks = (sitemapRes.links || []).filter((l) => !isBadSitelinkUrl(l.url));
+        // 2026-07-13（第五轮）：补 locale 闸——sitemap 含全部语言版本，此前只滤黑名单，
+        // /fr /nl 等跨 locale 链接直接顶进 links 池
+        const newLinks = (sitemapRes.links || []).filter((l) => !isBadSitelinkUrl(l.url) && isSitelinkLocaleCompatible(l.url, merchantUrl));
         if (newLinks.length > 0) {
           crawlResult.links = newLinks;
           console.log(`[CrawlPipeline] Sitemap 补充 ${newLinks.length} 个链接`);
@@ -2156,7 +2268,7 @@ export async function buildCrawlCache(
         },
       });
       if (fallbackResp.ok) {
-        const text = await fallbackResp.text();
+        const text = await decodeResponseText(fallbackResp);
         html = text.slice(0, 150000);
         console.log(`[CrawlPipeline] 补救 fetch 成功，html 长度: ${html.length}`);
       }
@@ -2195,7 +2307,7 @@ export async function buildCrawlCache(
           },
         });
         if (fullResp.ok) {
-          const rawHtml = await fullResp.text();
+          const rawHtml = await decodeResponseText(fullResp);
           // 策略1：先对前 300K 的可见 HTML 尝试结构化提取
           const sliceHtml = rawHtml.slice(0, 300000);
           const slicePromo = extractPromotionInfo(sliceHtml, promoFetchUrl, country);
@@ -2249,7 +2361,7 @@ export async function buildCrawlCache(
           headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36" },
         });
         if (!resp.ok) continue;
-        const subHtml = (await resp.text()).slice(0, 80000);
+        const subHtml = (await decodeResponseText(resp)).slice(0, 80000);
         const subPromo = extractPromotionInfo(subHtml, link.url, country);
         if (subPromo?.discount_type) {
           // 使用商家主页 URL 作为落地页（不用子页面 URL）
@@ -2295,7 +2407,7 @@ export async function buildCrawlCache(
           headers: { "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)", Accept: "text/html" },
         });
         if (!resp.ok) continue;
-        const subHtml = (await resp.text()).slice(0, 100000);
+        const subHtml = (await decodeResponseText(resp)).slice(0, 100000);
         const subPrices = extractPriceInfo(subHtml, country, link.url);
         for (const p of subPrices) {
           if (combined.length < 8 && !combined.some(r => r.header === p.header)) combined.push(p);
@@ -2381,8 +2493,12 @@ export async function buildCrawlCache(
   // L3: 始终把 <head> 抽出的结构化摘要（OG / meta description / title / h1 / h2）
   //     拼到 pageText 前面 —— SEO 必备字段是商家自写的主营业务描述，质量远高于 body 噪声，
   //     且 SPA 站 body 常常为空时 meta 仍非空，能彻底避免 AI 凭商家名瞎猜（如 Camplify→Spa）。
-  const metaText = html ? extractStructuredMeta(html) : "";
-  const bodyText = html ? htmlToText(html).slice(0, 9000) : "";
+  // 2026-07-13（第五轮）：
+  //   ① 两路文本入库前过 sanitizeCrawlText（控制字符/超长 token/乱码率检测）；
+  //   ② meta 设单项上限 1500——此前 meta+bloated head 可把 10000 额度吃掉大半，
+  //     body 被二次截断甚至为 0（品类词全在正文第一段 → AI 只看到 slogan 漂移品类）。
+  const metaText = sanitizeCrawlText(html ? extractStructuredMeta(html) : "").slice(0, 1500);
+  const bodyText = sanitizeCrawlText(html ? htmlToText(html).slice(0, 12000) : "").slice(0, 9000);
   const pageText = metaText
     ? (bodyText ? `${metaText}\n\n${bodyText}` : metaText).slice(0, 10000)
     : bodyText;
@@ -2592,6 +2708,8 @@ export async function buildCrawlCache(
     rawMentions,
     detectedLanguageCode: detectedLanguageCode ?? undefined,
     navLinks: puppeteerCache?.navLinks?.slice(0, 50),
+    crawledForCountry: country || undefined,
+    crawledFromUrl: merchantUrl || undefined,
   };
   } finally {
     releaseCrawlSlot();

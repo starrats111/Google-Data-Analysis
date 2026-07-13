@@ -463,6 +463,8 @@ export interface GenerationRequestPayload {
   ad_language?: string | null;
   keywords?: string[];
   optionalTypes?: string[];
+  /** 2026-07-13（第五轮）：前端「重新爬取」按钮显式强制重爬（此前候选 ≥6 时按钮只重跑 AI，员工以为刷新了实际没有） */
+  forceRecrawl?: boolean;
 }
 
 type GenCampaign = NonNullable<Awaited<ReturnType<typeof prisma.campaigns.findFirst>>>;
@@ -485,6 +487,7 @@ interface GenContext {
   requestKeywords: string[];
   body: { optionalTypes?: string[] };
   userId: bigint;
+  forceRecrawl: boolean;
 }
 
 export async function loadGenContext(
@@ -568,6 +571,7 @@ export async function loadGenContext(
       requestKeywords,
       body,
       userId,
+      forceRecrawl: !!payload.forceRecrawl,
     },
   };
 }
@@ -590,6 +594,7 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
     requestKeywords,
     body,
     userId,
+    forceRecrawl,
   } = ctx;
 
   const encoder = new TextEncoder();
@@ -914,9 +919,32 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
         const forceRecrawlForSitelinks =
           !!cache && wantsSitelinkGeneration && cachedSitelinkCount < SITELINK_QUALITY_TARGET;
 
-        if (!cache || !cache.crawledAt || cache.crawlFailed || cacheNeedsRefreshForPromo || cacheLowQuality || cacheHasEmptyLinks || cachePageTextTooShort || forceRecrawlForSitelinks) {
+        // ─── 2026-07-13（第五轮）缓存失效三闸 ───
+        // ① TTL 7 天：crawler-bridge 虽有同款 TTL，但主链路固定 trustExistingCrawlCache=true
+        //    直接绕过桥接判定，路由层此前完全不看年龄 → 30 天陈缓存照常复用，
+        //    商家改版/换促销后文案证据全是旧的。TTL 必须在路由层生效。
+        const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+        const cacheExpired = !!cache?.crawledAt && (Date.now() - new Date(cache.crawledAt).getTime()) > CACHE_TTL_MS;
+        // ② 投放国变更：US 代理爬出的 pageText/语言检测/sitelink 对 DE campaign 全不适用。
+        //    旧缓存无 crawledForCountry 字段时不触发（避免上线后全量重爬风暴）。
+        const cacheCountryMismatch = !!cache?.crawledForCountry && !!country &&
+          cache.crawledForCountry.toUpperCase() !== country.toUpperCase();
+        // ③ final_url 变更（ccTLD 校正/D-096 换域后）：旧域名的链接与正文不可复用。
+        //    对比规范化后的 host+pathname，忽略协议/www/尾斜杠差异。
+        const normUrlForCmp = (u: string | undefined | null): string => {
+          if (!u) return "";
+          try { const p = new URL(u); return p.hostname.replace(/^www\./, "") + p.pathname.replace(/\/$/, ""); } catch { return u; }
+        };
+        const cacheUrlMismatch = !!cache?.crawledFromUrl &&
+          normUrlForCmp(cache.crawledFromUrl) !== normUrlForCmp(merchantUrl);
+
+        if (!cache || !cache.crawledAt || cache.crawlFailed || forceRecrawl || cacheExpired || cacheCountryMismatch || cacheUrlMismatch || cacheNeedsRefreshForPromo || cacheLowQuality || cacheHasEmptyLinks || cachePageTextTooShort || forceRecrawlForSitelinks) {
           const reason = !cache || !cache.crawledAt ? '为空'
             : cache.crawlFailed ? '上次失败'
+            : forceRecrawl ? '用户显式要求重新爬取'
+            : cacheExpired ? `已过期（${Math.round((Date.now() - new Date(cache.crawledAt).getTime()) / 86400000)} 天 > 7 天 TTL）`
+            : cacheCountryMismatch ? `投放国已变更（缓存=${cache.crawledForCountry} 当前=${country}）`
+            : cacheUrlMismatch ? `落地页已变更（缓存=${cache.crawledFromUrl} 当前=${merchantUrl}）`
             : cacheLowQuality ? `质量低（score=${cache.crawlQualityScore}, issues=[${cache.crawlQualityIssues?.join(",")}]）`
             : cacheHasEmptyLinks ? 'links 为空（旧缓存命中 splash 页）'
             : cachePageTextTooShort ? `pageText 过短 (${(cache.pageText ?? "").length}<200) 且无 SemRush，旧脏 cache 重爬`
@@ -930,7 +958,10 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
           // 典型触发链：旧缓存质量良好但 sitelinkCandidates<6 → forceRecrawlForSitelinks 重爬 →
           // 反爬站超时降级空壳 → 旧逻辑无条件 cache=newCache 并落库 → 好缓存被空壳顶掉，
           // 后续所有生成/提交都拿不到正文，还会因 crawlFailed 触发更多重爬（恶性循环）。
+          // 2026-07-13（第五轮）：投放国/落地页已变更的旧缓存属「主动作废」，重爬失败也不得兜回——
+          // 错国 pageText、旧域 sitelink 比空缓存更有害（会被直接提交）。TTL 过期的旧缓存仍可兜底。
           const prevUsable = !!prevCache && !prevCache.crawlFailed &&
+            !cacheCountryMismatch && !cacheUrlMismatch &&
             ((prevCache.pageText ?? "").length >= 200 || (prevCache.sitelinkCandidates?.length ?? 0) > 0);
           if (newCache.crawlFailed && prevUsable) {
             console.warn(`[Extensions] 重爬失败（${newCache.crawlMethod}），保留已有可用缓存不覆盖（pageText=${(prevCache!.pageText ?? "").length}, sitelinks=${prevCache!.sitelinkCandidates?.length ?? 0}）`);
@@ -1489,11 +1520,17 @@ async function generateCore(
   const sitelinkPipeline = (async () => {
     try {
 
-      const baseline = (cache.sitelinkCandidates || []).map((s) => ({
-        url: s.url,
-        title: s.title,
-        description: s.description,
-      }));
+      // 2026-07-13（第五轮）：主 pipeline 补黑名单/locale/低价值三闸。
+      // 缓存里的 sitelinkCandidates 可能来自旧版爬虫（无闸时代的存量数据）或
+      // navLinks 旁路，此前直接进 AI —— buildRealSitelinks/generateSitelinksOnly
+      // 两条旁路都补过闸，唯独这条主路是裸的。
+      const baseline = (cache.sitelinkCandidates || [])
+        .filter((s) => !isBadSitelinkUrl(s.url) && isSitelinkLocaleCompatible(s.url, merchantUrl) && !isLowValueSitelink(s.url, s.title || ""))
+        .map((s) => ({
+          url: s.url,
+          title: s.title,
+          description: s.description,
+        }));
       const expanded = await autoExpandSitelinks({
         merchantUrl,
         country,
@@ -3705,10 +3742,22 @@ async function runIntelligentCore(
       existingCrawlCache: cache,
       // 速度病灶修复：路由层 Step 3 刚在本请求里确保/刷新过 cache（含降级空壳的情况），
       // orchestrator Step 2 无条件复用，禁止同请求内第二轮全预算重爬（此前最坏多烧 300s）。
+      // 2026-07-13（第五轮）：trust=true 的正当性依赖 Step 3 的失效三闸（TTL 7 天/投放国/
+      // final_url 变更）——Step 3 已在本请求校验过缓存新鲜度，这里复用才是安全的。
       trustExistingCrawlCache: true,
       // orchestrator 若真的爬到新数据（防御路径），回写 ad_creatives.crawl_cache 避免下次重爬
+      // 2026-07-13（第五轮）：回写前比较质量，防御性重爬的低分结果不覆盖 DB 好缓存（LWW 病灶）
       persistCrawlCache: adCreativeId
         ? async (freshCache) => {
+            const { isBetterCrawlCache } = await import("@/lib/crawl-pipeline");
+            const row = await prisma.ad_creatives.findFirst({
+              where: { id: adCreativeId }, select: { crawl_cache: true },
+            }).catch(() => null);
+            const existing = (row?.crawl_cache ?? null) as CrawlCache | null;
+            if (!isBetterCrawlCache(freshCache, existing)) {
+              console.warn(`[Intellicenter] persistCrawlCache：新结果不优于 DB 缓存（new=${freshCache.crawlQualityScore} existing=${existing?.crawlQualityScore}），跳过回写`);
+              return;
+            }
             await prisma.ad_creatives.update({
               where: { id: adCreativeId },
               data: { crawl_cache: freshCache as any },

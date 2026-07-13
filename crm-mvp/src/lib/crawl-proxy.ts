@@ -353,7 +353,13 @@ export async function fetchViaProxy(
             status,
             url: targetUrl,
             ok: status >= 200 && status < 400,
-            text: () => Promise.resolve(rawBuf.toString("utf8")),
+            // 2026-07-13（第五轮）：text() 按 Content-Type/<meta charset> 解码，
+            // 不再裸 utf8——Shift_JIS/GBK/win-1252 站点经代理抓取此前必乱码
+            text: async () => {
+              const { decodeHtmlBuffer } = await import("@/lib/response-decoder");
+              const ct = res.headers["content-type"];
+              return decodeHtmlBuffer(rawBuf, Array.isArray(ct) ? ct[0] : ct);
+            },
             buffer: () => Promise.resolve(rawBuf),
             headers: res.headers as Record<string, string | string[]>,
           });

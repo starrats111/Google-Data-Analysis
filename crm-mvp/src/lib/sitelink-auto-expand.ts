@@ -17,6 +17,14 @@ import {
   smartTruncate,
   decodeHtmlEntities,
 } from "@/lib/crawl-pipeline";
+import { isLowValueSitelink } from "@/lib/sitelink-filter";
+import {
+  fetchSitemapText,
+  parseSitemapLocs,
+  fetchRobotsRules,
+  isPathDisallowed,
+  type RobotsRules,
+} from "@/lib/sitemap-fetcher";
 
 export interface SitelinkItem {
   title: string;
@@ -86,93 +94,63 @@ function isTopLevelPath(u: string): boolean {
 // 非页面扩展名（sitemap / 静态资源 / 压缩包）
 const NON_PAGE_EXT_RE = /\.(xml|xml\.gz|txt|gz|pdf|jpe?g|png|gif|webp|svg|ico|css|js|zip|tar|mp4|mp3|woff2?)$/i;
 
-function parseSitemapLocs(xml: string, limit: number): string[] {
-  const out: string[] = [];
-  const locRe = /<loc>\s*([^<\s]+)\s*<\/loc>/gi;
-  let m: RegExpExecArray | null;
-  while ((m = locRe.exec(xml)) !== null) {
-    const u = m[1].trim();
-    if (u) out.push(u);
-    if (out.length >= limit) break;
+/** 嵌套 sitemap 索引展开（共享 fetchSitemapText：代理+gzip+CDATA+缓存+2MB 上限） */
+async function expandSitemap(sm: string, proxyUrl: string | null): Promise<string[]> {
+  const locs = parseSitemapLocs(sm, 200);
+  if (locs.length === 0) return [];
+  // 判定嵌套：<sitemapindex> 标签 or 所有 loc 都指向 .xml
+  const isNested =
+    /<sitemapindex[\s>]/i.test(sm) ||
+    locs.every((u) => /\.xml(\.gz)?(\?|$)/i.test(u));
+  if (!isNested) return locs;
+  const pageUrls: string[] = [];
+  // 展开前 3 个子 sitemap，每个最多取 40 条页面 URL
+  for (const child of locs.slice(0, 3)) {
+    const childSm = await fetchSitemapText(child, proxyUrl).catch(() => null);
+    if (!childSm) continue;
+    pageUrls.push(...parseSitemapLocs(childSm, 40));
+    if (pageUrls.length >= 100) break;
   }
-  return out;
+  return pageUrls;
 }
 
 /**
  * 抽取 sitemap 下的页面 URL。
- * 关键：自动识别 sitemap-of-sitemaps（嵌套索引），递归一层展开；
- * 最终结果过滤所有非页面扩展名（.xml/.txt/.gz/.pdf/媒体文件等）。
+ * 2026-07-13（第五轮）：抓取/解析统一走 sitemap-fetcher（代理优先、gzip、CDATA、
+ * 大小上限、进程内缓存——同一次生成不再重复抓同一 sitemap）。
  */
 async function extractFromSitemap(merchantUrl: string, proxyUrl: string | null): Promise<string[]> {
   for (const path of SITEMAP_URLS) {
     let sm: string | null;
     try {
-      sm = await fetchText(new URL(path, merchantUrl).toString(), proxyUrl);
+      sm = await fetchSitemapText(new URL(path, merchantUrl).toString(), proxyUrl);
     } catch {
       continue;
     }
     if (!sm) continue;
 
-    const locs = parseSitemapLocs(sm, 200);
-    if (locs.length === 0) continue;
-
-    // 判定嵌套：<sitemapindex> 标签 or 所有 loc 都指向 .xml
-    const isNested =
-      /<sitemapindex[\s>]/i.test(sm) ||
-      locs.every((u) => /\.xml(\.gz)?(\?|$)/i.test(u));
-
-    let pageUrls: string[] = [];
-    if (isNested) {
-      // 展开前 3 个子 sitemap，每个最多取 40 条页面 URL
-      for (const child of locs.slice(0, 3)) {
-        const childSm = await fetchText(child, proxyUrl).catch(() => null);
-        if (!childSm) continue;
-        const childLocs = parseSitemapLocs(childSm, 40);
-        pageUrls.push(...childLocs);
-        if (pageUrls.length >= 100) break;
-      }
-    } else {
-      pageUrls = locs;
-    }
-
+    let pageUrls = await expandSitemap(sm, proxyUrl);
     // 过滤所有非页面扩展名
-    pageUrls = pageUrls.filter((u) => !NON_PAGE_EXT_RE.test(new URL(u, merchantUrl).pathname));
-
+    pageUrls = pageUrls.filter((u) => {
+      try { return !NON_PAGE_EXT_RE.test(new URL(u, merchantUrl).pathname); } catch { return false; }
+    });
     if (pageUrls.length > 0) return pageUrls;
   }
   return [];
 }
 
-async function extractFromRobots(merchantUrl: string, proxyUrl: string | null): Promise<string[]> {
+/** robots.txt 的 Sitemap: 指令扩源（相对路径已由 sitemap-fetcher 解析为绝对 URL） */
+async function extractFromRobots(merchantUrl: string, proxyUrl: string | null, rules: RobotsRules | null): Promise<string[]> {
   try {
-    const robotsUrl = new URL("/robots.txt", merchantUrl).toString();
-    const text = await fetchText(robotsUrl, proxyUrl, 5000);
-    if (!text) return [];
+    if (!rules || rules.sitemaps.length === 0) return [];
     const urls: string[] = [];
-    for (const line of text.split(/\r?\n/)) {
-      const m = line.match(/^\s*sitemap:\s*(\S+)/i);
-      if (m) {
-        const sm = await fetchText(m[1], proxyUrl);
-        if (sm) {
-          const locs = parseSitemapLocs(sm, 60);
-          const isNested =
-            /<sitemapindex[\s>]/i.test(sm) ||
-            locs.every((u) => /\.xml(\.gz)?(\?|$)/i.test(u));
-          if (isNested) {
-            for (const child of locs.slice(0, 3)) {
-              const childSm = await fetchText(child, proxyUrl).catch(() => null);
-              if (!childSm) continue;
-              urls.push(...parseSitemapLocs(childSm, 40));
-              if (urls.length >= 60) break;
-            }
-          } else {
-            urls.push(...locs);
-          }
-        }
-      }
+    for (const smUrl of rules.sitemaps.slice(0, 5)) {
+      const sm = await fetchSitemapText(smUrl, proxyUrl);
+      if (!sm) continue;
+      urls.push(...(await expandSitemap(sm, proxyUrl)));
       if (urls.length >= 60) break;
     }
-    return urls.filter((u) => {
+    return urls.slice(0, 60).filter((u) => {
       try {
         return !NON_PAGE_EXT_RE.test(new URL(u, merchantUrl).pathname);
       } catch {
@@ -245,6 +223,19 @@ export async function autoExpandSitelinks(opts: {
   const proxyUrl = country ? await getProxyUrlForCountry(country).catch(() => null) : null;
   const usedUrls = new Set(existing.map((s) => s.url));
 
+  // 2026-07-13（第五轮）：先取 robots 规则——Disallow 路径不得进 sitelink 候选
+  // （被商家明确禁抓的路径投进广告，既是合规问题也常是死链/内部页）。robots 取不到时 fail-open。
+  const robotsRules = await fetchRobotsRules(merchantUrl, proxyUrl).catch(() => null);
+
+  // 候选统一闸口：同源 + 顶层路径 + 黑名单 + locale + robots Disallow + 低价值
+  const passGate = (u: string): boolean =>
+    sameOrigin(u, merchantUrl) &&
+    isTopLevelPath(u) &&
+    !isBadSitelinkUrl(u) &&
+    isSitelinkLocaleCompatible(u, merchantUrl) &&
+    !isPathDisallowed(u, robotsRules) &&
+    !isLowValueSitelink(u, titleFromUrlPath(u) || "");
+
   // 候选采集（三层）
   const candidates = new Set<string>();
   try {
@@ -252,9 +243,7 @@ export async function autoExpandSitelinks(opts: {
     for (const u of fromSitemap) {
       // isSitelinkLocaleCompatible：sitemap 常含全部语言版本 URL（/fr /nl /de…），
       // 只保留与落地页语言一致的，避免 rad.eu「落地页 /en 配 /fr /nl 站内链接」类错配
-      if (sameOrigin(u, merchantUrl) && isTopLevelPath(u) && !isBadSitelinkUrl(u) && isSitelinkLocaleCompatible(u, merchantUrl)) {
-        candidates.add(u);
-      }
+      if (passGate(u)) candidates.add(u);
     }
   } catch (e) {
     console.warn("[SitelinkExpand] sitemap 抽取失败:", e instanceof Error ? e.message : e);
@@ -262,11 +251,9 @@ export async function autoExpandSitelinks(opts: {
 
   if (candidates.size + existing.length < targetCount) {
     try {
-      const fromRobots = await extractFromRobots(merchantUrl, proxyUrl);
+      const fromRobots = await extractFromRobots(merchantUrl, proxyUrl, robotsRules);
       for (const u of fromRobots) {
-        if (sameOrigin(u, merchantUrl) && isTopLevelPath(u) && !isBadSitelinkUrl(u) && isSitelinkLocaleCompatible(u, merchantUrl)) {
-          candidates.add(u);
-        }
+        if (passGate(u)) candidates.add(u);
       }
     } catch (e) {
       console.warn("[SitelinkExpand] robots 抽取失败:", e instanceof Error ? e.message : e);
@@ -306,7 +293,24 @@ export async function autoExpandSitelinks(opts: {
     verifiedToFetch.map(async (u) => {
       try {
         const meta = await fetchUrlMeta(u, proxyUrl ?? undefined, country);
-        const item = toSitelinkItem(u, titleFromUrlPath(u), meta.ok ? { title: meta.title, description: meta.description } : undefined);
+        // 2026-07-13（第五轮）：sitelink 落 URL 对齐重定向后的 finalUrl——
+        // 此前用 sitemap 原始 URL 建 item，301 落到 /cart、跨 locale 或 Disallow 页时
+        // 全部闸口都被绕过（闸口只查过跳转前的 URL）。
+        let landUrl = u;
+        if (meta.ok && meta.finalUrl && meta.finalUrl !== u) {
+          try {
+            const fu = new URL(meta.finalUrl).toString();
+            if (sameOrigin(fu, merchantUrl)) {
+              // finalUrl 需重新过闸；不过闸则整条丢弃（不能退回原 URL——用户点击后仍会跳到坏页）
+              if (isBadSitelinkUrl(fu) || !isSitelinkLocaleCompatible(fu, merchantUrl) || isPathDisallowed(fu, robotsRules) || isLowValueSitelink(fu, titleFromUrlPath(fu) || "")) {
+                return { u, item: null, meta };
+              }
+              landUrl = fu;
+            }
+            // 跨域重定向（子域除外，下方单独处理）：保留原 URL 行为交给 meta 记录
+          } catch { /* finalUrl 非法则沿用原 URL */ }
+        }
+        const item = toSitelinkItem(landUrl, titleFromUrlPath(landUrl), meta.ok ? { title: meta.title, description: meta.description } : undefined);
         return { u, item, meta };
       } catch {
         return { u, item: toSitelinkItem(u, titleFromUrlPath(u)), meta: null };
@@ -314,6 +318,7 @@ export async function autoExpandSitelinks(opts: {
     }),
   );
 
+  const seenLandUrls = new Set<string>(existing.map((s) => s.url));
   for (const { u: _u, item, meta } of fetchResults) {
     if (results.length + existing.length >= targetCount) break;
     // 若目标 URL 301 到同源子域名，记录以便后续扩展
@@ -326,7 +331,8 @@ export async function autoExpandSitelinks(opts: {
         }
       } catch {}
     }
-    if (item.title && item.title.length >= 2) {
+    if (item && item.title && item.title.length >= 2 && !seenLandUrls.has(item.url)) {
+      seenLandUrls.add(item.url); // 多个原始 URL 301 到同一 finalUrl 时去重
       results.push(item);
     }
   }
@@ -346,7 +352,7 @@ export async function autoExpandSitelinks(opts: {
         while ((hm = hrefRe.exec(subHtml)) !== null) {
           try {
             const abs = new URL(hm[1], subRoot).toString();
-            if (sameOrigin(abs, merchantUrl) && isTopLevelPath(abs) && !isBadSitelinkUrl(abs) && isSitelinkLocaleCompatible(abs, merchantUrl) && !usedUrls.has(abs)) {
+            if (passGate(abs) && !usedUrls.has(abs)) {
               subCandidates.push(abs);
             }
           } catch {}

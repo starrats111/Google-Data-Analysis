@@ -1062,24 +1062,40 @@ async function triggerAdCopyGeneration(
     const keywordsTask = Promise.resolve();
 
     // 爬取主站 + 构建缓存（含站内链接发现、图片收集、特征提取等）
-    const crawlCache = await buildCrawlCache(merchantUrl, merchantName, country, {
-      titles: dedupedTitles,
-      descriptions: dedupedDescriptions,
-    });
+    // 2026-07-13（第五轮）：加 inflight 锁——认领预收集可与 generate-extensions Step 3
+    // 同时爬同一商家，此前两条全量爬取并行跑（双倍 Puppeteer/代理消耗）。
+    const { buildCrawlKey, withCrawlInflightLock } = await import("@/lib/crawl-inflight-lock");
+    const crawlCache = await withCrawlInflightLock(
+      buildCrawlKey(merchantUrl, country || ""),
+      () => buildCrawlCache(merchantUrl, merchantName, country, {
+        titles: dedupedTitles,
+        descriptions: dedupedDescriptions,
+      }),
+    );
 
     // 注意：业务摘要 L1 不在领取阶段预生成 —— 留给 generate-extensions 每次现场生成，
     //       保证多次"重新生成"广告时 prompt 上下文有轻微抖动、文案保持差异化。
 
-    // 并行：关键词写入 + 缓存存储
-    await Promise.all([
-      keywordsTask,
-      prisma.ad_creatives.update({
-        where: { id: adCreativeId },
-        data: { crawl_cache: crawlCache as any },
-      }),
-    ]);
-
-    console.log(`[DataCollect] 完成（SEM-02：预收集不取词）: 站内链接候选 ${crawlCache.sitelinkCandidates.length}, 图片 ${crawlCache.images.length}`);
+    // 2026-07-13（第五轮）：写库前比较质量——预收集是「顺带写入」路径，慢完成的低分结果
+    // 不得覆盖生成链路刚写的好缓存（此前 last-write-wins 随机劣化）。
+    const { isBetterCrawlCache } = await import("@/lib/crawl-pipeline");
+    const freshRow = await prisma.ad_creatives.findFirst({
+      where: { id: adCreativeId }, select: { crawl_cache: true },
+    }).catch(() => null);
+    const existingCache = (freshRow?.crawl_cache ?? null) as import("@/lib/crawl-pipeline").CrawlCache | null;
+    if (isBetterCrawlCache(crawlCache, existingCache)) {
+      await Promise.all([
+        keywordsTask,
+        prisma.ad_creatives.update({
+          where: { id: adCreativeId },
+          data: { crawl_cache: crawlCache as any },
+        }),
+      ]);
+      console.log(`[DataCollect] 完成（SEM-02：预收集不取词）: 站内链接候选 ${crawlCache.sitelinkCandidates.length}, 图片 ${crawlCache.images.length}`);
+    } else {
+      await keywordsTask;
+      console.warn(`[DataCollect] 预收集结果不优于现有缓存（new score=${crawlCache.crawlQualityScore} vs existing=${existingCache?.crawlQualityScore}），跳过写库`);
+    }
   } catch (err) {
     console.error("[DataCollect] 数据收集异常:", err);
   } finally {

@@ -49,6 +49,7 @@ export async function POST(req: NextRequest) {
       ad_language,
       keywords: keywords as string[],
       optionalTypes: (body.optionalTypes as string[]) || [],
+      forceRecrawl: !!body.forceRecrawl,
     },
   });
   enqueueGenerationJob(job.id);

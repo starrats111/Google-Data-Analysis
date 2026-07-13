@@ -13,6 +13,7 @@
 import type { MerchantIntelligenceProfile } from "@/lib/intellicenter/merchant-profile/types";
 import type { PreflightResult } from "./policy-preflight";
 import type { KeywordWithMatchType } from "./keyword-intelligence";
+import { sanitizeCrawlText } from "@/lib/crawl-pipeline";
 
 /** D-050 拒登事后学习负样本（单条） */
 export interface RejectionLesson {
@@ -165,9 +166,15 @@ const TONE_INSTRUCTIONS: Record<PreflightResult["recommendedTone"], string> = {
 function buildEvidenceBlock(merchantName: string, ev: EvidenceContext): string {
   const parts: string[] = [];
   if (ev.pageText) {
-    parts.push(
-      `## Page text excerpt (truncated)\n${ev.pageText.slice(0, 6000)}`,
-    );
+    // 2026-07-13（第五轮）：prompt 入口净化。新缓存的 pageText 已在爬取侧净化，
+    // 但存量旧缓存可能带乱码/代码残片/挑战页文案——脏证据会让 AI 脑补出不存在的
+    // 折扣认证，甚至被页面内文字注入指令。乱码率超标时整段弃用（features/SemRush 兜底）。
+    const cleanPageText = sanitizeCrawlText(ev.pageText);
+    if (cleanPageText.length >= 50) {
+      parts.push(
+        `## Page text excerpt (truncated)\n${cleanPageText.slice(0, 6000)}`,
+      );
+    }
   }
   if (ev.features && ev.features.length > 0) {
     parts.push(

@@ -302,6 +302,20 @@ function contentQualityScore(html: string): number {
   return score;
 }
 
+/**
+ * 2026-07-13（第五轮）：统一读取 HTML 文本，按 charset 正确解码。
+ * 原生 fetch 的 res.text() 固定 UTF-8；fetchViaProxy 的 text() 已自带解码。
+ * 通过是否有 arrayBuffer 区分两种响应对象。
+ */
+async function readHtmlText(res: { text: () => Promise<string> }): Promise<string> {
+  const r = res as unknown as Response;
+  if (typeof r.arrayBuffer === "function" && r.headers && typeof r.headers.get === "function") {
+    const { decodeResponseText } = await import("@/lib/response-decoder");
+    return decodeResponseText(r);
+  }
+  return res.text();
+}
+
 // ══════════════════════════════════════════════════════
 // 站点难度检测（照搬后端 _detect_site_difficulty）
 // ══════════════════════════════════════════════════════
@@ -406,7 +420,7 @@ async function crawlWithHttp(url: string, country?: string, proxyUrl?: string): 
         }
         if (res.status >= 400) break;
 
-        const html = await res.text();
+        const html = await readHtmlText(res);
         const score = contentQualityScore(html);
 
         if (score > bestScore) {
@@ -457,7 +471,7 @@ async function crawlWithHttp(url: string, country?: string, proxyUrl?: string): 
         ? await fetchViaProxy(tryUrl, { headers: gbHeaders, signal: ctrl.signal }, proxyUrl)
         : await fetch(tryUrl, { signal: ctrl.signal, headers: gbHeaders, redirect: "follow" });
       clearTimeout(t);
-      const html = await res.text();
+      const html = await readHtmlText(res);
       const score = contentQualityScore(html);
       if (score > bestScore) {
         bestScore = score;
@@ -485,36 +499,25 @@ async function crawlWithHttp(url: string, country?: string, proxyUrl?: string): 
 // ══════════════════════════════════════════════════════
 // 策略 2: Sitemap 提取（增强版 - 不受 Cloudflare 影响）
 // ══════════════════════════════════════════════════════
-export async function crawlViaSitemap(url: string): Promise<{ links: { url: string; text: string }[]; images: string[] } | null> {
+export async function crawlViaSitemap(url: string, country?: string): Promise<{ links: { url: string; text: string }[]; images: string[] } | null> {
   const domain = (() => { try { return new URL(url).origin; } catch { return ""; } })();
   if (!domain) return null;
 
+  // 2026-07-13（第五轮）：抓取统一走 sitemap-fetcher——代理优先（此前纯直连，
+  // geo 限制站从新加坡必失败）、gzip/.xml.gz 解压、CDATA、2MB 上限、进程内 TTL 缓存
+  // （同一次生成里 crawlPage 与 autoExpandSitelinks 不再重复抓同一 sitemap）。
+  const { fetchSitemapText, fetchRobotsRules, isPathDisallowed, parseSitemapLocs } = await import("@/lib/sitemap-fetcher");
+  const proxyUrl = country ? await getProxyUrlForCountry(country).catch(() => null) : null;
+
   const fetchXml = async (u: string): Promise<string | null> => {
-    for (const ua of [GOOGLEBOT_UA, randomUA()]) {
-      try {
-        const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), 10000);
-        const res = await fetch(u, {
-          signal: ctrl.signal,
-          headers: { "User-Agent": ua, "Accept": "text/xml,application/xml,text/html,*/*" },
-          redirect: "follow",
-        });
-        clearTimeout(t);
-        if (!res.ok) continue;
-        const txt = await res.text();
-        if (isBlockedPage(txt)) continue;
-        if (txt.length > 100) return txt;
-      } catch {}
-    }
-    return null;
+    const txt = await fetchSitemapText(u, proxyUrl);
+    if (!txt || isBlockedPage(txt) || txt.length <= 100) return null;
+    return txt;
   };
 
-  let sitemapUrls: string[] = [];
-  const robotsTxt = await fetchXml(`${domain}/robots.txt`);
-  if (robotsTxt) {
-    const matches = robotsTxt.match(/Sitemap:\s*(\S+)/gi) || [];
-    sitemapUrls = matches.map(m => m.replace(/^Sitemap:\s*/i, "").trim());
-  }
+  // robots：Sitemap 指令 + Disallow 规则（Disallow 页不得作为 sitelink 候选输出）
+  const robotsRules = await fetchRobotsRules(url, proxyUrl).catch(() => null);
+  let sitemapUrls: string[] = robotsRules?.sitemaps?.slice(0, 5) ?? [];
   if (sitemapUrls.length === 0) {
     sitemapUrls = [`${domain}/sitemap.xml`, `${domain}/sitemap_index.xml`];
   }
@@ -529,6 +532,7 @@ export async function crawlViaSitemap(url: string): Promise<{ links: { url: stri
     const xml = await fetchXml(smUrl);
     if (!xml) return;
 
+    // 块级正则优先（能区分 <sitemap>/<url>）；CDATA/命名空间站点由下方 parseSitemapLocs 兜底
     const subs = Array.from(xml.matchAll(/<sitemap>[\s\S]*?<loc>([^<]+)<\/loc>[\s\S]*?<\/sitemap>/g))
       .map(m => m[1].replace(/&amp;/g, "&"));
     if (subs.length > 0) {
@@ -544,11 +548,16 @@ export async function crawlViaSitemap(url: string): Promise<{ links: { url: stri
       return;
     }
 
-    const urls = Array.from(xml.matchAll(/<url>[\s\S]*?<loc>([^<]+)<\/loc>[\s\S]*?<\/url>/g))
+    let urls = Array.from(xml.matchAll(/<url>[\s\S]*?<loc>([^<]+)<\/loc>[\s\S]*?<\/url>/g))
       .map(m => m[1].replace(/&amp;/g, "&"));
+    if (urls.length === 0) {
+      // CDATA / 命名空间前缀（<sm:loc>）站点：块级正则匹配不到时用统一解析器兜底
+      urls = parseSitemapLocs(xml, 200).filter((u) => !/\.xml(\.gz)?(\?|$)/i.test(u));
+    }
     for (const u of urls) {
       if (allUrls.length >= 200) break;
       if (/\/(account|cart|checkout|login|register|search|api|wishlist|password|privacy|terms|imprint|impressum|datenschutz|agb|cookie)\b/i.test(u)) continue;
+      if (isPathDisallowed(u, robotsRules)) continue; // robots Disallow 页不进候选
       allUrls.push(u);
     }
 
@@ -947,7 +956,7 @@ export async function fetchPageImages(pageUrl: string): Promise<string[]> {
         break; // 错误页对同一个 pageUrl 无需继续重试其他 UA
       }
 
-      const html = await res.text();
+      const html = await readHtmlText(res);
       if (isBlockedPage(html) || html.length < 800) continue;
 
       const baseDomain = (() => { try { return new URL(finalUrl).origin; } catch { return new URL(pageUrl).origin || ""; } })();
@@ -2502,7 +2511,7 @@ export async function crawlPage(url: string, country?: string, opts: { httpOnly?
   }
 
   // 2. Sitemap（不受 Cloudflare 影响，多 UA 获取）
-  const sitemapResult = await crawlViaSitemap(url);
+  const sitemapResult = await crawlViaSitemap(url, country);
   if (sitemapResult && (sitemapResult.links.length > 0 || sitemapResult.images.length > 0)) {
     console.log(`[Crawler] Sitemap 成功: ${sitemapResult.links.length} 链接, ${sitemapResult.images.length} 图片`);
     return { html: "", links: sitemapResult.links, images: sitemapResult.images, method: "sitemap" };
@@ -2718,7 +2727,7 @@ export async function fetchUrlMeta(
         lastFinalUrl = finalUrl;
 
         if (res.ok || res.status < 400) {
-          const html = await res.text();
+          const html = await readHtmlText(res);
           if (isBlockedPage(html) || html.length < 200) {
             wasBlocked = true;
             if (useProxy) break; // D-030 §3

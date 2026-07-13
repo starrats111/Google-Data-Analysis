@@ -20,6 +20,7 @@ export interface GenerationRequestPayload {
   ad_language?: string | null;
   keywords?: string[];
   optionalTypes?: string[];
+  forceRecrawl?: boolean;
 }
 
 // 判定 job 僵死的阈值：心跳/创建超过此时长仍未结束，视为可重建/可恢复。
@@ -63,9 +64,15 @@ const inFlight = new Set<string>();
 // 请求载荷签名：同 campaign 下不同 types/optionalTypes 是不同的并行 job（core / optional / sitelinks），
 // 仅当签名相同才视为"重复点击同一生成"而复用。
 function payloadSignature(p: GenerationRequestPayload): string {
+  // 2026-07-13（第五轮）：签名补 ad_language / keywords / forceRecrawl。
+  // 此前只有 types——员工改了关键词或广告语言后 5 分钟内再点生成，会复用旧 job 回放旧参数，
+  // 新关键词/新语言被无视；「重新爬取」也会被并入普通生成 job。
   return JSON.stringify({
     t: [...(p.types || [])].sort(),
     o: [...(p.optionalTypes || [])].sort(),
+    l: (p.ad_language || "").toLowerCase(),
+    k: [...(p.keywords || [])].map((s) => String(s).trim().toLowerCase()).filter(Boolean).sort(),
+    f: p.forceRecrawl ? 1 : 0,
   });
 }
 
