@@ -137,6 +137,8 @@ export default function LinkExchangePage() {
   const [editingLinkId, setEditingLinkId] = useState<string | null>(null);
   const [linkDraft, setLinkDraft] = useState("");
   const [savingLink, setSavingLink] = useState(false);
+  // D-178 告警处理通道：重验中的告警 id
+  const [recheckingAlert, setRecheckingAlert] = useState<string | null>(null);
   // 「取链接」工具：输入联盟链接 + 国家 → 用该国动态住宅代理跟链，返回最终落地 URL
   const [fetchLinkInput, setFetchLinkInput] = useState("");
   const [fetchLinkCountry, setFetchLinkCountry] = useState<string>("US");
@@ -446,6 +448,34 @@ export default function LinkExchangePage() {
     else message.error(res.message ?? "操作失败");
   };
 
+  // D-178 告警处理通道：重验——清失败计数/冷却 → force 补货 → 返回人话结论
+  const handleRecheckAlert = async (alertId: string, campaignId: string) => {
+    setRecheckingAlert(alertId);
+    try {
+      const res = await fetch("/api/user/link-exchange/action", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "recheckLink", campaignId }),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        const { verdict, advice } = res.data as { verdict: string; advice: string };
+        if (verdict === "ok") message.success(advice, 8);
+        else if (verdict === "alive" || verdict === "proxy") message.info(advice, 10);
+        else message.warning(advice, 12);
+        fetchAlerts(); fetchData();
+      } else message.error(res.message ?? "重验失败，请稍后重试");
+    } catch { message.error("网络异常，请重试"); }
+    finally { setRecheckingAlert(null); }
+  };
+
+  // D-178 告警处理通道：换链接——跳「链接管理」tab 并直接打开该系列的链接编辑框
+  const handleGoEditLink = (campaignId: string) => {
+    const row = (data?.rows ?? []).find((r) => r.campaignId === campaignId);
+    setActiveTab("links");
+    setEditingLinkId(campaignId);
+    setLinkDraft(row?.trackingLink ?? "");
+    message.info("已定位到「链接管理」，粘贴新的联盟追踪链接后保存，系统会立即验证并补货", 6);
+  };
+
   const rows = data?.rows ?? [];
   const summary = data?.summary;
   const lowWatermark = data?.stockConfig.lowWatermark ?? 6;
@@ -674,7 +704,7 @@ export default function LinkExchangePage() {
     },
   ];
 
-  // ───────── 告警中心列 ─────────
+  // ───────── 告警中心列（D-178：每类告警配处理动作，不止报警） ─────────
   const alertColumns: ColumnsType<AlertRow> = [
     { title: "类型", dataIndex: "type", width: 120, render: (t: string) => <Tag color={t === "merchant_not_found" || t === "invalid_link" ? "red" : t === "replenish_failed" ? "volcano" : "orange"}>{ALERT_TYPE_LABEL[t] ?? t}</Tag> },
     { title: "级别", dataIndex: "level", width: 80, render: (l: string) => <Tag color={l === "error" ? "error" : l === "warning" ? "warning" : "default"}>{l}</Tag> },
@@ -682,24 +712,89 @@ export default function LinkExchangePage() {
     { title: "次数", dataIndex: "occurCount", width: 70, align: "center", render: (c: number) => <Badge count={c} overflowCount={999} style={{ backgroundColor: "#faad14" }} /> },
     { title: "最近", dataIndex: "lastSeenAt", width: 150, render: (v: string | null) => v ? <Text style={{ fontSize: 12 }}>{new Date(v).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}</Text> : "—" },
     {
-      title: "操作", width: 90, align: "center",
-      render: (_: unknown, row) => (
-        <Popconfirm
-          title={row.type === "merchant_not_found" ? "确认点掉这条告警？" : "标记为已解决？"}
-          description={
-            row.type === "merchant_not_found"
-              ? "若该商家确实没有佣金回流，可点掉；点掉后只要不再有新交易就不会重复提醒，一旦又有新订单才会再次告警。"
-              : undefined
-          }
-          onConfirm={() => handleResolveAlert([row.id])}
-          okText="确认"
-          cancelText="取消"
-        >
-          <Button size="small" type="link">处理</Button>
-        </Popconfirm>
-      ),
+      title: "操作", width: 230, align: "center",
+      render: (_: unknown, row) => {
+        const cid = row.campaignId;
+        const canRecheck = !!cid && (row.type === "invalid_link" || row.type === "replenish_failed");
+        const canEditLink = !!cid && (row.type === "invalid_link" || row.type === "replenish_failed" || row.type === "merchant_not_found");
+        const canReplenish = !!cid && row.type === "low_stock";
+        return (
+          <Space size={0}>
+            {canRecheck && (
+              <Tooltip title="清除失败记录后立即重新跟链验证（约 20-60 秒），当场返回结论">
+                <Button size="small" type="link" icon={<SyncOutlined />}
+                  loading={recheckingAlert === row.id}
+                  onClick={() => handleRecheckAlert(row.id, cid!)}>重验</Button>
+              </Tooltip>
+            )}
+            {canReplenish && (
+              <Button size="small" type="link" icon={<ThunderboltOutlined />}
+                loading={replenishing === cid}
+                onClick={() => handleReplenish(cid!)}>补货</Button>
+            )}
+            {canEditLink && (
+              <Tooltip title="到联盟平台重新生成追踪链接后，点此直接打开该系列的链接编辑框">
+                <Button size="small" type="link" icon={<EditOutlined />}
+                  onClick={() => handleGoEditLink(cid!)}>换链接</Button>
+              </Tooltip>
+            )}
+            <Popconfirm
+              title={row.type === "merchant_not_found" ? "确认点掉这条告警？" : "标记为已解决？"}
+              description={
+                row.type === "merchant_not_found"
+                  ? "若该商家确实没有佣金回流，可点掉；点掉后只要不再有新交易就不会重复提醒，一旦又有新订单才会再次告警。"
+                  : "仅从列表移除，不解决根因；同样问题再次发生时会重新告警。建议先用左侧按钮处理。"
+              }
+              onConfirm={() => handleResolveAlert([row.id])}
+              okText="确认"
+              cancelText="取消"
+            >
+              <Button size="small" type="link">已处理</Button>
+            </Popconfirm>
+          </Space>
+        );
+      },
     },
   ];
+
+  // D-178：展开行——告警上下文 + 分步处理指引（员工照着做）
+  const ALERT_GUIDE: Record<string, string[]> = {
+    invalid_link: [
+      "① 先点「重验」：排除代理波动/临时故障，约 20-60 秒当场出结论，通过则告警自动解除。",
+      "② 重验仍失败：到联盟平台（LB/CG/MUI 等）后台确认该商家是否还在线、重新生成追踪链接。",
+      "③ 点「换链接」粘贴新链接保存，系统立即验证 + 补货，不用等冷却。",
+      "④ 商家确认已下线/合作终止：到库存管理关掉该系列换链开关，并考虑暂停广告，然后点「已处理」。",
+    ],
+    replenish_failed: [
+      "① 先看页面顶部 kookeey 剩余流量：流量耗尽会导致批量失败，充值后点「重验」即可。",
+      "② 流量正常仍失败：点「重验」看具体失败原因，按提示决定是否「换链接」。",
+    ],
+    low_stock: [
+      "① 点「补货」立即为该系列补库存（忽略冷却强制执行）。",
+      "② 反复偏低：多为商家链接每条都要跑浏览器（慢）或代理流量不足，检查顶部流量余量。",
+    ],
+    merchant_not_found: [
+      "① 该系列在商家库找不到对应商家或缺追踪链接：点「换链接」直接填入联盟追踪链接，系统按系列名自动关联/新建商家。",
+      "② 若商家确实无佣金回流、不需要换链：点「已处理」点掉即可。",
+    ],
+  };
+  const renderAlertGuide = (row: AlertRow) => {
+    const ctx = (row.context ?? {}) as { affiliateUrl?: string; finalUrl?: string | null; failCount?: number; reason?: string };
+    return (
+      <div style={{ padding: "4px 8px" }}>
+        {(ALERT_GUIDE[row.type] ?? ["点「已处理」标记解决。"]).map((step, i) => (
+          <Paragraph key={i} style={{ marginBottom: 4, fontSize: 13 }}>{step}</Paragraph>
+        ))}
+        {(ctx.affiliateUrl || ctx.finalUrl || ctx.failCount != null) && (
+          <Paragraph type="secondary" style={{ marginBottom: 0, fontSize: 12 }}>
+            {ctx.failCount != null && <>连续失败 {ctx.failCount} 次；</>}
+            {ctx.affiliateUrl && <>联盟链接：{ctx.affiliateUrl.slice(0, 160)}；</>}
+            {ctx.finalUrl && <>实际落到：{String(ctx.finalUrl).slice(0, 160)}</>}
+          </Paragraph>
+        )}
+      </div>
+    );
+  };
 
   const apiKey = data?.apiKey ?? null;
   const maskedKey = apiKey ? apiKey.slice(0, 12) + "•".repeat(16) + apiKey.slice(-4) : "";
@@ -918,11 +1013,17 @@ export default function LinkExchangePage() {
               key: "alerts",
               label: <Space size={4}>告警中心 {alerts.length > 0 && <Badge count={alerts.length} size="small" />}</Space>,
               children: (
-                <Table<AlertRow>
-                  columns={alertColumns} dataSource={alerts} rowKey="id" size="small" loading={alertsLoading}
-                  pagination={{ defaultPageSize: 20, showTotal: (t) => `共 ${t} 条` }}
-                  locale={{ emptyText: "暂无待处理告警" }}
-                />
+                <>
+                  <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 8 }}>
+                    每条告警都可展开查看处理步骤；「重验」当场返回结论，「换链接」直达编辑框，处理完成的告警会自动解除。
+                  </Text>
+                  <Table<AlertRow>
+                    columns={alertColumns} dataSource={alerts} rowKey="id" size="small" loading={alertsLoading}
+                    pagination={{ defaultPageSize: 20, showTotal: (t) => `共 ${t} 条` }}
+                    locale={{ emptyText: "暂无待处理告警" }}
+                    expandable={{ expandedRowRender: renderAlertGuide, rowExpandable: () => true }}
+                  />
+                </>
               ),
             },
             {

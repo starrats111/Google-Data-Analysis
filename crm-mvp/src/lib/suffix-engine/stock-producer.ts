@@ -54,6 +54,10 @@ export interface ReplenishResult {
   failed: number
   /** 本轮 probe 观测：该系列是否必须无头浏览器才能跟链（仅 probe 成功的轮次有值） */
   needsBrowser?: boolean
+  /** probe 失败时的具体错误（D-178 供员工「重验」时看到失败细节） */
+  probeError?: string
+  /** probe 失败时跟到的最终落地 URL（域名匹配判定依据，供员工核对） */
+  probeFinalUrl?: string | null
 }
 
 interface CampaignForReplenish {
@@ -321,7 +325,7 @@ async function doReplenish(
   if (!probe.ok) {
     failed++
     const reason = await handleProbeFailure(campaign, merchant.merchant_name, merchant.merchant_url, effectiveUrl, probe)
-    return { campaignId: cid, skipped: false, reason, before, generated: 0, after: before, failed }
+    return { campaignId: cid, skipped: false, reason, before, generated: 0, after: before, failed, probeError: probe.error, probeFinalUrl: probe.finalUrl ?? null }
   }
   // probe 成功 = 链接确认活着：清 D-177 疑似死链计数与冷却（仅有残留时写库）
   if (campaign.suffix_fail_count > 0 || campaign.suffix_cooldown_until) {

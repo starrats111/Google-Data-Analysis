@@ -9,7 +9,7 @@ import { ensureCampaignMerchant } from '@/lib/campaign-merchant-link'
 import { STOCK_CONFIG } from '@/lib/suffix-engine/config'
 
 interface ActionBody {
-  action: 'replenish' | 'replenishAll' | 'toggle' | 'brushClicks' | 'brushAll' | 'syncLinks' | 'updateLink' | 'setClickControl' | 'setScriptInterval'
+  action: 'replenish' | 'replenishAll' | 'toggle' | 'brushClicks' | 'brushAll' | 'syncLinks' | 'updateLink' | 'setClickControl' | 'setScriptInterval' | 'recheckLink'
   campaignId?: string
   enabled?: boolean
   count?: number
@@ -78,6 +78,53 @@ export async function POST(req: NextRequest) {
 
     const result = await replenishCampaign(campaignId, { force: true })
     return NextResponse.json({ code: 0, data: result })
+  }
+
+  // D-178 告警处理通道：「重验」——员工处理 invalid_link/replenish_failed 告警的动作入口。
+  // 清 D-177 失败计数与冷却 → force 补货（同步等待）→ 把 D-177 三态结论翻译成员工能看懂的话返回。
+  // 重验通过/活链判定会自动 resolve 该系列的 invalid_link 告警（stock-producer 已有逻辑）。
+  if (body.action === 'recheckLink') {
+    if (!body.campaignId) return NextResponse.json({ code: -1, message: '缺少 campaignId' }, { status: 400 })
+    const campaignId = BigInt(body.campaignId)
+    const owns = await prisma.campaigns.findFirst({
+      where: { id: campaignId, user_id: userId, is_deleted: 0 },
+      select: { id: true },
+    })
+    if (!owns) return NextResponse.json({ code: -1, message: '广告系列不存在或无权限' }, { status: 404 })
+
+    // 员工主动重验 = 从零开始判定：清连续失败计数与冷却（force 补货本就穿透冷却，这里清计数避免旧账累加）
+    await prisma.campaigns.update({
+      where: { id: campaignId },
+      data: { suffix_fail_count: 0, suffix_cooldown_until: null },
+    })
+
+    // 小目标快速验证：只补到「现有库存+2」，避免同步等整轮补 20 条把请求拖到超时——
+    // 重验要的是当场结论（probe 成败），库存缺口交给后续 cron 正常补
+    const available = await prisma.suffix_pool.count({
+      where: { campaign_id: campaignId, status: 'available', is_deleted: 0 },
+    })
+    const r = await replenishCampaign(campaignId, { force: true, target: available + 2 })
+
+    // 翻译成员工可执行的结论
+    let verdict: 'ok' | 'alive' | 'dead' | 'proxy' | 'other'
+    let advice: string
+    if (r.generated > 0 || r.reason === 'static_suffix') {
+      verdict = 'ok'
+      advice = `重验通过，链接可用，已补货 ${r.generated} 条（库存 ${r.after}），相关告警已自动解除。`
+    } else if (r.reason === 'alive_no_tracking') {
+      verdict = 'alive'
+      advice = '链接活着：已跟到商家官网，只是本次没拿到追踪参数（多为需浏览器执行 JS）。系统会自动重试，无需换链接；若持续无产出再考虑更换。'
+    } else if (r.reason === 'proxy_unavailable') {
+      verdict = 'proxy'
+      advice = '代理暂不可用（流量耗尽或熔断中），这不是链接问题。请先到本页顶部查看 kookeey 剩余流量，稍后再点重验。'
+    } else if (r.reason === 'probe_failed') {
+      verdict = 'dead'
+      advice = `重验仍失败：${r.probeError ?? '未跟到商家落地页'}${r.probeFinalUrl ? `（实际落到 ${r.probeFinalUrl.slice(0, 120)}）` : ''}。请到联盟平台后台重新生成该商家的追踪链接，然后点告警行的「换链接」按钮替换，保存后会自动验证。`
+    } else {
+      verdict = 'other'
+      advice = `未完成重验（${r.reason ?? '未知原因'}），请稍后重试；若反复出现请联系管理员。`
+    }
+    return NextResponse.json({ code: 0, data: { verdict, advice, result: r } })
   }
 
   // 全部低库存补货（异步触发，避免长时间阻塞请求）
@@ -189,6 +236,13 @@ export async function POST(req: NextRequest) {
 
     // 手动补链接即视为该系列「断链问题」已处理：清掉遗留的 merchant_not_found 告警
     await resolveAlertsByType(userId, campaign.id, ['merchant_not_found'])
+
+    // D-178：换了新链接 = 旧链接的失败历史作废，立即清 D-177 失败计数与冷却，
+    // 让新链接马上参与验证/补货，不用干等最长 8h 的疑似死链冷却到期。
+    await prisma.campaigns.update({
+      where: { id: campaign.id },
+      data: { suffix_fail_count: 0, suffix_cooldown_until: null },
+    })
 
     // 即时巡航验证（最多 ~35s）：成功即返回状态；超时则后台继续，前端稍后刷新
     const result = await Promise.race([
