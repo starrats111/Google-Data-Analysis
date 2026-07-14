@@ -470,6 +470,8 @@ export const CampaignsScalarFieldEnum = {
   suffix_last_apply_at: 'suffix_last_apply_at',
   suffix_click_baseline: 'suffix_click_baseline',
   suffix_click_checkpoint_at: 'suffix_click_checkpoint_at',
+  suffix_fail_count: 'suffix_fail_count',
+  suffix_cooldown_until: 'suffix_cooldown_until',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
   updated_at: 'updated_at'

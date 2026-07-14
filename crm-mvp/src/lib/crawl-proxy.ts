@@ -196,6 +196,19 @@ async function checkProxyEgress(proxyUrl: string, timeoutMs = 5000): Promise<{ i
  *
  * 校验通过的 proxyUrl 才返回，避免后续 puppeteer 抓取被错国出口 IP 浪费 100s+。
  */
+/**
+ * 业务国家码 → ISO 3166-1 alpha-2 归一化（出口校验比对用）。
+ * 系列/商家侧习惯用 UK，而 ipinfo 等 IP 库返回 ISO 码 GB——不归一会导致
+ * 「期望=UK 实际=GB」永远校验失败：每次取代理白烧 3 次探活流量后降级直连（CN 出口），
+ * UK 系列因此系统性跟链失败（D-176 死链事故的组成部分）。
+ * 注意与 toProxyCountryCode（ISO→供应商别名，GB→UK，组装代理用户名用）方向相反，两者并存不冲突。
+ */
+export function toIsoCountryCode(code: string): string {
+  const upper = code.toUpperCase().trim();
+  if (upper === "UK") return "GB";
+  return upper;
+}
+
 export async function ensureCountryEgressHttpProxy(
   country: string,
   options: { maxRetries?: number; checkTimeoutMs?: number; userId?: bigint | null; exchange?: boolean } = {},
@@ -203,7 +216,7 @@ export async function ensureCountryEgressHttpProxy(
   if (!country) return null;
   const maxRetries = options.maxRetries ?? 3;
   const checkTimeoutMs = options.checkTimeoutMs ?? 5000;
-  const targetCountry = country.toUpperCase().trim();
+  const targetCountry = toIsoCountryCode(country);
 
   let lastProxyUrl: string | null = null;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {

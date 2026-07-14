@@ -378,9 +378,10 @@ async function executeItem(rt: TaskRuntime, itemId: bigint): Promise<{ ok: boole
     return { ok: true }
   }
 
-  // 瞬时代理并发错误（撞 kookeey 并发上限被拒/连接抖动）：延后重排一次，等会话名额释放后再试。
+  // 瞬时代理并发错误（撞 kookeey 并发上限被拒/连接抖动）或 D-177 代理不可用（余额耗尽/熔断/池空，
+  // 未发起真实跟链）：延后重排一次，等会话名额/余额恢复后再试，不把环境故障算成点击失败。
   // 已重排过（alreadyRequeued）则按失败处理，避免无限重排。
-  if (TRANSIENT_PROXY_ERR.test(r.error) && !alreadyRequeued) {
+  if ((TRANSIENT_PROXY_ERR.test(r.error) || r.reason === 'proxy_unavailable') && !alreadyRequeued) {
     const delayMs = randomInt(REQUEUE_MIN_MS, REQUEUE_MAX_MS)
     await prisma.kyads_click_task_items
       .update({

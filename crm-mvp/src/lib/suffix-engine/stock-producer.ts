@@ -18,6 +18,7 @@ import { raiseAlert, resolveAlertsByType } from './alerts'
 import { recordExitIp } from './exit-ip'
 import { resolveMerchantReferer } from './referer-resolver'
 import { pickCampaignAffiliateLink } from '@/lib/merchant-connection'
+import { sameRootDomain } from '@/lib/root-domain'
 
 const inflight = new Map<string, Promise<ReplenishResult>>()
 
@@ -69,6 +70,8 @@ interface CampaignForReplenish {
   status: string | null
   google_status: string | null
   google_campaign_id: string | null
+  suffix_fail_count: number
+  suffix_cooldown_until: Date | null
 }
 
 /**
@@ -155,11 +158,19 @@ async function doReplenish(
       status: true,
       google_status: true,
       google_campaign_id: true,
+      suffix_fail_count: true,
+      suffix_cooldown_until: true,
     },
   })) as CampaignForReplenish | null
 
   if (!campaign) {
     return { campaignId: cid, skipped: true, reason: 'campaign_not_found', before: 0, generated: 0, after: 0, failed: 0 }
+  }
+  // D-177 落库冷却闸门：冷却期内不补货（proxy_unavailable 10min / 活链 30min / 疑似死链 8h）。
+  // 落库使冷却跨 pm2 重启生效（旧进程内 Map 一天被 33 次重启清零，死链系列死循环重烧代理流量）。
+  // force（lease NO_STOCK 按需路径）不受限——真没货时仍可立即尝试，成功即自动清冷却。
+  if (!opts.force && campaign.suffix_cooldown_until && campaign.suffix_cooldown_until > new Date()) {
+    return { campaignId: cid, skipped: true, reason: 'fail_cooldown', before: 0, generated: 0, after: 0, failed: 0 }
   }
   // 用户级闸门：jy 交垟队等「只同步数据、不参与换链接」的账号(link_exchange_disabled=1)一律不补货，
   // 避免其系列被 lease 触发或 cron 选中后空跑生成、白烧低配机预算并刷 no_tracking/invalid_link 告警。
@@ -218,7 +229,7 @@ async function doReplenish(
   // 加载商家联盟链接 + 平台
   const merchant = await prisma.user_merchants.findFirst({
     where: { id: campaign.user_merchant_id, is_deleted: 0 },
-    select: { id: true, platform: true, tracking_link: true, campaign_link: true, connection_campaign_links: true, platform_connection_id: true, merchant_name: true },
+    select: { id: true, platform: true, tracking_link: true, campaign_link: true, connection_campaign_links: true, platform_connection_id: true, merchant_name: true, merchant_url: true },
   })
 
   if (!merchant) {
@@ -309,8 +320,12 @@ async function doReplenish(
   }
   if (!probe.ok) {
     failed++
-    await emitGenFailureAlert(campaign, merchant.merchant_name, effectiveUrl, probe)
-    return { campaignId: cid, skipped: false, reason: 'probe_failed', before, generated: 0, after: before, failed }
+    const reason = await handleProbeFailure(campaign, merchant.merchant_name, merchant.merchant_url, effectiveUrl, probe)
+    return { campaignId: cid, skipped: false, reason, before, generated: 0, after: before, failed }
+  }
+  // probe 成功 = 链接确认活着：清 D-177 疑似死链计数与冷却（仅有残留时写库）
+  if (campaign.suffix_fail_count > 0 || campaign.suffix_cooldown_until) {
+    await setFailCooldown(campaign, 0, null)
   }
   // 学习「必须浏览器」标记：probe 成功即知本系列纯 HTTP 能否跟到（usedBrowser）。
   // 双向回写——变为需要 → 置 1（下轮起低频补货）；恢复纯 HTTP 可跟 → 清 0（恢复正常水位）。仅变化时写库。
@@ -412,31 +427,82 @@ async function setStaticFlag(campaign: CampaignForReplenish, value: 0 | 1): Prom
   }
 }
 
-/** 跟链失败 → 落「链接无效」告警 */
-async function emitGenFailureAlert(
+/** D-177 疑似死链计数/冷却回写（仅变化时写库，失败不阻断补货主流程） */
+async function setFailCooldown(
+  campaign: CampaignForReplenish,
+  failCount: number,
+  cooldownUntil: Date | null,
+): Promise<void> {
+  try {
+    await prisma.campaigns.update({
+      where: { id: campaign.id },
+      data: { suffix_fail_count: failCount, suffix_cooldown_until: cooldownUntil },
+    })
+    campaign.suffix_fail_count = failCount
+    campaign.suffix_cooldown_until = cooldownUntil
+  } catch (e) {
+    console.warn('[stock-producer] 更新失败冷却字段失败:', campaign.id.toString(), e instanceof Error ? e.message : e)
+  }
+}
+
+/**
+ * D-177 probe 失败三态分类（采纳 kyads verify-link 判定思想），返回 ReplenishResult.reason：
+ *
+ * 1) proxy_unavailable —— kookeey 余额耗尽/熔断/池空，resolver 未发起真实跟链。环境故障，
+ *    短冷却(10min)重试，不计死链、不告警（D-176 事故：此类被误判成 3316 次 no_tracking 假死）。
+ * 2) alive_no_tracking —— 跟链落地根域名 == 商家官网根域名，只是没拿到追踪参数：链接活着
+ *    （需浏览器执行 JS / 参数被吃），冷却 30min 换出口重试，不报 invalid_link，并清疑似死链计数。
+ * 3) probe_failed —— 其余硬失败（域名也不匹配 / 停跳板 / 超时等）：疑似死链计数 +1，
+ *    达 DEAD_LINK_FAIL_THRESHOLD 才升级 invalid_link 告警 + 长冷却(8h)；未达阈值先短冷却(30min)。
+ *    连续达标才告警，避免把代理抖动/慢站误报成死链刷屏。
+ */
+async function handleProbeFailure(
   campaign: CampaignForReplenish,
   merchantName: string | null,
+  merchantUrl: string | null,
   affiliateUrl: string,
   fail: GenFailure,
-): Promise<void> {
+): Promise<string> {
   const cid = campaign.id.toString()
-  const ctx = {
-    campaignName: campaign.campaign_name,
-    merchantName,
-    country: campaign.target_country,
-    affiliateUrl: affiliateUrl.slice(0, 300),
-    reason: fail.reason,
-    finalUrl: fail.finalUrl ?? null,
+
+  // 1) 代理不可用：不下链接死活结论
+  if (fail.reason === 'proxy_unavailable') {
+    await setFailCooldown(campaign, campaign.suffix_fail_count, new Date(Date.now() + STOCK_CONFIG.PROXY_UNAVAILABLE_COOLDOWN_MS))
+    return 'proxy_unavailable'
   }
 
-  // resolve_failed / no_tracking / forbidden_network / timeout / bad_input → 链接无效类
-  await raiseAlert(campaign.user_id, {
-    type: 'invalid_link',
-    campaignId: campaign.id,
-    level: 'error',
-    message: `广告系列「${campaign.campaign_name ?? cid}」联盟链接无效：${fail.error}`,
-    context: ctx,
-  })
+  // 2) 域名匹配 = 活链（kyads matched 判定）：落到了商家官网、只是无追踪参数
+  if (fail.reason === 'no_tracking' && sameRootDomain(fail.finalUrl, merchantUrl)) {
+    await setFailCooldown(campaign, 0, new Date(Date.now() + STOCK_CONFIG.ALIVE_LINK_COOLDOWN_MS))
+    // 链接确认活着：顺手清掉此前误报的 invalid_link
+    await resolveAlertsByType(campaign.user_id, campaign.id, ['invalid_link'])
+    return 'alive_no_tracking'
+  }
+
+  // 3) 疑似死链：连续计数，达阈值才告警 + 长冷却
+  const failCount = campaign.suffix_fail_count + 1
+  const isDead = failCount >= STOCK_CONFIG.DEAD_LINK_FAIL_THRESHOLD
+  const cooldownMs = isDead ? STOCK_CONFIG.DEAD_LINK_COOLDOWN_MS : STOCK_CONFIG.ALIVE_LINK_COOLDOWN_MS
+  await setFailCooldown(campaign, failCount, new Date(Date.now() + cooldownMs))
+
+  if (isDead) {
+    await raiseAlert(campaign.user_id, {
+      type: 'invalid_link',
+      campaignId: campaign.id,
+      level: 'error',
+      message: `广告系列「${campaign.campaign_name ?? cid}」联盟链接疑似失效（连续 ${failCount} 次跟链失败）：${fail.error}`,
+      context: {
+        campaignName: campaign.campaign_name,
+        merchantName,
+        country: campaign.target_country,
+        affiliateUrl: affiliateUrl.slice(0, 300),
+        reason: fail.reason,
+        finalUrl: fail.finalUrl ?? null,
+        failCount,
+      },
+    })
+  }
+  return 'probe_failed'
 }
 
 /**
@@ -462,6 +528,7 @@ export async function replenishLowStock(
   const disabledUserIds = disabledUsers.map((u) => u.id)
 
   // 1. 所有已启用换链系列：active + Google ENABLED + 已真正投放(有 gcid) + 换链开 + 已匹配商家
+  //    + 不在 D-177 落库失败冷却期内（proxy_unavailable/活链/疑似死链冷却，pm2 重启不丢）
   const enabled = await prisma.campaigns.findMany({
     where: {
       status: 'active',
@@ -470,6 +537,7 @@ export async function replenishLowStock(
       suffix_exchange_enabled: 1,
       is_deleted: 0,
       user_merchant_id: { not: BigInt(0) },
+      OR: [{ suffix_cooldown_until: null }, { suffix_cooldown_until: { lt: new Date() } }],
       ...(disabledUserIds.length > 0 ? { user_id: { notIn: disabledUserIds } } : {}),
     },
     select: { id: true, suffix_needs_browser: true },

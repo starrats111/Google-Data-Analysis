@@ -14,7 +14,15 @@ import { STOCK_CONFIG } from './config'
 import { getUsedExitIps, acquireDedupedProxy, probeExitIp } from './exit-ip'
 import { reportProviderResult, PROXY_HARD_ERR } from './proxy-circuit'
 
-export type GenFailReason = 'no_tracking' | 'forbidden_network' | 'resolve_failed' | 'timeout' | 'bad_input'
+export type GenFailReason =
+  | 'no_tracking'
+  | 'forbidden_network'
+  | 'resolve_failed'
+  | 'timeout'
+  | 'bad_input'
+  // D-177：换链接代理不可用（kookeey 余额耗尽/熔断/供应商池空）。瞬时环境故障，
+  // 不代表链接死活——调用方短冷却重试即可，绝不计入死链失败计数/invalid_link 告警。
+  | 'proxy_unavailable'
 
 export interface GenSuccess {
   ok: true
@@ -146,6 +154,10 @@ export async function generateOneSuffix(
       }
     }
     const resolveErr = r.error || '跟链失败，未跟到广告主落地页'
+    // D-177：代理不可用（resolver 未发起任何真实跟链）→ 单列瞬时错误，不归因代理熔断也不算链接失败
+    if (resolveErr.startsWith('proxy_unavailable')) {
+      return { ok: false, reason: 'proxy_unavailable', error: resolveErr, finalUrl: null }
+    }
     // 仅当错误是硬代理错误（SOCKS5 认证失败/连接被拒/reset）才判代理失败，避免误伤
     reportProxy(!PROXY_HARD_ERR.test(resolveErr))
     return {

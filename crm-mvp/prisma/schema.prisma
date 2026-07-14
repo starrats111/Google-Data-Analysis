@@ -417,6 +417,10 @@ model campaigns {
   suffix_last_apply_at       DateTime? @db.DateTime(0) // 最近换链时间
   suffix_click_baseline      Int       @default(0) @db.Int // 脚本退出前记录的点击数基线，下次启动时读取以跨实例延续
   suffix_click_checkpoint_at DateTime? @db.DateTime(0) // 基线记录时间
+  // D-177 疑似死链计数：连续「域名也不匹配」类硬失败次数（成功/活链判定清零）。达 DEAD_LINK_FAIL_THRESHOLD 才升级 invalid_link 告警
+  suffix_fail_count          Int       @default(0) @db.UnsignedInt
+  // D-177 补货失败冷却截止：此前该系列不参与补货（落库持久化，治「进程内冷却被 pm2 重启清零 → 死循环重烧」）
+  suffix_cooldown_until      DateTime? @db.DateTime(0)
   is_deleted                 Int       @default(0) @db.TinyInt
   created_at                 DateTime  @default(now()) @db.DateTime(0)
   updated_at                 DateTime  @default(now()) @updatedAt @db.DateTime(0)

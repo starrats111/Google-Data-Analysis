@@ -51,6 +51,16 @@ export const STOCK_CONFIG = {
   CRON_MAX_CAMPAIGNS: 50,
   /** 只补货最近多少小时内有 lease 活动的广告系列 */
   ACTIVE_WINDOW_HOURS: 48,
+
+  // ── D-177 失败分类冷却（采纳 kyads verify-link 判定思想，冷却落库、pm2 重启不丢） ──
+  /** proxy_unavailable（kookeey 余额耗尽/熔断/池空）瞬时错误冷却：环境故障，短冷却重试，不计死链 */
+  PROXY_UNAVAILABLE_COOLDOWN_MS: 10 * 60_000,
+  /** 「域名匹配但无追踪参数」活链冷却：链接活着（需浏览器/参数被吃），短冷却换姿势重试，不报 invalid_link */
+  ALIVE_LINK_COOLDOWN_MS: 30 * 60_000,
+  /** 疑似死链（域名也不匹配/跟链硬失败）连续多少次才升级 invalid_link 告警 + 长冷却 */
+  DEAD_LINK_FAIL_THRESHOLD: 3,
+  /** 疑似死链达阈值后的长冷却：期间不再重试（不烧浏览器/代理），到期自动再验一次 */
+  DEAD_LINK_COOLDOWN_MS: 8 * 60 * 60_000,
 } as const
 
 export type StockConfig = typeof STOCK_CONFIG

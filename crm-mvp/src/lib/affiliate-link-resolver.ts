@@ -567,24 +567,31 @@ async function resolveViaBrowser(
   // 本函数只服务换链接（resolveAffiliateLink 的所有调用方均为换链接场景）→ 强制 exchange:true，
   // 一律走 kookeey 的 http 代理（1000 端口双协议），绝不借用 AI 出口(arxlabs)；userId 仅用于选该用户分配的供应商。
   const httpProxy = await ensureCountryEgressHttpProxy(country, { userId, exchange: true }).catch((e) => {
-    // 无代理仍会继续（直连出口国不对，多半跟不到目标国落地页）→ 必须留痕，否则兜底静默失败无从排查
     console.warn(
-      `[AffiliateResolver] 浏览器兜底取 ${country} http 代理失败，将无代理直连: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`,
+      `[AffiliateResolver] 浏览器兜底取 ${country} http 代理异常: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`,
     );
     return null;
   });
+  // D-177（采纳 kyads「代理不可用不下结论」）：拿不到换链接代理（余额耗尽/熔断/出口校验全败）时
+  // 一律不再「无代理直连」——腾讯云 CN 出口跟联盟 JS 跳板得到的必然是无追踪参数的假落地页，
+  // 会被误判成 no_tracking「死链」（D-176 事故：余额 0 当天 3316 次假死全由此产生）。
+  // 返回 proxy_unavailable 瞬时错误，交上层短冷却后重试，绝不用直连结果给链接判死刑。
+  if (!httpProxy) {
+    console.warn(`[AffiliateResolver] 浏览器兜底失败：${country} 换链接代理不可用（proxy_unavailable），本次不判定链接死活 url=${startUrl.slice(0, 120)}`);
+    return { finalUrl: "", chain, error: "proxy_unavailable" };
+  }
   let proxyAuth: { server: string; username: string; password: string } | null = null;
-  if (httpProxy) {
-    try {
-      const u = new URL(httpProxy);
-      proxyAuth = {
-        server: `http://${u.hostname}:${u.port}`,
-        username: decodeURIComponent(u.username),
-        password: decodeURIComponent(u.password),
-      };
-    } catch {
-      proxyAuth = null;
-    }
+  try {
+    const u = new URL(httpProxy);
+    proxyAuth = {
+      server: `http://${u.hostname}:${u.port}`,
+      username: decodeURIComponent(u.username),
+      password: decodeURIComponent(u.password),
+    };
+  } catch {
+    // 代理 URL 解析失败同样按不可用处理（不无代理直连）
+    console.warn(`[AffiliateResolver] 浏览器兜底代理 URL 解析失败（proxy_unavailable） url=${startUrl.slice(0, 120)}`);
+    return { finalUrl: "", chain, error: "proxy_unavailable" };
   }
 
   const args = [
@@ -975,6 +982,14 @@ export async function resolveAffiliateLink(
   const acquireProxy = async (): Promise<string | null> =>
     opts.proxyUrl != null ? opts.proxyUrl : await getProxyUrlForCountry(cc, { userId: opts.userId, exchange: true }).catch(() => null);
 
+  // D-177（采纳 kyads「代理不可用不下结论」）：换链接路径拿不到代理（kookeey 余额耗尽/熔断/供应商池空）
+  // 时不再直连跟链——CN 出口跟出来的「无追踪参数落地页」是假结论，会把活链误判成死链（D-176 事故根源）。
+  // 统一返回 proxy_unavailable 瞬时错误，上层短冷却重试，不计入链接死活判定。
+  const proxyUnavailable = (): ResolveResult => ({
+    ...base,
+    error: "proxy_unavailable: 换链接代理不可用（余额耗尽/熔断/供应商池空），本次不判定链接死活",
+  });
+
   // ── 第一遍抓取 ──
   // 记录「胜出结果」实际使用的代理出口，供末尾回填 result.exitIp（让上层准确记录真实点击出口 IP）：
   //   httpProxyUsed = 纯 HTTP 路径实际用的代理 URL；browserExitIp = 浏览器路径探到的出口 IP。
@@ -988,15 +1003,17 @@ export async function resolveAffiliateLink(
       result = await evaluate(br, false, true);
     } else {
       const proxyUrl = await acquireProxy();
+      if (!proxyUrl) return proxyUnavailable();
       httpProxyUsed = proxyUrl;
       const r0 = await fetchChain(affiliateUrl, proxyUrl, 10, 18000, { userAgent: opts.userAgent, referer: opts.referer });
-      result = await evaluate(r0, !!proxyUrl, false);
+      result = await evaluate(r0, true, false);
     }
   } else {
     const proxyUrl = await acquireProxy();
+    if (!proxyUrl) return proxyUnavailable();
     httpProxyUsed = proxyUrl;
     const r0 = await fetchChain(affiliateUrl, proxyUrl, 10, 18000, { userAgent: opts.userAgent, referer: opts.referer });
-    result = await evaluate(r0, !!proxyUrl, false);
+    result = await evaluate(r0, true, false);
   }
 
   // ── 无头浏览器兜底 ──
