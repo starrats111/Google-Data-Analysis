@@ -322,16 +322,65 @@ export async function GET(req: NextRequest) {
   // 交易连接在该商家下无系列组时回退商家级代表行。
   // 仅影响逐行展示；总览合计与按 MCC 花费分布继续基于原始 per-campaign 统计（allStatsMap）。
   const merge = mergeMerchantCampaigns(dedupedCampaigns, allStatsMap);
-  const commissionByRow = routeCommissionToRows(commissionGroups, merge.commissionTarget);
 
-  // D-176：单 MCC 模式下，总佣金口径改为「能归属到当前 MCC 广告系列的佣金之和」
-  //（即 commissionByRow 合计，与表格逐行佣金对得上）；花费此时已按 MCC 过滤，
-  // 两者口径一致后 ROI/净利润才有意义。不选 MCC（全部）时保持全量交易聚合，
-  // 避免商家无系列/纯自然成交的佣金被漏统计。
+  // D-176 v2：单 MCC 模式下，佣金归属必须基于【全量 campaign（跨 MCC）】全局计算一次——
+  // 若只在筛选后的集合内路由，同商家在两个 MCC 各有系列时，每个 MCC 视图都会把该商家
+  // 全部佣金投给本视图的代表行，导致同一笔佣金在多个 MCC 重复计入（wj02 实测复现）。
+  // 全局路由后每组佣金只投一行（选举规则同 D-168：已启用优先 → created_at 最近），
+  // 一笔佣金全局只挂一个 MCC；各 MCC 佣金之和 + 未归属部分 = 账号总佣金。
   const isSingleMccView = Boolean(mccAccountId);
+  let commissionRoutingTarget = merge.commissionTarget;
+  // 全局代表行 primaryId → mcc_id（用于把路由结果按 MCC 汇总）
+  let globalPrimaryMcc: Map<string, string | null> | null = null;
+  if (isSingleMccView) {
+    const globalCampaigns = await prisma.campaigns.findMany({
+      where: {
+        user_id: userId,
+        NOT: [{ google_campaign_id: null }, { google_campaign_id: "" }],
+        is_deleted: 0,
+      },
+      select: {
+        id: true,
+        mcc_id: true,
+        google_campaign_id: true,
+        customer_id: true,
+        google_status: true,
+        user_merchant_id: true,
+        platform_connection_id: true,
+        created_at: true,
+      },
+    });
+    // 与上方筛选集合相同的 gcid 去重规则，保证组内组间 primaryId 一致
+    const gGroups = new Map<string, typeof globalCampaigns>();
+    for (const c of globalCampaigns) {
+      const gcid = c.google_campaign_id || String(c.id);
+      if (!gGroups.has(gcid)) gGroups.set(gcid, []);
+      gGroups.get(gcid)!.push(c);
+    }
+    const globalDeduped: typeof globalCampaigns = [];
+    for (const [, group] of gGroups) {
+      group.sort((a, b) => {
+        if (a.customer_id && !b.customer_id) return -1;
+        if (!a.customer_id && b.customer_id) return 1;
+        return Number(b.id) - Number(a.id);
+      });
+      globalDeduped.push(group[0]);
+    }
+    // 只取 commissionTarget（代表行选举不依赖花费统计，传空 stats 即可）
+    const globalMerge = mergeMerchantCampaigns(globalDeduped, new Map());
+    commissionRoutingTarget = globalMerge.commissionTarget;
+    globalPrimaryMcc = new Map(globalDeduped.map((c) => [String(c.id), c.mcc_id !== null ? String(c.mcc_id) : null]));
+  }
+  const commissionByRow = routeCommissionToRows(commissionGroups, commissionRoutingTarget);
+
+  // D-176：单 MCC 模式下，总佣金口径 =「全局归属到当前 MCC 广告系列的佣金之和」；
+  // 花费此时已按 MCC 过滤，两者口径一致后 ROI/净利润才有意义。
+  // 不选 MCC（全部）时保持全量交易聚合，避免商家无系列/纯自然成交的佣金被漏统计。
   let mccCommission = 0, mccRejected = 0, mccApproved = 0, mccPaid = 0, mccPending = 0;
   if (isSingleMccView) {
-    for (const rc of commissionByRow.values()) {
+    const selectedMccIdStr = String(mccIds[0]);
+    for (const [rowId, rc] of commissionByRow) {
+      if (globalPrimaryMcc?.get(rowId) !== selectedMccIdStr) continue;
       mccCommission += rc.commission;
       mccRejected += rc.rejected;
       mccApproved += rc.approved;
