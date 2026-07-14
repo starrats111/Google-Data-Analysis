@@ -1275,13 +1275,42 @@ export async function buildTeamAnnualReport(
         ],
       },
     });
+    // 账号列归属对齐月度 resolveColKey（C-173）：打款单归到活跃连接列；
+    // 已删连接的打款在该平台仅剩一个活跃账号时并入该列（否则与月度一致忽略并警告）——
+    // 否则银行流水净额替换会漏掉这些"孤儿账号格"，年度默认实收比月度多算
+    const activeConns = await prisma.platform_connections.findMany({
+      where: { user_id: { in: memberIds }, is_deleted: 0 },
+      select: { user_id: true, platform: true, account_name: true },
+    });
+    const activeAcctSet = new Set<string>();
+    const acctsByUserPlat = new Map<string, Set<string>>();
+    for (const c of activeConns) {
+      const acct = (c.account_name || "").trim();
+      activeAcctSet.add(`${c.user_id}|${c.platform}|${acct}`);
+      const k = `${c.user_id}|${c.platform}`;
+      let s = acctsByUserPlat.get(k);
+      if (!s) { s = new Set(); acctsByUserPlat.set(k, s); }
+      s.add(acct);
+    }
+    const resolveAcct = (uid: string, platform: string, acct: string): string | null => {
+      if (activeAcctSet.has(`${uid}|${platform}|${acct}`)) return acct;
+      const s = acctsByUserPlat.get(`${uid}|${platform}`);
+      if (s && s.size === 1) return [...s][0];
+      return null;
+    };
+
     const recvCells = new Map<string, number>(); // `${uid}|${m}|${platform}|${acct}|${half}`
     const paidCells = new Map<string, number>();
     const paidCnyCells = new Map<string, number>();
     for (const r of payRows) {
       const m = String(r.m);
       if (!acc.has(m)) continue;
-      const key = `${r.uid}|${m}|${r.platform}|${(r.acct || "").trim()}|${r.half}`;
+      const acct = resolveAcct(String(r.uid), r.platform, (r.acct || "").trim());
+      if (acct == null) {
+        warnings.push(`${m} ${r.platform} 有打款 $${r2(Number(r.recv || 0))} 无法归属到现有账号，未计入（与月度口径一致）`);
+        continue;
+      }
+      const key = `${r.uid}|${m}|${r.platform}|${acct}|${r.half}`;
       recvCells.set(key, (recvCells.get(key) || 0) + Number(r.recv || 0));
       const paid = Number(r.paid || 0);
       paidCells.set(key, (paidCells.get(key) || 0) + paid);
