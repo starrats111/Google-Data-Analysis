@@ -8,10 +8,21 @@
  */
 
 export const STOCK_CONFIG = {
-  /** 单个广告系列的目标库存水位（补货补到此值） */
+  /** 单个广告系列的目标库存水位（补货补到此值）。纯 HTTP 系列启用自适应后此值为「上限封顶」。 */
   TARGET_STOCK: 20,
   /** 低水位：可用库存 <= 此值时触发补货 */
   LOW_WATERMARK: 6,
+  /** 纯 HTTP 系列自适应目标水位（治「固定补到 20 → 低消费系列 36h 内消费不掉、约 32% 过期作废」）。
+   *  目标 = clamp( ceil(近 N 天日均消费 × COVERAGE_HOURS/24), MIN_TARGET_STOCK, TARGET_STOCK )。
+   *  高消费系列仍接近 20（不缺货）；低/新系列降到下限（少蓄水、少作废）。仅普通 HTTP 系列生效——
+   *  浏览器系列走 BROWSER_TARGET_STOCK、静态后缀系列走去重逻辑、lease 显式 target 优先，均不受影响。 */
+  ADAPTIVE_TARGET_ENABLED: true,
+  /** 库存目标覆盖的消费时长（小时）：库存约保留这么多小时的消费量。cron 每 5min 补货，短覆盖即够周转。 */
+  TARGET_COVERAGE_HOURS: 12,
+  /** 自适应目标下限：低消费/新系列至少蓄这么多，避免消费波动时频繁 NO_STOCK。 */
+  MIN_TARGET_STOCK: 6,
+  /** 计算日均消费的回看天数（数据源：suffix_assignments write_success=1 的 reported_at）。 */
+  CONSUMPTION_LOOKBACK_DAYS: 3,
   /** 「必须无头浏览器才能跟链」的系列（suffix_needs_browser=1）专用的更低目标库存。
    *  这类系列每生成一条都要跑整页浏览器（纯 HTTP 的几十倍流量），故按最小可用量蓄水，降频补货省流量。 */
   BROWSER_TARGET_STOCK: 5,

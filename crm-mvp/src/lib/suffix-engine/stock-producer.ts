@@ -71,6 +71,29 @@ interface CampaignForReplenish {
   google_campaign_id: string | null
 }
 
+/**
+ * 纯 HTTP 系列自适应目标库存：按该系列近 N 天真实消费速率定目标，替代「一律补到 20」。
+ * 数据源：suffix_assignments.write_success=1 的 reported_at（Script 真正写进 Google Ads 才算消费，权威）。
+ *   目标 = clamp( ceil(日均消费 × TARGET_COVERAGE_HOURS/24), MIN_TARGET_STOCK, TARGET_STOCK )
+ * 高消费系列仍接近 20（不缺货），低/新系列降到下限（少蓄水、少 36h 过期作废）。
+ * 查询失败 / 关闭时回退固定 TARGET_STOCK（不阻断补货）。
+ */
+async function computeAdaptiveTarget(campaignId: bigint): Promise<number> {
+  if (!STOCK_CONFIG.ADAPTIVE_TARGET_ENABLED) return STOCK_CONFIG.TARGET_STOCK
+  try {
+    const since = new Date(Date.now() - STOCK_CONFIG.CONSUMPTION_LOOKBACK_DAYS * 24 * 3600_000)
+    const consumed = await prisma.suffix_assignments.count({
+      where: { campaign_id: campaignId, write_success: 1, reported_at: { gte: since }, is_deleted: 0 },
+    })
+    const dailyAvg = consumed / STOCK_CONFIG.CONSUMPTION_LOOKBACK_DAYS
+    const desired = Math.ceil(dailyAvg * (STOCK_CONFIG.TARGET_COVERAGE_HOURS / 24))
+    return Math.min(STOCK_CONFIG.TARGET_STOCK, Math.max(STOCK_CONFIG.MIN_TARGET_STOCK, desired))
+  } catch (e) {
+    console.warn('[stock-producer] computeAdaptiveTarget 失败，回退固定水位:', campaignId.toString(), e instanceof Error ? e.message : e)
+    return STOCK_CONFIG.TARGET_STOCK
+  }
+}
+
 /** 简单并发限制器 */
 async function runWithConcurrency<T>(
   count: number,
@@ -171,10 +194,12 @@ async function doReplenish(
   // 每条后缀都要整页跑无头浏览器，代理流量是纯 HTTP 的几十倍——用更低的目标库存/水位少蓄水、少补货。
   // 调用方显式传 opts.target 时以显式值优先（lease 按需路径等）。
   const needsBrowser = campaign.suffix_needs_browser === 1
-  const target = Math.max(
-    1,
-    opts.target ?? (needsBrowser ? STOCK_CONFIG.BROWSER_TARGET_STOCK : STOCK_CONFIG.TARGET_STOCK),
-  )
+  // 纯 HTTP 系列：按真实消费速率自适应目标（治 32% 过期作废）。浏览器系列仍用低固定水位、
+  // lease 等显式传 opts.target 的按需路径优先用显式值（force 补到位，不受自适应下调影响）。
+  const defaultTarget = needsBrowser
+    ? STOCK_CONFIG.BROWSER_TARGET_STOCK
+    : await computeAdaptiveTarget(campaign.id)
+  const target = Math.max(1, opts.target ?? defaultTarget)
   const lowWatermark = needsBrowser ? STOCK_CONFIG.BROWSER_LOW_WATERMARK : STOCK_CONFIG.LOW_WATERMARK
 
   const before = await prisma.suffix_pool.count({
@@ -357,10 +382,12 @@ async function doReplenish(
     // 双向学习「静态后缀」：批量产出全为新内容（零重复）说明落地参数随会话变化（商家换了带 token 的链接），清 0 恢复正常水位口径。
     // need=1 的单条按需生成无法判定静态性（静态商家消费后重生成同样是 1 条新内容），不作依据。
     if (duplicates === 0 && need > 1) await setStaticFlag(campaign, 0)
-    // 若产出仍不足低水位，记一条 low_stock（warning）。
+    // 若产出仍明显不足目标水位，记一条 low_stock（warning）。
+    // 用 after < target（而非 <= lowWatermark）：自适应后低消费系列目标可能就等于低水位，
+    // 补到目标即达标，不该再报 low_stock 刷屏。仅当产出连目标都没够到才告警。
     // 例外：缺口是「内容重复」造成的（静态后缀商家补 1 条后其余全是重复）——
     // 库存不可能超过不同内容数，报 low_stock 只会每轮刷屏。
-    if (after <= lowWatermark && duplicates === 0) {
+    if (after < target && after <= lowWatermark && duplicates === 0) {
       await raiseAlert(campaign.user_id, {
         type: 'low_stock',
         campaignId,

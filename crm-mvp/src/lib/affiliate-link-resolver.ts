@@ -633,6 +633,20 @@ async function resolveViaBrowser(
     // 移动端 UA + 匹配的移动端视口（避免「手机 UA + 桌面分辨率」的指纹矛盾），并请求移动版轻量落地页。
     await page.setUserAgent(pickMobileUserAgent());
     await page.setViewport({ width: 393, height: 852, isMobile: true, hasTouch: true, deviceScaleFactor: 3 });
+    // 分阶段拦截（省 kookeey 流量大头）：换链接只需要拿到「广告主落地页 URL + 追踪 query」，
+    // 一旦主框架离开入口/跳板/中转域名、抵达真正的广告主落地页，URL 就已确定——此后落地页自身的
+    // script/xhr/图片等整页资源对「拿后缀」毫无价值，却是浏览器兜底流量最大的隐形放大器。故：
+    //   ① 跳转阶段（仍在入口/跳板/联盟点击中转/深链域名）：放行 script/xhr/fetch，保证 JS 跳转能触发
+    //      （MUI/PM/CG 等联盟靠 JS 执行点击注册才跳转，拦了会掉跟链成功率）；只拦重资源 + 第三方追踪。
+    //   ② 落地阶段（已到广告主域名）：非导航请求一律拦，仅保留主跳转链，砍掉落地页整页加载。
+    // 副作用红利：落地后资源被拦，后续 waitForNetworkIdle 会因无请求在飞而快速返回，兜底更快。
+    let startHost = "";
+    try {
+      startHost = new URL(startUrl).hostname;
+    } catch {
+      /* ignore */
+    }
+    let reachedLanding = false;
     await page.setRequestInterception(true);
     page.on("request", (reqUnknown: unknown) => {
       const r = reqUnknown as {
@@ -645,15 +659,36 @@ async function resolveViaBrowser(
       };
       const t = r.resourceType();
       const isNav = r.isNavigationRequest() && r.frame() === page.mainFrame();
-      if (isNav) {
-        chain.push(r.url());
-      }
       // 导航请求（document 主跳转链）永不拦，否则会中断跟链。
       if (isNav) {
+        chain.push(r.url());
         r.continue().catch(() => {});
         return;
       }
-      // 重资源类型 + 第三方分析/广告/追踪域名整类拦，砍掉落地页流量大头。
+      // 落地判定：主框架 host 已离开入口/跳板/中转/深链域名 → 视为已抵达广告主落地页（latch，不回退）。
+      // about:blank / chrome-error 等 hostname 为空，视为未落地；与 startHost 相同也视为未落地（还在入口页）。
+      if (!reachedLanding) {
+        try {
+          const mfHost = new URL(page.mainFrame().url()).hostname;
+          if (
+            mfHost &&
+            mfHost !== startHost &&
+            !isTrackerHost(mfHost) &&
+            !isNetworkClickHost(mfHost) &&
+            !isDeeplinkHost(mfHost)
+          ) {
+            reachedLanding = true;
+          }
+        } catch {
+          /* 未落地 */
+        }
+      }
+      if (reachedLanding) {
+        // 已到广告主落地页：URL 已定，落地页资源全拦，省整页加载流量。
+        r.abort().catch(() => {});
+        return;
+      }
+      // 跳转阶段：重资源类型 + 第三方分析/广告/追踪域名整类拦；script/xhr/fetch 放行以保证 JS 跳转成功。
       let host = "";
       try {
         host = new URL(r.url()).hostname;
