@@ -89,6 +89,8 @@ interface Summary {
   todayAdsCount?: number | null;
   /** 是否已配置统一脚本（MCC sheet_url），false 时显示「脚本未同步」备注 */
   scriptConfigured?: boolean;
+  /** D-176：佣金口径——"mcc"=仅当前 MCC 广告系列归属佣金，"all"=全账号全量佣金 */
+  commissionScope?: "mcc" | "all";
 }
 
 function formatInt(value: number | null | undefined): string {
@@ -891,7 +893,11 @@ export default function DataCenterPage() {
 
       {/* ========== 口径说明 + 行数限制提示 ========== */}
       <div style={{ marginBottom: 8, padding: "4px 8px", background: "#fafafa", borderRadius: 4, fontSize: 12, color: "#888", lineHeight: 1.8 }}>
-        <span>统计口径：总花费 / 总佣金 / ROI 基于全部去重 Campaign 聚合，不受表格展示行数限制。</span>
+        <span>
+          {summary.commissionScope === "mcc"
+            ? "统计口径：已选择单个 MCC——总花费 / 总佣金 / ROI 仅统计该 MCC 下广告系列（佣金按商家+联盟账号归属到系列），归不到该 MCC 系列的佣金不计入。"
+            : "统计口径：总花费 / 总佣金 / ROI 基于全部去重 Campaign 聚合，不受表格展示行数限制。"}
+        </span>
         <span style={{ marginLeft: 8 }}>展示 / 点击与花费同源于 Google Ads。</span>
         {rowMeta?.isLimited && (
           <span style={{ color: "#fa8c16", marginLeft: 8 }}>
@@ -999,6 +1005,12 @@ export default function DataCenterPage() {
 
       {/* ========== 佣金详情弹窗（含汇总指标 + 按平台账号明细） ========== */}
       <Modal title="佣金详情" open={commissionModal} onCancel={() => setCommissionModal(false)} footer={null} width={900}>
+        {/* D-176：佣金详情弹窗始终按全账号统计（交易无 MCC 归属），选了单 MCC 时提示与卡片口径差异 */}
+        {selectedMcc && (
+          <div style={{ marginBottom: 12, padding: "6px 10px", background: "#fffbe6", border: "1px solid #ffe58f", borderRadius: 4, fontSize: 12, color: "#874d00" }}>
+            当前已选择单个 MCC：上方「总佣金」卡片仅统计能归属到该 MCC 广告系列的佣金；本弹窗明细为全账号所有平台佣金，两者可能不一致。
+          </div>
+        )}
         {/* 汇总指标 — 与下方明细表同源（commission-by-account API 实时拉取），避免与 campaigns SWR 缓存口径不一 */}
         {(() => {
           const src = commissionByAccount.length > 0 ? commissionByAccount : commissionByMerchant;

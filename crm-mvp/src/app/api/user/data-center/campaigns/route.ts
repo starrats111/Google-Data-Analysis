@@ -306,6 +306,8 @@ export async function GET(req: NextRequest) {
       commission: Number(r.total_commission || 0),
       rejected: Number(r.rejected_commission || 0),
       approved: Number(r.approved_commission || 0),
+      paid: Number(r.paid_commission || 0),
+      pending: Number(r.pending_commission || 0),
       orders: Number(r.order_count || 0),
     });
     totalCommissionFromTxn += Number(r.total_commission || 0);
@@ -321,6 +323,22 @@ export async function GET(req: NextRequest) {
   // 仅影响逐行展示；总览合计与按 MCC 花费分布继续基于原始 per-campaign 统计（allStatsMap）。
   const merge = mergeMerchantCampaigns(dedupedCampaigns, allStatsMap);
   const commissionByRow = routeCommissionToRows(commissionGroups, merge.commissionTarget);
+
+  // D-176：单 MCC 模式下，总佣金口径改为「能归属到当前 MCC 广告系列的佣金之和」
+  //（即 commissionByRow 合计，与表格逐行佣金对得上）；花费此时已按 MCC 过滤，
+  // 两者口径一致后 ROI/净利润才有意义。不选 MCC（全部）时保持全量交易聚合，
+  // 避免商家无系列/纯自然成交的佣金被漏统计。
+  const isSingleMccView = Boolean(mccAccountId);
+  let mccCommission = 0, mccRejected = 0, mccApproved = 0, mccPaid = 0, mccPending = 0;
+  if (isSingleMccView) {
+    for (const rc of commissionByRow.values()) {
+      mccCommission += rc.commission;
+      mccRejected += rc.rejected;
+      mccApproved += rc.approved;
+      mccPaid += rc.paid;
+      mccPending += rc.pending;
+    }
+  }
 
   // ─── 全量计算总览 summary 和 costByMcc ───
   let totalCost = 0, totalClicks = 0, totalImpressions = 0;
@@ -431,17 +449,24 @@ export async function GET(req: NextRequest) {
   }
   totalCost += totalAdjustment;
 
+  // D-176：单 MCC 视图用归属佣金，全部视图用全量交易佣金
+  const summaryCommission = isSingleMccView ? mccCommission : totalCommissionFromTxn;
+  const summaryRejected = isSingleMccView ? mccRejected : totalRejectedFromTxn;
+  const summaryApproved = isSingleMccView ? mccApproved : totalApprovedFromTxn;
+  const summaryPaid = isSingleMccView ? mccPaid : totalPaidFromTxn;
+  const summaryPending = isSingleMccView ? mccPending : totalPendingFromTxn;
+
   const summary = {
     totalCost: Number(totalCost.toFixed(2)),
-    totalCommission: Number(totalCommissionFromTxn.toFixed(2)),
-    totalRejectedCommission: Number(totalRejectedFromTxn.toFixed(2)),
-    totalApprovedCommission: Number(totalApprovedFromTxn.toFixed(2)),
-    totalPaidCommission: Number(totalPaidFromTxn.toFixed(2)),
-    totalPendingCommission: Number(totalPendingFromTxn.toFixed(2)),
+    totalCommission: Number(summaryCommission.toFixed(2)),
+    totalRejectedCommission: Number(summaryRejected.toFixed(2)),
+    totalApprovedCommission: Number(summaryApproved.toFixed(2)),
+    totalPaidCommission: Number(summaryPaid.toFixed(2)),
+    totalPendingCommission: Number(summaryPending.toFixed(2)),
     totalClicks,
     totalImpressions,
     avgCpc: totalClicks > 0 ? Number((totalCost / totalClicks).toFixed(4)) : 0,
-    roi: totalCost > 0 ? Number(((totalCommissionFromTxn - totalRejectedFromTxn - totalCost) / totalCost).toFixed(2)) : 0,
+    roi: totalCost > 0 ? Number(((summaryCommission - summaryRejected - totalCost) / totalCost).toFixed(2)) : 0,
     campaignCount: dedupedCampaigns.length,
     enabledCount,
     pausedCount,
@@ -449,6 +474,8 @@ export async function GET(req: NextRequest) {
     todayAdsCount,
     // 是否已配置统一脚本（MCC sheet_url），false 时前端提示「脚本未同步」
     scriptConfigured,
+    // D-176：佣金口径标识——"mcc"=仅当前 MCC 广告系列归属佣金，"all"=全账号全量佣金
+    commissionScope: isSingleMccView ? "mcc" : "all",
   };
 
   // ─── 表格行：按状态排序，同状态内按广告系列名称中的序号升序，取前 200 条 ───

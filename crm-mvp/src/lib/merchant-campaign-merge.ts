@@ -136,6 +136,19 @@ export interface CommissionGroup {
   rejected: number;
   approved: number;
   orders: number;
+  /** D-176：已打款佣金（可选，单 MCC 汇总口径需要） */
+  paid?: number;
+  /** D-176：待确认佣金（可选，单 MCC 汇总口径需要） */
+  pending?: number;
+}
+
+export interface RoutedCommission {
+  commission: number;
+  rejected: number;
+  approved: number;
+  paid: number;
+  pending: number;
+  orders: number;
 }
 
 /**
@@ -146,17 +159,19 @@ export interface CommissionGroup {
 export function routeCommissionToRows(
   groups: CommissionGroup[],
   commissionTarget: Map<string, string>,
-): Map<string, { commission: number; rejected: number; approved: number; orders: number }> {
-  const byRow = new Map<string, { commission: number; rejected: number; approved: number; orders: number }>();
+): Map<string, RoutedCommission> {
+  const byRow = new Map<string, RoutedCommission>();
   for (const g of groups) {
     const target =
       (g.connId ? commissionTarget.get(`${g.merchantId}:${g.connId}`) : undefined) ??
       commissionTarget.get(g.merchantId);
     if (!target) continue;
-    const entry = byRow.get(target) ?? { commission: 0, rejected: 0, approved: 0, orders: 0 };
+    const entry = byRow.get(target) ?? { commission: 0, rejected: 0, approved: 0, paid: 0, pending: 0, orders: 0 };
     entry.commission += g.commission;
     entry.rejected += g.rejected;
     entry.approved += g.approved;
+    entry.paid += g.paid || 0;
+    entry.pending += g.pending || 0;
     entry.orders += g.orders;
     byRow.set(target, entry);
   }
