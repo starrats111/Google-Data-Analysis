@@ -743,12 +743,17 @@ export default function AdPreviewPage() {
   }, [headlines, descriptions, callouts, enableCallouts, sitelinks, preview, message]);
 
   // ─── 标题/描述操作 ───
+  // C-172（07 拍板）：记录用户手动输入/修改过的文案值（按最终文本匹配，AI 生成/事件回填不会入集）。
+  // 提交时随 body 发给后端，C-016 证据闸门对这些条目跳过「无证据宣称」改写，不再静默替换用户手改文案。
+  const userEditedTextsRef = useRef<Set<string>>(new Set());
   const updateHeadline = (idx: number, val: string) => {
+    userEditedTextsRef.current.add(val.trim());
     setHeadlines((prev) => { const n = [...prev]; n[idx] = val; return n; });
   };
   const removeHeadline = (idx: number) => setHeadlines((prev) => prev.filter((_, i) => i !== idx));
   const addHeadline = () => { if (headlines.length < 15) setHeadlines((prev) => [...prev, ""]); };
   const updateDescription = (idx: number, val: string) => {
+    userEditedTextsRef.current.add(val.trim());
     setDescriptions((prev) => { const n = [...prev]; n[idx] = val; return n; });
   };
   const removeDescription = (idx: number) => setDescriptions((prev) => prev.filter((_, i) => i !== idx));
@@ -2244,11 +2249,16 @@ export default function AdPreviewPage() {
     try {
       if (!selectedCid) { message.error("请选择发布的 CID 账户"); return; }
 
+      // C-172：标记本次提交里哪些条目是用户手改的（后端据此跳过证据校验，不静默改写）
+      const userEditedH = validH.filter((h) => userEditedTextsRef.current.has(h.trim()));
+      const userEditedD = validD.filter((d) => userEditedTextsRef.current.has(d.trim()));
       const submitBody: Record<string, any> = {
         campaign_id: campaignId,
         ...(confirmReachable ? { confirm_reachable: true } : {}),
         headlines: validH,
         descriptions: validD,
+        ...(userEditedH.length > 0 ? { user_edited_headlines: userEditedH } : {}),
+        ...(userEditedD.length > 0 ? { user_edited_descriptions: userEditedD } : {}),
         keywords: validKw,
         daily_budget: budget,
         max_cpc_limit: maxCpc,

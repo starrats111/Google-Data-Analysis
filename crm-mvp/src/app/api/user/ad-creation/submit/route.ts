@@ -580,14 +580,33 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
       features: (adCreative.crawl_cache as any)?.features || [],
     };
 
+    // C-172（07 拍板：信任用户手改文案）：前端标记的用户手动修改条目跳过「事实证据」校验。
+    // 背景：证据来自 crawl_cache（爬取失败/爬错国家站时为空），用户核对过的折扣/金额宣称
+    // （如 "Save up to 78%"）会因查无证据被静默改写成保守模板，Google 收到的不是用户文案。
+    // 注意：仅跳过 validateClaims；Google 官方政策闸（gv）、D-082 禁止词、D-162 政策风险、H4 终检照常执行。
+    const userEditedTexts = new Set<string>(
+      [
+        ...(Array.isArray(body.user_edited_headlines) ? body.user_edited_headlines : []),
+        ...(Array.isArray(body.user_edited_descriptions) ? body.user_edited_descriptions : []),
+      ]
+        .map((t: unknown) => String(t ?? "").trim())
+        .filter(Boolean),
+    );
+
     const runGate = async (items: string[], field: "headline" | "description", maxLen: number, minLen: number): Promise<string[]> => {
       const gv = collectGooglePolicyViolations(
         field === "headline"
           ? { headlines: items, brandRoot }
           : { descriptions: items, brandRoot }
       ).filter((v) => v.field === field);
+      const claimTexts = items
+        .map((t, i) => ({ field, index: i, text: t }))
+        .filter((x) => !userEditedTexts.has(x.text.trim()));
+      if (claimTexts.length < items.length) {
+        console.warn(`[AdSubmit] C-172 ${field} 用户手改条目跳过证据校验 ${items.length - claimTexts.length} 条`);
+      }
       const cv = validateClaims({
-        texts: items.map((t, i) => ({ field, index: i, text: t })),
+        texts: claimTexts,
         evidence,
         country,
       });
