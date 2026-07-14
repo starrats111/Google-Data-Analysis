@@ -1190,6 +1190,25 @@ export async function buildTeamAnnualReport(
   /** 每平台×月×半月的默认实收(CNY)（逐笔打款日汇率 + 组员手填），组长手填为空时的兜底 */
   const paidCnyPlatHalf = new Map<string, number>(); // `${month}|${platform}|${H1|H2}`
 
+  // ── 银行流水登记（R-07）：整年一次拉取。归半月同月度口径：source_date 反查批次
+  // request_date 判批，兜底按日期就近。用于：
+  // a) 月×平台×半月 实际入账(CNY)聚合（实际佣金取值，优先级低于组长手填、高于成员估算）；
+  // b) 默认实收(CNY)的净额替换（与月度 3b 一致，杜绝年度/月度口径漂移，见下方替换段）
+  const bankRows = await prisma.bank_flow_entries.findMany({
+    where: { team_id: teamId, is_deleted: 0, month: { startsWith: `${year}-` } },
+    select: { month: true, platform: true, txn_at: true, amount: true, fee: true, source_date: true, breakdown: true },
+  });
+  const resolveAnnualBankHalf = await buildBankHalfResolver(bankRows, memberIds);
+  const bankCnyMonthPlat = new Map<string, Map<string, { H1?: number; H2?: number }>>();
+  for (const e of bankRows) {
+    const half = resolveAnnualBankHalf(e);
+    let byPlat = bankCnyMonthPlat.get(e.month);
+    if (!byPlat) { byPlat = new Map(); bankCnyMonthPlat.set(e.month, byPlat); }
+    const entry = byPlat.get(e.platform) || {};
+    entry[half] = (entry[half] || 0) + Number(e.amount || 0);
+    byPlat.set(e.platform, entry);
+  }
+
   if (memberIds.length > 0) {
     const uidIn = memberIds.map(() => "?").join(",");
 
@@ -1298,7 +1317,42 @@ export async function buildTeamAnnualReport(
         bookCells.set(key, c);
       }
     }
-    // recvcny:* 后套（覆盖 recv:* 推导的默认 CNY）
+    // ── 银行流水净额替换（C-173，口径对齐月度 3b）：有流水登记的 员工×月×平台×账号×半月，
+    // 默认实收(CNY) 改用 流水明细金额 − 按比例分摊手续费（真实净到手），
+    // 替代打款日汇率毛额估算（含 recv:* 推导值）；组员手填 recvcny:* 仍最优先（后套） ──
+    const memberIdSet = new Set(memberIds.map((id) => String(id)));
+    const bankNetCells = new Map<string, number>(); // `${uid}|${m}|${platform}|${acct}|${half}`
+    for (const e of bankRows) {
+      let items: { userId?: unknown; account?: unknown; amount?: unknown }[] = [];
+      try { items = e.breakdown ? JSON.parse(e.breakdown) : []; } catch { /* 脏数据跳过 */ }
+      if (!Array.isArray(items) || items.length === 0) continue;
+      const fees = apportionFee(items.map((i) => Number(i.amount || 0)), Number(e.fee || 0));
+      const half = resolveAnnualBankHalf(e);
+      items.forEach((it, idx) => {
+        const uid = String(it.userId ?? "");
+        if (!memberIdSet.has(uid)) return;
+        const net = Number(it.amount || 0) - fees[idx];
+        const key = `${uid}|${e.month}|${e.platform}|${String(it.account ?? "").trim()}|${half}`;
+        bankNetCells.set(key, (bankNetCells.get(key) || 0) + net);
+      });
+    }
+    // 先把每个净额格解析到目标格（账号名精确匹配不到时，归该 员工×月×平台 已有打款的首个账号），
+    // 再按目标格汇总后一次性替换估算值，避免多来源相互覆盖
+    const existingKeys = [...paidCnyCells.keys()];
+    const resolvedNet = new Map<string, number>();
+    for (const [key, net] of bankNetCells) {
+      let target = key;
+      if (!paidCnyCells.has(target)) {
+        const [uid, m, platform, , half] = key.split("|");
+        const prefix = `${uid}|${m}|${platform}|`;
+        const alt = existingKeys.find((k) => k.startsWith(prefix) && k.endsWith(`|${half}`))
+          ?? existingKeys.find((k) => k.startsWith(prefix));
+        if (alt) target = `${prefix}${alt.split("|")[3]}|${half}`;
+      }
+      resolvedNet.set(target, (resolvedNet.get(target) || 0) + net);
+    }
+    for (const [target, net] of resolvedNet) paidCnyCells.set(target, net);
+    // recvcny:* 后套（覆盖 recv:* 推导与银行流水净额的默认 CNY）
     for (const o of memberOv) {
       const mch = o.scope_key.match(/^recvcny:([^:]+):([^:]*):(H1|H2)$/);
       if (!mch) continue;
@@ -1393,23 +1447,6 @@ export async function buildTeamAnnualReport(
       if (isCny) a.adCny += effOriginal;
       else a.adUsd += effUsd;
     }
-  }
-
-  // ── 4a. 银行流水登记（R-07）：月×平台×半月 实际入账(CNY)聚合，优先级低于组长手填、高于成员估算 ──
-  // 归半月同月度口径：source_date 反查批次 request_date 判批，兜底按日期就近
-  const bankRows = await prisma.bank_flow_entries.findMany({
-    where: { team_id: teamId, is_deleted: 0, month: { startsWith: `${year}-` } },
-    select: { month: true, platform: true, txn_at: true, amount: true, source_date: true, breakdown: true },
-  });
-  const resolveAnnualBankHalf = await buildBankHalfResolver(bankRows, memberIds);
-  const bankCnyMonthPlat = new Map<string, Map<string, { H1?: number; H2?: number }>>();
-  for (const e of bankRows) {
-    const half = resolveAnnualBankHalf(e);
-    let byPlat = bankCnyMonthPlat.get(e.month);
-    if (!byPlat) { byPlat = new Map(); bankCnyMonthPlat.set(e.month, byPlat); }
-    const entry = byPlat.get(e.platform) || {};
-    entry[half] = (entry[half] || 0) + Number(e.amount || 0);
-    byPlat.set(e.platform, entry);
   }
 
   // ── 4. 组长手填（每平台 CNY + 旧版总额），按月套用 ──
