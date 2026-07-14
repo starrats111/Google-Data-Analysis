@@ -1832,6 +1832,116 @@ ${bodyOpenTag}
  * 解析 index.html 中引用的数据 JS 文件路径，
  * 确保新文章也写入首页实际加载的索引文件。
  */
+// ─── 双索引站点兼容（首页索引与 CRM 主索引字段风格不同，如 draftify.sbs 的 articles.js/ARTICLES）───
+
+const HOMEPAGE_INDEX_VAR_NAMES = [
+  "articlesIndex", "articles", "ARTICLES", "posts", "blogPosts", "POSTS", "articlesData", "window.__ARTICLES__",
+];
+
+const HOMEPAGE_CATEGORY_LABELS: Record<string, string> = {
+  fashion: "Fashion & Accessories",
+  health: "Health & Beauty",
+  home: "Home & Garden",
+  travel: "Travel & Accommodation",
+  finance: "Finance & Insurance",
+  food: "Food & Beverage",
+};
+
+const HOMEPAGE_CATEGORY_EMOJI: Record<string, string> = {
+  fashion: "👗",
+  health: "✨",
+  home: "🌿",
+  travel: "🧭",
+  finance: "💰",
+  food: "🍽️",
+};
+
+function isLongMonthDate(value: unknown): boolean {
+  return typeof value === "string"
+    && /^(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}$/.test(value.trim());
+}
+
+function formatHomepageLongDate(date: Date): string {
+  return date.toLocaleDateString("en-US", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+}
+
+/**
+ * 按首页索引现有条目的字段风格适配 CRM 标准条目。
+ * 若现有条目使用 url（而非 detailUrl）作为链接字段（如批量建站模板的 ARTICLES），
+ * 则补齐 url/catKey/emoji/author 等首页模板实际渲染的字段，避免链接失效或显示 undefined。
+ */
+function adaptEntryToHomepageSchema(
+  indexEntry: Record<string, unknown>,
+  existingEntries: Record<string, unknown>[],
+): Record<string, unknown> {
+  const sample = existingEntries.find((e) => e && typeof e === "object");
+  const usesUrlSchema = Boolean(sample && typeof sample.url === "string" && typeof sample.detailUrl !== "string");
+  if (!usesUrlSchema || !sample) return indexEntry;
+
+  const catKey = String(indexEntry.category || "general").toLowerCase();
+  const detailUrl = String(indexEntry.detailUrl || "");
+  const url = detailUrl.includes("?")
+    ? `/${detailUrl.replace(/^\/+/, "")}`
+    : `/${detailUrl.replace(/^\/+|\/+$/g, "")}/`;
+
+  const adapted: Record<string, unknown> = {
+    id: indexEntry.id,
+    slug: indexEntry.slug,
+    title: indexEntry.title,
+    excerpt: indexEntry.excerpt,
+    category: HOMEPAGE_CATEGORY_LABELS[catKey] || (catKey.charAt(0).toUpperCase() + catKey.slice(1)),
+    catKey,
+    date: isLongMonthDate(sample.date)
+      ? formatHomepageLongDate(parseDateValue(indexEntry.dateISO) || new Date())
+      : (indexEntry.dateLabel || indexEntry.date),
+    dateISO: indexEntry.dateISO,
+    readTime: indexEntry.readTime,
+    url,
+    // 保留 detailUrl 供 CRM 后续识别/撤回
+    detailUrl,
+  };
+  if ("emoji" in sample) adapted.emoji = HOMEPAGE_CATEGORY_EMOJI[catKey] || "📝";
+  if ("author" in sample) adapted.author = "Editorial Team";
+  if ("image" in sample || "heroImage" in sample) {
+    adapted.image = indexEntry.image;
+    adapted.heroImage = indexEntry.heroImage;
+  }
+  return adapted;
+}
+
+/** 收集首页实际引用、但不是 CRM 主索引的候选数据文件（相对路径） */
+function findHomepageIndexCandidates(indexHtml: string, primaryDataJsPath: string): string[] {
+  const candidates: string[] = [];
+
+  // 从 <script src="..."> 标签中提取所有 JS 路径
+  const scriptRe = /<script[^>]+src=["']([^"'?]+)/gi;
+  let m: RegExpExecArray | null;
+  while ((m = scriptRe.exec(indexHtml)) !== null) {
+    const src = m[1].replace(/^\.\//, "").replace(/^\/+/, "");
+    if (src && src !== primaryDataJsPath && !src.includes("main.js") && !candidates.includes(src)) {
+      candidates.push(src);
+    }
+  }
+
+  // 同时检测已知索引文件名（含双索引站点的根目录 articles.js）
+  const knownIndexFiles = [
+    "js/articles-index.js", "js/data.js", "data.js", "articles.js",
+    "articles-data.js", "assets/js/main.js", "assets/main.js",
+  ];
+  for (const known of knownIndexFiles) {
+    if (known !== primaryDataJsPath && indexHtml.includes(known) && !candidates.includes(known)) {
+      candidates.push(known);
+    }
+  }
+
+  return candidates;
+}
+
 async function syncToHomepageDataFile(
   sftp: SFTPWrapper,
   siteRoot: string,
@@ -1841,28 +1951,7 @@ async function syncToHomepageDataFile(
 ): Promise<void> {
   try {
     const indexHtml = await sftpReadFile(sftp, `${siteRoot}/index.html`);
-
-    // 从 <script src="..."> 标签中提取所有 JS 路径
-    const scriptRe = /<script[^>]+src=["']([^"'?]+)/gi;
-    let m: RegExpExecArray | null;
-    const candidates: string[] = [];
-    while ((m = scriptRe.exec(indexHtml)) !== null) {
-      const src = m[1].replace(/^\.\//, "");
-      if (src !== primaryDataJsPath && !src.includes("main.js")) {
-        candidates.push(src);
-      }
-    }
-
-    // 同时检测 main.js 引用但非当前数据文件的索引 JS
-    const knownIndexFiles = [
-      "js/articles-index.js", "js/data.js", "data.js",
-      "articles-data.js", "assets/js/main.js", "assets/main.js",
-    ];
-    for (const known of knownIndexFiles) {
-      if (known !== primaryDataJsPath && indexHtml.includes(known)) {
-        if (!candidates.includes(known)) candidates.push(known);
-      }
-    }
+    const candidates = findHomepageIndexCandidates(indexHtml, primaryDataJsPath);
 
     for (const relPath of candidates) {
       const fullPath = `${siteRoot}/${relPath}`;
@@ -1872,11 +1961,14 @@ async function syncToHomepageDataFile(
       try { content = await sftpReadFile(sftp, fullPath); } catch { continue; }
 
       // 检测文件中的数组变量名
-      const candidateVarNames = ["articlesIndex", "articles", "posts", "blogPosts", "POSTS", "articlesData", "window.__ARTICLES__"];
-      const hpVarName = candidateVarNames.find((name) => Boolean(findArrayAssignmentMatch(content, name)));
+      const hpVarName = HOMEPAGE_INDEX_VAR_NAMES.find((name) => Boolean(findArrayAssignmentMatch(content, name)));
       if (!hpVarName) continue;
 
       console.log(`[Publisher] 同步索引到首页文件: ${relPath} (var=${hpVarName})`);
+
+      // 按现有条目字段风格适配（双索引站点的首页模板常用 url/catKey/emoji 字段）
+      const existingEntries = parseJsArrayLiteral(content, hpVarName) || [];
+      const adaptedEntry = adaptEntryToHomepageSchema(indexEntry, existingEntries);
 
       content = removeArticleEntriesByIdentity(content, {
         id: articleId,
@@ -1889,13 +1981,63 @@ async function syncToHomepageDataFile(
       const arrMatch = findArrayAssignmentMatch(content, hpVarName);
       if (arrMatch) {
         const pos = (arrMatch.index || 0) + arrMatch[0].length;
-        const entryStr = "\n  " + JSON.stringify(indexEntry) + ",";
+        const entryStr = "\n  " + JSON.stringify(adaptedEntry) + ",";
         content = content.slice(0, pos) + entryStr + content.slice(pos);
         await sftpWriteFile(sftp, fullPath, content);
       }
     }
   } catch (err) {
     console.warn(`[Publisher] 同步首页数据文件时出错（非致命）:`, err);
+  }
+}
+
+/** 把日期变更同步到首页实际加载的数据文件（双索引站点） */
+async function syncDateToHomepageFiles(
+  sftp: SFTPWrapper,
+  siteRoot: string,
+  primaryDataJsPath: string,
+  articleId: string,
+  publishDate: Date,
+): Promise<void> {
+  try {
+    const indexHtml = await sftpReadFile(sftp, `${siteRoot}/index.html`);
+    const candidates = findHomepageIndexCandidates(indexHtml, primaryDataJsPath);
+
+    const dateLabel = publishDate.toLocaleDateString("en-US", {
+      timeZone: "Asia/Shanghai",
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+    const dateISO = publishDate.toISOString().slice(0, 10);
+
+    for (const relPath of candidates) {
+      const fullPath = `${siteRoot}/${relPath}`;
+      let content = "";
+      try { content = await sftpReadFile(sftp, fullPath); } catch { continue; }
+
+      const hpVarName = HOMEPAGE_INDEX_VAR_NAMES.find((name) => Boolean(findArrayAssignmentMatch(content, name)));
+      if (!hpVarName) continue;
+
+      const entries = parseJsArrayLiteral(content, hpVarName);
+      if (!entries) continue;
+      const idx = entries.findIndex((e) => String(e.id) === articleId);
+      if (idx < 0) continue;
+
+      const entry = { ...entries[idx] };
+      if ("dateISO" in entry) entry.dateISO = dateISO;
+      if ("dateLabel" in entry) entry.dateLabel = dateLabel;
+      entry.date = isLongMonthDate(entry.date) ? formatHomepageLongDate(publishDate) : dateLabel;
+      entries[idx] = entry;
+
+      const newContent = replaceJsArrayLiteral(content, hpVarName, entries);
+      if (newContent) {
+        await sftpWriteFile(sftp, fullPath, newContent);
+        console.log(`[Publisher] 首页数据文件日期已同步: ${relPath} (var=${hpVarName})`);
+      }
+    }
+  } catch (err) {
+    console.warn(`[Publisher] 同步首页数据文件日期时出错（非致命）:`, err);
   }
 }
 
@@ -2379,6 +2521,7 @@ export async function publishArticleToSite(
     const primaryBasename = dataJsPath.split("/").pop() || "";
     if (primaryBasename) jsBasenames.add(primaryBasename);
     jsBasenames.add("articles-index.js");
+    jsBasenames.add("articles.js");  // 双索引站点的首页索引（如 draftify.sbs）
 
     for (const htmlName of ["article.html", "articles.html", "index.html"]) {
       const htmlPath = `${siteRoot}/${htmlName}`;
@@ -2445,7 +2588,7 @@ export async function unpublishArticleFromSite(
       });
     } catch { /* 文件可能不存在 */ }
 
-    // 2. 从所有索引文件中移除条目（包括首页数据文件）
+    // 2. 从所有索引文件中移除条目（包括首页数据文件，含双索引站点的根目录 articles.js）
     const entryRegex = new RegExp(
       `\\{[^}]*"id"\\s*:\\s*"${articleId}"[^}]*\\},?\\s*`,
       "g"
@@ -2455,7 +2598,7 @@ export async function unpublishArticleFromSite(
     try {
       const indexHtml = await sftpReadFile(sftp, `${siteRoot}/index.html`);
       const knownFiles = [
-        "js/articles-index.js", "js/data.js", "data.js",
+        "js/articles-index.js", "js/data.js", "data.js", "articles.js",
         "articles-data.js", "assets/js/main.js", "assets/main.js",
       ];
       for (const f of knownFiles) {
@@ -2465,7 +2608,9 @@ export async function unpublishArticleFromSite(
     for (const fp of filesToClean) {
       try {
         const content = await sftpReadFile(sftp, fp);
-        const cleaned = content.replace(entryRegex, "");
+        let cleaned = content.replace(entryRegex, "");
+        // 正则未命中时（如条目 id 为数字或字段风格不同的双索引首页），解析数组按 id/slug 精确移除
+        cleaned = removeArticleEntriesByIdentity(cleaned, { id: articleId, slug });
         if (cleaned !== content) await sftpWriteFile(sftp, fp, cleaned);
       } catch { /* 文件可能不存在 */ }
     }
@@ -2548,6 +2693,9 @@ export async function updateArticleDateOnSite(
     } catch {
       // 索引文件操作失败时不阻断
     }
+
+    // 3. 同步首页实际加载的数据文件（双索引站点，如根目录 articles.js）
+    await syncDateToHomepageFiles(sftp, siteRoot, dataJsPath, articleId, publishDate);
 
     client.end();
     return { success: true };
