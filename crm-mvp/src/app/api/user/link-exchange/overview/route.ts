@@ -5,6 +5,7 @@ import { getAlertSummary } from '@/lib/suffix-engine/alerts'
 import { getKookeeyTrafficCached } from '@/lib/suffix-engine/kookeey-quota'
 import { STOCK_CONFIG } from '@/lib/suffix-engine/config'
 import { parseCampaignNameFull } from '@/lib/campaign-merchant-link'
+import { pickCampaignAffiliateLink } from '@/lib/merchant-connection'
 import { normalizePlatformCode } from '@/lib/constants'
 import { todayCST, parseCSTDateStart, parseCSTDateEndExclusive } from '@/lib/date-utils'
 
@@ -24,6 +25,7 @@ export async function GET(req: NextRequest) {
       target_country: true,
       google_status: true,
       user_merchant_id: true,
+      platform_connection_id: true,
       suffix_exchange_enabled: true,
       suffix_is_static: true,
       suffix_last_apply_at: true,
@@ -63,6 +65,7 @@ export async function GET(req: NextRequest) {
     parent_blacklisted: true,
     kyads_referer_url: true,
     platform_connection_id: true,
+    connection_campaign_links: true,
   } as const
 
   // 巡航结果(tracking_status) 映射到前端状态。关键：resolve_failed/no_tracking 多为
@@ -71,13 +74,17 @@ export async function GET(req: NextRequest) {
   // - ok                        → valid（有效）
   // - forbidden_network         → invalid（命中上级联盟黑名单，真无效/硬拦截）
   // - resolve_failed/no_tracking→ 基础检测已判坏(link_status=invalid)才算 invalid；否则 recheck（待验证，巡航未通过，会重试）
-  // - 未巡航(unchecked)         → 无任何链接 → no_link（缺链接）；有链接 → 回退 link_status
-  const deriveLinkStatus = (m: {
-    tracking_status: string | null
-    link_status: string | null
-    tracking_link: string | null
-    campaign_link: string | null
-  }): string => {
+  // - 未巡航(unchecked)         → 该广告归属账号无链接 → no_link（缺链接）；有链接 → 回退 link_status
+  //
+  // 账号感知（D-181）：「缺链接」以 pickCampaignAffiliateLink（广告归属连接的链接）为准，
+  // 而不是商家主链接字段——多连接用户（如 RW1/RW2）主链接为空但 per-conn 键有链接时不误报。
+  const deriveLinkStatus = (
+    m: {
+      tracking_status: string | null
+      link_status: string | null
+    },
+    effectiveLink: string,
+  ): string => {
     switch (m.tracking_status) {
       case 'ok':
         return 'valid'
@@ -87,7 +94,7 @@ export async function GET(req: NextRequest) {
       case 'resolve_failed':
         return m.link_status === 'invalid' ? 'invalid' : 'recheck'
       default:
-        if (!m.tracking_link && !m.campaign_link) return 'no_link'
+        if (!effectiveLink) return 'no_link'
         return m.link_status ?? 'unchecked'
     }
   }
@@ -241,6 +248,8 @@ export async function GET(req: NextRequest) {
     const todayClicks = mkey ? (clicksByKey.get(mkey) ?? 0) : 0
     const todayOrders = mkey ? (ordersByKey.get(mkey) ?? 0) : 0
     const conversion = todayClicks > 0 ? todayOrders / todayClicks : null // 订单/点击；无点击为 null（前端显示 —）
+    // 账号感知有效链接：与补货/刷点击引擎同口径（广告归属连接的 per-conn 键 > 主连接主链接）
+    const effectiveLink = merchant ? pickCampaignAffiliateLink(c.platform_connection_id, merchant) : ''
     return {
       campaignId: c.id.toString(),
       googleCampaignId: c.google_campaign_id,
@@ -252,8 +261,8 @@ export async function GET(req: NextRequest) {
       matched: !!merchant,
       merchantId: merchant?.id.toString() ?? null,
       merchantName: merchant?.merchant_name ?? null,
-      trackingLink: merchant?.tracking_link ?? null,
-      linkStatus: merchant ? deriveLinkStatus(merchant) : 'unchecked',
+      trackingLink: effectiveLink || merchant?.tracking_link || null,
+      linkStatus: merchant ? deriveLinkStatus(merchant, effectiveLink) : 'unchecked',
       linkCheckReason: merchant?.parent_check_reason ?? merchant?.link_check_reason ?? null,
       parentNetwork: merchant?.parent_network ?? null,
       parentBlacklisted: merchant?.parent_blacklisted === 1,
