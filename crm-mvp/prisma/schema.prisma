@@ -115,6 +115,9 @@ model platform_connections {
   // D-168：账号位次（07 规则）——同用户同平台第 1 个账号=1、第 2 个=2；删除释放位次，
   // 新账号补最小空缺（删 2 加第 4 个 → 新账号=2）。系列名平台段序号（LH2）按此映射到连接。
   account_index        Int?      @db.UnsignedInt
+  // D-180：联盟序号用户确认时间。NULL=未确认（含存量自动分配 + 多连接未核对）；
+  // 有值=用户已确认或单连接平台系统自动确认。多连接平台存在 NULL 时登录强制弹窗要求确认。
+  account_index_confirmed_at DateTime? @db.DateTime(0)
   api_key              String?   @db.Text
   channel_id           String?   @db.VarChar(64) // 历史遗留（AD 平台已下线），保留不再使用
   payee                String?   @db.VarChar(64) // D-077：该账号打款的收款人（如 张文俊 / 龚建成）。R-01 起弃用，改用 payment_method_id

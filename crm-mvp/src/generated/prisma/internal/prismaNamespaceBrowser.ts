@@ -228,6 +228,7 @@ export const Platform_connectionsScalarFieldEnum = {
   platform: 'platform',
   account_name: 'account_name',
   account_index: 'account_index',
+  account_index_confirmed_at: 'account_index_confirmed_at',
   api_key: 'api_key',
   channel_id: 'channel_id',
   payee: 'payee',

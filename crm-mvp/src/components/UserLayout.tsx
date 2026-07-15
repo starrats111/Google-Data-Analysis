@@ -26,6 +26,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { COLORS } from "@/styles/themeConfig";
 import { useApi } from "@/lib/swr";
 import type { MenuProps } from "antd";
+import AccountIndexGate from "@/components/AccountIndexGate";
 
 const { Sider, Content, Header } = Layout;
 const { Text } = Typography;
@@ -374,6 +375,9 @@ export default function UserLayout({ children }: { children: React.ReactNode }) 
         </Header>
         <Content style={{ margin: 16 }} className="page-content">{children}</Content>
       </Layout>
+
+      {/* D-180：联盟序号未确认时全局强制弹窗 */}
+      <AccountIndexGate />
 
       <Modal
         title={detailModal.title}
