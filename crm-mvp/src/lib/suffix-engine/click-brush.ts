@@ -263,6 +263,10 @@ interface TaskRuntime {
   country: string
   platform: string | null
   sourceMerchantId: bigint | null
+  /** F-IPDEDUP-01 组级去重键：用户所属组（NULL=未分组，不做组级去重） */
+  teamId: bigint | null
+  /** F-IPDEDUP-01 组级去重键：联盟平台商家 ID（字符串，跨用户对同一真实商家一致） */
+  merchantIdStr: string | null
   existingSuffixes: Set<string>
   /** 本任务是否已顺带清过库存类告警（刷点击也在产出库存，成功一次即清一次，避免高消耗系列告警常驻） */
   alertsResolved?: boolean
@@ -292,8 +296,11 @@ async function buildTaskRuntime(taskId: bigint): Promise<TaskRuntime | null> {
 
   const merchant = await prisma.user_merchants.findFirst({
     where: { id: campaign.user_merchant_id, is_deleted: 0 },
-    select: { id: true, platform: true },
+    select: { id: true, platform: true, merchant_id: true },
   })
+
+  // 组级去重键：取用户所属组（NULL=未分组，不参与组级去重）
+  const owner = await prisma.users.findUnique({ where: { id: campaign.user_id }, select: { team_id: true } })
 
   const existing = await prisma.suffix_pool.findMany({
     where: { campaign_id: campaign.id, status: 'available', is_deleted: 0 },
@@ -310,6 +317,8 @@ async function buildTaskRuntime(taskId: bigint): Promise<TaskRuntime | null> {
     country: campaign.target_country || 'US',
     platform: merchant?.platform ?? null,
     sourceMerchantId: merchant?.id ?? null,
+    teamId: owner?.team_id ?? null,
+    merchantIdStr: merchant?.merchant_id ?? null,
     existingSuffixes: new Set(existing.map((r) => r.suffix_content)),
   }
 }
@@ -336,6 +345,8 @@ async function executeItem(rt: TaskRuntime, itemId: bigint): Promise<{ ok: boole
   const r = await generateOneSuffix(rt.affiliateUrl, rt.country, rt.platform, {
     userId: rt.userId,
     campaignId: rt.campaignId,
+    teamId: rt.teamId,
+    merchantId: rt.merchantIdStr,
     userAgent: randomPick(USER_AGENTS),
     // 优先用商家自定义来路，未配置才回退随机 REFERERS（更贴近真实站点引流）
     referer: rt.refererUrl || randomPick(REFERERS) || null,
@@ -362,8 +373,13 @@ async function executeItem(rt: TaskRuntime, itemId: bigint): Promise<{ ok: boole
         })
         .catch(() => {})
     }
-    // 记录本次点击出口 IP（24h 去重 + 子项留痕）
-    if (r.exitIp) await recordExitIp(rt.userId, rt.campaignId, r.exitIp)
+    // 记录本次点击出口 IP（24h 组级去重 + 子项留痕）
+    if (r.exitIp) {
+      await recordExitIp(
+        { teamId: rt.teamId, platform: rt.platform, merchantId: rt.merchantIdStr, userId: rt.userId, campaignId: rt.campaignId },
+        r.exitIp,
+      )
+    }
     await prisma.kyads_click_task_items
       .update({ where: { id: itemId }, data: { status: 'success', exit_ip: r.exitIp, duration_ms: duration } })
       .catch(() => {})

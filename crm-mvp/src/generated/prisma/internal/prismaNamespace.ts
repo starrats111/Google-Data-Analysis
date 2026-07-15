@@ -5766,7 +5766,11 @@ export const Proxy_exit_ip_usageScalarFieldEnum = {
   id: 'id',
   user_id: 'user_id',
   campaign_id: 'campaign_id',
+  team_id: 'team_id',
+  platform: 'platform',
+  merchant_id: 'merchant_id',
   exit_ip: 'exit_ip',
+  exit_subnet: 'exit_subnet',
   used_at: 'used_at',
   expires_at: 'expires_at'
 } as const
@@ -6671,7 +6675,10 @@ export type kyads_click_task_itemsOrderByRelevanceFieldEnum = (typeof kyads_clic
 
 
 export const proxy_exit_ip_usageOrderByRelevanceFieldEnum = {
-  exit_ip: 'exit_ip'
+  platform: 'platform',
+  merchant_id: 'merchant_id',
+  exit_ip: 'exit_ip',
+  exit_subnet: 'exit_subnet'
 } as const
 
 export type proxy_exit_ip_usageOrderByRelevanceFieldEnum = (typeof proxy_exit_ip_usageOrderByRelevanceFieldEnum)[keyof typeof proxy_exit_ip_usageOrderByRelevanceFieldEnum]

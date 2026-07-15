@@ -180,7 +180,7 @@ async function doReplenish(
   // 避免其系列被 lease 触发或 cron 选中后空跑生成、白烧低配机预算并刷 no_tracking/invalid_link 告警。
   const owner = await prisma.users.findUnique({
     where: { id: campaign.user_id },
-    select: { link_exchange_disabled: true },
+    select: { link_exchange_disabled: true, team_id: true },
   })
   if (owner?.link_exchange_disabled === 1) {
     return { campaignId: cid, skipped: true, reason: 'user_exchange_disabled', before: 0, generated: 0, after: 0, failed: 0 }
@@ -233,7 +233,7 @@ async function doReplenish(
   // 加载商家联盟链接 + 平台
   const merchant = await prisma.user_merchants.findFirst({
     where: { id: campaign.user_merchant_id, is_deleted: 0 },
-    select: { id: true, platform: true, tracking_link: true, campaign_link: true, connection_campaign_links: true, platform_connection_id: true, merchant_name: true, merchant_url: true },
+    select: { id: true, platform: true, merchant_id: true, tracking_link: true, campaign_link: true, connection_campaign_links: true, platform_connection_id: true, merchant_name: true, merchant_url: true },
   })
 
   if (!merchant) {
@@ -261,6 +261,9 @@ async function doReplenish(
 
   const country = campaign.target_country
   const platform = merchant.platform
+  // F-IPDEDUP-01 组级去重键（跨用户、不跨组）：team 缺省(未分组)时组级去重自然关闭
+  const teamId = owner?.team_id ?? null
+  const merchantIdStr = merchant.merchant_id ?? null
 
   // 已有 available suffix 内容集合，用于去重
   const existingSuffixes = new Set(
@@ -300,8 +303,13 @@ async function doReplenish(
         expires_at: expiresAt,
       },
     })
-    // 记录出口 IP（24h 去重）：成功入库才记，下条生成即可避开
-    if (exitIp) await recordExitIp(campaign.user_id, campaignId, exitIp)
+    // 记录出口 IP（24h 组级去重）：成功入库才记，下条生成即可避开
+    if (exitIp) {
+      await recordExitIp(
+        { teamId, platform, merchantId: merchantIdStr, userId: campaign.user_id, campaignId },
+        exitIp,
+      )
+    }
     return true
   }
 
@@ -313,10 +321,10 @@ async function doReplenish(
   let effectiveUrl = affiliateUrl
 
   // ── probe：先探一条 ──
-  let probe = await generateOneSuffix(effectiveUrl, country, platform, { userId: campaign.user_id, campaignId, referer: refererUrl })
+  let probe = await generateOneSuffix(effectiveUrl, country, platform, { userId: campaign.user_id, campaignId, teamId, merchantId: merchantIdStr, referer: refererUrl })
   if (!probe.ok && probe.reason === 'no_tracking' && trackingFallback && trackingFallback !== effectiveUrl) {
     // 挑中链接落地无追踪参数：改用商家动态 tracking_link 重试一次。
-    const retry = await generateOneSuffix(trackingFallback, country, platform, { userId: campaign.user_id, campaignId, referer: refererUrl })
+    const retry = await generateOneSuffix(trackingFallback, country, platform, { userId: campaign.user_id, campaignId, teamId, merchantId: merchantIdStr, referer: refererUrl })
     if (retry.ok) {
       effectiveUrl = trackingFallback
       probe = retry
@@ -353,7 +361,7 @@ async function doReplenish(
     let circuitOpen = false
     await runWithConcurrency(remaining, STOCK_CONFIG.CONCURRENCY, async () => {
       if (circuitOpen) return
-      const r = await generateOneSuffix(effectiveUrl, country, platform, { userId: campaign.user_id, campaignId, referer: refererUrl })
+      const r = await generateOneSuffix(effectiveUrl, country, platform, { userId: campaign.user_id, campaignId, teamId, merchantId: merchantIdStr, referer: refererUrl })
       if (r.ok) {
         consecutiveFail = 0
         if (await persist(r.suffix, r.exitIp)) generated++

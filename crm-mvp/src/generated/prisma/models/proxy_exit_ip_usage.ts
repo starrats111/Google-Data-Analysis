@@ -30,19 +30,25 @@ export type Proxy_exit_ip_usageAvgAggregateOutputType = {
   id: number | null
   user_id: number | null
   campaign_id: number | null
+  team_id: number | null
 }
 
 export type Proxy_exit_ip_usageSumAggregateOutputType = {
   id: bigint | null
   user_id: bigint | null
   campaign_id: bigint | null
+  team_id: bigint | null
 }
 
 export type Proxy_exit_ip_usageMinAggregateOutputType = {
   id: bigint | null
   user_id: bigint | null
   campaign_id: bigint | null
+  team_id: bigint | null
+  platform: string | null
+  merchant_id: string | null
   exit_ip: string | null
+  exit_subnet: string | null
   used_at: Date | null
   expires_at: Date | null
 }
@@ -51,7 +57,11 @@ export type Proxy_exit_ip_usageMaxAggregateOutputType = {
   id: bigint | null
   user_id: bigint | null
   campaign_id: bigint | null
+  team_id: bigint | null
+  platform: string | null
+  merchant_id: string | null
   exit_ip: string | null
+  exit_subnet: string | null
   used_at: Date | null
   expires_at: Date | null
 }
@@ -60,7 +70,11 @@ export type Proxy_exit_ip_usageCountAggregateOutputType = {
   id: number
   user_id: number
   campaign_id: number
+  team_id: number
+  platform: number
+  merchant_id: number
   exit_ip: number
+  exit_subnet: number
   used_at: number
   expires_at: number
   _all: number
@@ -71,19 +85,25 @@ export type Proxy_exit_ip_usageAvgAggregateInputType = {
   id?: true
   user_id?: true
   campaign_id?: true
+  team_id?: true
 }
 
 export type Proxy_exit_ip_usageSumAggregateInputType = {
   id?: true
   user_id?: true
   campaign_id?: true
+  team_id?: true
 }
 
 export type Proxy_exit_ip_usageMinAggregateInputType = {
   id?: true
   user_id?: true
   campaign_id?: true
+  team_id?: true
+  platform?: true
+  merchant_id?: true
   exit_ip?: true
+  exit_subnet?: true
   used_at?: true
   expires_at?: true
 }
@@ -92,7 +112,11 @@ export type Proxy_exit_ip_usageMaxAggregateInputType = {
   id?: true
   user_id?: true
   campaign_id?: true
+  team_id?: true
+  platform?: true
+  merchant_id?: true
   exit_ip?: true
+  exit_subnet?: true
   used_at?: true
   expires_at?: true
 }
@@ -101,7 +125,11 @@ export type Proxy_exit_ip_usageCountAggregateInputType = {
   id?: true
   user_id?: true
   campaign_id?: true
+  team_id?: true
+  platform?: true
+  merchant_id?: true
   exit_ip?: true
+  exit_subnet?: true
   used_at?: true
   expires_at?: true
   _all?: true
@@ -197,7 +225,11 @@ export type Proxy_exit_ip_usageGroupByOutputType = {
   id: bigint
   user_id: bigint
   campaign_id: bigint
+  team_id: bigint | null
+  platform: string | null
+  merchant_id: string | null
   exit_ip: string
+  exit_subnet: string | null
   used_at: Date
   expires_at: Date
   _count: Proxy_exit_ip_usageCountAggregateOutputType | null
@@ -229,7 +261,11 @@ export type proxy_exit_ip_usageWhereInput = {
   id?: Prisma.BigIntFilter<"proxy_exit_ip_usage"> | bigint | number
   user_id?: Prisma.BigIntFilter<"proxy_exit_ip_usage"> | bigint | number
   campaign_id?: Prisma.BigIntFilter<"proxy_exit_ip_usage"> | bigint | number
+  team_id?: Prisma.BigIntNullableFilter<"proxy_exit_ip_usage"> | bigint | number | null
+  platform?: Prisma.StringNullableFilter<"proxy_exit_ip_usage"> | string | null
+  merchant_id?: Prisma.StringNullableFilter<"proxy_exit_ip_usage"> | string | null
   exit_ip?: Prisma.StringFilter<"proxy_exit_ip_usage"> | string
+  exit_subnet?: Prisma.StringNullableFilter<"proxy_exit_ip_usage"> | string | null
   used_at?: Prisma.DateTimeFilter<"proxy_exit_ip_usage"> | Date | string
   expires_at?: Prisma.DateTimeFilter<"proxy_exit_ip_usage"> | Date | string
 }
@@ -238,7 +274,11 @@ export type proxy_exit_ip_usageOrderByWithRelationInput = {
   id?: Prisma.SortOrder
   user_id?: Prisma.SortOrder
   campaign_id?: Prisma.SortOrder
+  team_id?: Prisma.SortOrderInput | Prisma.SortOrder
+  platform?: Prisma.SortOrderInput | Prisma.SortOrder
+  merchant_id?: Prisma.SortOrderInput | Prisma.SortOrder
   exit_ip?: Prisma.SortOrder
+  exit_subnet?: Prisma.SortOrderInput | Prisma.SortOrder
   used_at?: Prisma.SortOrder
   expires_at?: Prisma.SortOrder
   _relevance?: Prisma.proxy_exit_ip_usageOrderByRelevanceInput
@@ -251,7 +291,11 @@ export type proxy_exit_ip_usageWhereUniqueInput = Prisma.AtLeast<{
   NOT?: Prisma.proxy_exit_ip_usageWhereInput | Prisma.proxy_exit_ip_usageWhereInput[]
   user_id?: Prisma.BigIntFilter<"proxy_exit_ip_usage"> | bigint | number
   campaign_id?: Prisma.BigIntFilter<"proxy_exit_ip_usage"> | bigint | number
+  team_id?: Prisma.BigIntNullableFilter<"proxy_exit_ip_usage"> | bigint | number | null
+  platform?: Prisma.StringNullableFilter<"proxy_exit_ip_usage"> | string | null
+  merchant_id?: Prisma.StringNullableFilter<"proxy_exit_ip_usage"> | string | null
   exit_ip?: Prisma.StringFilter<"proxy_exit_ip_usage"> | string
+  exit_subnet?: Prisma.StringNullableFilter<"proxy_exit_ip_usage"> | string | null
   used_at?: Prisma.DateTimeFilter<"proxy_exit_ip_usage"> | Date | string
   expires_at?: Prisma.DateTimeFilter<"proxy_exit_ip_usage"> | Date | string
 }, "id">
@@ -260,7 +304,11 @@ export type proxy_exit_ip_usageOrderByWithAggregationInput = {
   id?: Prisma.SortOrder
   user_id?: Prisma.SortOrder
   campaign_id?: Prisma.SortOrder
+  team_id?: Prisma.SortOrderInput | Prisma.SortOrder
+  platform?: Prisma.SortOrderInput | Prisma.SortOrder
+  merchant_id?: Prisma.SortOrderInput | Prisma.SortOrder
   exit_ip?: Prisma.SortOrder
+  exit_subnet?: Prisma.SortOrderInput | Prisma.SortOrder
   used_at?: Prisma.SortOrder
   expires_at?: Prisma.SortOrder
   _count?: Prisma.proxy_exit_ip_usageCountOrderByAggregateInput
@@ -277,7 +325,11 @@ export type proxy_exit_ip_usageScalarWhereWithAggregatesInput = {
   id?: Prisma.BigIntWithAggregatesFilter<"proxy_exit_ip_usage"> | bigint | number
   user_id?: Prisma.BigIntWithAggregatesFilter<"proxy_exit_ip_usage"> | bigint | number
   campaign_id?: Prisma.BigIntWithAggregatesFilter<"proxy_exit_ip_usage"> | bigint | number
+  team_id?: Prisma.BigIntNullableWithAggregatesFilter<"proxy_exit_ip_usage"> | bigint | number | null
+  platform?: Prisma.StringNullableWithAggregatesFilter<"proxy_exit_ip_usage"> | string | null
+  merchant_id?: Prisma.StringNullableWithAggregatesFilter<"proxy_exit_ip_usage"> | string | null
   exit_ip?: Prisma.StringWithAggregatesFilter<"proxy_exit_ip_usage"> | string
+  exit_subnet?: Prisma.StringNullableWithAggregatesFilter<"proxy_exit_ip_usage"> | string | null
   used_at?: Prisma.DateTimeWithAggregatesFilter<"proxy_exit_ip_usage"> | Date | string
   expires_at?: Prisma.DateTimeWithAggregatesFilter<"proxy_exit_ip_usage"> | Date | string
 }
@@ -286,7 +338,11 @@ export type proxy_exit_ip_usageCreateInput = {
   id?: bigint | number
   user_id: bigint | number
   campaign_id: bigint | number
+  team_id?: bigint | number | null
+  platform?: string | null
+  merchant_id?: string | null
   exit_ip: string
+  exit_subnet?: string | null
   used_at?: Date | string
   expires_at: Date | string
 }
@@ -295,7 +351,11 @@ export type proxy_exit_ip_usageUncheckedCreateInput = {
   id?: bigint | number
   user_id: bigint | number
   campaign_id: bigint | number
+  team_id?: bigint | number | null
+  platform?: string | null
+  merchant_id?: string | null
   exit_ip: string
+  exit_subnet?: string | null
   used_at?: Date | string
   expires_at: Date | string
 }
@@ -304,7 +364,11 @@ export type proxy_exit_ip_usageUpdateInput = {
   id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   user_id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   campaign_id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
+  team_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
+  platform?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  merchant_id?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   exit_ip?: Prisma.StringFieldUpdateOperationsInput | string
+  exit_subnet?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   used_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   expires_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -313,7 +377,11 @@ export type proxy_exit_ip_usageUncheckedUpdateInput = {
   id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   user_id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   campaign_id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
+  team_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
+  platform?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  merchant_id?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   exit_ip?: Prisma.StringFieldUpdateOperationsInput | string
+  exit_subnet?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   used_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   expires_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -322,7 +390,11 @@ export type proxy_exit_ip_usageCreateManyInput = {
   id?: bigint | number
   user_id: bigint | number
   campaign_id: bigint | number
+  team_id?: bigint | number | null
+  platform?: string | null
+  merchant_id?: string | null
   exit_ip: string
+  exit_subnet?: string | null
   used_at?: Date | string
   expires_at: Date | string
 }
@@ -331,7 +403,11 @@ export type proxy_exit_ip_usageUpdateManyMutationInput = {
   id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   user_id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   campaign_id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
+  team_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
+  platform?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  merchant_id?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   exit_ip?: Prisma.StringFieldUpdateOperationsInput | string
+  exit_subnet?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   used_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   expires_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -340,7 +416,11 @@ export type proxy_exit_ip_usageUncheckedUpdateManyInput = {
   id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   user_id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   campaign_id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
+  team_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
+  platform?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  merchant_id?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   exit_ip?: Prisma.StringFieldUpdateOperationsInput | string
+  exit_subnet?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   used_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   expires_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -355,7 +435,11 @@ export type proxy_exit_ip_usageCountOrderByAggregateInput = {
   id?: Prisma.SortOrder
   user_id?: Prisma.SortOrder
   campaign_id?: Prisma.SortOrder
+  team_id?: Prisma.SortOrder
+  platform?: Prisma.SortOrder
+  merchant_id?: Prisma.SortOrder
   exit_ip?: Prisma.SortOrder
+  exit_subnet?: Prisma.SortOrder
   used_at?: Prisma.SortOrder
   expires_at?: Prisma.SortOrder
 }
@@ -364,13 +448,18 @@ export type proxy_exit_ip_usageAvgOrderByAggregateInput = {
   id?: Prisma.SortOrder
   user_id?: Prisma.SortOrder
   campaign_id?: Prisma.SortOrder
+  team_id?: Prisma.SortOrder
 }
 
 export type proxy_exit_ip_usageMaxOrderByAggregateInput = {
   id?: Prisma.SortOrder
   user_id?: Prisma.SortOrder
   campaign_id?: Prisma.SortOrder
+  team_id?: Prisma.SortOrder
+  platform?: Prisma.SortOrder
+  merchant_id?: Prisma.SortOrder
   exit_ip?: Prisma.SortOrder
+  exit_subnet?: Prisma.SortOrder
   used_at?: Prisma.SortOrder
   expires_at?: Prisma.SortOrder
 }
@@ -379,7 +468,11 @@ export type proxy_exit_ip_usageMinOrderByAggregateInput = {
   id?: Prisma.SortOrder
   user_id?: Prisma.SortOrder
   campaign_id?: Prisma.SortOrder
+  team_id?: Prisma.SortOrder
+  platform?: Prisma.SortOrder
+  merchant_id?: Prisma.SortOrder
   exit_ip?: Prisma.SortOrder
+  exit_subnet?: Prisma.SortOrder
   used_at?: Prisma.SortOrder
   expires_at?: Prisma.SortOrder
 }
@@ -388,6 +481,7 @@ export type proxy_exit_ip_usageSumOrderByAggregateInput = {
   id?: Prisma.SortOrder
   user_id?: Prisma.SortOrder
   campaign_id?: Prisma.SortOrder
+  team_id?: Prisma.SortOrder
 }
 
 
@@ -396,7 +490,11 @@ export type proxy_exit_ip_usageSelect<ExtArgs extends runtime.Types.Extensions.I
   id?: boolean
   user_id?: boolean
   campaign_id?: boolean
+  team_id?: boolean
+  platform?: boolean
+  merchant_id?: boolean
   exit_ip?: boolean
+  exit_subnet?: boolean
   used_at?: boolean
   expires_at?: boolean
 }, ExtArgs["result"]["proxy_exit_ip_usage"]>
@@ -407,12 +505,16 @@ export type proxy_exit_ip_usageSelectScalar = {
   id?: boolean
   user_id?: boolean
   campaign_id?: boolean
+  team_id?: boolean
+  platform?: boolean
+  merchant_id?: boolean
   exit_ip?: boolean
+  exit_subnet?: boolean
   used_at?: boolean
   expires_at?: boolean
 }
 
-export type proxy_exit_ip_usageOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "campaign_id" | "exit_ip" | "used_at" | "expires_at", ExtArgs["result"]["proxy_exit_ip_usage"]>
+export type proxy_exit_ip_usageOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "campaign_id" | "team_id" | "platform" | "merchant_id" | "exit_ip" | "exit_subnet" | "used_at" | "expires_at", ExtArgs["result"]["proxy_exit_ip_usage"]>
 
 export type $proxy_exit_ip_usagePayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "proxy_exit_ip_usage"
@@ -421,7 +523,11 @@ export type $proxy_exit_ip_usagePayload<ExtArgs extends runtime.Types.Extensions
     id: bigint
     user_id: bigint
     campaign_id: bigint
+    team_id: bigint | null
+    platform: string | null
+    merchant_id: string | null
     exit_ip: string
+    exit_subnet: string | null
     used_at: Date
     expires_at: Date
   }, ExtArgs["result"]["proxy_exit_ip_usage"]>
@@ -796,7 +902,11 @@ export interface proxy_exit_ip_usageFieldRefs {
   readonly id: Prisma.FieldRef<"proxy_exit_ip_usage", 'BigInt'>
   readonly user_id: Prisma.FieldRef<"proxy_exit_ip_usage", 'BigInt'>
   readonly campaign_id: Prisma.FieldRef<"proxy_exit_ip_usage", 'BigInt'>
+  readonly team_id: Prisma.FieldRef<"proxy_exit_ip_usage", 'BigInt'>
+  readonly platform: Prisma.FieldRef<"proxy_exit_ip_usage", 'String'>
+  readonly merchant_id: Prisma.FieldRef<"proxy_exit_ip_usage", 'String'>
   readonly exit_ip: Prisma.FieldRef<"proxy_exit_ip_usage", 'String'>
+  readonly exit_subnet: Prisma.FieldRef<"proxy_exit_ip_usage", 'String'>
   readonly used_at: Prisma.FieldRef<"proxy_exit_ip_usage", 'DateTime'>
   readonly expires_at: Prisma.FieldRef<"proxy_exit_ip_usage", 'DateTime'>
 }

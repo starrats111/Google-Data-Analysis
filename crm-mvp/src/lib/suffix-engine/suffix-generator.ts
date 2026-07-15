@@ -11,7 +11,7 @@
 
 import { resolveAffiliateLink } from '@/lib/affiliate-link-resolver'
 import { STOCK_CONFIG } from './config'
-import { getUsedExitIps, acquireDedupedProxy, probeExitIp } from './exit-ip'
+import { getUsedExitIps, acquireDedupedProxy, probeExitIp, type DedupScope } from './exit-ip'
 import { reportProviderResult, PROXY_HARD_ERR } from './proxy-circuit'
 
 export type GenFailReason =
@@ -72,8 +72,11 @@ export async function generateOneSuffix(
   platform: string | null,
   opts: {
     userId?: bigint | null
-    /** 传入时启用「按系列 24h 出口 IP 去重」并把出口 IP 记到结果，供调用方落库 */
+    /** 传入时启用代理选择/出口 IP 记录（补货/刷点击路径） */
     campaignId?: bigint | null
+    /** F-IPDEDUP-01：组级去重键。三者(team+platform+merchant)齐全才启用「跨用户不跨组 + /24 段」去重 */
+    teamId?: bigint | null
+    merchantId?: string | null
     userAgent?: string | null
     referer?: string | null
   } = {},
@@ -82,19 +85,27 @@ export async function generateOneSuffix(
     return { ok: false, reason: 'bad_input', error: '联盟链接为空或格式不合法' }
   }
 
-  // 出口 IP 去重：仅在带 campaignId+userId 时启用（补货/刷点击路径）。
-  // 取一个「24h 内该系列未用过」的粘性会话代理，探到的出口 IP 与后续生成复用同一会话。
+  // 组级去重键（跨用户、不跨组）。返回给调用方复用于 recordExitIp，保证「取/记」同键。
+  const dedupScope: DedupScope = {
+    teamId: opts.teamId ?? null,
+    platform: platform ?? null,
+    merchantId: opts.merchantId ?? null,
+    userId: opts.userId ?? null,
+    campaignId: opts.campaignId ?? null,
+  }
+
+  // 出口 IP 去重 + 代理选择：仍以「带 campaignId+userId」为触发（补货/刷点击路径）。
+  // 组级去重集合按 (team,platform,merchant) 取；缺组信息(如未分组)时集合为空 → 退化为纯代理选择、不去重。
   let proxyUrl: string | null | undefined = undefined
   let exitIp: string | null = null
   // 本次选中的供应商 id（用于向熔断器归因成败）；走 env/模板兜底或无供应商时为 null。
   let selectedProviderId: string | null = null
   if (opts.campaignId && opts.userId) {
     try {
-      const usedIps = await getUsedExitIps(opts.userId, opts.campaignId)
+      const used = await getUsedExitIps(dedupScope)
       const picked = await acquireDedupedProxy(country || 'US', {
         userId: opts.userId,
-        campaignId: opts.campaignId,
-        usedIps,
+        used,
       })
       proxyUrl = picked.proxyUrl ?? undefined
       exitIp = picked.exitIp

@@ -1101,11 +1101,18 @@ model proxy_exit_ip_usage {
   id          BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
   user_id     BigInt   @db.UnsignedBigInt
   campaign_id BigInt   @db.UnsignedBigInt
+  // F-IPDEDUP-01：去重范围升级为「跨用户、不跨组」——按 (team_id, platform, merchant_id) 聚合，
+  // 匹配联盟/商家反作弊「同商家名下多订单同 IP/同段」的视角。旧行这些列为 NULL，24h 后自然淘汰，不影响新逻辑。
+  team_id     BigInt?  @db.UnsignedBigInt // users.team_id；NULL=未分组（不参与换链接，不做组级去重）
+  platform    String?  @db.VarChar(8) // 联盟平台代号
+  merchant_id String?  @db.VarChar(64) // 联盟平台商家 ID（字符串，跨用户对同一真实商家一致）
   exit_ip     String   @db.VarChar(64)
+  exit_subnet String?  @db.VarChar(64) // 出口 IP 所在子网（IPv4 取 /24、IPv6 取 /64）；商家风控常按段判定
   used_at     DateTime @default(now()) @db.DateTime(0)
   expires_at  DateTime @db.DateTime(0) // 过期时间（默认 used_at + 24h）
 
   @@index([user_id, campaign_id, exit_ip], map: "idx_user_campaign_ip")
+  @@index([team_id, platform, merchant_id, used_at], map: "idx_team_merchant_used")
   @@index([expires_at], map: "idx_expires")
 }
 
