@@ -80,7 +80,10 @@ const PLATFORM_API_CONFIG: Record<string, PlatformApiConfig> = {
   RW: {
     mode: "post_form",
     url: "https://admin.rewardoo.com/api.php?mod=medium&op=merchant_details",
-    pageKey: "page", sizeKey: "limit", maxSize: 1000,
+    // 原 1000：RW 服务端单页 1000 条需 60s+，撞上 60s 请求超时必 504/abort（2026-07-15 yz04 RW2
+    // 整账号 11124 商家 0 条入库事故）。实测 limit=200 约 20s/页、limit=500 约 39s/页，
+    // 降到 200 留 3 倍余量（同 LH 2000→200 的先例）。代价：单账号全量约 56 页 / ~19 分钟。
+    pageKey: "page", sizeKey: "limit", maxSize: 200,
     // RW API 必须携带 relationship="Joined" 才能返回已批准商家（不传返回 0 条，传"Approved"返回 error 1003）。
     // UI 界面显示"Approved"，API 过滤值为"Joined"，两者是同一状态的不同术语。
     // RW 有多个账号（7000+商家每账号），并发请求会导致第3+页超时，故在 sync 层改为串行拉取。
