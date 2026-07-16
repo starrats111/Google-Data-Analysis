@@ -10,9 +10,11 @@
  *   目标 T = O×rand(cpoMin,cpoMax)：订单倒推「应有点击数」，使转化率落在用户区间内。
  *   缺口 deficit = T − C；deficit ≤ 0 不刷。
  *   B = 过去 7 天该商家联盟点击日均（排除今天）：仅作「当天基线总预算」封顶——当天累计 ≤ ⌊B/4⌋×剩余小时。
- *   ★ 基线为 0 不再跳过：有订单就按 T 补刷。补刷窗口固定 1 小时：本轮缺口在「未来 60 分钟内」
- *     随机分散执行，实现「订单传回 1 小时内刷完」（每 30min 的 txn-sync 触发一轮，effectiveC 含 pending 不会重复下单）。
- *   补刷复用 click-brush（startBrushTaskWindowed，windowMinutes=60）。
+ *   ★ 基线为 0 不再跳过：有订单就按 T 补刷。
+ *   补刷窗口（D-185，联盟按「当天 CST」算转化率 → 当天单必须当天内洗完，跨午夜无意义）：
+ *     窗口 = min(120 分钟, 距当日 CST 午夜剩余分钟)。即 22:00 前的单 2 小时内洗完、22:00 后的单压到当日 24:00 前。
+ *     本轮缺口在窗口内随机分散执行（每 30min 的 txn-sync 触发一轮，effectiveC 含 pending 不会重复下单）。
+ *   补刷复用 click-brush（startBrushTaskWindowed）。
  *
  * 触发：订单同步后（ontxn，见 txn-quick-sync 钩子）；仅对开启 click_control_enabled 的用户生效。
  */
@@ -238,20 +240,26 @@ export async function runAutoClickForUser(
     const baseline = Math.max(avg7, realClicksToday)
     const hourlyCap = Math.floor(baseline / HOURLY_DIVISOR) // 0=无基线
 
+    // 距当日 CST 午夜的剩余分钟 / 小时（todayEndUTC=次日 CST 00:00 的 UTC 时刻）。
+    const minutesToMidnight = Math.max(1, Math.floor((todayEndUTC.getTime() - now.getTime()) / 60_000))
     // 当天剩余小时数（北京时间到 24:00），仅用于「当天基线总预算」封顶（非补刷窗口）。
     const hoursLeft = Math.max(1, Math.ceil((todayEndUTC.getTime() - now.getTime()) / 3_600_000))
 
     // 有基线：当天累计不超过 ⌊B/4⌋×剩余小时（当天基线总预算上限，防止全天严重超刷）。
-    // 补刷窗口已固定 1 小时（见下），此处仅作日预算天花板；订单倒推目标 T 通常很小，几乎不触顶。
+    // 此处仅作日预算天花板；订单倒推目标 T 通常很小，几乎不触顶。
     if (hourlyCap > 0) deficit = Math.min(deficit, hourlyCap * hoursLeft)
     if (deficit <= 0) {
       res.details.push(`${platform}:${mid} O=${O} C=${effectiveC} 受基线限速(${hourlyCap}/h)本轮不补`)
       continue
     }
 
-    // 窗口固定 1 小时：本轮缺口在「未来 60 分钟内」随机分散补刷，实现「订单传回 1 小时内刷完」。
-    // scheduler 在窗口内随机分散（真人化）；effectiveC 已含我方今日 pending，订单再次同步触发也不会重复下单。
-    const windowMinutes = 60
+    // 补刷窗口（07 定版 D-185）：联盟按「当天(CST)」算转化率，故当天出的单必须当天内洗完，
+    // 跨午夜再刷对当天的转化率毫无意义。规则：
+    //   - 22:00 前出的单：在「之后 2 小时内」随机分散补刷完（拟人）；
+    //   - 22:00 后出的单：压缩到「当日 24:00 前」刷完。
+    // 两条合并为一个公式：窗口 = min(120 分钟, 距当日 CST 午夜的剩余分钟)。
+    // scheduler 在窗口内随机分散（真人化）；effectiveC 已含我方今日 pending，订单再次同步触发不会重复下单。
+    const windowMinutes = Math.min(120, minutesToMidnight)
     const r = await startBrushTaskWindowed(c.id, userId, deficit, windowMinutes)
     if (r.ok) {
       res.scheduled++
