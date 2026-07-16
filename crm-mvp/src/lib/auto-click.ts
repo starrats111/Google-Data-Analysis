@@ -26,6 +26,7 @@ import { PLATFORM_CLICK_CONFIG } from '@/lib/platform-api'
 import { randomInt } from '@/lib/suffix-engine/click-scheduler'
 import { startBrushTaskWindowed } from '@/lib/suffix-engine/click-brush'
 import { pickCampaignAffiliateLink } from '@/lib/merchant-connection'
+import { raiseAlert, resolveAlertsByType } from '@/lib/suffix-engine/alerts'
 
 /** 转化率目标改为按用户配置（click_control_ratio_min/max_pct）运行时计算，默认 5%~10%（每订单 10~20 点击） */
 /**
@@ -157,9 +158,6 @@ export async function runAutoClickForUser(
     // 该广告归属的联盟账号（连接）。建广告时写入，是「这条广告用哪个号」的唯一可靠依据。
     // NULL=存量未回填，pickCampaignAffiliateLink 回退旧逻辑（主连接/tracking_link）。
     const connId = c.platform_connection_id ?? null
-    // 账号感知选链接：拿不到该号的链接就跳过（宁可不刷，也不刷到没配链接/别的号）
-    const affiliateUrl = pickCampaignAffiliateLink(connId, merchant)
-    if (!affiliateUrl) continue
 
     if (onlyMerchantKeys && !onlyMerchantKeys.has(`${platform}:${mid}`)) continue
 
@@ -180,6 +178,22 @@ export async function runAutoClickForUser(
     })
     if (O <= 0) {
       res.skippedNoOrders++
+      continue
+    }
+
+    // ★ 有订单 → 当天必须净化转化率。此时才校验链接：拿不到该号链接 = 「该刷却刷不了」，
+    // 不再静默跳过，而是报警挂人工（D-186）——正是 lenstore 7/15「有单无链接被跳过」的堵漏。
+    // 账号感知选链接：宁可不刷（也不刷到没配链接/别的号），但必须让人看见。
+    const affiliateUrl = pickCampaignAffiliateLink(connId, merchant)
+    if (!affiliateUrl) {
+      await raiseAlert(userId, {
+        type: 'brush_blocked',
+        campaignId: c.id,
+        level: 'error',
+        message: `广告系列「${c.campaign_name ?? c.id.toString()}」当天有 ${O} 单，但其所属联盟账号未配置追踪链接，无法当天补刷净化转化率，需人工补链接`,
+        context: { platform, merchantId: mid, connId: connId != null ? connId.toString() : null, ordersToday: O },
+      }).catch(() => {})
+      res.details.push(`${platform}:${mid} O=${O} 无链接→挂人工`)
       continue
     }
 
@@ -264,9 +278,19 @@ export async function runAutoClickForUser(
     if (r.ok) {
       res.scheduled++
       res.clicksScheduled += r.target
-      res.details.push(`${platform}:${mid} O=${O} C=${effectiveC} T=${T} 铺${r.target}点击/1h(基线${hourlyCap}/h)`)
+      res.details.push(`${platform}:${mid} O=${O} C=${effectiveC} T=${T} 铺${r.target}点击/${windowMinutes}min(基线${hourlyCap}/h)`)
+      // 补刷任务已成功创建 → 清掉该系列的「补刷受阻」挂人工告警（若有）。
+      await resolveAlertsByType(userId, c.id, ['brush_blocked']).catch(() => {})
     } else {
-      res.details.push(`${platform}:${mid} 补刷失败: ${r.message}`)
+      // 有订单、需补刷，但补刷任务创建失败（无链接/其他）→ 当天净化落空，报警挂人工（D-186）。
+      await raiseAlert(userId, {
+        type: 'brush_blocked',
+        campaignId: c.id,
+        level: 'error',
+        message: `广告系列「${c.campaign_name ?? c.id.toString()}」当天有 ${O} 单、需补刷 ${deficit} 次，但补刷任务创建失败：${r.message}，需人工介入`,
+        context: { platform, merchantId: mid, connId: connId != null ? connId.toString() : null, ordersToday: O, deficit, reason: r.message },
+      }).catch(() => {})
+      res.details.push(`${platform}:${mid} 补刷失败→挂人工: ${r.message}`)
     }
   }
 

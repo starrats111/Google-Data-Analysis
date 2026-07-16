@@ -14,6 +14,7 @@ export type SuffixAlertType =
   | 'merchant_not_found' // 商家库找不到对应商家或缺少追踪链接
   | 'low_stock' // 库存持续偏低且补货跟不上
   | 'replenish_failed' // 补货批量全部失败
+  | 'brush_blocked' // 有订单需当天净化转化率，但补刷无法进行（无链接/任务创建失败），需人工介入
 
 export type SuffixAlertLevel = 'info' | 'warning' | 'error'
 
@@ -200,6 +201,7 @@ export async function getAlertSummary(userId: bigint) {
     merchant_not_found: 0,
     low_stock: 0,
     replenish_failed: 0,
+    brush_blocked: 0,
   }
   let totalOpen = 0
   for (const r of rows) {

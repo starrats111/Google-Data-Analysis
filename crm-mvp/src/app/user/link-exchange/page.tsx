@@ -120,6 +120,7 @@ const ALERT_TYPE_LABEL: Record<string, string> = {
   merchant_not_found: "商家库找不到",
   low_stock: "库存偏低",
   replenish_failed: "补货失败",
+  brush_blocked: "补刷受阻·挂人工",
 };
 
 function LinkStatusTag({ status, reason }: { status: string; reason?: string | null }) {
@@ -746,7 +747,7 @@ export default function LinkExchangePage() {
 
   // ───────── 告警中心列（D-178：每类告警配处理动作，不止报警） ─────────
   const alertColumns: ColumnsType<AlertRow> = [
-    { title: "类型", dataIndex: "type", width: 120, render: (t: string) => <Tag color={t === "merchant_not_found" || t === "invalid_link" ? "red" : t === "replenish_failed" ? "volcano" : "orange"}>{ALERT_TYPE_LABEL[t] ?? t}</Tag> },
+    { title: "类型", dataIndex: "type", width: 130, render: (t: string) => <Tag color={t === "merchant_not_found" || t === "invalid_link" || t === "brush_blocked" ? "red" : t === "replenish_failed" ? "volcano" : "orange"}>{ALERT_TYPE_LABEL[t] ?? t}</Tag> },
     { title: "级别", dataIndex: "level", width: 80, render: (l: string) => <Tag color={l === "error" ? "error" : l === "warning" ? "warning" : "default"}>{l}</Tag> },
     { title: "告警内容", dataIndex: "message", ellipsis: true, render: (m: string) => <Tooltip title={m}><Text style={{ fontSize: 13 }}>{m}</Text></Tooltip> },
     { title: "次数", dataIndex: "occurCount", width: 70, align: "center", render: (c: number) => <Badge count={c} overflowCount={999} style={{ backgroundColor: "#faad14" }} /> },
@@ -756,7 +757,7 @@ export default function LinkExchangePage() {
       render: (_: unknown, row) => {
         const cid = row.campaignId;
         const canRecheck = !!cid && (row.type === "invalid_link" || row.type === "replenish_failed");
-        const canEditLink = !!cid && (row.type === "invalid_link" || row.type === "replenish_failed" || row.type === "merchant_not_found");
+        const canEditLink = !!cid && (row.type === "invalid_link" || row.type === "replenish_failed" || row.type === "merchant_not_found" || row.type === "brush_blocked");
         const canReplenish = !!cid && row.type === "low_stock";
         return (
           <Space size={0}>
@@ -817,9 +818,15 @@ export default function LinkExchangePage() {
       "① 该系列在商家库找不到对应商家或缺追踪链接：点「换链接」直接填入联盟追踪链接，系统按系列名自动关联/新建商家。",
       "② 若商家确实无佣金回流、不需要换链：点「已处理」点掉即可。",
     ],
+    brush_blocked: [
+      "① 含义：该系列当天已出单、本应在当天内补刷净化转化率，但补刷跑不起来（多为「该联盟账号缺追踪链接」），当天净化会落空——需尽快人工处理。",
+      "② 点「换链接」把该系列所属联盟账号的追踪链接补上，保存后系统会立即验证并恢复补刷，本告警随之自动解除。",
+      "③ 若确认该商家不参与刷点击/无需净化：点「已处理」点掉即可。",
+      "④ 注意：联盟只看当天转化率，过去某天已落空的净化补不回来，处理越及时越好。",
+    ],
   };
   const renderAlertGuide = (row: AlertRow) => {
-    const ctx = (row.context ?? {}) as { affiliateUrl?: string; finalUrl?: string | null; failCount?: number; reason?: string };
+    const ctx = (row.context ?? {}) as { affiliateUrl?: string; finalUrl?: string | null; failCount?: number; reason?: string; platform?: string; merchantId?: string; ordersToday?: number; deficit?: number };
     return (
       <div style={{ padding: "4px 8px" }}>
         {(ALERT_GUIDE[row.type] ?? ["点「已处理」标记解决。"]).map((step, i) => (
@@ -830,6 +837,15 @@ export default function LinkExchangePage() {
             {ctx.failCount != null && <>连续失败 {ctx.failCount} 次；</>}
             {ctx.affiliateUrl && <>联盟链接：{ctx.affiliateUrl.slice(0, 160)}；</>}
             {ctx.finalUrl && <>实际落到：{String(ctx.finalUrl).slice(0, 160)}</>}
+          </Paragraph>
+        )}
+        {row.type === "brush_blocked" && (
+          <Paragraph type="secondary" style={{ marginBottom: 0, fontSize: 12 }}>
+            {ctx.platform && <>平台 {ctx.platform}；</>}
+            {ctx.merchantId && <>商家 MID {ctx.merchantId}；</>}
+            {ctx.ordersToday != null && <>当天订单 {ctx.ordersToday}；</>}
+            {ctx.deficit != null && <>缺口 {ctx.deficit} 次点击；</>}
+            {ctx.reason && <>原因：{String(ctx.reason).slice(0, 120)}</>}
           </Paragraph>
         )}
       </div>
