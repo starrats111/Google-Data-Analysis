@@ -93,6 +93,28 @@ interface HistoryData {
   byCampaign: HistoryCampaignRow[];
 }
 
+interface RwReconcileRow {
+  conn: string;
+  connName: string;
+  merchantId: string;
+  merchantName: string;
+  trackingStatus: string | null;
+  linkStatus: string | null;
+  gadsClicks: number;
+  brushClicks: number;
+  totalClicks: number;
+  orders: number;
+  convPct: number | null;
+  overTarget: boolean;
+}
+interface RwReconcileData {
+  rows: RwReconcileRow[];
+  summary: { merchants: number; overTarget: number; withOrders: number; noClickData: number };
+  ratio: { minPct: number; maxPct: number };
+  days: number;
+  range: { start: string; end: string };
+}
+
 const ALERT_TYPE_LABEL: Record<string, string> = {
   invalid_link: "链接无效",
   merchant_not_found: "商家库找不到",
@@ -128,6 +150,9 @@ export default function LinkExchangePage() {
   const [history, setHistory] = useState<HistoryData | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyDays, setHistoryDays] = useState(7);
+  const [reconcile, setReconcile] = useState<RwReconcileData | null>(null);
+  const [reconcileLoading, setReconcileLoading] = useState(false);
+  const [reconcileDays, setReconcileDays] = useState(3);
   const [activeTab, setActiveTab] = useState("links");
   const [brushCounts, setBrushCounts] = useState<Record<string, number>>({});
   const [brushing, setBrushing] = useState<string | null>(null);
@@ -177,12 +202,27 @@ export default function LinkExchangePage() {
     }
   }, []);
 
+  const fetchReconcile = useCallback(async (days: number) => {
+    setReconcileLoading(true);
+    try {
+      const res = await fetch(`/api/user/link-exchange/rw-reconcile?days=${days}`).then((r) => r.json());
+      if (res.code === 0) setReconcile(res.data);
+    } finally {
+      setReconcileLoading(false);
+    }
+  }, []);
+
   useEffect(() => { fetchData(); fetchAlerts(); }, [fetchData, fetchAlerts]);
 
   // 打开「历史记录」页或切换天数时按需加载
   useEffect(() => {
     if (activeTab === "history") fetchHistory(historyDays);
   }, [activeTab, historyDays, fetchHistory]);
+
+  // 打开「RW核对」页或切换天数时按需加载
+  useEffect(() => {
+    if (activeTab === "rw-reconcile") fetchReconcile(reconcileDays);
+  }, [activeTab, reconcileDays, fetchReconcile]);
 
   const hasRunningBrush = (data?.rows ?? []).some(
     (r) => r.clickTask && (r.clickTask.status === "running" || r.clickTask.status === "pending"),
@@ -1086,6 +1126,79 @@ export default function LinkExchangePage() {
                         );
                       },
                     }}
+                  />
+                </>
+              ),
+            },
+            {
+              key: "rw-reconcile",
+              label: <Space size={4}><AimOutlined />RW核对{(reconcile?.summary.overTarget ?? 0) > 0 && <Badge count={reconcile?.summary.overTarget} size="small" />}</Space>,
+              children: (
+                <>
+                  <Alert
+                    type="info"
+                    showIcon
+                    style={{ marginBottom: 12 }}
+                    message="RW（Rewardoo）为聚合联盟，点击在下游注册、其点击接口对我方恒返回 0，故 RW 点击不可见。"
+                    description={
+                      <span>
+                        本页用「反推口径」自查 RW 稀释效果，不依赖 RW 点击接口：
+                        <b> 反推转化率 = RW订单 ÷ (Google点击 + 我方刷点击)</b>，两者都打在同一条 RW 跟链上。
+                        目标 ≤ <b>{reconcile?.ratio.maxPct ?? 10}%</b>（你设定的上限）。标红=稀释不到位（漏刷/风控风险）。
+                        Google 点击来自 ads_daily_stats（按东八区自然日），非实时，当天数据可能滞后。
+                      </span>
+                    }
+                  />
+                  <Space style={{ marginBottom: 12 }} wrap>
+                    <Segmented
+                      size="small"
+                      value={reconcileDays}
+                      onChange={(v) => setReconcileDays(Number(v))}
+                      options={[{ label: "近3天", value: 3 }, { label: "近7天", value: 7 }, { label: "近14天", value: 14 }]}
+                    />
+                    <Button size="small" icon={<SyncOutlined />} loading={reconcileLoading} onClick={() => fetchReconcile(reconcileDays)}>刷新</Button>
+                    {reconcile && (
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        {reconcile.range.start} ~ {reconcile.range.end} · 共 {reconcile.summary.merchants} 个 RW 商家 ·
+                        <Text type={reconcile.summary.overTarget > 0 ? "danger" : "secondary"}> 超标 {reconcile.summary.overTarget}</Text>
+                        {reconcile.summary.noClickData > 0 && <Text type="danger"> · 有单零点击 {reconcile.summary.noClickData}</Text>}
+                      </Text>
+                    )}
+                  </Space>
+                  <Table<RwReconcileRow>
+                    rowKey={(r) => `${r.conn}-${r.merchantId}`}
+                    size="small"
+                    loading={reconcileLoading}
+                    dataSource={reconcile?.rows ?? []}
+                    pagination={{ pageSize: 50, hideOnSinglePage: true }}
+                    locale={{ emptyText: "暂无 RW 广告系列" }}
+                    rowClassName={(r) => (r.overTarget ? "row-invalid-link" : "")}
+                    columns={[
+                      { title: "商家", dataIndex: "merchantName", ellipsis: true,
+                        render: (n: string, r) => <Tooltip title={`MID ${r.merchantId}`}><span>{n}</span></Tooltip> },
+                      { title: "账号", dataIndex: "connName", width: 150, ellipsis: true },
+                      { title: "Google点击", dataIndex: "gadsClicks", width: 100, align: "right",
+                        render: (v: number) => <Text style={{ color: v > 0 ? "#1677ff" : undefined }}>{v}</Text> },
+                      { title: "刷点击", dataIndex: "brushClicks", width: 90, align: "right",
+                        render: (v: number) => <Text style={{ color: v > 0 ? "#52c41a" : undefined }}>{v}</Text> },
+                      { title: "合计点击", dataIndex: "totalClicks", width: 90, align: "right",
+                        render: (v: number) => <Text strong>{v}</Text> },
+                      { title: "RW订单", dataIndex: "orders", width: 80, align: "right",
+                        render: (v: number) => <Text strong style={{ color: v > 0 ? "#fa8c16" : undefined }}>{v}</Text> },
+                      { title: "反推转化率", dataIndex: "convPct", width: 120, align: "right",
+                        render: (v: number | null, r) => {
+                          if (r.orders === 0) return <Text type="secondary">-</Text>;
+                          if (v === null) return <Tag color="error">有单零点击</Tag>;
+                          return <Tag color={r.overTarget ? "error" : "success"}>{v}%</Tag>;
+                        } },
+                      { title: "判断", dataIndex: "overTarget", width: 110,
+                        render: (over: boolean, r) => {
+                          if (r.orders === 0) return <Tag color="default">无单</Tag>;
+                          return over
+                            ? <Tooltip title={`超过上限 ${reconcile?.ratio.maxPct ?? 10}%，稀释不到位`}><Tag icon={<WarningOutlined />} color="error">超标</Tag></Tooltip>
+                            : <Tag icon={<CheckCircleOutlined />} color="success">达标</Tag>;
+                        } },
+                    ]}
                   />
                 </>
               ),
