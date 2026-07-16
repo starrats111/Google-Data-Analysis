@@ -682,6 +682,43 @@ export async function recycleSuffixes(): Promise<{ expiredAvailable: number; rec
   return { expiredAvailable, reclaimedLeased }
 }
 
+/**
+ * D-187：终态数据物理清理。suffix_pool 的 consumed/expired 与 suffix_assignments 的历史回执
+ * 都是「用过即弃」的终态记录，只增不删会持续蚕食低配机磁盘（上线 20 天已 300MB+/45 万行）。
+ * 保留 PURGE_RETENTION_DAYS 天用于近期排障/追溯，超期物理删除。
+ * 低配机保护：单轮每表最多删 PURGE_BATCH 行（分批，避免长事务/大范围行锁）；由 cron 每小时触发一次。
+ */
+const PURGE_RETENTION_DAYS = 14
+const PURGE_BATCH = 5000
+
+export async function purgeTerminalSuffixes(): Promise<{ poolDeleted: number; assignmentsDeleted: number }> {
+  const cutoff = new Date(Date.now() - PURGE_RETENTION_DAYS * 86_400_000)
+  let poolDeleted = 0
+  let assignmentsDeleted = 0
+  try {
+    // suffix_pool：仅删终态（consumed/expired），available/leased 绝不动。分批 LIMIT（常量内联，无注入面）。
+    poolDeleted = await prisma.$executeRawUnsafe(
+      `DELETE FROM suffix_pool WHERE status IN ('consumed','expired') AND created_at < ? LIMIT ${PURGE_BATCH}`,
+      cutoff,
+    )
+  } catch (e) {
+    console.warn('[stock-producer] purge suffix_pool 失败:', e instanceof Error ? e.message : e)
+  }
+  try {
+    // suffix_assignments：全是历史回执快照，超期即删（不影响在途，在途窗口远短于 14 天）。
+    assignmentsDeleted = await prisma.$executeRawUnsafe(
+      `DELETE FROM suffix_assignments WHERE created_at < ? LIMIT ${PURGE_BATCH}`,
+      cutoff,
+    )
+  } catch (e) {
+    console.warn('[stock-producer] purge suffix_assignments 失败:', e instanceof Error ? e.message : e)
+  }
+  if (poolDeleted > 0 || assignmentsDeleted > 0) {
+    console.log(`[stock-producer] purge 物理清理终态数据：suffix_pool ${poolDeleted} 行 / suffix_assignments ${assignmentsDeleted} 行（保留 ${PURGE_RETENTION_DAYS} 天）`)
+  }
+  return { poolDeleted, assignmentsDeleted }
+}
+
 /** 触发某系列的异步补货（fire-and-forget），lease NO_STOCK / 低库存时调用 */
 export function triggerReplenishAsync(campaignId: bigint, opts: { force?: boolean } = {}): void {
   replenishCampaign(campaignId, opts).catch((err) => {

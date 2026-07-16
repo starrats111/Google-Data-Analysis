@@ -222,6 +222,52 @@ function unwrapDeeplink(deeplinkUrl: string): string | null {
   return null;
 }
 
+// D-187：Android intent:// / android-app:// 深链解包。移动归因链常把网页落地塞进
+//   intent://host/path?query#Intent;scheme=https;package=...;S.browser_fallback_url=<enc>;end
+// 的 browser_fallback_url extra 里（web 用户回退用），纯 HTTP/浏览器巡航会误停在 intent:// 上，
+// 被上层「终态非 http」判失败（MUI 的 The Outnet / TrainPal 近3天 122 条即此）。
+// 取真实 web 落地：① 优先 #Intent 片段里的 (S.)browser_fallback_url；② 回退用 unwrapDeeplink 扫 query 兜底参数。
+function unwrapIntentUri(uri: string): string | null {
+  const tryDecodeToHttp = (raw: string): string | null => {
+    let candidate = decodeJsUnicode(raw.trim());
+    for (let i = 0; i < 3 && !/^https?:\/\//i.test(candidate); i++) {
+      try {
+        const decoded = decodeURIComponent(candidate);
+        if (decoded === candidate) break;
+        candidate = decoded;
+      } catch {
+        break;
+      }
+    }
+    if (!/^https?:\/\//i.test(candidate)) return null;
+    try {
+      const u = new URL(candidate);
+      if (isDeeplinkHost(u.hostname) || isTrackerHost(u.hostname)) return null;
+      return u.toString();
+    } catch {
+      return null;
+    }
+  };
+
+  // ① #Intent;...;S.browser_fallback_url=<enc>;end 片段（Android intent URI 标准回退位）
+  const hashIdx = uri.indexOf("#Intent;");
+  if (hashIdx >= 0) {
+    for (const part of uri.slice(hashIdx + 1).split(";")) {
+      const eq = part.indexOf("=");
+      if (eq < 0) continue;
+      const key = part.slice(0, eq);
+      if (key === "S.browser_fallback_url" || key === "browser_fallback_url") {
+        const real = tryDecodeToHttp(part.slice(eq + 1));
+        if (real) return real;
+      }
+    }
+  }
+
+  // ② 回退：把 intent:// 换成 https:// 后复用 query 兜底参数（adjust_t 等场景 fallback 藏在 query）
+  const asHttp = uri.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "https://");
+  return unwrapDeeplink(asHttp);
+}
+
 // ───────── 上级联盟库 / 黑名单（Prisma，5 分钟内存缓存）─────────
 interface ParentNet {
   label: string;
@@ -900,6 +946,15 @@ export async function resolveAffiliateLink(
     // 浏览器兜底路径的 page.url() 也可能带未展开的 ${...} 字面量（浏览器会照样导航过去），统一在此清洗
     let finalUrl = res.finalUrl ? stripUnexpandedTemplateVars(res.finalUrl) : res.finalUrl;
     let chain = res.chain;
+    // D-187：终态若是 Android intent:// / android-app:// 深链，先解出 browser_fallback_url 的真实
+    // 网页落地，再走后续判定（否则会被下方「终态非 http」判失败，MUI Outnet/TrainPal 即此）。
+    if (finalUrl && /^(intent|android-app):\/\//i.test(finalUrl)) {
+      const realWeb = unwrapIntentUri(finalUrl);
+      if (realWeb) {
+        finalUrl = realWeb;
+        chain = [...chain, realWeb];
+      }
+    }
     // D-172 防御：非 http(s) 终态（chrome-error:// 等浏览器内部页）一律判解析失败，
     // 绝不能流进 landingUrl/trackingLink 判定被误判成 no_tracking「伪结果」。
     if (finalUrl && !/^https?:\/\//i.test(finalUrl)) {

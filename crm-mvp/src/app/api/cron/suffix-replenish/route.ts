@@ -13,7 +13,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { replenishLowStock, recycleSuffixes } from '@/lib/suffix-engine/stock-producer'
+import { replenishLowStock, recycleSuffixes, purgeTerminalSuffixes } from '@/lib/suffix-engine/stock-producer'
 import { cleanupExpiredExitIps } from '@/lib/suffix-engine/exit-ip'
 import { resolveAlertsForInactiveCampaigns } from '@/lib/suffix-engine/alerts'
 
@@ -21,6 +21,10 @@ export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 
 let isRunning = false
+// D-187：终态数据物理清理节流——cron 每 5 分钟一轮，但重删每小时至多跑一次（分批 5000，
+// 有积压时多个整点逐步清空，之后每天稳态只删当天到期量）。
+let lastPurgeAt = 0
+const PURGE_INTERVAL_MS = 3_600_000
 
 function verifyCron(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET
@@ -43,11 +47,18 @@ export async function GET(req: NextRequest) {
   const recycled = await recycleSuffixes()
   const zombieAlerts = await resolveAlertsForInactiveCampaigns()
 
+  // 终态数据物理清理（每小时至多一次，分批删）：与回收解耦，同样不受补货并发锁影响。
+  let purged: { poolDeleted: number; assignmentsDeleted: number } | null = null
+  if (Date.now() - lastPurgeAt >= PURGE_INTERVAL_MS) {
+    lastPurgeAt = Date.now()
+    purged = await purgeTerminalSuffixes()
+  }
+
   if (isRunning) {
     console.warn('[cron/suffix-replenish] 上一轮补货仍在执行，本轮只做回收、跳过补货')
     return NextResponse.json({
       code: 0,
-      data: { skipped: true, cleanedExitIps: cleanedIps, recycled, zombieAlerts },
+      data: { skipped: true, cleanedExitIps: cleanedIps, recycled, zombieAlerts, purged },
     })
   }
   isRunning = true
@@ -59,7 +70,7 @@ export async function GET(req: NextRequest) {
         ` cleanedExitIps=${cleanedIps} expired=${recycled.expiredAvailable} reclaimedLeased=${recycled.reclaimedLeased}` +
         ` zombieAlerts=${zombieAlerts} cost=${Date.now() - startedAt}ms`,
     )
-    return NextResponse.json({ code: 0, data: { ...result, cleanedExitIps: cleanedIps, recycled, zombieAlerts } })
+    return NextResponse.json({ code: 0, data: { ...result, cleanedExitIps: cleanedIps, recycled, zombieAlerts, purged } })
   } catch (error) {
     console.error('[cron/suffix-replenish] error:', error)
     return NextResponse.json(
