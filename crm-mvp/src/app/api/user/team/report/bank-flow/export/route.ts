@@ -3,7 +3,7 @@ import { withLeader } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import ExcelJS from "exceljs";
 import {
-  buildBankStatementSheet, buildBankReconSheet,
+  buildBankStatementSheet, buildPayeeStatementSheet,
   type BankFlowExportMethod, type BankFlowExportEntry,
 } from "@/lib/bank-flow-xlsx";
 
@@ -11,9 +11,10 @@ export const dynamic = "force-dynamic";
 
 /**
  * GET /api/user/team/report/bank-flow/export?month=YYYY-MM[&methodId=]
- * 导出银行流水：每个收款方式一张正规「账户交易明细清单」sheet +
- * 按实际收款人（去掉括号里的银行标注归并，如 龚建成(农业)/龚建成(WISE) → 龚建成）
- * 各一张「打款对账明细」sheet。methodId 指定时只导出该收款方式。
+ * 导出银行流水（C-179 精简为每收款人一张 sheet）：
+ * - 整体导出：每个收款人一张「账户交易明细清单」合并流水单（该人所有卡/渠道入账合并、
+ *   带打款方式(卡号)列、期初余额=各卡合计逐笔滚动）
+ * - methodId 指定时（单卡导出按钮）：仍导出该卡单独一张流水单
  */
 export const GET = withLeader(async (req: NextRequest, { user }) => {
   if (!user.teamId) return new NextResponse("未关联小组", { status: 400 });
@@ -74,28 +75,34 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   wb.creator = "CRM System";
   wb.created = new Date();
 
-  // 每个收款方式一张流水单（sheet 名去重；同名同卡不同打款方式时靠渠道区分）
-  const used = new Set<string>();
-  for (const m of methods) {
-    let name = `${m.payeeName}${m.payChannel ? "-" + m.payChannel : ""}${m.cardNo ? "-" + m.cardNo.slice(-4) : ""}`.slice(0, 28);
-    let i = 2;
-    while (used.has(name)) name = `${m.payeeName.slice(0, 24)}(${i++})`;
-    used.add(name);
+  if (methodIdParam) {
+    // 单卡导出：该卡单独一张流水单
+    const m = methods[0];
+    const name = `${m.payeeName}${m.payChannel ? "-" + m.payChannel : ""}${m.cardNo ? "-" + m.cardNo.slice(-4) : ""}`.slice(0, 28);
     buildBankStatementSheet(wb, month, m, entries.filter((e) => e.paymentMethodId === m.id), name);
-  }
-  // 对账明细按实际收款人分表（龚建成 / 张文俊 各一张，卡不同也归同一收款人）
-  // C-178 后 payee_name 已是纯名字；保留去括号逻辑兼容未迁移的旧文本
-  const payees = [...new Set(methods.map((m) => m.payeeName.replace(/[（(].*$/, "").trim() || m.payeeName))];
-  for (const payee of payees) {
-    const payeeMethods = methods.filter((m) => (m.payeeName.replace(/[（(].*$/, "").trim() || m.payeeName) === payee);
-    const methodIds = new Set(payeeMethods.map((m) => m.id));
-    const payeeEntries = entries.filter((e) => methodIds.has(e.paymentMethodId));
-    if (payeeEntries.length === 0 && payees.length > 1) continue; // 该收款人本月无到账则不出空表
-    let name = `对账-${payee}`.slice(0, 28);
-    let i = 2;
-    while (used.has(name)) name = `对账-${payee.slice(0, 20)}(${i++})`;
-    used.add(name);
-    buildBankReconSheet(wb, month, payeeMethods, payeeEntries, name, payee);
+  } else {
+    // C-179：每收款人一张合并流水单（该人所有卡/渠道入账合并）
+    // C-178 后 payee_name 已是纯名字；保留去括号逻辑兼容未迁移的旧文本
+    const used = new Set<string>();
+    const payeeOf = (m: BankFlowExportMethod) => m.payeeName.replace(/[（(].*$/, "").trim() || m.payeeName;
+    const payees = [...new Set(methods.map(payeeOf))];
+    for (const payee of payees) {
+      const payeeMethods = methods.filter((m) => payeeOf(m) === payee);
+      const methodIds = new Set(payeeMethods.map((m) => m.id));
+      const payeeEntries = entries.filter((e) => methodIds.has(e.paymentMethodId));
+      if (payeeEntries.length === 0 && payees.length > 1) continue; // 该收款人本月无到账则不出空表
+      let name = payee.slice(0, 28);
+      let i = 2;
+      while (used.has(name)) name = `${payee.slice(0, 24)}(${i++})`;
+      used.add(name);
+      buildPayeeStatementSheet(wb, month, payee, payeeMethods, payeeEntries, name);
+    }
+    if (wb.worksheets.length === 0) {
+      // 全部收款人本月都无到账：仍给每人一张空表，避免空 workbook
+      for (const payee of payees) {
+        buildPayeeStatementSheet(wb, month, payee, methods.filter((m) => payeeOf(m) === payee), [], payee.slice(0, 28));
+      }
+    }
   }
 
   const buffer = await wb.xlsx.writeBuffer();

@@ -157,6 +157,99 @@ export function buildBankStatementSheet(
   ws.getRow(r).height = 26;
 }
 
+/**
+ * C-179：每收款人一张「账户交易明细清单」合并流水单——
+ * 该收款人名下所有卡/渠道的入账合并按到账时间排序，新增「打款方式(卡号)」列，
+ * 期初余额 = 各卡期初合计，逐笔滚动余额。
+ */
+export function buildPayeeStatementSheet(
+  wb: ExcelJS.Workbook,
+  month: string,
+  payeeName: string,
+  methods: BankFlowExportMethod[],
+  entries: BankFlowExportEntry[],
+  sheetName: string,
+) {
+  const ws = wb.addWorksheet(sheetName);
+  const COLS = 10;
+  const widths = [6, 13, 9, 16, 20, 26, 15, 15, 16, 22];
+  widths.forEach((w, i) => (ws.getColumn(i + 1).width = w));
+
+  const { start, end } = monthRange(month);
+  const methodById = new Map(methods.map((m) => [m.id, m]));
+  const opening = methods.reduce((s, m) => s + (m.openingBalance ?? 0), 0);
+  const cardNos = [...new Set(methods.map((m) => m.cardNo).filter(Boolean))];
+  const acctLabel = cardNos.length === 0 ? "—" : cardNos.length === 1 ? cardNos[0] : `共 ${cardNos.length} 张卡（见「打款方式」列）`;
+
+  // 抬头
+  ws.mergeCells(1, 1, 1, COLS);
+  cell(ws, 1, 1, "账户交易明细清单", { sz: 16, bold: true, noBorder: true });
+  ws.getRow(1).height = 34;
+
+  ws.mergeCells(2, 1, 2, 3);
+  cell(ws, 2, 1, `户　名：${payeeName}`, { h: "left", noBorder: true });
+  ws.mergeCells(2, 4, 2, 6);
+  cell(ws, 2, 4, `账　号：${acctLabel}`, { h: "left", noBorder: true });
+  ws.mergeCells(2, 7, 2, COLS);
+  cell(ws, 2, 7, `币　种：人民币(CNY)`, { h: "left", noBorder: true });
+
+  const now = new Date();
+  ws.mergeCells(3, 1, 3, 3);
+  cell(ws, 3, 1, `查询期间：${start} 至 ${end}`, { h: "left", noBorder: true });
+  ws.mergeCells(3, 4, 3, 6);
+  cell(ws, 3, 4, `期初余额：${opening.toLocaleString("zh-CN", { minimumFractionDigits: 2 })}（各卡合计）`, { h: "left", noBorder: true });
+  ws.mergeCells(3, 7, 3, COLS);
+  cell(ws, 3, 7, `打印时间：${fmtDate(now)} ${fmtTime(now)}`, { h: "left", noBorder: true });
+  for (let r = 2; r <= 3; r++) ws.getRow(r).height = 22;
+
+  // 表头
+  const HEAD = ["序号", "交易日期", "交易时间", "交易摘要", "对方户名", "打款方式(卡号)", "收入金额(贷)", "支出金额(借)", "账户余额", "备注"];
+  HEAD.forEach((h, i) => cell(ws, 5, 1 + i, h, { bold: true, fill: GRAY }));
+  ws.getRow(5).height = 24;
+
+  // 逐笔（按到账时间升序滚动余额）
+  const sorted = [...entries].sort((a, b) => a.txnAt.getTime() - b.txnAt.getTime());
+  let balance = opening;
+  let r = 6;
+  sorted.forEach((e, i) => {
+    const m = methodById.get(e.paymentMethodId);
+    balance += e.amount;
+    cell(ws, r, 1, i + 1, {});
+    cell(ws, r, 2, fmtDate(e.txnAt), {});
+    cell(ws, r, 3, fmtTime(e.txnAt), {});
+    cell(ws, r, 4, e.summary || "佣金结算", {});
+    cell(ws, r, 5, e.counterparty || e.platform, { wrap: true });
+    cell(ws, r, 6, m ? `${m.payChannel || "—"} ${m.cardNo || ""}`.trim() : "—", { sz: 10 });
+    cell(ws, r, 7, e.amount, { numFmt: MONEY, h: "right" });
+    cell(ws, r, 8, "", {});
+    cell(ws, r, 9, Math.round(balance * 100) / 100, { numFmt: MONEY, h: "right" });
+    cell(ws, r, 10, e.remark || `${e.platform} 平台佣金打款`, { wrap: true, h: "left", sz: 10 });
+    ws.getRow(r).height = 22;
+    r++;
+  });
+  if (sorted.length === 0) {
+    ws.mergeCells(r, 1, r, COLS);
+    cell(ws, r, 1, "本期无交易记录", {});
+    r++;
+  }
+
+  // 合计
+  const totalIn = Math.round(sorted.reduce((s, e) => s + e.amount, 0) * 100) / 100;
+  ws.mergeCells(r, 1, r, 6);
+  cell(ws, r, 1, `本期合计：收入 ${sorted.length} 笔`, { bold: true, fill: GRAY, h: "left" });
+  cell(ws, r, 7, totalIn, { bold: true, fill: GRAY, numFmt: MONEY, h: "right" });
+  cell(ws, r, 8, 0, { bold: true, fill: GRAY, numFmt: MONEY, h: "right" });
+  cell(ws, r, 9, Math.round(balance * 100) / 100, { bold: true, fill: GRAY, numFmt: MONEY, h: "right" });
+  cell(ws, r, 10, "", { fill: GRAY });
+  ws.getRow(r).height = 24;
+  r += 2;
+
+  // 签章栏
+  ws.mergeCells(r, 1, r, COLS);
+  cell(ws, r, 1, "制表人：＿＿＿＿＿＿　　　复核人：＿＿＿＿＿＿　　　日期：＿＿＿＿年＿＿月＿＿日", { h: "left", noBorder: true });
+  ws.getRow(r).height = 26;
+}
+
 /** 打款对账明细 sheet（核对应到/实到/手续费 + 逐人明细）；按收款人分表时传 sheetName/payeeName */
 export function buildBankReconSheet(
   wb: ExcelJS.Workbook,

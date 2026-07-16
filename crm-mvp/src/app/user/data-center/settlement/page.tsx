@@ -3,11 +3,11 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import {
   Card, Input, Button, Row, Col, Statistic, Table, Segmented, Space, Typography,
-  Empty, Progress, Select, DatePicker, Tag, App, Tooltip,
+  Empty, Progress, Select, DatePicker, Tag, App, Tooltip, Modal,
 } from "antd";
 import {
   SearchOutlined, AccountBookOutlined,
-  DollarOutlined, SyncOutlined, BankOutlined,
+  DollarOutlined, SyncOutlined, BankOutlined, EditOutlined,
 } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import { COLORS } from "@/styles/themeConfig";
@@ -103,6 +103,10 @@ interface PaymentRow {
   gross_amount: number | null;
   currency: string;
   payment_type: string | null;
+  /** C-179：生效收款方式 id（逐笔修正优先，否则账号绑定），null=未绑定 */
+  payment_method_id?: string | null;
+  /** C-179：该笔是否被逐笔修正过 */
+  is_override?: boolean;
   /** paid=已到账 | processing=审核中（如 LB 打款单确认期） */
   status?: string;
   raw_status: string | null;
@@ -137,6 +141,20 @@ export default function SettlementPage() {
   const [payAggTab, setPayAggTab] = useState<string>("detail");
   const [payData, setPayData] = useState<PaymentsData | null>(null);
   const [paySyncing, setPaySyncing] = useState(false);
+
+  // C-179：逐笔修正打款方式
+  interface TeamMethod { id: string; payee_name: string; pay_channel: string; card_no: string }
+  const [teamMethods, setTeamMethods] = useState<TeamMethod[]>([]);
+  const [payEdit, setPayEdit] = useState<PaymentRow | null>(null);
+  const [editMethodId, setEditMethodId] = useState<string | undefined>(undefined);
+  const [editSaving, setEditSaving] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/user/team/payment-methods")
+      .then((r) => r.json())
+      .then((res) => { if (res?.code === 0) setTeamMethods(res.data || []); })
+      .catch(() => undefined);
+  }, []);
 
   // 构建与结算查询一致的筛选参数（打款记录不支持 mid 维度）
   const buildParams = useCallback((withMid: boolean) => {
@@ -199,6 +217,28 @@ export default function SettlementPage() {
       setPaySyncing(false);
     }
   }, [doSearch, message]);
+
+  // C-179：保存逐笔修正（methodId=null 恢复跟随账号绑定）
+  const savePayMethod = useCallback(async (methodId: string | null) => {
+    if (!payEdit) return;
+    setEditSaving(true);
+    try {
+      const res = await fetch("/api/user/data-center/payments", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: payEdit.id, payment_method_id: methodId }),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        message.success(res.message || "已保存");
+        setPayEdit(null);
+        loadPayments();
+      } else {
+        message.error(res.message || "保存失败");
+      }
+    } finally {
+      setEditSaving(false);
+    }
+  }, [payEdit, loadPayments, message]);
 
   useEffect(() => { doSearch(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -418,11 +458,36 @@ export default function SettlementPage() {
       render: (v: string) => <Tag>{SOURCE_KIND_LABEL[v] || v}</Tag>,
     },
     {
-      // C-178：打款方式 = 账号绑定收款方式的「打款方式」字段（未绑定显示 —），支持列头筛选
-      title: "打款方式", dataIndex: "payment_type", width: 110, ellipsis: true,
+      // C-178：打款方式 = 生效收款方式的「打款方式」字段（未绑定显示 —），支持列头筛选
+      // C-179：可逐笔修正（员工换绑后历史笔按当时实际打款方式改回）
+      title: "打款方式", dataIndex: "payment_type", width: 130,
       filters: [...new Set(payData?.payments.map((p) => p.payment_type || "未绑定") || [])].map((t) => ({ text: t, value: t })),
       onFilter: (v, r) => (r.payment_type || "未绑定") === v,
-      render: (v: string | null) => v ? <Tag color="geekblue">{v}</Tag> : <Text type="secondary">—</Text>,
+      render: (v: string | null, r: PaymentRow) => (
+        <Space size={2}>
+          {v ? (
+            r.is_override ? (
+              <Tooltip title="该笔已逐笔修正，不随账号绑定变化">
+                <Tag color="orange" style={{ marginInlineEnd: 0 }}>{v}</Tag>
+              </Tooltip>
+            ) : (
+              <Tag color="geekblue" style={{ marginInlineEnd: 0 }}>{v}</Tag>
+            )
+          ) : (
+            <Text type="secondary">—</Text>
+          )}
+          <Tooltip title="修改这一笔的打款方式">
+            <Button
+              type="text" size="small" icon={<EditOutlined />}
+              onClick={(e) => {
+                e.stopPropagation();
+                setPayEdit(r);
+                setEditMethodId(r.payment_method_id || undefined);
+              }}
+            />
+          </Tooltip>
+        </Space>
+      ),
     },
     { title: "单号", dataIndex: "payment_no", width: 140, ellipsis: true, render: (v: string) => <Text type="secondary" style={{ fontSize: 12 }}>{v}</Text> },
   ];
@@ -887,6 +952,52 @@ export default function SettlementPage() {
           </Card>
         )
       )}
+
+      {/* C-179：逐笔修正打款方式弹窗 */}
+      <Modal
+        title="修改这一笔的打款方式"
+        open={!!payEdit}
+        onCancel={() => setPayEdit(null)}
+        footer={[
+          ...(payEdit?.is_override
+            ? [<Button key="reset" loading={editSaving} onClick={() => savePayMethod(null)}>恢复跟随账号绑定</Button>]
+            : []),
+          <Button key="cancel" onClick={() => setPayEdit(null)}>取消</Button>,
+          <Button
+            key="ok" type="primary" loading={editSaving}
+            disabled={!editMethodId || editMethodId === (payEdit?.payment_method_id || undefined)}
+            onClick={() => editMethodId && savePayMethod(editMethodId)}
+          >
+            保存
+          </Button>,
+        ]}
+      >
+        {payEdit && (
+          <Space direction="vertical" size={8} style={{ width: "100%" }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {payEdit.platform} · {payEdit.account_name} · 打款日 {payEdit.paid_date || "—"} · ${payEdit.amount.toFixed(2)}（单号 {payEdit.payment_no}）
+            </Text>
+            <Select
+              style={{ width: "100%" }}
+              placeholder="选择打款方式"
+              value={editMethodId}
+              onChange={(v) => setEditMethodId(v)}
+              options={(payEdit.payee
+                ? teamMethods.filter((m) => m.payee_name === payEdit.payee)
+                : teamMethods
+              ).map((m) => ({
+                value: m.id,
+                label: `${m.payee_name} · ${m.pay_channel || "未填打款方式"}（${m.card_no || "未填卡号"}）`,
+              }))}
+            />
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              只改这一笔（含同单号的重复行），不影响账号绑定和其它打款记录；
+              {payEdit.payee ? `只能选「${payEdit.payee}」名下的打款方式。` : "该笔未绑定收款方式，可任选本组清单。"}
+              银行流水登记的预填也按修改后的归属计算。
+            </Text>
+          </Space>
+        )}
+      </Modal>
     </div>
   );
 }

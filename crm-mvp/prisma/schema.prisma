@@ -748,6 +748,9 @@ model affiliate_payments {
   status                 String    @default("paid") @db.VarChar(24) // paid | processing | rejected
   raw_status             String?   @db.VarChar(64)
   payment_type           String?   @db.VarChar(64)
+  // C-179：逐笔修正的收款方式（payment_methods.id）。NULL=跟随账号实时绑定；
+  // 员工月中换绑时历史笔会被新绑定“串改”，在结算页逐笔改回当时实际打款的方式。
+  payment_method_id_override BigInt? @db.UnsignedBigInt
   raw_json               String?   @db.Text
   is_deleted             Int       @default(0) @db.TinyInt
   created_at             DateTime  @default(now()) @db.DateTime(0)

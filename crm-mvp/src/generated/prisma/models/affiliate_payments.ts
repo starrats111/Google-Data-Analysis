@@ -32,6 +32,7 @@ export type Affiliate_paymentsAvgAggregateOutputType = {
   platform_connection_id: number | null
   amount: runtime.Decimal | null
   gross_amount: runtime.Decimal | null
+  payment_method_id_override: number | null
   is_deleted: number | null
 }
 
@@ -41,6 +42,7 @@ export type Affiliate_paymentsSumAggregateOutputType = {
   platform_connection_id: bigint | null
   amount: runtime.Decimal | null
   gross_amount: runtime.Decimal | null
+  payment_method_id_override: bigint | null
   is_deleted: number | null
 }
 
@@ -59,6 +61,7 @@ export type Affiliate_paymentsMinAggregateOutputType = {
   status: string | null
   raw_status: string | null
   payment_type: string | null
+  payment_method_id_override: bigint | null
   raw_json: string | null
   is_deleted: number | null
   created_at: Date | null
@@ -80,6 +83,7 @@ export type Affiliate_paymentsMaxAggregateOutputType = {
   status: string | null
   raw_status: string | null
   payment_type: string | null
+  payment_method_id_override: bigint | null
   raw_json: string | null
   is_deleted: number | null
   created_at: Date | null
@@ -101,6 +105,7 @@ export type Affiliate_paymentsCountAggregateOutputType = {
   status: number
   raw_status: number
   payment_type: number
+  payment_method_id_override: number
   raw_json: number
   is_deleted: number
   created_at: number
@@ -115,6 +120,7 @@ export type Affiliate_paymentsAvgAggregateInputType = {
   platform_connection_id?: true
   amount?: true
   gross_amount?: true
+  payment_method_id_override?: true
   is_deleted?: true
 }
 
@@ -124,6 +130,7 @@ export type Affiliate_paymentsSumAggregateInputType = {
   platform_connection_id?: true
   amount?: true
   gross_amount?: true
+  payment_method_id_override?: true
   is_deleted?: true
 }
 
@@ -142,6 +149,7 @@ export type Affiliate_paymentsMinAggregateInputType = {
   status?: true
   raw_status?: true
   payment_type?: true
+  payment_method_id_override?: true
   raw_json?: true
   is_deleted?: true
   created_at?: true
@@ -163,6 +171,7 @@ export type Affiliate_paymentsMaxAggregateInputType = {
   status?: true
   raw_status?: true
   payment_type?: true
+  payment_method_id_override?: true
   raw_json?: true
   is_deleted?: true
   created_at?: true
@@ -184,6 +193,7 @@ export type Affiliate_paymentsCountAggregateInputType = {
   status?: true
   raw_status?: true
   payment_type?: true
+  payment_method_id_override?: true
   raw_json?: true
   is_deleted?: true
   created_at?: true
@@ -292,6 +302,7 @@ export type Affiliate_paymentsGroupByOutputType = {
   status: string
   raw_status: string | null
   payment_type: string | null
+  payment_method_id_override: bigint | null
   raw_json: string | null
   is_deleted: number
   created_at: Date
@@ -336,6 +347,7 @@ export type affiliate_paymentsWhereInput = {
   status?: Prisma.StringFilter<"affiliate_payments"> | string
   raw_status?: Prisma.StringNullableFilter<"affiliate_payments"> | string | null
   payment_type?: Prisma.StringNullableFilter<"affiliate_payments"> | string | null
+  payment_method_id_override?: Prisma.BigIntNullableFilter<"affiliate_payments"> | bigint | number | null
   raw_json?: Prisma.StringNullableFilter<"affiliate_payments"> | string | null
   is_deleted?: Prisma.IntFilter<"affiliate_payments"> | number
   created_at?: Prisma.DateTimeFilter<"affiliate_payments"> | Date | string
@@ -357,6 +369,7 @@ export type affiliate_paymentsOrderByWithRelationInput = {
   status?: Prisma.SortOrder
   raw_status?: Prisma.SortOrderInput | Prisma.SortOrder
   payment_type?: Prisma.SortOrderInput | Prisma.SortOrder
+  payment_method_id_override?: Prisma.SortOrderInput | Prisma.SortOrder
   raw_json?: Prisma.SortOrderInput | Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
@@ -383,6 +396,7 @@ export type affiliate_paymentsWhereUniqueInput = Prisma.AtLeast<{
   status?: Prisma.StringFilter<"affiliate_payments"> | string
   raw_status?: Prisma.StringNullableFilter<"affiliate_payments"> | string | null
   payment_type?: Prisma.StringNullableFilter<"affiliate_payments"> | string | null
+  payment_method_id_override?: Prisma.BigIntNullableFilter<"affiliate_payments"> | bigint | number | null
   raw_json?: Prisma.StringNullableFilter<"affiliate_payments"> | string | null
   is_deleted?: Prisma.IntFilter<"affiliate_payments"> | number
   created_at?: Prisma.DateTimeFilter<"affiliate_payments"> | Date | string
@@ -404,6 +418,7 @@ export type affiliate_paymentsOrderByWithAggregationInput = {
   status?: Prisma.SortOrder
   raw_status?: Prisma.SortOrderInput | Prisma.SortOrder
   payment_type?: Prisma.SortOrderInput | Prisma.SortOrder
+  payment_method_id_override?: Prisma.SortOrderInput | Prisma.SortOrder
   raw_json?: Prisma.SortOrderInput | Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
@@ -433,6 +448,7 @@ export type affiliate_paymentsScalarWhereWithAggregatesInput = {
   status?: Prisma.StringWithAggregatesFilter<"affiliate_payments"> | string
   raw_status?: Prisma.StringNullableWithAggregatesFilter<"affiliate_payments"> | string | null
   payment_type?: Prisma.StringNullableWithAggregatesFilter<"affiliate_payments"> | string | null
+  payment_method_id_override?: Prisma.BigIntNullableWithAggregatesFilter<"affiliate_payments"> | bigint | number | null
   raw_json?: Prisma.StringNullableWithAggregatesFilter<"affiliate_payments"> | string | null
   is_deleted?: Prisma.IntWithAggregatesFilter<"affiliate_payments"> | number
   created_at?: Prisma.DateTimeWithAggregatesFilter<"affiliate_payments"> | Date | string
@@ -454,6 +470,7 @@ export type affiliate_paymentsCreateInput = {
   status?: string
   raw_status?: string | null
   payment_type?: string | null
+  payment_method_id_override?: bigint | number | null
   raw_json?: string | null
   is_deleted?: number
   created_at?: Date | string
@@ -475,6 +492,7 @@ export type affiliate_paymentsUncheckedCreateInput = {
   status?: string
   raw_status?: string | null
   payment_type?: string | null
+  payment_method_id_override?: bigint | number | null
   raw_json?: string | null
   is_deleted?: number
   created_at?: Date | string
@@ -496,6 +514,7 @@ export type affiliate_paymentsUpdateInput = {
   status?: Prisma.StringFieldUpdateOperationsInput | string
   raw_status?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   payment_type?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  payment_method_id_override?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   raw_json?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -517,6 +536,7 @@ export type affiliate_paymentsUncheckedUpdateInput = {
   status?: Prisma.StringFieldUpdateOperationsInput | string
   raw_status?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   payment_type?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  payment_method_id_override?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   raw_json?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -538,6 +558,7 @@ export type affiliate_paymentsCreateManyInput = {
   status?: string
   raw_status?: string | null
   payment_type?: string | null
+  payment_method_id_override?: bigint | number | null
   raw_json?: string | null
   is_deleted?: number
   created_at?: Date | string
@@ -559,6 +580,7 @@ export type affiliate_paymentsUpdateManyMutationInput = {
   status?: Prisma.StringFieldUpdateOperationsInput | string
   raw_status?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   payment_type?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  payment_method_id_override?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   raw_json?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -580,6 +602,7 @@ export type affiliate_paymentsUncheckedUpdateManyInput = {
   status?: Prisma.StringFieldUpdateOperationsInput | string
   raw_status?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   payment_type?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  payment_method_id_override?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   raw_json?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -613,6 +636,7 @@ export type affiliate_paymentsCountOrderByAggregateInput = {
   status?: Prisma.SortOrder
   raw_status?: Prisma.SortOrder
   payment_type?: Prisma.SortOrder
+  payment_method_id_override?: Prisma.SortOrder
   raw_json?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
@@ -625,6 +649,7 @@ export type affiliate_paymentsAvgOrderByAggregateInput = {
   platform_connection_id?: Prisma.SortOrder
   amount?: Prisma.SortOrder
   gross_amount?: Prisma.SortOrder
+  payment_method_id_override?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
 }
 
@@ -643,6 +668,7 @@ export type affiliate_paymentsMaxOrderByAggregateInput = {
   status?: Prisma.SortOrder
   raw_status?: Prisma.SortOrder
   payment_type?: Prisma.SortOrder
+  payment_method_id_override?: Prisma.SortOrder
   raw_json?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
@@ -664,6 +690,7 @@ export type affiliate_paymentsMinOrderByAggregateInput = {
   status?: Prisma.SortOrder
   raw_status?: Prisma.SortOrder
   payment_type?: Prisma.SortOrder
+  payment_method_id_override?: Prisma.SortOrder
   raw_json?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
@@ -676,6 +703,7 @@ export type affiliate_paymentsSumOrderByAggregateInput = {
   platform_connection_id?: Prisma.SortOrder
   amount?: Prisma.SortOrder
   gross_amount?: Prisma.SortOrder
+  payment_method_id_override?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
 }
 
@@ -696,6 +724,7 @@ export type affiliate_paymentsSelect<ExtArgs extends runtime.Types.Extensions.In
   status?: boolean
   raw_status?: boolean
   payment_type?: boolean
+  payment_method_id_override?: boolean
   raw_json?: boolean
   is_deleted?: boolean
   created_at?: boolean
@@ -719,13 +748,14 @@ export type affiliate_paymentsSelectScalar = {
   status?: boolean
   raw_status?: boolean
   payment_type?: boolean
+  payment_method_id_override?: boolean
   raw_json?: boolean
   is_deleted?: boolean
   created_at?: boolean
   updated_at?: boolean
 }
 
-export type affiliate_paymentsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "platform" | "platform_connection_id" | "payment_no" | "source_kind" | "paid_date" | "request_date" | "amount" | "gross_amount" | "currency" | "status" | "raw_status" | "payment_type" | "raw_json" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["affiliate_payments"]>
+export type affiliate_paymentsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "platform" | "platform_connection_id" | "payment_no" | "source_kind" | "paid_date" | "request_date" | "amount" | "gross_amount" | "currency" | "status" | "raw_status" | "payment_type" | "payment_method_id_override" | "raw_json" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["affiliate_payments"]>
 
 export type $affiliate_paymentsPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "affiliate_payments"
@@ -745,6 +775,7 @@ export type $affiliate_paymentsPayload<ExtArgs extends runtime.Types.Extensions.
     status: string
     raw_status: string | null
     payment_type: string | null
+    payment_method_id_override: bigint | null
     raw_json: string | null
     is_deleted: number
     created_at: Date
@@ -1132,6 +1163,7 @@ export interface affiliate_paymentsFieldRefs {
   readonly status: Prisma.FieldRef<"affiliate_payments", 'String'>
   readonly raw_status: Prisma.FieldRef<"affiliate_payments", 'String'>
   readonly payment_type: Prisma.FieldRef<"affiliate_payments", 'String'>
+  readonly payment_method_id_override: Prisma.FieldRef<"affiliate_payments", 'BigInt'>
   readonly raw_json: Prisma.FieldRef<"affiliate_payments", 'String'>
   readonly is_deleted: Prisma.FieldRef<"affiliate_payments", 'Int'>
   readonly created_at: Prisma.FieldRef<"affiliate_payments", 'DateTime'>

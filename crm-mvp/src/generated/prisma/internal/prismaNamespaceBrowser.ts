@@ -744,6 +744,7 @@ export const Affiliate_paymentsScalarFieldEnum = {
   status: 'status',
   raw_status: 'raw_status',
   payment_type: 'payment_type',
+  payment_method_id_override: 'payment_method_id_override',
   raw_json: 'raw_json',
   is_deleted: 'is_deleted',
   created_at: 'created_at',

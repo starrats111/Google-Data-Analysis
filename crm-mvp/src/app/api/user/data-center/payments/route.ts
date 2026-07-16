@@ -75,12 +75,14 @@ export async function GET(req: NextRequest) {
       paid_date: true, amount: true, gross_amount: true, currency: true,
       status: true, raw_status: true,
       platform_connection_id: true, user_id: true,
+      payment_method_id_override: true,
     },
   });
 
   // 关联账号名 / 收款方式（platform_connections → payment_methods）。先取出全部原始行涉及的连接，
   // 以便去重时优先保留「带收款方式绑定的主连接」，避免折叠后丢失收款人/账号归属信息。
   // C-178：收款人/打款方式统一从组员绑定的收款方式（payment_methods）取，弃用连接上的旧 payee 文本。
+  // C-179：逐笔修正（payment_method_id_override）优先于账号实时绑定。
   const allConnIds = [...new Set(rowsRaw.map((r) => r.platform_connection_id).filter((x): x is bigint => x != null))];
   const conns = allConnIds.length
     ? await prisma.platform_connections.findMany({
@@ -88,7 +90,10 @@ export async function GET(req: NextRequest) {
         select: { id: true, account_name: true, payment_method_id: true },
       })
     : [];
-  const methodIds = [...new Set(conns.map((c) => c.payment_method_id).filter((x): x is bigint => x != null))];
+  const methodIds = [...new Set([
+    ...conns.map((c) => c.payment_method_id),
+    ...rowsRaw.map((r) => r.payment_method_id_override),
+  ].filter((x): x is bigint => x != null))];
   const methods = methodIds.length
     ? await prisma.payment_methods.findMany({
         where: { id: { in: methodIds } }, // 不过滤 is_deleted：已删清单项仍按原文本显示
@@ -97,6 +102,9 @@ export async function GET(req: NextRequest) {
     : [];
   const methodById = new Map(methods.map((m) => [String(m.id), m]));
   const connNameMap = new Map(conns.map((c) => [String(c.id), c.account_name || ""]));
+  const connMethodIdMap = new Map(
+    conns.map((c) => [String(c.id), c.payment_method_id != null ? String(c.payment_method_id) : null]),
+  );
   const connMethodMap = new Map(
     conns.map((c) => [String(c.id), c.payment_method_id ? methodById.get(String(c.payment_method_id)) ?? null : null]),
   );
@@ -108,9 +116,11 @@ export async function GET(req: NextRequest) {
   // 主连接行，确保归属落在总帐号上（其余渠道 API 仅作为同一总帐号的来源，不重复计）。
   const connScore = (r: (typeof rowsRaw)[number]): number => {
     const cid = r.platform_connection_id ? String(r.platform_connection_id) : "";
+    // 带逐笔修正的行必须赢得折叠，否则修正会被同单其它渠道行顶掉
+    const hasOverride = r.payment_method_id_override != null ? 4 : 0;
     const hasMethod = cid && connMethodMap.get(cid) ? 2 : 0;
     const hasName = cid && connNameMap.get(cid) ? 1 : 0;
-    return hasMethod + hasName;
+    return hasOverride + hasMethod + hasName;
   };
   const bestByPayment = new Map<string, (typeof rowsRaw)[number]>();
   for (const r of rowsRaw) {
@@ -142,8 +152,12 @@ export async function GET(req: NextRequest) {
   const payments = rows.map((r) => {
     const accountName = r.platform_connection_id ? (connNameMap.get(String(r.platform_connection_id)) || "") : "";
     const memberName = isLeader ? (userNameMap.get(String(r.user_id)) || "") : "";
-    // 收款人 / 打款方式：一律取绑定的收款方式（未绑定则留空，前端展示 —/未绑定）
-    const method = r.platform_connection_id ? connMethodMap.get(String(r.platform_connection_id)) ?? null : null;
+    // 收款人 / 打款方式：逐笔修正优先，否则取账号绑定的收款方式（都没有则留空，前端展示 —/未绑定）
+    const overrideId = r.payment_method_id_override != null && methodById.has(String(r.payment_method_id_override))
+      ? String(r.payment_method_id_override) : null;
+    const boundId = r.platform_connection_id ? connMethodIdMap.get(String(r.platform_connection_id)) ?? null : null;
+    const effMethodId = overrideId ?? boundId;
+    const method = effMethodId ? methodById.get(effMethodId) ?? null : null;
     const payee = method?.payee_name || "";
     // 对齐平台后台：展示金额一律用毛额（gross 优先），净额/手续费附带返回
     const netAmount = +Number(r.amount).toFixed(2);
@@ -162,8 +176,11 @@ export async function GET(req: NextRequest) {
       fee: +(displayAmount - netAmount).toFixed(2),
       gross_amount: r.gross_amount != null ? +Number(r.gross_amount).toFixed(2) : null,
       currency: r.currency,
-      // C-178：打款方式 = 绑定收款方式的 pay_channel（不再展示平台 API 原始 payment_type）
+      // C-178：打款方式 = 生效收款方式的 pay_channel（不再展示平台 API 原始 payment_type）
       payment_type: method?.pay_channel || null,
+      // C-179：生效收款方式 id 与是否逐笔修正（前端编辑用）
+      payment_method_id: effMethodId,
+      is_override: overrideId != null,
       status: r.status,
       raw_status: r.raw_status,
     };
@@ -189,4 +206,98 @@ export async function GET(req: NextRequest) {
     byPlatform,
     total_paid: +totalPaid.toFixed(2),
   }));
+}
+
+/**
+ * PATCH /api/user/data-center/payments
+ * C-179：逐笔修正打款记录的打款方式 { id, payment_method_id | null }
+ *
+ * - 组员只能改自己的记录，组长可改本组成员的记录
+ * - 只能换到该笔当前收款人名下的其它打款方式（未绑定收款方式的笔可任选本组清单）
+ * - payment_method_id 传 null 恢复跟随账号实时绑定
+ * - 同一打款单因多渠道连接在库内的重复行一并更新，保证折叠/预填口径一致
+ */
+export async function PATCH(req: NextRequest) {
+  const user = getUserFromRequest(req);
+  if (!user) return apiError("未授权", 401);
+
+  const { id, payment_method_id } = await req.json();
+  if (!id) return apiError("缺少打款记录 ID");
+
+  const row = await prisma.affiliate_payments.findFirst({
+    where: { id: BigInt(id), is_deleted: 0 },
+    select: {
+      id: true, user_id: true, platform: true, payment_no: true,
+      platform_connection_id: true, payment_method_id_override: true,
+    },
+  });
+  if (!row) return apiError("打款记录不存在");
+
+  // 权限：本人，或组长改本组成员
+  if (String(row.user_id) !== user.userId) {
+    if (!(user.role === "leader" && user.teamId)) return apiError("无权修改该记录", 403);
+    const owner = await prisma.users.findFirst({
+      where: { id: row.user_id, team_id: BigInt(user.teamId), is_deleted: 0 },
+      select: { id: true },
+    });
+    if (!owner) return apiError("无权修改该记录", 403);
+  }
+
+  // 同一打款单的全部渠道行一并更新
+  const sameNoWhere = {
+    platform: row.platform,
+    payment_no: row.payment_no,
+    user_id: row.user_id,
+    is_deleted: 0,
+  };
+
+  if (payment_method_id == null) {
+    await prisma.affiliate_payments.updateMany({
+      where: sameNoWhere,
+      data: { payment_method_id_override: null },
+    });
+    return apiSuccess(null, "已恢复跟随账号绑定");
+  }
+
+  // 目标收款方式必须属于当前用户所在小组
+  let teamId: bigint | null = user.teamId ? BigInt(user.teamId) : null;
+  if (!teamId) {
+    const me = await prisma.users.findFirst({
+      where: { id: BigInt(user.userId), is_deleted: 0 },
+      select: { team_id: true },
+    });
+    teamId = me?.team_id ?? null;
+  }
+  if (!teamId) return apiError("未关联小组");
+
+  const target = await prisma.payment_methods.findFirst({
+    where: { id: BigInt(payment_method_id), team_id: teamId, is_deleted: 0 },
+    select: { id: true, payee_name: true },
+  });
+  if (!target) return apiError("收款方式不存在");
+
+  // 只允许同收款人换打款方式（该笔当前生效收款人 = override ?? 账号绑定；未绑定则不限制）
+  let currentMethodId: bigint | null = row.payment_method_id_override;
+  if (currentMethodId == null && row.platform_connection_id != null) {
+    const conn = await prisma.platform_connections.findFirst({
+      where: { id: row.platform_connection_id },
+      select: { payment_method_id: true },
+    });
+    currentMethodId = conn?.payment_method_id ?? null;
+  }
+  if (currentMethodId != null) {
+    const cur = await prisma.payment_methods.findFirst({
+      where: { id: currentMethodId },
+      select: { payee_name: true },
+    });
+    if (cur?.payee_name && cur.payee_name !== target.payee_name) {
+      return apiError(`只能选「${cur.payee_name}」名下的打款方式`);
+    }
+  }
+
+  await prisma.affiliate_payments.updateMany({
+    where: sameNoWhere,
+    data: { payment_method_id_override: target.id },
+  });
+  return apiSuccess(null, "打款方式已修改");
 }

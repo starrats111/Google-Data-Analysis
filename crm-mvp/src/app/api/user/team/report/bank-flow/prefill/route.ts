@@ -15,6 +15,8 @@ export const dynamic = "force-dynamic";
  * 2) 账号归属逐账号判定：该月快照有该账号且收款人非空 → 按快照收款人+卡号文本匹配
  *    （龚建成/张文俊各自的卡只拉各自名下账号）；快照缺失或收款人为空 → 退回实时绑定
  *    payment_method_id（避免个别账号快照漏登导致整批少人）；
+ *    C-179 逐笔修正（payment_method_id_override）最优先：被改到本卡的笔计入、
+ *    被改走的笔剔除（治员工月中换绑串改历史笔归属）；
  * 3) 取到账日当天的打款记录；当天没有则取 ±WINDOW_DAYS 内最近且有记录的那一天
  *    （只取那一天，保证 6-16 / 6-18 两笔到账各自预填各自批次）；
  *    银行到账可能晚于平台打款日数天（实测 LH 平台 6-22 批次 6-18 就到账，
@@ -85,13 +87,10 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     }
     return c.payment_method_id === method.id;
   });
-  if (matchedConns.length === 0) {
-    return apiSuccess({
-      matchedDate: null, items: [],
-      note: `${month} 没有归属「${methodPayeeText}」×${platform} 的组员账号，可手动填写明细`,
-    });
-  }
-  const connById = new Map(matchedConns.map((c) => [String(c.id), c]));
+  // C-179：账号没匹配上也不能提前返回——可能有逐笔修正指到本收款方式的打款记录
+  const matchedConnIds = new Set(matchedConns.map((c) => String(c.id)));
+  // 归属解析用全量团队连接（逐笔修正的笔可能挂在未匹配的连接上）
+  const connById = new Map(conns.map((c) => [String(c.id), c]));
 
   // ── 已登记过的批次不再重复预填 ──
   // source_date 精确排除；旧数据（无 source_date）按其到账日兜底排除
@@ -111,10 +110,10 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   const from = new Date(center.getTime() - WINDOW_DAYS * 86400000);
   const to = new Date(center.getTime() + (WINDOW_DAYS + 1) * 86400000);
   const dateWindow = { gte: from, lt: to };
-  const payments = await prisma.affiliate_payments.findMany({
+  const paymentsAll = await prisma.affiliate_payments.findMany({
     where: {
       platform,
-      platform_connection_id: { in: matchedConns.map((c) => c.id) },
+      user_id: { in: memberIds },
       is_deleted: 0,
       status: { in: ["paid", "processing"] },
       OR: [
@@ -125,19 +124,35 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     select: {
       payment_no: true, user_id: true, platform_connection_id: true,
       paid_date: true, request_date: true, amount: true, gross_amount: true,
+      payment_method_id_override: true,
     },
+  });
+
+  // C-179：逐笔修正优先——同一 payment_no 任一渠道行带 override 即以 override 为准；
+  // 被改到别的收款方式的笔从本卡预填剔除，被改到本卡的笔即使账号归属不匹配也计入。
+  const overrideByNo = new Map<string, bigint>();
+  for (const p of paymentsAll) {
+    if (p.payment_method_id_override != null) overrideByNo.set(p.payment_no, p.payment_method_id_override);
+  }
+  const payments = paymentsAll.filter((p) => {
+    const ov = overrideByNo.get(p.payment_no);
+    if (ov != null) return ov === method.id;
+    return p.platform_connection_id != null && matchedConnIds.has(String(p.platform_connection_id));
   });
   if (payments.length === 0) {
     return apiSuccess({
       matchedDate: null, items: [],
-      note: `到账日 ${dateStr} 前后 ${WINDOW_DAYS} 天内没有「${methodPayeeText}」×${platform} 的组员打款记录（按实际打款日 paid_date），可手动填写明细`,
+      note: `到账日 ${dateStr} 前后 ${WINDOW_DAYS} 天内没有「${methodPayeeText}」×${platform} 的组员打款记录（按实际打款日 paid_date，含逐笔修正归属），可手动填写明细`,
     });
   }
 
-  // 同一打款单可能因多渠道连接在库内有多行 → 按 payment_no 去重
+  // 同一打款单可能因多渠道连接在库内有多行 → 按 payment_no 去重（优先取连接可解析的行）
   const uniq = new Map<string, (typeof payments)[number]>();
   for (const p of payments) {
-    if (!uniq.has(p.payment_no)) uniq.set(p.payment_no, p);
+    const cur = uniq.get(p.payment_no);
+    if (!cur || (!connById.has(String(cur.platform_connection_id)) && connById.has(String(p.platform_connection_id)))) {
+      uniq.set(p.payment_no, p);
+    }
   }
 
   // 只取一天：优先到账日当天；否则取距离最近的那一天（并列取更早的）。
@@ -179,14 +194,17 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   });
   const usdToCny = snap && Number(snap.rate_to_usd) > 0 ? 1 / Number(snap.rate_to_usd) : 0;
 
-  // 同账号同日多笔合并为一行
+  // 同账号同日多笔合并为一行（逐笔修正的笔连接可能已删，按 user_id 兜底归属）
   const agg = new Map<string, { userId: string; account: string; usd: number }>();
   for (const p of dayRows) {
     const conn = connById.get(String(p.platform_connection_id));
-    if (!conn) continue;
     const usd = paymentDisplayAmount(Number(p.amount || 0), p.gross_amount == null ? null : Number(p.gross_amount));
-    const key = String(p.platform_connection_id);
-    const cur = agg.get(key) ?? { userId: String(conn.user_id), account: (conn.account_name || "").trim(), usd: 0 };
+    const key = conn ? String(p.platform_connection_id) : `u${p.user_id}`;
+    const cur = agg.get(key) ?? {
+      userId: conn ? String(conn.user_id) : String(p.user_id),
+      account: conn ? (conn.account_name || "").trim() : "(已删连接)",
+      usd: 0,
+    };
     cur.usd += usd;
     agg.set(key, cur);
   }
