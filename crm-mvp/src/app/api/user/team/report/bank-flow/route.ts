@@ -91,7 +91,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     prisma.payment_methods.findMany({
       where: { team_id: teamId, is_deleted: 0 },
       orderBy: { created_at: "asc" },
-      select: { id: true, payee_name: true, card_no: true },
+      select: { id: true, payee_name: true, pay_channel: true, card_no: true },
     }),
     prisma.bank_flow_entries.findMany({
       where: { team_id: teamId, month, is_deleted: 0 },
@@ -108,6 +108,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     methods: methods.map((m) => ({
       id: String(m.id),
       payeeName: m.payee_name,
+      payChannel: m.pay_channel,
       cardNo: m.card_no,
       openingBalance: openMap.get(String(m.id)) ?? null,
     })),

@@ -73,22 +73,33 @@ export async function GET(req: NextRequest) {
     select: {
       id: true, platform: true, payment_no: true, source_kind: true,
       paid_date: true, amount: true, gross_amount: true, currency: true,
-      payment_type: true, status: true, raw_status: true,
+      status: true, raw_status: true,
       platform_connection_id: true, user_id: true,
     },
   });
 
-  // 关联账号名 / 收款人（platform_connections）。先取出全部原始行涉及的连接，
-  // 以便去重时优先保留「带收款人的主连接」，避免折叠后丢失收款人/账号归属信息。
+  // 关联账号名 / 收款方式（platform_connections → payment_methods）。先取出全部原始行涉及的连接，
+  // 以便去重时优先保留「带收款方式绑定的主连接」，避免折叠后丢失收款人/账号归属信息。
+  // C-178：收款人/打款方式统一从组员绑定的收款方式（payment_methods）取，弃用连接上的旧 payee 文本。
   const allConnIds = [...new Set(rowsRaw.map((r) => r.platform_connection_id).filter((x): x is bigint => x != null))];
   const conns = allConnIds.length
     ? await prisma.platform_connections.findMany({
         where: { id: { in: allConnIds } },
-        select: { id: true, account_name: true, payee: true },
+        select: { id: true, account_name: true, payment_method_id: true },
       })
     : [];
+  const methodIds = [...new Set(conns.map((c) => c.payment_method_id).filter((x): x is bigint => x != null))];
+  const methods = methodIds.length
+    ? await prisma.payment_methods.findMany({
+        where: { id: { in: methodIds } }, // 不过滤 is_deleted：已删清单项仍按原文本显示
+        select: { id: true, payee_name: true, pay_channel: true },
+      })
+    : [];
+  const methodById = new Map(methods.map((m) => [String(m.id), m]));
   const connNameMap = new Map(conns.map((c) => [String(c.id), c.account_name || ""]));
-  const connPayeeMap = new Map(conns.map((c) => [String(c.id), c.payee || ""]));
+  const connMethodMap = new Map(
+    conns.map((c) => [String(c.id), c.payment_method_id ? methodById.get(String(c.payment_method_id)) ?? null : null]),
+  );
 
   // 病灶根除（读取端兜底）：同一「总帐号」下的多个渠道(连接)各自配置了不同 api_key，
   // 联盟支付接口按账号返回同一笔打款单(payment_no)，导致同一笔实付按渠道在库里存了多行。
@@ -97,9 +108,9 @@ export async function GET(req: NextRequest) {
   // 主连接行，确保归属落在总帐号上（其余渠道 API 仅作为同一总帐号的来源，不重复计）。
   const connScore = (r: (typeof rowsRaw)[number]): number => {
     const cid = r.platform_connection_id ? String(r.platform_connection_id) : "";
-    const hasPayee = cid && connPayeeMap.get(cid) ? 2 : 0;
+    const hasMethod = cid && connMethodMap.get(cid) ? 2 : 0;
     const hasName = cid && connNameMap.get(cid) ? 1 : 0;
-    return hasPayee + hasName;
+    return hasMethod + hasName;
   };
   const bestByPayment = new Map<string, (typeof rowsRaw)[number]>();
   for (const r of rowsRaw) {
@@ -131,7 +142,9 @@ export async function GET(req: NextRequest) {
   const payments = rows.map((r) => {
     const accountName = r.platform_connection_id ? (connNameMap.get(String(r.platform_connection_id)) || "") : "";
     const memberName = isLeader ? (userNameMap.get(String(r.user_id)) || "") : "";
-    const payee = r.platform_connection_id ? (connPayeeMap.get(String(r.platform_connection_id)) || "") : "";
+    // 收款人 / 打款方式：一律取绑定的收款方式（未绑定则留空，前端展示 —/未绑定）
+    const method = r.platform_connection_id ? connMethodMap.get(String(r.platform_connection_id)) ?? null : null;
+    const payee = method?.payee_name || "";
     // 对齐平台后台：展示金额一律用毛额（gross 优先），净额/手续费附带返回
     const netAmount = +Number(r.amount).toFixed(2);
     const displayAmount = +paymentDisplayAmount(Number(r.amount), r.gross_amount != null ? Number(r.gross_amount) : null).toFixed(2);
@@ -149,7 +162,8 @@ export async function GET(req: NextRequest) {
       fee: +(displayAmount - netAmount).toFixed(2),
       gross_amount: r.gross_amount != null ? +Number(r.gross_amount).toFixed(2) : null,
       currency: r.currency,
-      payment_type: r.payment_type,
+      // C-178：打款方式 = 绑定收款方式的 pay_channel（不再展示平台 API 原始 payment_type）
+      payment_type: method?.pay_channel || null,
       status: r.status,
       raw_status: r.raw_status,
     };

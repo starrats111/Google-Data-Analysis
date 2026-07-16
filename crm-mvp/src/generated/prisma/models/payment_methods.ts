@@ -42,6 +42,7 @@ export type Payment_methodsMinAggregateOutputType = {
   id: bigint | null
   team_id: bigint | null
   payee_name: string | null
+  pay_channel: string | null
   card_no: string | null
   is_deleted: number | null
   created_at: Date | null
@@ -52,6 +53,7 @@ export type Payment_methodsMaxAggregateOutputType = {
   id: bigint | null
   team_id: bigint | null
   payee_name: string | null
+  pay_channel: string | null
   card_no: string | null
   is_deleted: number | null
   created_at: Date | null
@@ -62,6 +64,7 @@ export type Payment_methodsCountAggregateOutputType = {
   id: number
   team_id: number
   payee_name: number
+  pay_channel: number
   card_no: number
   is_deleted: number
   created_at: number
@@ -86,6 +89,7 @@ export type Payment_methodsMinAggregateInputType = {
   id?: true
   team_id?: true
   payee_name?: true
+  pay_channel?: true
   card_no?: true
   is_deleted?: true
   created_at?: true
@@ -96,6 +100,7 @@ export type Payment_methodsMaxAggregateInputType = {
   id?: true
   team_id?: true
   payee_name?: true
+  pay_channel?: true
   card_no?: true
   is_deleted?: true
   created_at?: true
@@ -106,6 +111,7 @@ export type Payment_methodsCountAggregateInputType = {
   id?: true
   team_id?: true
   payee_name?: true
+  pay_channel?: true
   card_no?: true
   is_deleted?: true
   created_at?: true
@@ -203,6 +209,7 @@ export type Payment_methodsGroupByOutputType = {
   id: bigint
   team_id: bigint
   payee_name: string
+  pay_channel: string
   card_no: string
   is_deleted: number
   created_at: Date
@@ -236,6 +243,7 @@ export type payment_methodsWhereInput = {
   id?: Prisma.BigIntFilter<"payment_methods"> | bigint | number
   team_id?: Prisma.BigIntFilter<"payment_methods"> | bigint | number
   payee_name?: Prisma.StringFilter<"payment_methods"> | string
+  pay_channel?: Prisma.StringFilter<"payment_methods"> | string
   card_no?: Prisma.StringFilter<"payment_methods"> | string
   is_deleted?: Prisma.IntFilter<"payment_methods"> | number
   created_at?: Prisma.DateTimeFilter<"payment_methods"> | Date | string
@@ -246,6 +254,7 @@ export type payment_methodsOrderByWithRelationInput = {
   id?: Prisma.SortOrder
   team_id?: Prisma.SortOrder
   payee_name?: Prisma.SortOrder
+  pay_channel?: Prisma.SortOrder
   card_no?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
@@ -260,6 +269,7 @@ export type payment_methodsWhereUniqueInput = Prisma.AtLeast<{
   NOT?: Prisma.payment_methodsWhereInput | Prisma.payment_methodsWhereInput[]
   team_id?: Prisma.BigIntFilter<"payment_methods"> | bigint | number
   payee_name?: Prisma.StringFilter<"payment_methods"> | string
+  pay_channel?: Prisma.StringFilter<"payment_methods"> | string
   card_no?: Prisma.StringFilter<"payment_methods"> | string
   is_deleted?: Prisma.IntFilter<"payment_methods"> | number
   created_at?: Prisma.DateTimeFilter<"payment_methods"> | Date | string
@@ -270,6 +280,7 @@ export type payment_methodsOrderByWithAggregationInput = {
   id?: Prisma.SortOrder
   team_id?: Prisma.SortOrder
   payee_name?: Prisma.SortOrder
+  pay_channel?: Prisma.SortOrder
   card_no?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
@@ -288,6 +299,7 @@ export type payment_methodsScalarWhereWithAggregatesInput = {
   id?: Prisma.BigIntWithAggregatesFilter<"payment_methods"> | bigint | number
   team_id?: Prisma.BigIntWithAggregatesFilter<"payment_methods"> | bigint | number
   payee_name?: Prisma.StringWithAggregatesFilter<"payment_methods"> | string
+  pay_channel?: Prisma.StringWithAggregatesFilter<"payment_methods"> | string
   card_no?: Prisma.StringWithAggregatesFilter<"payment_methods"> | string
   is_deleted?: Prisma.IntWithAggregatesFilter<"payment_methods"> | number
   created_at?: Prisma.DateTimeWithAggregatesFilter<"payment_methods"> | Date | string
@@ -298,6 +310,7 @@ export type payment_methodsCreateInput = {
   id?: bigint | number
   team_id: bigint | number
   payee_name: string
+  pay_channel?: string
   card_no: string
   is_deleted?: number
   created_at?: Date | string
@@ -308,6 +321,7 @@ export type payment_methodsUncheckedCreateInput = {
   id?: bigint | number
   team_id: bigint | number
   payee_name: string
+  pay_channel?: string
   card_no: string
   is_deleted?: number
   created_at?: Date | string
@@ -318,6 +332,7 @@ export type payment_methodsUpdateInput = {
   id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   team_id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   payee_name?: Prisma.StringFieldUpdateOperationsInput | string
+  pay_channel?: Prisma.StringFieldUpdateOperationsInput | string
   card_no?: Prisma.StringFieldUpdateOperationsInput | string
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -328,6 +343,7 @@ export type payment_methodsUncheckedUpdateInput = {
   id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   team_id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   payee_name?: Prisma.StringFieldUpdateOperationsInput | string
+  pay_channel?: Prisma.StringFieldUpdateOperationsInput | string
   card_no?: Prisma.StringFieldUpdateOperationsInput | string
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -338,6 +354,7 @@ export type payment_methodsCreateManyInput = {
   id?: bigint | number
   team_id: bigint | number
   payee_name: string
+  pay_channel?: string
   card_no: string
   is_deleted?: number
   created_at?: Date | string
@@ -348,6 +365,7 @@ export type payment_methodsUpdateManyMutationInput = {
   id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   team_id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   payee_name?: Prisma.StringFieldUpdateOperationsInput | string
+  pay_channel?: Prisma.StringFieldUpdateOperationsInput | string
   card_no?: Prisma.StringFieldUpdateOperationsInput | string
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -358,6 +376,7 @@ export type payment_methodsUncheckedUpdateManyInput = {
   id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   team_id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   payee_name?: Prisma.StringFieldUpdateOperationsInput | string
+  pay_channel?: Prisma.StringFieldUpdateOperationsInput | string
   card_no?: Prisma.StringFieldUpdateOperationsInput | string
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -374,6 +393,7 @@ export type payment_methodsCountOrderByAggregateInput = {
   id?: Prisma.SortOrder
   team_id?: Prisma.SortOrder
   payee_name?: Prisma.SortOrder
+  pay_channel?: Prisma.SortOrder
   card_no?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
@@ -390,6 +410,7 @@ export type payment_methodsMaxOrderByAggregateInput = {
   id?: Prisma.SortOrder
   team_id?: Prisma.SortOrder
   payee_name?: Prisma.SortOrder
+  pay_channel?: Prisma.SortOrder
   card_no?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
@@ -400,6 +421,7 @@ export type payment_methodsMinOrderByAggregateInput = {
   id?: Prisma.SortOrder
   team_id?: Prisma.SortOrder
   payee_name?: Prisma.SortOrder
+  pay_channel?: Prisma.SortOrder
   card_no?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
@@ -418,6 +440,7 @@ export type payment_methodsSelect<ExtArgs extends runtime.Types.Extensions.Inter
   id?: boolean
   team_id?: boolean
   payee_name?: boolean
+  pay_channel?: boolean
   card_no?: boolean
   is_deleted?: boolean
   created_at?: boolean
@@ -430,13 +453,14 @@ export type payment_methodsSelectScalar = {
   id?: boolean
   team_id?: boolean
   payee_name?: boolean
+  pay_channel?: boolean
   card_no?: boolean
   is_deleted?: boolean
   created_at?: boolean
   updated_at?: boolean
 }
 
-export type payment_methodsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "team_id" | "payee_name" | "card_no" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["payment_methods"]>
+export type payment_methodsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "team_id" | "payee_name" | "pay_channel" | "card_no" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["payment_methods"]>
 
 export type $payment_methodsPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "payment_methods"
@@ -445,6 +469,7 @@ export type $payment_methodsPayload<ExtArgs extends runtime.Types.Extensions.Int
     id: bigint
     team_id: bigint
     payee_name: string
+    pay_channel: string
     card_no: string
     is_deleted: number
     created_at: Date
@@ -821,6 +846,7 @@ export interface payment_methodsFieldRefs {
   readonly id: Prisma.FieldRef<"payment_methods", 'BigInt'>
   readonly team_id: Prisma.FieldRef<"payment_methods", 'BigInt'>
   readonly payee_name: Prisma.FieldRef<"payment_methods", 'String'>
+  readonly pay_channel: Prisma.FieldRef<"payment_methods", 'String'>
   readonly card_no: Prisma.FieldRef<"payment_methods", 'String'>
   readonly is_deleted: Prisma.FieldRef<"payment_methods", 'Int'>
   readonly created_at: Prisma.FieldRef<"payment_methods", 'DateTime'>

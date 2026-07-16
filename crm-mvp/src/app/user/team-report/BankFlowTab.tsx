@@ -31,6 +31,8 @@ const { Text } = Typography;
 interface MethodItem {
   id: string;
   payeeName: string;
+  /** C-178：打款方式（收款银行/渠道，如 农业/工商/香港/PingPong/WISE） */
+  payChannel: string;
   cardNo: string;
   openingBalance: number | null;
 }
@@ -109,6 +111,14 @@ export default function BankFlowTab() {
 
   const methodById = useMemo(() => new Map(methods.map((m) => [m.id, m])), [methods]);
 
+  // C-178：登记弹窗两级选择 —— 先选收款人（去重后一般只有两人），再选其名下打款方式定位到具体卡
+  const payeeOptions = useMemo(() => [...new Set(methods.map((m) => m.payeeName))], [methods]);
+  const watchedPayee = Form.useWatch("payee", form);
+  const methodOptionsForPayee = useMemo(
+    () => methods.filter((m) => m.payeeName === watchedPayee),
+    [methods, watchedPayee],
+  );
+
   const openAdd = () => {
     setEditing(null);
     setBreakdown([]);
@@ -125,6 +135,7 @@ export default function BankFlowTab() {
     setBreakdown(e.breakdown);
     setSourceDate(e.sourceDate ?? null);
     form.setFieldsValue({
+      payee: methodById.get(e.paymentMethodId)?.payeeName,
       paymentMethodId: e.paymentMethodId,
       platform: e.platform,
       txnAt: dayjs(e.txnAt),
@@ -294,7 +305,10 @@ export default function BankFlowTab() {
         const m = methodById.get(e.paymentMethodId);
         return m ? (
           <Space direction="vertical" size={0}>
-            <Text strong>{m.payeeName}</Text>
+            <Space size={6}>
+              <Text strong>{m.payeeName}</Text>
+              {m.payChannel && <Tag color="geekblue" style={{ marginInlineEnd: 0 }}>{m.payChannel}</Tag>}
+            </Space>
             <Text type="secondary" style={{ fontSize: 12 }}>{m.cardNo || "未填卡号"}</Text>
           </Space>
         ) : <Text type="secondary">已删除的收款方式</Text>;
@@ -454,7 +468,13 @@ export default function BankFlowTab() {
                 <Col key={m.id} xs={24} sm={12} md={8} lg={6}>
                   <Card
                     size="small"
-                    title={<Space><Text strong>{m.payeeName}</Text><Text type="secondary" style={{ fontSize: 12 }}>{m.cardNo || "未填卡号"}</Text></Space>}
+                    title={
+                      <Space size={6}>
+                        <Text strong>{m.payeeName}</Text>
+                        {m.payChannel && <Tag color="geekblue" style={{ marginInlineEnd: 0 }}>{m.payChannel}</Tag>}
+                        <Text type="secondary" style={{ fontSize: 12 }}>{m.cardNo || "未填卡号"}</Text>
+                      </Space>
+                    }
                     extra={
                       <Tooltip title="导出该卡流水单">
                         <Button size="small" type="text" icon={<FileExcelOutlined />} onClick={() => handleExport(m.id)} />
@@ -535,6 +555,7 @@ export default function BankFlowTab() {
               <Descriptions size="small" bordered column={2} styles={{ label: { width: 110 } }}>
                 <Descriptions.Item label="收款方式" span={2}>
                   <Text strong>{m?.payeeName || "已删除的收款方式"}</Text>
+                  {m?.payChannel && <Tag color="geekblue" style={{ marginLeft: 8 }}>{m.payChannel}</Tag>}
                   {m?.cardNo && <Text type="secondary" style={{ marginLeft: 8 }}>{m.cardNo}</Text>}
                 </Descriptions.Item>
                 <Descriptions.Item label="平台"><Tag color="green">{viewing.platform}</Tag></Descriptions.Item>
@@ -600,22 +621,35 @@ export default function BankFlowTab() {
       >
         <Form form={form} layout="vertical" style={{ marginTop: 8 }}>
           <Row gutter={12}>
-            <Col span={9}>
-              <Form.Item name="paymentMethodId" label="收款方式" rules={[{ required: true, message: "请选择收款方式" }]}>
+            <Col span={5}>
+              <Form.Item name="payee" label="收款人" rules={[{ required: true, message: "请选择收款人" }]}>
                 <Select
-                  placeholder="选择收款人/卡"
-                  options={methods.map((m) => ({ value: m.id, label: `${m.payeeName}（${m.cardNo || "未填卡号"}）` }))}
+                  placeholder="收款人"
+                  options={payeeOptions.map((p) => ({ value: p, label: p }))}
+                  onChange={() => form.setFieldValue("paymentMethodId", undefined)}
+                />
+              </Form.Item>
+            </Col>
+            <Col span={7}>
+              <Form.Item name="paymentMethodId" label="打款方式" rules={[{ required: true, message: "请选择打款方式" }]}>
+                <Select
+                  placeholder={watchedPayee ? "选择打款方式" : "先选收款人"}
+                  disabled={!watchedPayee}
+                  options={methodOptionsForPayee.map((m) => ({
+                    value: m.id,
+                    label: `${m.payChannel || "未填打款方式"}（${m.cardNo || "未填卡号"}）`,
+                  }))}
                   showSearch
                   optionFilterProp="label"
                 />
               </Form.Item>
             </Col>
-            <Col span={5}>
+            <Col span={4}>
               <Form.Item name="platform" label="打款平台" rules={[{ required: true, message: "请选择平台" }]}>
                 <Select placeholder="平台" options={platformOptions.map((p) => ({ value: p, label: p }))} />
               </Form.Item>
             </Col>
-            <Col span={10}>
+            <Col span={8}>
               <Form.Item name="txnAt" label="到账日期时间" rules={[{ required: true, message: "请选择到账时间" }]}>
                 <DatePicker showTime={{ format: "HH:mm" }} format="YYYY-MM-DD HH:mm" style={{ width: "100%" }} />
               </Form.Item>

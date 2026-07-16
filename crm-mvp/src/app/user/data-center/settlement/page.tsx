@@ -417,7 +417,13 @@ export default function SettlementPage() {
       title: "类型", dataIndex: "source_kind", width: 90, align: "center",
       render: (v: string) => <Tag>{SOURCE_KIND_LABEL[v] || v}</Tag>,
     },
-    { title: "打款方式", dataIndex: "payment_type", width: 110, ellipsis: true, render: (v: string | null) => v || "—" },
+    {
+      // C-178：打款方式 = 账号绑定收款方式的「打款方式」字段（未绑定显示 —），支持列头筛选
+      title: "打款方式", dataIndex: "payment_type", width: 110, ellipsis: true,
+      filters: [...new Set(payData?.payments.map((p) => p.payment_type || "未绑定") || [])].map((t) => ({ text: t, value: t })),
+      onFilter: (v, r) => (r.payment_type || "未绑定") === v,
+      render: (v: string | null) => v ? <Tag color="geekblue">{v}</Tag> : <Text type="secondary">—</Text>,
+    },
     { title: "单号", dataIndex: "payment_no", width: 140, ellipsis: true, render: (v: string) => <Text type="secondary" style={{ fontSize: 12 }}>{v}</Text> },
   ];
 

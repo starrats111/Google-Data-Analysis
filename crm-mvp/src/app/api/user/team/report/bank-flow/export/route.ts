@@ -27,7 +27,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     prisma.payment_methods.findMany({
       where: { team_id: teamId, is_deleted: 0, ...(methodIdParam ? { id: BigInt(methodIdParam) } : {}) },
       orderBy: { created_at: "asc" },
-      select: { id: true, payee_name: true, card_no: true },
+      select: { id: true, payee_name: true, pay_channel: true, card_no: true },
     }),
     prisma.bank_flow_entries.findMany({
       where: {
@@ -47,6 +47,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   const methods: BankFlowExportMethod[] = methodRows.map((m) => ({
     id: String(m.id),
     payeeName: m.payee_name,
+    payChannel: m.pay_channel,
     cardNo: m.card_no,
     openingBalance: openMap.get(String(m.id)) ?? null,
   }));
@@ -73,16 +74,17 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   wb.creator = "CRM System";
   wb.created = new Date();
 
-  // 每个收款方式一张流水单（sheet 名去重）
+  // 每个收款方式一张流水单（sheet 名去重；同名同卡不同打款方式时靠渠道区分）
   const used = new Set<string>();
   for (const m of methods) {
-    let name = `${m.payeeName}${m.cardNo ? "-" + m.cardNo.slice(-4) : ""}`.slice(0, 28);
+    let name = `${m.payeeName}${m.payChannel ? "-" + m.payChannel : ""}${m.cardNo ? "-" + m.cardNo.slice(-4) : ""}`.slice(0, 28);
     let i = 2;
     while (used.has(name)) name = `${m.payeeName.slice(0, 24)}(${i++})`;
     used.add(name);
     buildBankStatementSheet(wb, month, m, entries.filter((e) => e.paymentMethodId === m.id), name);
   }
   // 对账明细按实际收款人分表（龚建成 / 张文俊 各一张，卡不同也归同一收款人）
+  // C-178 后 payee_name 已是纯名字；保留去括号逻辑兼容未迁移的旧文本
   const payees = [...new Set(methods.map((m) => m.payeeName.replace(/[（(].*$/, "").trim() || m.payeeName))];
   for (const payee of payees) {
     const payeeMethods = methods.filter((m) => (m.payeeName.replace(/[（(].*$/, "").trim() || m.payeeName) === payee);
@@ -97,7 +99,9 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   }
 
   const buffer = await wb.xlsx.writeBuffer();
-  const filename = encodeURIComponent(`银行流水-${month}${methodIdParam ? `-${methods[0].payeeName}` : ""}.xlsx`);
+  const filename = encodeURIComponent(
+    `银行流水-${month}${methodIdParam ? `-${methods[0].payeeName}${methods[0].payChannel ? `(${methods[0].payChannel})` : ""}` : ""}.xlsx`,
+  );
   return new NextResponse(new Uint8Array(buffer as ArrayBuffer), {
     status: 200,
     headers: {

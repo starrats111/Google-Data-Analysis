@@ -651,9 +651,17 @@ async function attachPaymentBindings(
     if (methodIds.length === 0) return new Map<string, { payee_name: string; card_no: string }>();
     const methods = await prisma.payment_methods.findMany({
       where: { id: { in: methodIds } }, // 不过滤 is_deleted：已删清单项仍按原文本显示
-      select: { id: true, payee_name: true, card_no: true },
+      select: { id: true, payee_name: true, pay_channel: true, card_no: true },
     });
-    const byId = new Map(methods.map((m) => [String(m.id), { payee_name: m.payee_name, card_no: m.card_no }]));
+    // C-178：清单已拆成 纯名字 + 打款方式 两字段；报表展示与月度快照仍用组合文本
+    // 「名字(打款方式)」，与历史快照口径一致（prefill 按该文本匹配账号归属）。
+    const byId = new Map(methods.map((m) => [
+      String(m.id),
+      {
+        payee_name: m.pay_channel ? `${m.payee_name}(${m.pay_channel})` : m.payee_name,
+        card_no: m.card_no,
+      },
+    ]));
     const byColKey = new Map<string, { payee_name: string; card_no: string }>();
     for (const [colKey, mid] of methodIdByColKey) {
       if (mid != null && byId.has(String(mid))) byColKey.set(colKey, byId.get(String(mid))!);

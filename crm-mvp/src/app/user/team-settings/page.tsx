@@ -8,7 +8,8 @@ import AppPageHeader from "@/components/AppPageHeader";
 const { Text } = Typography;
 
 // ==================== R-01 收款方式清单管理（组长） ====================
-type PaymentMethod = { id: string; payee_name: string; card_no: string; created_at: string };
+// C-178：收款人=纯名字，打款方式（银行/渠道）单独一列
+type PaymentMethod = { id: string; payee_name: string; pay_channel: string; card_no: string; created_at: string };
 
 function PaymentMethodsCard() {
   const { message } = App.useApp();
@@ -91,6 +92,7 @@ function PaymentMethodsCard() {
         pagination={false}
         columns={[
           { title: "收款人", dataIndex: "payee_name" },
+          { title: "打款方式", dataIndex: "pay_channel", render: (v: string) => v ? <Tag color="blue">{v}</Tag> : <Text type="secondary">未填</Text> },
           { title: "收款卡号", dataIndex: "card_no", render: (v: string) => v || <Text type="secondary">未填</Text> },
           {
             title: "操作", width: 140,
@@ -98,7 +100,7 @@ function PaymentMethodsCard() {
               <Space size={4}>
                 <Button size="small" icon={<EditOutlined />} onClick={() => {
                   setEditItem(rec);
-                  form.setFieldsValue({ payee_name: rec.payee_name, card_no: rec.card_no });
+                  form.setFieldsValue({ payee_name: rec.payee_name, pay_channel: rec.pay_channel, card_no: rec.card_no });
                   setModalOpen(true);
                 }}>编辑</Button>
                 <Popconfirm title="确认删除此收款方式？" onConfirm={() => handleDelete(rec.id)}>
@@ -117,8 +119,17 @@ function PaymentMethodsCard() {
         onCancel={() => { setModalOpen(false); setEditItem(null); }}
       >
         <Form form={form} layout="vertical">
-          <Form.Item name="payee_name" label="收款人姓名" rules={[{ required: true, message: "请输入收款人姓名" }]}>
-            <Input placeholder="如 张文俊" maxLength={64} />
+          <Form.Item
+            name="payee_name" label="收款人姓名"
+            rules={[
+              { required: true, message: "请输入收款人姓名" },
+              { pattern: /^[^（()）]*$/, message: "请填纯名字，银行/渠道填在下方「打款方式」" },
+            ]}
+          >
+            <Input placeholder="如 张文俊（纯名字，不带括号）" maxLength={64} />
+          </Form.Item>
+          <Form.Item name="pay_channel" label="打款方式" tooltip="该卡的收款银行/渠道，结算查询「打款记录」按此列展示与筛选">
+            <Input placeholder="如 农业 / 工商 / 香港 / PingPong / WISE" maxLength={64} />
           </Form.Item>
           <Form.Item name="card_no" label="收款卡号">
             <Input placeholder="如 6222031203014493768" maxLength={64} />

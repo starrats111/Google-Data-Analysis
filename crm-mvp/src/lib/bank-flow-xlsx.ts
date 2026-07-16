@@ -13,6 +13,8 @@ import { apportionFee } from "@/lib/bank-flow-fee";
 export interface BankFlowExportMethod {
   id: string;
   payeeName: string;
+  /** C-178：打款方式（收款银行/渠道） */
+  payChannel: string;
   cardNo: string;
   openingBalance: number | null;
 }
@@ -190,7 +192,7 @@ export function buildBankReconSheet(
         return `${b.displayName || b.username}｜${b.platform} ${b.account}｜应发¥${money(b.amount)}｜手续费¥${money(fee)}｜净到手¥${money(net)}`;
       })
       .join("\n");
-    cell(ws, r, 1, m?.payeeName || "—", {});
+    cell(ws, r, 1, m ? `${m.payeeName}${m.payChannel ? `(${m.payChannel})` : ""}` : "—", {});
     cell(ws, r, 2, m?.cardNo || "—", {});
     cell(ws, r, 3, e.platform, {});
     cell(ws, r, 4, `${fmtDate(e.txnAt)} ${fmtTime(e.txnAt)}`, {});

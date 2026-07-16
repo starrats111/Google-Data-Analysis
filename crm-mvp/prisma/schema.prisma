@@ -1351,13 +1351,15 @@ model semrush_health_logs {
 // -----------------------------------------------------------
 // R-01. 月度收支报表 — 收款方式清单（组长维护，组员绑定）
 // 替代 platform_connections.payee 文本字段：组长在 team-settings 维护
-// 「收款人姓名 + 卡号」清单，组员为每个联盟账号选一条绑定。
+// 「收款人姓名 + 打款方式 + 卡号」清单，组员为每个联盟账号选一条绑定。
+// C-178：payee_name 拆为纯名字，括号里的银行/渠道拆入 pay_channel（打款方式）。
 // -----------------------------------------------------------
 model payment_methods {
-  id         BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
-  team_id    BigInt   @db.UnsignedBigInt
-  payee_name String   @db.VarChar(64)
-  card_no    String   @db.VarChar(64)
+  id          BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  team_id     BigInt   @db.UnsignedBigInt
+  payee_name  String   @db.VarChar(64)
+  pay_channel String   @default("") @db.VarChar(64) // 打款方式（如 农业/工商/香港/PingPong/WISE）
+  card_no     String   @db.VarChar(64)
   is_deleted Int      @default(0) @db.TinyInt
   created_at DateTime @default(now()) @db.DateTime(0)
   updated_at DateTime @default(now()) @updatedAt @db.DateTime(0)

@@ -25,7 +25,7 @@ const { Text } = Typography;
 // D-026: 增加测试连接 + 健康状态展示 + 保存前强制测试
 type TestResult = { ok: boolean; msg?: string; error?: string; suggest?: string; sample_count?: number; elapsed_ms?: number };
 
-type PaymentMethod = { id: string; payee_name: string; card_no: string };
+type PaymentMethod = { id: string; payee_name: string; pay_channel: string; card_no: string };
 
 function PlatformConnectionsTab() {
   const { message } = App.useApp();
@@ -394,10 +394,10 @@ function PlatformConnectionsTab() {
             <Select
               allowClear
               placeholder={paymentMethods.length === 0 ? "组长尚未维护收款方式清单" : "选择收款方式"}
-              options={paymentMethods.map((m) => ({
-                value: m.id,
-                label: m.card_no ? `${m.payee_name} · ${m.card_no}` : m.payee_name,
-              }))}
+              options={paymentMethods.map((m) => {
+                const name = m.pay_channel ? `${m.payee_name}（${m.pay_channel}）` : m.payee_name;
+                return { value: m.id, label: m.card_no ? `${name} · ${m.card_no}` : name };
+              })}
             />
           </Form.Item>
           <Form.Item name="publish_site_id" label="绑定站点" tooltip="选择该账号对应的发布站点，领取商家后文章将自动发布到此站点">

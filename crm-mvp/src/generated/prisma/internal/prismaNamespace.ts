@@ -5961,6 +5961,7 @@ export const Payment_methodsScalarFieldEnum = {
   id: 'id',
   team_id: 'team_id',
   payee_name: 'payee_name',
+  pay_channel: 'pay_channel',
   card_no: 'card_no',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
@@ -6788,6 +6789,7 @@ export type semrush_health_logsOrderByRelevanceFieldEnum = (typeof semrush_healt
 
 export const payment_methodsOrderByRelevanceFieldEnum = {
   payee_name: 'payee_name',
+  pay_channel: 'pay_channel',
   card_no: 'card_no'
 } as const
 

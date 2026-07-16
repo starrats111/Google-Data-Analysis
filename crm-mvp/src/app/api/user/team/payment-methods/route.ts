@@ -34,17 +34,20 @@ export const GET = withUser(async (_req: NextRequest, { user }) => {
 
 /**
  * POST /api/user/team/payment-methods
- * 组长新建/编辑收款方式 { id?, payee_name, card_no }
+ * 组长新建/编辑收款方式 { id?, payee_name, pay_channel, card_no }
+ * C-178：payee_name 为纯名字，打款方式（银行/渠道）单独存 pay_channel。
  */
 export const POST = withLeader(async (req: NextRequest, { user }) => {
   if (!user.teamId) return apiError("未关联小组");
   const teamId = BigInt(user.teamId);
 
-  const { id, payee_name, card_no } = await req.json();
+  const { id, payee_name, pay_channel, card_no } = await req.json();
   const name = typeof payee_name === "string" ? payee_name.trim() : "";
+  const channel = typeof pay_channel === "string" ? pay_channel.trim() : "";
   const card = typeof card_no === "string" ? card_no.trim() : "";
   if (!name) return apiError("收款人姓名不能为空");
-  if (name.length > 64 || card.length > 64) return apiError("姓名/卡号长度不能超过64字符");
+  if (/[（()）]/.test(name)) return apiError("收款人姓名请填纯名字，银行/渠道填在「打款方式」里");
+  if (name.length > 64 || channel.length > 64 || card.length > 64) return apiError("姓名/打款方式/卡号长度不能超过64字符");
 
   if (id) {
     const parsedId = toBigIntId(id);
@@ -55,18 +58,18 @@ export const POST = withLeader(async (req: NextRequest, { user }) => {
     if (!existing) return apiError("收款方式不存在");
     await prisma.payment_methods.update({
       where: { id: existing.id },
-      data: { payee_name: name, card_no: card },
+      data: { payee_name: name, pay_channel: channel, card_no: card },
     });
     return apiSuccess(null, "保存成功");
   }
 
   const dup = await prisma.payment_methods.findFirst({
-    where: { team_id: teamId, payee_name: name, card_no: card, is_deleted: 0 },
+    where: { team_id: teamId, payee_name: name, pay_channel: channel, card_no: card, is_deleted: 0 },
   });
-  if (dup) return apiError("已存在相同姓名和卡号的收款方式");
+  if (dup) return apiError("已存在相同姓名、打款方式和卡号的收款方式");
 
   await prisma.payment_methods.create({
-    data: { team_id: teamId, payee_name: name, card_no: card },
+    data: { team_id: teamId, payee_name: name, pay_channel: channel, card_no: card },
   });
   return apiSuccess(null, "创建成功");
 });
