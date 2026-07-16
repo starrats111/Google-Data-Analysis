@@ -22,6 +22,7 @@ import { acquireExchangeSlot } from "@/lib/puppeteer-semaphore";
 import { probeExitIp } from "@/lib/suffix-engine/exit-ip";
 import { pickMobileUserAgent } from "@/lib/mobile-user-agents";
 import { registerBrowser, closeBrowserSafely, getStealthLauncher } from "@/lib/puppeteer-browser-registry";
+import { sameRootDomain } from "@/lib/root-domain";
 
 export type LinkStatus = "ok" | "no_tracking" | "forbidden_network" | "resolve_failed";
 
@@ -92,6 +93,58 @@ const NETWORK_CLICK_HOST_PATTERNS: RegExp[] = [
 
 function isNetworkClickHost(host: string): boolean {
   return NETWORK_CLICK_HOST_PATTERNS.some((re) => re.test(host));
+}
+
+// 「落地洗参」广告主兜底取参（D-182）：Partnerize(prf.hn) / Impact / CJ 等联盟经中转跳转把点击参数
+// 带到广告主域名（如 gilt.com/?clickref=...&utm_source=...），广告主前端随即把 query 洗成干净路径
+// （gilt.com/boutique/）。追踪参数其实已在「广告主域名带参那一跳」注册成功、点击有效，只是最终落地页
+// query 为空被误判 no_tracking。回退策略：最终落地页无 query 时，在跳转链里回溯「与最终落地页同根域名、
+// 且带已知联盟追踪参数」的那一跳，用它的 query 串作 suffix（该参数是广告主自己域名接受过的，附到 Google
+// finalUrl 安全）。为避免误取（如 ?locale=en 之类站内参数），必须命中已知联盟追踪键才采用。
+const TRACKING_QUERY_KEYS = new Set([
+  "clickref", "clickid", "click_id", "clid",
+  "irclickid", "ranmid", "ransiteid", "ranevent",
+  "pzevent", "cjevent", "cjdata",
+  "utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term",
+  "subid", "sub_id", "subid1", "afsrc", "pubref",
+  "gclid", "wgu", "tduid", "dclid", "affid", "aff_id", "clickcode",
+  "sscid", "irgwc", "sharedid",
+]);
+
+export function queryHasTrackingKey(search: string): boolean {
+  if (!search) return false;
+  try {
+    const params = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
+    for (const k of params.keys()) {
+      if (TRACKING_QUERY_KEYS.has(k.toLowerCase())) return true;
+    }
+  } catch {
+    /* ignore */
+  }
+  return false;
+}
+
+/**
+ * 落地页无 query 时的兜底取参：在跳转链里回溯与最终落地页「同根域名」且带联盟追踪参数的那一跳，
+ * 返回该跳的 query 串（不含前导 ?）；未找到返回 null。
+ */
+export function salvageTrackingFromChain(chain: string[], finalUrl: string): string | null {
+  for (let i = chain.length - 1; i >= 0; i--) {
+    const hop = chain[i];
+    if (!hop || hop === finalUrl) continue;
+    let u: URL;
+    try {
+      u = new URL(hop);
+    } catch {
+      continue;
+    }
+    const q = u.search.replace(/^\?/, "").trim();
+    if (!q) continue;
+    if (!sameRootDomain(hop, finalUrl)) continue;
+    if (!queryHasTrackingKey(q)) continue;
+    return q;
+  }
+  return null;
 }
 
 /**
@@ -968,6 +1021,15 @@ export async function resolveAffiliateLink(
     if (needBrowserEnrich) r.requiresBrowserEnrich = true;
 
     if (!r.trackingLink) {
+      // D-182「落地洗参」兜底：最终落地页无 query，但跳转链里广告主同根域名那一跳带联盟追踪参数
+      // （Partnerize/prf.hn 等：gilt.com/?clickref=... → gilt.com/boutique/ 洗掉参数）。点击已在带参
+      // 那一跳注册成功，回溯取该 query 作 suffix，修复 no_tracking 误判。
+      const salvaged = salvageTrackingFromChain(chain, finalUrl);
+      if (salvaged) {
+        r.trackingLink = salvaged;
+        r.status = "ok";
+        return r;
+      }
       // 从 EV/MUI 中转链接静态解出的广告主落地页本身不带 query 参数属正常（追踪发生在中转跳转那一步，
       // CRM 实际追踪走 final_url_suffix 后缀交换系统）→ 视为解析成功，不误判 no_tracking（避免前端显示无效）。
       r.status = unwrappedNetworkClick ? "ok" : "no_tracking";
