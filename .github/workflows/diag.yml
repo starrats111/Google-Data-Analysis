@@ -1,0 +1,136 @@
+name: Remote Diag (temp)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Run diagnostics via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT }}
+          timeout: 60s
+          command_timeout: 8m
+          script: |
+            set +e
+            cd /home/ubuntu/Google-Data-Analysis/crm-mvp || exit 1
+            DBURL=$(grep -E '^DATABASE_URL=' .env | cut -d= -f2- | tr -d '"')
+            DBUSER=$(echo "$DBURL" | sed -E 's|mysql://([^:]+):.*|\1|')
+            DBPASS=$(echo "$DBURL" | sed -E 's|mysql://[^:]+:([^@]+)@.*|\1|')
+            DBHOST=$(echo "$DBURL" | sed -E 's|.*@([^:/]+).*|\1|')
+            DBNAME=$(echo "$DBURL" | sed -E 's|.*/([^/?]+)(\?.*)?$|\1|')
+            Q=/tmp/_diag_bsh.sql
+            cat > "$Q" <<'SQL'
+            SELECT '=== 1. BellaDahl campaigns ===' x;
+            SELECT c.id, c.user_id, u.username, c.campaign_name, c.status, c.google_status,
+                   c.suffix_exchange_enabled se, c.user_merchant_id um_id, c.platform_connection_id conn_id, c.is_deleted
+            FROM campaigns c JOIN users u ON u.id=c.user_id
+            WHERE c.campaign_name LIKE '%BellaDahl%';
+
+            SELECT '=== 2. user_merchants BSH 8001831 ===' x;
+            SELECT m.id, m.user_id, m.platform, m.merchant_id, m.platform_connection_id,
+                   m.tracking_link IS NOT NULL AND m.tracking_link<>'' has_tracking,
+                   LEFT(m.tracking_link,120) tracking,
+                   LEFT(m.connection_campaign_links,220) conn_links
+            FROM user_merchants m
+            WHERE m.is_deleted=0 AND m.platform='BSH' AND m.merchant_id='8001831';
+
+            SELECT '=== 3. BSH 8001831 orders by day/user/conn (9d) ===' x;
+            SELECT t.user_id, DATE(CONVERT_TZ(t.transaction_time,'+00:00','+08:00')) d,
+                   t.platform_connection_id conn, COUNT(*) orders
+            FROM affiliate_transactions t
+            WHERE t.platform='BSH' AND t.merchant_id='8001831' AND t.is_deleted=0
+              AND t.transaction_time > NOW()-INTERVAL 9 DAY
+            GROUP BY t.user_id, d, t.platform_connection_id ORDER BY d DESC;
+
+            SELECT '=== 4. BSH 8001831 click backflow (9d) ===' x;
+            SELECT cd.user_id, cd.click_date, cd.clicks
+            FROM affiliate_click_daily cd
+            WHERE cd.platform='BSH' AND cd.merchant_id='8001831' AND cd.is_deleted=0
+              AND cd.click_date > CURDATE()-INTERVAL 9 DAY
+            ORDER BY cd.click_date DESC;
+
+            SELECT '=== 5. BellaDahl brush tasks (9d) ===' x;
+            SELECT t.id task_id, t.user_id, t.campaign_id, t.status, t.target_count, t.done_count,
+                   t.created_at, LEFT(t.error_message,60) err,
+                   SUM(i.status='success') ok, SUM(i.status='failed') fail,
+                   SUM(i.status IN('pending','executing')) inflight
+            FROM kyads_click_tasks t
+            LEFT JOIN kyads_click_task_items i ON i.task_id=t.id
+            JOIN campaigns c ON c.id=t.campaign_id
+            WHERE c.campaign_name LIKE '%BellaDahl%' AND t.created_at > NOW()-INTERVAL 9 DAY
+            GROUP BY t.id ORDER BY t.created_at DESC LIMIT 40;
+
+            SELECT '=== 5b. BellaDahl task item errors TOP (9d) ===' x;
+            SELECT LEFT(i.error,120) err, COUNT(*) n, MAX(i.executed_at) last_at
+            FROM kyads_click_task_items i
+            JOIN kyads_click_tasks t ON t.id=i.task_id
+            JOIN campaigns c ON c.id=t.campaign_id
+            WHERE c.campaign_name LIKE '%BellaDahl%' AND i.status='failed'
+              AND i.scheduled_at > NOW()-INTERVAL 9 DAY
+            GROUP BY LEFT(i.error,120) ORDER BY n DESC LIMIT 15;
+
+            SELECT '=== 6. users switches ===' x;
+            SELECT u.id, u.username, u.status, u.click_control_enabled cce, u.link_exchange_disabled led,
+                   u.click_control_ratio_min_pct, u.click_control_ratio_max_pct
+            FROM users u WHERE u.id IN (
+              SELECT DISTINCT user_id FROM user_merchants WHERE platform='BSH' AND merchant_id='8001831' AND is_deleted=0
+            );
+
+            SELECT '=== 7. global brush execution (4d) ===' x;
+            SELECT DATE(i.executed_at) d, SUM(i.status='success') ok, SUM(i.status='failed') fail
+            FROM kyads_click_task_items i
+            WHERE i.executed_at > NOW()-INTERVAL 4 DAY
+            GROUP BY DATE(i.executed_at) ORDER BY d DESC;
+
+            SELECT '=== 7b. global task creation (4d) ===' x;
+            SELECT DATE(created_at) d, COUNT(*) tasks, SUM(target_count) target
+            FROM kyads_click_tasks WHERE created_at > NOW()-INTERVAL 4 DAY
+            GROUP BY DATE(created_at) ORDER BY d DESC;
+
+            SELECT '=== 8. brush_blocked alerts (3d) ===' x;
+            SELECT a.user_id, a.campaign_id, LEFT(a.message,110) msg, a.created_at, a.status
+            FROM suffix_alerts a
+            WHERE a.type='brush_blocked' AND a.created_at > NOW()-INTERVAL 3 DAY
+            ORDER BY a.created_at DESC LIMIT 20;
+
+            SELECT '=== 9. BSH platform click backflow all users (9d) ===' x;
+            SELECT click_date, SUM(clicks) clicks, COUNT(DISTINCT user_id) users
+            FROM affiliate_click_daily
+            WHERE platform='BSH' AND is_deleted=0 AND click_date > CURDATE()-INTERVAL 9 DAY
+            GROUP BY click_date ORDER BY click_date DESC;
+
+            SELECT '=== 9b. per-platform click backflow (7d) ===' x;
+            SELECT platform,
+              SUM(CASE WHEN click_date=CURDATE() THEN clicks ELSE 0 END) d0,
+              SUM(CASE WHEN click_date=CURDATE()-INTERVAL 1 DAY THEN clicks ELSE 0 END) d1,
+              SUM(CASE WHEN click_date=CURDATE()-INTERVAL 2 DAY THEN clicks ELSE 0 END) d2,
+              SUM(CASE WHEN click_date=CURDATE()-INTERVAL 3 DAY THEN clicks ELSE 0 END) d3,
+              SUM(CASE WHEN click_date=CURDATE()-INTERVAL 4 DAY THEN clicks ELSE 0 END) d4,
+              SUM(CASE WHEN click_date=CURDATE()-INTERVAL 5 DAY THEN clicks ELSE 0 END) d5,
+              SUM(CASE WHEN click_date=CURDATE()-INTERVAL 6 DAY THEN clicks ELSE 0 END) d6
+            FROM affiliate_click_daily WHERE is_deleted=0 AND click_date > CURDATE()-INTERVAL 7 DAY
+            GROUP BY platform ORDER BY platform;
+
+            SELECT '=== 10. click-sync job runs BSH (5d) ===' x;
+            SELECT id, user_id, job_type, status, created_at, LEFT(error_message,100) err
+            FROM sync_jobs
+            WHERE job_type LIKE '%click%' AND created_at > NOW()-INTERVAL 5 DAY
+            ORDER BY created_at DESC LIMIT 30;
+            SQL
+            mysql -h"$DBHOST" -u"$DBUSER" -p"$DBPASS" "$DBNAME" -t < "$Q" 2>&1 | grep -v "Using a password"
+
+            echo "===== live test: BSH tracking link redirect from server ====="
+            BSHLINK=$(mysql -h"$DBHOST" -u"$DBUSER" -p"$DBPASS" "$DBNAME" -N -e "SELECT tracking_link FROM user_merchants WHERE platform='BSH' AND merchant_id='8001831' AND is_deleted=0 AND tracking_link<>'' LIMIT 1" 2>/dev/null)
+            echo "LINK: $BSHLINK"
+            if [ -n "$BSHLINK" ]; then
+              curl -sS -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36' -o /dev/null -w 'direct code:%{http_code} final:%{url_effective}\n' -L --max-time 30 "$BSHLINK" 2>&1 | head -3
+            fi
+            echo "===== recent click-execute cron log ====="
+            grep -h "click" /home/ubuntu/.pm2/logs/ad-automation-out.log 2>/dev/null | tail -20 || true
