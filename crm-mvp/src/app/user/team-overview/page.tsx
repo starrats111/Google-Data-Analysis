@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
-  Card, Table, Tag, Statistic, Row, Col, Progress, Typography, Spin, Empty,
+  Card, Table, Tag, Typography, Spin, Empty,
   Space, DatePicker, Button, Tooltip, notification, Badge, App,
 } from "antd";
 import {
@@ -345,55 +345,102 @@ export default function TeamOverviewPage() {
               borderLeft: `4px solid ${teamStats.avg_roi >= 0 ? "#52c41a" : "#ff4d4f"}`,
             }}
           >
-            <Row gutter={16}>
-              <Col xs={12} sm={8} md={4}>
-                <Statistic title="小组成员" value={teamStats.member_count} suffix="人" prefix={<TeamOutlined />} />
-              </Col>
-              <Col xs={12} sm={8} md={4}>
-                <Tooltip title="全组今日新建（CST）且历史没出现过同名系列的广告数量，每 30 分钟同步">
-                  <Statistic
-                    title={<Space><RocketOutlined />今日投放广告</Space>}
-                    value={teamStats.today_ads}
-                    suffix="条"
-                    styles={{ content: { color: teamStats.today_ads > 0 ? "#1677ff" : "#8c8c8c" } }}
-                  />
-                </Tooltip>
-              </Col>
-              <Col xs={12} sm={8} md={4}>
-                <Tooltip title="全组正在跑广告的商家数（跨成员去重）">
-                  <Statistic
-                    title={<Space><ShopOutlined />在跑商家</Space>}
-                    value={teamStats.active_merchants}
-                    suffix="家"
-                    styles={{ content: { color: teamStats.active_merchants > 0 ? "#52c41a" : "#8c8c8c" } }}
-                  />
-                </Tooltip>
-              </Col>
-              <Col xs={12} sm={8} md={4}>
-                <Statistic title="总费用" value={teamStats.total_cost} precision={2} prefix="$"
-                  styles={{ content: { color: "#cf1322" } }} />
-              </Col>
-              <Col xs={12} sm={8} md={4}>
-                <Statistic title="总佣金" value={teamStats.total_commission} precision={2} prefix="$"
-                  styles={{ content: { color: "#4DA6FF" } }} />
-              </Col>
-              <Col xs={12} sm={8} md={4}>
-                <Statistic title="拒付佣金" value={teamStats.rejected_commission} precision={2} prefix="$"
-                  styles={{ content: { color: "#ff4d4f" } }} />
-              </Col>
-              <Col xs={12} sm={8} md={4}>
-                <Statistic title="净佣金" value={teamStats.net_commission} precision={2} prefix="$"
-                  styles={{ content: { color: teamStats.net_commission >= 0 ? "#52c41a" : "#cf1322" } }} />
-              </Col>
-            </Row>
-            <div style={{ marginTop: 16 }}>
-              <Text type="secondary">平均 ROI</Text>
-              <Progress
-                percent={Math.min(Math.abs(teamStats.avg_roi), 200)}
-                status={teamStats.avg_roi >= 0 ? "success" : "exception"}
-                format={() => `${teamStats.avg_roi >= 0 ? "+" : ""}${teamStats.avg_roi}%`}
-                strokeWidth={12}
-              />
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                alignItems: "center",
+                gap: "8px 0",
+              }}
+            >
+              {[
+                {
+                  key: "members",
+                  title: <><TeamOutlined /> 小组成员</>,
+                  value: `${teamStats.member_count} 人`,
+                  color: undefined as string | undefined,
+                  tooltip: undefined as string | undefined,
+                },
+                {
+                  key: "today_ads",
+                  title: <><RocketOutlined /> 今日投放</>,
+                  value: `${teamStats.today_ads} 条`,
+                  color: teamStats.today_ads > 0 ? "#1677ff" : "#8c8c8c",
+                  tooltip: "全组今日新建（CST）且历史没出现过同名系列的广告数量，每 30 分钟同步",
+                },
+                {
+                  key: "active_merchants",
+                  title: <><ShopOutlined /> 在跑商家</>,
+                  value: `${teamStats.active_merchants} 家`,
+                  color: teamStats.active_merchants > 0 ? "#52c41a" : "#8c8c8c",
+                  tooltip: "全组正在跑广告的商家数（跨成员去重）",
+                },
+                {
+                  key: "cost",
+                  title: "总费用",
+                  value: `$${teamStats.total_cost.toFixed(2)}`,
+                  color: "#cf1322",
+                  tooltip: undefined,
+                },
+                {
+                  key: "commission",
+                  title: "总佣金",
+                  value: `$${teamStats.total_commission.toFixed(2)}`,
+                  color: "#4DA6FF",
+                  tooltip: undefined,
+                },
+                {
+                  key: "rejected",
+                  title: "拒付佣金",
+                  value: `$${teamStats.rejected_commission.toFixed(2)}`,
+                  color: "#ff4d4f",
+                  tooltip: undefined,
+                },
+                {
+                  key: "net",
+                  title: "净佣金",
+                  value: `$${teamStats.net_commission.toFixed(2)}`,
+                  color: teamStats.net_commission >= 0 ? "#52c41a" : "#cf1322",
+                  tooltip: undefined,
+                },
+                {
+                  key: "roi",
+                  title: "平均 ROI",
+                  value: `${teamStats.avg_roi >= 0 ? "+" : ""}${teamStats.avg_roi}%`,
+                  color: teamStats.avg_roi >= 0 ? "#52c41a" : "#ff4d4f",
+                  tooltip: "净佣金 / 总费用",
+                },
+              ].map((item, idx) => {
+                const cell = (
+                  <div
+                    key={item.key}
+                    style={{
+                      flex: "1 1 0",
+                      minWidth: 110,
+                      textAlign: "center",
+                      borderLeft: idx > 0 ? "1px solid #f0f0f0" : "none",
+                      padding: "0 8px",
+                    }}
+                  >
+                    <div style={{ fontSize: 13, color: "#8c8c8c", marginBottom: 4, whiteSpace: "nowrap" }}>
+                      {item.title}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 20,
+                        fontWeight: 600,
+                        color: item.color ?? "rgba(0,0,0,0.88)",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {item.value}
+                    </div>
+                  </div>
+                );
+                return item.tooltip ? (
+                  <Tooltip key={item.key} title={item.tooltip}>{cell}</Tooltip>
+                ) : cell;
+              })}
             </div>
           </Card>
         )}
