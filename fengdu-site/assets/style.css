@@ -1,0 +1,300 @@
+/* ============================================================
+   温州丰度广告传媒有限公司 官网样式
+   Wenzhou Fengdu Advertising & Media Co., Ltd.
+   ============================================================ */
+
+:root {
+  --primary: #1a7fdb;
+  --primary-dark: #1063b0;
+  --primary-light: #e8f3fc;
+  --text: #17212b;
+  --text-sub: #45525f;
+  --text-muted: #7a8794;
+  --border: #e3e8ee;
+  --bg-page: #ffffff;
+  --bg-section: #f7fafc;
+  --green: #16a34a;
+  --radius: 12px;
+  --radius-lg: 16px;
+  --shadow-soft: 0 1px 3px rgba(23, 33, 43, 0.06);
+  --shadow-med: 0 4px 16px rgba(23, 33, 43, 0.07);
+  --maxw: 1080px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  color: var(--text);
+  background: var(--bg-page);
+  line-height: 1.7;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--primary-dark); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.container { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+/* ---------- Header ---------- */
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border);
+}
+
+.header-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 64px;
+  gap: 16px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--text);
+  white-space: nowrap;
+}
+.brand:hover { text-decoration: none; }
+.brand img { width: 34px; height: 34px; }
+.brand .brand-sub {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--text-muted);
+  letter-spacing: 0.2px;
+  line-height: 1.2;
+}
+
+.main-nav { display: flex; align-items: center; gap: 4px; }
+.main-nav a {
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 14.5px;
+  font-weight: 500;
+  color: var(--text-sub);
+}
+.main-nav a:hover { background: var(--bg-section); color: var(--text); text-decoration: none; }
+.main-nav a.active { color: var(--primary-dark); background: var(--primary-light); font-weight: 600; }
+.main-nav a.lang-switch {
+  border: 1px solid var(--border);
+  margin-left: 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+/* mobile nav */
+.nav-toggle { display: none; }
+
+/* ---------- Hero ---------- */
+.hero {
+  background: linear-gradient(180deg, #f0f7fd 0%, #ffffff 100%);
+  border-bottom: 1px solid var(--border);
+  padding: 88px 0 72px;
+  text-align: center;
+}
+
+.hero .eyebrow {
+  display: inline-block;
+  padding: 6px 16px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--primary-dark);
+  letter-spacing: 0.3px;
+  margin-bottom: 24px;
+  box-shadow: var(--shadow-soft);
+}
+
+.hero h1 {
+  font-size: clamp(32px, 5.5vw, 52px);
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  line-height: 1.15;
+  margin-bottom: 18px;
+}
+
+.hero .sub {
+  font-size: 17px;
+  color: var(--text-sub);
+  max-width: 760px;
+  margin: 0 auto 14px;
+}
+
+.hero .note {
+  font-size: 14px;
+  color: var(--text-muted);
+  max-width: 700px;
+  margin: 0 auto 34px;
+}
+
+.btn-row { display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; }
+
+.btn {
+  display: inline-block;
+  padding: 12px 28px;
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+.btn:hover { text-decoration: none; opacity: 0.92; }
+.btn-primary {
+  background: var(--primary);
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(26, 127, 219, 0.3);
+}
+.btn-outline { background: #fff; color: var(--text); border-color: var(--border); }
+.btn-green {
+  background: var(--green);
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(22, 163, 74, 0.25);
+}
+
+/* ---------- Sections ---------- */
+.section { padding: 72px 0; }
+.section.alt { background: var(--bg-section); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+
+.section-title {
+  font-size: clamp(24px, 3.4vw, 32px);
+  font-weight: 700;
+  text-align: center;
+  letter-spacing: -0.3px;
+  margin-bottom: 10px;
+}
+.section-sub {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 15.5px;
+  max-width: 640px;
+  margin: 0 auto 44px;
+}
+
+/* card grid */
+.grid { display: grid; gap: 20px; }
+.grid-3 { grid-template-columns: repeat(3, 1fr); }
+.grid-2 { grid-template-columns: repeat(2, 1fr); }
+
+.card {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 28px;
+  box-shadow: var(--shadow-soft);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.card:hover { transform: translateY(-3px); box-shadow: var(--shadow-med); }
+
+.card .icon {
+  width: 46px;
+  height: 46px;
+  border-radius: 10px;
+  background: var(--primary-light);
+  color: var(--primary-dark);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  margin-bottom: 16px;
+}
+.card h3 { font-size: 17px; font-weight: 700; margin-bottom: 8px; }
+.card p { font-size: 14px; color: var(--text-sub); }
+
+/* ---------- Content pages (about / privacy / terms) ---------- */
+.page-hero {
+  background: linear-gradient(180deg, #f0f7fd 0%, #ffffff 100%);
+  border-bottom: 1px solid var(--border);
+  padding: 64px 0 48px;
+  text-align: center;
+}
+.page-hero h1 { font-size: clamp(28px, 4.5vw, 42px); font-weight: 800; letter-spacing: -0.4px; margin-bottom: 12px; }
+.page-hero p { color: var(--text-sub); font-size: 16px; max-width: 680px; margin: 0 auto; }
+
+.content-block {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 32px 36px;
+  box-shadow: var(--shadow-soft);
+  margin-bottom: 22px;
+}
+.content-block h2 {
+  font-size: 21px;
+  font-weight: 700;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.content-block h3 { font-size: 16.5px; font-weight: 700; margin: 18px 0 8px; }
+.content-block p { font-size: 15px; color: var(--text-sub); margin-bottom: 12px; }
+.content-block p:last-child { margin-bottom: 0; }
+.content-block ul { padding-left: 22px; margin-bottom: 12px; }
+.content-block li { font-size: 15px; color: var(--text-sub); margin-bottom: 7px; }
+.content-block strong { color: var(--text); }
+
+.narrow { max-width: 860px; margin: 0 auto; }
+
+/* info table */
+.info-table { width: 100%; border-collapse: collapse; }
+.info-table th, .info-table td {
+  text-align: left;
+  padding: 12px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14.5px;
+  vertical-align: top;
+}
+.info-table th { width: 170px; color: var(--text-muted); font-weight: 600; white-space: nowrap; }
+.info-table tr:last-child th, .info-table tr:last-child td { border-bottom: none; }
+
+/* stat / value strip */
+.value-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+.value-item { text-align: center; padding: 22px 14px; }
+.value-item .v-title { font-size: 16px; font-weight: 700; color: var(--primary-dark); margin-bottom: 6px; }
+.value-item .v-desc { font-size: 13.5px; color: var(--text-muted); }
+
+/* ---------- Footer ---------- */
+.site-footer {
+  background: #10202f;
+  color: #b9c5d1;
+  padding: 52px 0 28px;
+  margin-top: 0;
+  font-size: 14px;
+}
+.footer-grid { display: grid; grid-template-columns: 1.5fr 1fr 1fr; gap: 36px; margin-bottom: 34px; }
+.site-footer h4 { color: #fff; font-size: 15px; margin-bottom: 14px; font-weight: 700; }
+.site-footer a { color: #b9c5d1; display: block; margin-bottom: 8px; }
+.site-footer a:hover { color: #fff; }
+.site-footer p { margin-bottom: 8px; line-height: 1.7; }
+.footer-bottom {
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  padding-top: 20px;
+  text-align: center;
+  font-size: 13px;
+  color: #8496a7;
+}
+
+/* ---------- Responsive ---------- */
+@media (max-width: 900px) {
+  .grid-3 { grid-template-columns: 1fr; }
+  .grid-2 { grid-template-columns: 1fr; }
+  .value-strip { grid-template-columns: 1fr; }
+  .footer-grid { grid-template-columns: 1fr; gap: 24px; }
+  .main-nav { flex-wrap: wrap; justify-content: flex-end; }
+  .main-nav a { padding: 6px 10px; font-size: 13.5px; }
+  .header-inner { height: auto; padding: 10px 0; flex-wrap: wrap; }
+  .content-block { padding: 24px 20px; }
+  .info-table th { width: 110px; }
+}
