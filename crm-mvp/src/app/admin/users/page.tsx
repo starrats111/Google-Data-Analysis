@@ -5,17 +5,13 @@ import { PlusOutlined, EditOutlined, DeleteOutlined, SyncOutlined, ShopOutlined,
 import { useState, useMemo, useCallback } from "react";
 import { useApi, mutateApi } from "@/lib/swr";
 import AppPageHeader from "@/components/AppPageHeader";
+import { PLATFORMS } from "@/lib/constants";
 
-const PLATFORM_OPTIONS = [
-  { value: "CF", label: "CF — Commission Factory" },
-  { value: "CG", label: "CG — Commission Group" },
-  { value: "BSH", label: "BSH — Bshareit" },
-  { value: "PM", label: "PM — PartnerMate" },
-  { value: "LB", label: "LB — LinkBridge" },
-  { value: "LH", label: "LH — LinkHaitao" },
-  { value: "RW", label: "RW — Rewardoo" },
-  { value: "MUI", label: "MUI — Muii" },
-];
+// C-183：由 PLATFORMS 派生，替换原过期硬编码列表（缺 EV/PB 且平台全称有误）
+const PLATFORM_OPTIONS = PLATFORMS.map((p) => ({
+  value: p.code,
+  label: `${p.code} — ${p.name}`,
+}));
 
 const { Text } = Typography;
 

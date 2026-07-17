@@ -107,6 +107,15 @@ const PLATFORM_API_CONFIG: Record<string, PlatformApiConfig> = {
     assumeAllJoined: true,
     requiresRelationshipParam: true,
   },
+  // C-183 PB (PartnerBoost)：与 LB 同引擎的 Legacy 形态（app.partnerboost.com/api.php）。
+  // 官方文档确认 monetization_api 端点与参数同 LB；relationship 同样大小写敏感须传 "Joined"。
+  PB: {
+    mode: "post_form",
+    url: "https://app.partnerboost.com/api.php?mod=medium&op=monetization_api",
+    pageKey: "page", sizeKey: "limit", maxSize: 1000,
+    assumeAllJoined: true,
+    requiresRelationshipParam: true,
+  },
 };
 
 // ── 统一商家数据结构 ──
@@ -220,13 +229,25 @@ async function callPlatformApi(
 
 // ── 解析商家数据（各平台返回格式不同，统一提取） ──
 
+/**
+ * C-183：统一提取商家原始列表。
+ * 多数平台为 data.list / items / merchants；PB monetization_api 的 data 本身就是数组
+ * （官方文档 Response Demo：{"status":{...},"data":[{brand_id,...}]}），需直接取用。
+ */
+function extractMerchantRawList(data: Record<string, unknown>): Record<string, unknown>[] {
+  const root = data.data ?? data;
+  if (Array.isArray(root)) return root as Record<string, unknown>[];
+  const obj = root as Record<string, unknown>;
+  const list = obj.list || obj.items || obj.merchants || [];
+  return Array.isArray(list) ? (list as Record<string, unknown>[]) : [];
+}
+
 function parseMerchants(
   platform: string,
   data: Record<string, unknown>,
   assumeAllJoined = false,
 ): PlatformMerchant[] {
-  const root = (data.data || data) as Record<string, unknown>;
-  const list = (root.list || root.items || root.merchants || []) as Record<string, unknown>[];
+  const list = extractMerchantRawList(data);
 
   if (!Array.isArray(list)) return [];
 
@@ -416,8 +437,7 @@ export async function fetchAllMerchants(
     }
 
     // 首页诊断：打印首条原始记录的链接相关字段
-    const diagRoot = ((firstPage as any).data || firstPage) as Record<string, unknown>;
-    const diagList = (diagRoot.list || diagRoot.items || diagRoot.merchants || []) as Record<string, unknown>[];
+    const diagList = extractMerchantRawList(firstPage);
     if (Array.isArray(diagList) && diagList.length > 0) {
       const sample = diagList[0];
       const linkFields: Record<string, unknown> = {};
@@ -432,9 +452,7 @@ export async function fetchAllMerchants(
     }
 
     // 获取首页原始列表数量（用于判断是否是最后一页，不受 parseMerchants 过滤影响）
-    const firstRoot = ((firstPage as any).data || firstPage) as Record<string, unknown>;
-    const firstRawList = (firstRoot.list || firstRoot.items || firstRoot.merchants || []) as unknown[];
-    const firstRawCount = Array.isArray(firstRawList) ? firstRawList.length : 0;
+    const firstRawCount = extractMerchantRawList(firstPage).length;
 
     const firstBatch = parseMerchants(platform, firstPage, assumeAllJoined);
     for (const m of firstBatch) {
@@ -490,9 +508,7 @@ export async function fetchAllMerchants(
           pageRawCount = 0;
           continue;
         }
-        const pageRoot = ((pageData as any).data || pageData) as Record<string, unknown>;
-        const pageRawList = (pageRoot.list || pageRoot.items || pageRoot.merchants || []) as unknown[];
-        pageRawCount = Array.isArray(pageRawList) ? pageRawList.length : 0;
+        pageRawCount = extractMerchantRawList(pageData).length;
         if (pageRawCount > 0) break;
       }
 
@@ -609,6 +625,19 @@ const PLATFORM_TXN_CONFIG: Record<string, PlatformTxnConfig> = {
     url: "https://api.engagevantage.com/api/transaction_v3",
     source: "engagevantage",
     dateFormat: "camel", pageKey: "curPage", sizeKey: "perPage", maxSize: 2000,
+  },
+  // C-183 PB：对齐 kyads 实测适配器（kyads lib/affiliates/partnerboost.ts）：
+  //   - 仅传 token/begin_date/end_date/page/limit，无 status/source/dataScope → omitStatusAll
+  //   - limit 上限 2000，响应 data.total_page 翻页
+  //   - 日期跨度 >62 天报错误码 1006 → 显式 60 天切片留余量
+  //   - order_time 为 Unix 秒 → parseTimestamp 走真 UTC 入库，不进 CST_FACE_PLATFORMS
+  //   - 唯一 ID 字段 partnerboost_id（已入 txnId 候选链）；paid_status=1 → paid；Normal → pending
+  PB: {
+    mode: "get",
+    url: "https://app.partnerboost.com/api.php?mod=medium&op=transaction",
+    dateFormat: "snake", pageKey: "page", sizeKey: "limit", maxSize: 2000,
+    omitStatusAll: true,
+    maxDateSpanDays: 60,
   },
 };
 
@@ -861,6 +890,7 @@ function parseTransactions(platform: string, data: Record<string, unknown>): Pla
       item.partnermatic_id || item.partnermaticId ||
       item.linkbux_id || item.linkbuxId ||
       item.rewardoo_id || item.rewardooId ||
+      item.partnerboost_id || item.partnerboostId ||
       item.sign_id || item.action_id ||
       item.order_id || item.transaction_id || item.orderId ||
       item.id || ""
@@ -1137,6 +1167,9 @@ const PLATFORM_CLICK_CONFIG: Record<string, PlatformClickConfig> = {
   //     故不纳入 click-sync（否则每轮空打接口浪费限流、还会撞上 RW 网关偶发 504 制造错误噪声）。
   //     auto-click 对 RW 仍正常工作：effectiveC 用我方 kyads_click_task_items 成功/在途数兜底（见 auto-click.ts），
   //     不依赖平台点击 API，不会过刷；代价仅是看不到自然点击（偏保守，方向安全）。
+  // C-183 PB：op=transfer，带时分秒窗口 ≤1h、限频 10/min（同 SaaS 节奏）；
+  //     响应 {status:{code:0},data:{total_items,list}} → listPath=data，click_time 为 UTC+8，click_ref 可去重。
+  PB:  { mode: "get", url: "https://app.partnerboost.com/api.php?mod=medium&op=transfer", dateFormat: "snake", withTime: true, pageKey: "page", sizeKey: "limit", maxSize: 2000, rateLimitMs: CLICK_RATE_SAAS, maxWindowHours: 1, listPath: "data" },
 };
 
 export interface PlatformClickCount {
@@ -1210,8 +1243,19 @@ function getClickTotalPages(listPath: PlatformClickConfig["listPath"], data: Rec
   return 1;
 }
 
-/** 错误判定：SaaS code!="0"；LB/RW status="200" 成功、LH status="0" 成功（两者都接受，其余判为错误如 LB 1007） */
+/** 错误判定：SaaS code!="0"；LB/RW status="200" 成功、LH status="0" 成功（两者都接受，其余判为错误如 LB 1007）；
+ *  PB（listPath=data 但 Legacy 引擎）错误包装为嵌套对象 {status:{code,msg}}，需单独识别 */
 function clickErrorMessage(listPath: PlatformClickConfig["listPath"], data: Record<string, unknown>): string | null {
+  // 嵌套 status 对象（PB 等 app.partnerboost.com 系）：{status:{code:0,msg:"Success"}}
+  const nested = asObj(data.status);
+  if (nested && nested.code !== undefined) {
+    if (String(nested.code) !== "0" && String(nested.code) !== "200") return String(nested.msg ?? `code ${nested.code}`);
+    return null;
+  }
+  // PB transfer 实测（2026-07-17）：token 无效时返回 {status:0,data:null,info:"token error"}
+  // （status 为原始 0、错误文案在 info），不识别会被当成空页静默吞掉。
+  // 加 list 兜底判断避免误伤 LH（root 级 list）等带 info 字段的正常响应
+  if (data.info != null && data.data == null && !Array.isArray(data.list)) return String(data.info);
   if (listPath === "data") {
     const code = data.code;
     if (code !== undefined && String(code) !== "0") return String(data.message ?? `code ${code}`);

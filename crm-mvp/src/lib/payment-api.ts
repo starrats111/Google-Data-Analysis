@@ -60,10 +60,10 @@ const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** 去除千分位逗号后解析为 number；无效返回 0 */
+/** 去除千分位逗号与货币符号（PB 实测 amount 带 "$" 前缀如 "$20.00"）后解析为 number；无效返回 0 */
 function parseAmount(v: unknown): number {
   if (v == null) return 0;
-  const n = parseFloat(String(v).replace(/,/g, "").trim());
+  const n = parseFloat(String(v).replace(/[,$€£¥\s]/g, "").trim());
   return isNaN(n) ? 0 : n;
 }
 
@@ -410,10 +410,77 @@ async function fetchLinkbuxMerchantCommission(
   return out;
 }
 
+// ─────────────────────────────────────────────────────────────
+// 4. PB 打款单（medium&op=payment_summary）
+//    C-183：与 SaaS payment_summary 同名但走 Legacy 引擎（app.partnerboost.com/api.php）。
+//    对齐 kyads 实测适配器（kyads lib/affiliates/partnerboost.ts fetchPaymentSummary）：
+//    paid_date_begin/paid_date_end + page/limit 分页，按 data.total_items 收尾；
+//    行无状态字段 → paid_date 非空即视为已打款；amount 带 "$" 前缀由 parseAmount 剥离。
+// ─────────────────────────────────────────────────────────────
+async function fetchPartnerboostPayments(
+  token: string,
+  startDate: string,
+  endDate: string,
+): Promise<PlatformPayment[]> {
+  const out: PlatformPayment[] = [];
+  const perPage = 2000;
+  let page = 1;
+
+  while (true) {
+    const params = new URLSearchParams({
+      token,
+      paid_date_begin: startDate,
+      paid_date_end: endDate,
+      page: String(page),
+      limit: String(perPage),
+    });
+    const data = await fetchWithRetry(
+      `https://app.partnerboost.com/api.php?mod=medium&op=payment_summary&${params}`,
+      { method: "GET" },
+      "PB payment_summary",
+    );
+    const apiErr = checkApiCode(data);
+    if (apiErr) throw new Error(apiErr);
+
+    const root = (data.data || {}) as Record<string, unknown>;
+    const list = (root.list || []) as Record<string, unknown>[];
+    if (!Array.isArray(list) || list.length === 0) break;
+
+    for (const it of list) {
+      const paymentNo = String(it.payment_id ?? "").trim();
+      if (!paymentNo) continue;
+      const paidDate = toISO(it.paid_date);
+      out.push({
+        payment_no: paymentNo,
+        source_kind: "payment_summary",
+        paid_date: paidDate,
+        request_date: toISO(it.request_date),
+        amount: parseAmount(it.amount),
+        gross_amount: null,
+        currency: "USD",
+        status: paidDate ? "paid" : "processing",
+        raw_status: paidDate ? "paid" : "no_paid_date",
+        payment_type: (it.payment_type ?? null) as string | null,
+        raw_json: JSON.stringify(it),
+      });
+    }
+
+    // kyads 同款收尾：total_items/limit 推总页数，且不满页即最后一页
+    const totalItems = Number(root.total_items ?? 0);
+    const limit = Number(root.limit ?? perPage);
+    const totalPage = totalItems > 0 ? Math.ceil(totalItems / limit) : 1;
+    if (page >= totalPage || list.length < limit) break;
+    page++;
+    if (page > 50) break; // 安全上限
+  }
+  return out;
+}
+
 /** 该平台是否支持支付 API */
 export function platformSupportsPayments(platform: string): boolean {
   return (
-    !!PAYMENT_SUMMARY_HOSTS[platform] || platform === "RW" || platform === "LH" || platform === "LB"
+    !!PAYMENT_SUMMARY_HOSTS[platform] ||
+    platform === "RW" || platform === "LH" || platform === "LB" || platform === "PB"
   );
 }
 
@@ -434,6 +501,7 @@ export async function fetchPlatformPayments(
     if (platform === "RW") return { payments: await fetchRewardooPayments(token, startDate, endDate) };
     if (platform === "LH") return { payments: await fetchLinkhaitaoPayments(token, startDate, endDate) };
     if (platform === "LB") return { payments: await fetchLinkbuxMerchantCommission(token, startDate, endDate) };
+    if (platform === "PB") return { payments: await fetchPartnerboostPayments(token, startDate, endDate) };
     return { payments: [] }; // AD 等无支付 API
   } catch (err) {
     return { payments: [], error: err instanceof Error ? err.message : String(err) };

@@ -1,7 +1,7 @@
 // 联盟平台代码及全称
 // LH: linkhaitao.com | LB: linkbux.com | RW: rewardoo.com
 // CG: collabglow.com | PM: partnermatic.com | BSH: brandsparkhub.com | CF: creatorflare.com
-// MUI: ultrainfluence.com | EV: engagevantage.com
+// MUI: ultrainfluence.com | EV: engagevantage.com | PB: partnerboost.com
 // D-073：AD (AdsDoubler) 已全线下线，不再支持
 export const PLATFORMS = [
   { code: "CG", name: "CollabGlow", domain: "collabglow.com" },
@@ -13,6 +13,7 @@ export const PLATFORMS = [
   { code: "CF", name: "CreatorFlare", domain: "creatorflare.com" },
   { code: "MUI", name: "UltraInfluence", domain: "ultrainfluence.com" },
   { code: "EV", name: "EngageVantage", domain: "engagevantage.com" },
+  { code: "PB", name: "PartnerBoost", domain: "partnerboost.com" },
 ] as const;
 
 export type PlatformCode = (typeof PLATFORMS)[number]["code"];
@@ -70,6 +71,12 @@ const _PLATFORM_ALIAS_ENTRIES: [string, PlatformCode][] = [
   ["EV", "EV"], ["ev", "EV"],
   ["EngageVantage", "EV"], ["engagevantage", "EV"], ["Engage Vantage", "EV"], ["engage vantage", "EV"],
   ["engagevantage.com", "EV"], ["app.engagevantage.com", "EV"], ["api.engagevantage.com", "EV"],
+
+  // PB = PartnerBoost (partnerboost.com)
+  ["PB", "PB"], ["pb", "PB"],
+  ["PartnerBoost", "PB"], ["partnerboost", "PB"], ["Partnerboost", "PB"],
+  ["Partner Boost", "PB"], ["partner boost", "PB"],
+  ["partnerboost.com", "PB"], ["www.partnerboost.com", "PB"], ["app.partnerboost.com", "PB"],
 ];
 
 export const PLATFORM_ALIASES: ReadonlyMap<string, PlatformCode> = new Map(_PLATFORM_ALIAS_ENTRIES);
