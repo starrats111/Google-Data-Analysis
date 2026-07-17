@@ -52,7 +52,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     cardNo: m.card_no,
     openingBalance: openMap.get(String(m.id)) ?? null,
   }));
-  const entries: BankFlowExportEntry[] = entryRows.map((e) => {
+  const rawEntries: BankFlowExportEntry[] = entryRows.map((e) => {
     let breakdown: BankFlowExportEntry["breakdown"] = [];
     try { breakdown = e.breakdown ? JSON.parse(e.breakdown) : []; } catch { /* 脏数据容错 */ }
     return {
@@ -60,6 +60,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       paymentMethodId: String(e.payment_method_id),
       txnAt: e.txn_at,
       platform: e.platform,
+      txnGroup: e.txn_group,
       counterparty: e.counterparty,
       summary: e.summary,
       amount: Number(e.amount),
@@ -70,6 +71,34 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       remark: e.remark || "",
     };
   });
+
+  // C-180：同一笔银行到账按平台拆分的条目（同卡同 txn_group）导出时合并回一行，
+  // 与真实银行流水一致（银行只到账一笔总额）
+  const entries: BankFlowExportEntry[] = [];
+  const grouped = new Map<string, BankFlowExportEntry>();
+  for (const e of rawEntries) {
+    if (!e.txnGroup) {
+      entries.push(e);
+      continue;
+    }
+    const key = `${e.paymentMethodId}\u0000${e.txnGroup}`;
+    const cur = grouped.get(key);
+    if (!cur) {
+      const merged = { ...e, breakdown: [...e.breakdown] };
+      grouped.set(key, merged);
+      entries.push(merged);
+      continue;
+    }
+    cur.amount = Math.round((cur.amount + e.amount) * 100) / 100;
+    cur.expectedAmount = Math.round((cur.expectedAmount + e.expectedAmount) * 100) / 100;
+    cur.fee = Math.round((cur.fee + e.fee) * 100) / 100;
+    cur.breakdown.push(...e.breakdown);
+    if (!cur.platform.split("+").includes(e.platform)) cur.platform = `${cur.platform}+${e.platform}`;
+    if (e.txnAt < cur.txnAt) cur.txnAt = e.txnAt;
+    if (!cur.counterparty && e.counterparty) cur.counterparty = e.counterparty;
+    if (e.remark && !cur.remark.includes(e.remark)) cur.remark = cur.remark ? `${cur.remark}；${e.remark}` : e.remark;
+  }
+  entries.sort((a, b) => a.txnAt.getTime() - b.txnAt.getTime());
 
   const wb = new ExcelJS.Workbook();
   wb.creator = "CRM System";

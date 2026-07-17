@@ -1,7 +1,9 @@
 import { NextRequest } from "next/server";
+import { randomUUID } from "crypto";
 import { apiSuccess, apiError } from "@/lib/constants";
 import { withLeader } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
+import { splitByPlatform, type SplitBreakdownItem } from "@/lib/bank-flow-split";
 
 export const dynamic = "force-dynamic";
 
@@ -14,16 +16,16 @@ export const dynamic = "force-dynamic";
  * DELETE { id }                     软删
  *
  * 手续费口径：fee = 员工明细合计(expected_amount) − 实际入账(amount)。
- * 员工明细默认由 ./prefill 按「该收款方式×该平台×到账日当天」的组员打款记录预填，可修改。
+ * 员工明细默认由 ./prefill 按「该收款方式×该平台×到账日当天」的组员打款记录预填，可修改；
+ * 也可经 ./candidates 手动勾选任意平台的打款记录添加（C-180）。
+ *
+ * C-180 混平台拆分：一笔银行到账可能覆盖多个平台（如 BSH+CG 一起提现），
+ * 保存时按明细行平台拆成多条流水（每平台到账 = 该平台明细合计 − 按比例分摊手续费），
+ * 拆出的条目共享 txn_group，各自独立编辑/删除，导出流水单时合并回一笔。
  */
 
-export interface BankFlowBreakdownItem {
-  userId: string;
-  username: string;
-  displayName: string;
-  platform: string;
-  account: string;
-  amount: number;
+export interface BankFlowBreakdownItem extends SplitBreakdownItem {
+  sourceDate?: string | null;
 }
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -38,6 +40,8 @@ function parseBreakdown(raw: unknown): { items: BankFlowBreakdownItem[]; total: 
     const o = it as Record<string, unknown>;
     const amount = Number(o.amount);
     if (!isFinite(amount) || Math.abs(amount) > 999999999) return null;
+    const sd = o.sourceDate == null ? null : String(o.sourceDate);
+    if (sd != null && !/^\d{4}-\d{2}-\d{2}$/.test(sd)) return null;
     items.push({
       userId: String(o.userId ?? ""),
       username: String(o.username ?? "").slice(0, 32),
@@ -45,15 +49,19 @@ function parseBreakdown(raw: unknown): { items: BankFlowBreakdownItem[]; total: 
       platform: String(o.platform ?? "").slice(0, 8),
       account: String(o.account ?? "").slice(0, 64),
       amount: r2(amount),
+      ...(sd ? { sourceDate: sd } : {}),
     });
     total += amount;
   }
   return { items, total: r2(total) };
 }
 
+/** C-180：拆分组号（同一笔银行到账的多平台条目共享） */
+const newTxnGroup = () => randomUUID().replace(/-/g, "").slice(0, 32);
+
 function serializeEntry(e: {
   id: bigint; team_id: bigint; month: string; payment_method_id: bigint; txn_at: Date;
-  platform: string; source_date: Date | null; counterparty: string; summary: string;
+  platform: string; txn_group: string | null; source_date: Date | null; counterparty: string; summary: string;
   amount: unknown; currency: string; expected_amount: unknown; fee: unknown;
   breakdown: string | null; remark: string | null; created_at: Date; updated_at: Date;
 }) {
@@ -67,6 +75,7 @@ function serializeEntry(e: {
     paymentMethodId: String(e.payment_method_id),
     txnAt: e.txn_at.toISOString(),
     platform: e.platform,
+    txnGroup: e.txn_group,
     sourceDate: e.source_date ? e.source_date.toISOString().slice(0, 10) : null,
     counterparty: e.counterparty,
     summary: e.summary,
@@ -164,26 +173,43 @@ export const POST = withLeader(async (req: NextRequest, { user }) => {
   const bd = parseBreakdown(breakdown ?? []);
   if (!bd) return apiError("员工明细格式无效");
 
-  const created = await prisma.bank_flow_entries.create({
-    data: {
-      team_id: teamId,
-      month,
-      payment_method_id: method.id,
-      txn_at: txnDate,
-      platform,
-      source_date: sourceDate ? new Date(`${sourceDate}T00:00:00Z`) : null,
-      counterparty: typeof counterparty === "string" ? counterparty.trim().slice(0, 128) : "",
-      summary: typeof summary === "string" && summary.trim() ? summary.trim().slice(0, 128) : "佣金结算",
-      amount: amt,
-      currency: typeof currency === "string" && currency ? currency.slice(0, 8) : "CNY",
-      expected_amount: bd.total,
-      fee: r2(bd.total - amt),
-      breakdown: JSON.stringify(bd.items),
-      remark: typeof remark === "string" ? remark.slice(0, 255) : null,
-      created_by: BigInt(user.userId),
-    },
-  });
-  return apiSuccess(serializeEntry(created), "已登记");
+  // C-180：明细混含多个平台时按平台拆分保存（同一笔银行到账共享 txn_group）
+  const groups = splitByPlatform(bd.items, amt, platform, sourceDate ?? null);
+  if (groups.some((g) => !/^[A-Z]{2,8}$/.test(g.platform))) return apiError("明细行 platform 无效");
+  const txnGroup = groups.length > 1 ? newTxnGroup() : null;
+  const shared = {
+    team_id: teamId,
+    month,
+    payment_method_id: method.id,
+    txn_at: txnDate,
+    txn_group: txnGroup,
+    counterparty: typeof counterparty === "string" ? counterparty.trim().slice(0, 128) : "",
+    summary: typeof summary === "string" && summary.trim() ? summary.trim().slice(0, 128) : "佣金结算",
+    currency: typeof currency === "string" && currency ? currency.slice(0, 8) : "CNY",
+    remark: typeof remark === "string" ? remark.slice(0, 255) : null,
+    created_by: BigInt(user.userId),
+  };
+  const created = await prisma.$transaction(
+    groups.map((g) =>
+      prisma.bank_flow_entries.create({
+        data: {
+          ...shared,
+          platform: g.platform,
+          source_date: g.sourceDate ? new Date(`${g.sourceDate}T00:00:00Z`) : null,
+          amount: g.amount,
+          expected_amount: g.expected,
+          fee: g.fee,
+          breakdown: JSON.stringify(g.items),
+        },
+      }),
+    ),
+  );
+  return apiSuccess(
+    created.map(serializeEntry),
+    groups.length > 1
+      ? `已登记，按平台拆分为 ${groups.map((g) => `${g.platform} ¥${g.amount.toFixed(2)}`).join(" + ")}`
+      : "已登记",
+  );
 });
 
 // ── PUT：修改（重算手续费） ──────────────────────────────────────────────────
@@ -223,16 +249,67 @@ export const PUT = withLeader(async (req: NextRequest, { user }) => {
     if (!isFinite(amt) || amt < 0 || amt > 999999999) return apiError("总打款金额必须为非负数字");
     data.amount = amt;
   }
-  let expected = Number(existing.expected_amount);
+
   if (body.breakdown !== undefined) {
     const bd = parseBreakdown(body.breakdown);
     if (!bd) return apiError("员工明细格式无效");
-    expected = bd.total;
-    data.breakdown = JSON.stringify(bd.items);
-    data.expected_amount = expected;
-  }
-  data.fee = r2(expected - amt);
 
+    // C-180：编辑后明细仍可能混含多个平台 → 按平台拆分；
+    // 本条目承接与其原平台一致的组（无则第一组），其余组另建条目并共享 txn_group。
+    const fallbackPlatform = typeof body.platform === "string" && body.platform ? body.platform : existing.platform;
+    const fallbackSourceDate = body.sourceDate !== undefined
+      ? (body.sourceDate || null)
+      : (existing.source_date ? existing.source_date.toISOString().slice(0, 10) : null);
+    const groups = splitByPlatform(bd.items, amt, fallbackPlatform, fallbackSourceDate);
+    if (groups.some((g) => !/^[A-Z]{2,8}$/.test(g.platform))) return apiError("明细行 platform 无效");
+    const mainIdx = Math.max(0, groups.findIndex((g) => g.platform === existing.platform));
+    const main = groups[mainIdx];
+    const siblings = groups.filter((_, i) => i !== mainIdx);
+    const txnGroup = existing.txn_group ?? (siblings.length > 0 ? newTxnGroup() : null);
+
+    data.platform = main.platform;
+    data.source_date = main.sourceDate ? new Date(`${main.sourceDate}T00:00:00Z`) : null;
+    data.amount = main.amount;
+    data.expected_amount = main.expected;
+    data.fee = main.fee;
+    data.breakdown = JSON.stringify(main.items);
+    if (txnGroup !== existing.txn_group) data.txn_group = txnGroup;
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const u = await tx.bank_flow_entries.update({ where: { id: existing.id }, data });
+      for (const g of siblings) {
+        await tx.bank_flow_entries.create({
+          data: {
+            team_id: existing.team_id,
+            month: existing.month,
+            payment_method_id: existing.payment_method_id,
+            txn_at: (data.txn_at as Date | undefined) ?? existing.txn_at,
+            platform: g.platform,
+            txn_group: txnGroup,
+            source_date: g.sourceDate ? new Date(`${g.sourceDate}T00:00:00Z`) : null,
+            counterparty: (data.counterparty as string | undefined) ?? existing.counterparty,
+            summary: (data.summary as string | undefined) ?? existing.summary,
+            amount: g.amount,
+            currency: existing.currency,
+            expected_amount: g.expected,
+            fee: g.fee,
+            breakdown: JSON.stringify(g.items),
+            remark: (data.remark as string | null | undefined) ?? existing.remark,
+            created_by: BigInt(user.userId),
+          },
+        });
+      }
+      return u;
+    });
+    return apiSuccess(
+      serializeEntry(updated),
+      siblings.length > 0
+        ? `已保存，按平台拆分为 ${groups.map((g) => `${g.platform} ¥${g.amount.toFixed(2)}`).join(" + ")}`
+        : "已保存",
+    );
+  }
+
+  data.fee = r2(Number(existing.expected_amount) - amt);
   const updated = await prisma.bank_flow_entries.update({ where: { id: existing.id }, data });
   return apiSuccess(serializeEntry(updated), "已保存");
 });

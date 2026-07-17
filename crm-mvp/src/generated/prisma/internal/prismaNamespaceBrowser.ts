@@ -1280,6 +1280,7 @@ export const Bank_flow_entriesScalarFieldEnum = {
   payment_method_id: 'payment_method_id',
   txn_at: 'txn_at',
   platform: 'platform',
+  txn_group: 'txn_group',
   source_date: 'source_date',
   counterparty: 'counterparty',
   summary: 'summary',
@@ -2091,6 +2092,7 @@ export type payment_binding_snapshotsOrderByRelevanceFieldEnum = (typeof payment
 export const bank_flow_entriesOrderByRelevanceFieldEnum = {
   month: 'month',
   platform: 'platform',
+  txn_group: 'txn_group',
   counterparty: 'counterparty',
   summary: 'summary',
   currency: 'currency',

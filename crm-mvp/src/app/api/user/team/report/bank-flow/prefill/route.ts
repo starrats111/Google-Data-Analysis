@@ -93,17 +93,28 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   const connById = new Map(conns.map((c) => [String(c.id), c]));
 
   // ── 已登记过的批次不再重复预填 ──
-  // source_date 精确排除；旧数据（无 source_date）按其到账日兜底排除
+  // source_date 精确排除；旧数据（无 source_date）按其到账日兜底排除；
+  // C-180：手动添加的明细行随行携带 sourceDate（可能与条目 source_date 不同批次），一并排除
   const existing = await prisma.bank_flow_entries.findMany({
     where: {
       team_id: teamId, payment_method_id: method.id, platform, is_deleted: 0,
       ...(excludeId ? { id: { not: BigInt(excludeId) } } : {}),
     },
-    select: { source_date: true, txn_at: true },
+    select: { source_date: true, txn_at: true, breakdown: true },
   });
   const usedDays = new Set(
     existing.map((e) => (e.source_date ?? e.txn_at).toISOString().slice(0, 10)),
   );
+  for (const e of existing) {
+    try {
+      const rows: { platform?: unknown; sourceDate?: unknown }[] = e.breakdown ? JSON.parse(e.breakdown) : [];
+      if (!Array.isArray(rows)) continue;
+      for (const r of rows) {
+        const sd = String(r?.sourceDate ?? "");
+        if (/^\d{4}-\d{2}-\d{2}$/.test(sd) && String(r?.platform || platform) === platform) usedDays.add(sd);
+      }
+    } catch { /* 脏数据跳过 */ }
+  }
 
   // ── 到账日 ±WINDOW_DAYS 内的打款记录（应收口径：paid + processing；按 paid_date） ──
   const center = new Date(`${dateStr}T00:00:00Z`);

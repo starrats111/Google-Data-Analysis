@@ -55,6 +55,7 @@ export type Bank_flow_entriesMinAggregateOutputType = {
   payment_method_id: bigint | null
   txn_at: Date | null
   platform: string | null
+  txn_group: string | null
   source_date: Date | null
   counterparty: string | null
   summary: string | null
@@ -77,6 +78,7 @@ export type Bank_flow_entriesMaxAggregateOutputType = {
   payment_method_id: bigint | null
   txn_at: Date | null
   platform: string | null
+  txn_group: string | null
   source_date: Date | null
   counterparty: string | null
   summary: string | null
@@ -99,6 +101,7 @@ export type Bank_flow_entriesCountAggregateOutputType = {
   payment_method_id: number
   txn_at: number
   platform: number
+  txn_group: number
   source_date: number
   counterparty: number
   summary: number
@@ -145,6 +148,7 @@ export type Bank_flow_entriesMinAggregateInputType = {
   payment_method_id?: true
   txn_at?: true
   platform?: true
+  txn_group?: true
   source_date?: true
   counterparty?: true
   summary?: true
@@ -167,6 +171,7 @@ export type Bank_flow_entriesMaxAggregateInputType = {
   payment_method_id?: true
   txn_at?: true
   platform?: true
+  txn_group?: true
   source_date?: true
   counterparty?: true
   summary?: true
@@ -189,6 +194,7 @@ export type Bank_flow_entriesCountAggregateInputType = {
   payment_method_id?: true
   txn_at?: true
   platform?: true
+  txn_group?: true
   source_date?: true
   counterparty?: true
   summary?: true
@@ -298,6 +304,7 @@ export type Bank_flow_entriesGroupByOutputType = {
   payment_method_id: bigint
   txn_at: Date
   platform: string
+  txn_group: string | null
   source_date: Date | null
   counterparty: string
   summary: string
@@ -343,6 +350,7 @@ export type bank_flow_entriesWhereInput = {
   payment_method_id?: Prisma.BigIntFilter<"bank_flow_entries"> | bigint | number
   txn_at?: Prisma.DateTimeFilter<"bank_flow_entries"> | Date | string
   platform?: Prisma.StringFilter<"bank_flow_entries"> | string
+  txn_group?: Prisma.StringNullableFilter<"bank_flow_entries"> | string | null
   source_date?: Prisma.DateTimeNullableFilter<"bank_flow_entries"> | Date | string | null
   counterparty?: Prisma.StringFilter<"bank_flow_entries"> | string
   summary?: Prisma.StringFilter<"bank_flow_entries"> | string
@@ -365,6 +373,7 @@ export type bank_flow_entriesOrderByWithRelationInput = {
   payment_method_id?: Prisma.SortOrder
   txn_at?: Prisma.SortOrder
   platform?: Prisma.SortOrder
+  txn_group?: Prisma.SortOrderInput | Prisma.SortOrder
   source_date?: Prisma.SortOrderInput | Prisma.SortOrder
   counterparty?: Prisma.SortOrder
   summary?: Prisma.SortOrder
@@ -391,6 +400,7 @@ export type bank_flow_entriesWhereUniqueInput = Prisma.AtLeast<{
   payment_method_id?: Prisma.BigIntFilter<"bank_flow_entries"> | bigint | number
   txn_at?: Prisma.DateTimeFilter<"bank_flow_entries"> | Date | string
   platform?: Prisma.StringFilter<"bank_flow_entries"> | string
+  txn_group?: Prisma.StringNullableFilter<"bank_flow_entries"> | string | null
   source_date?: Prisma.DateTimeNullableFilter<"bank_flow_entries"> | Date | string | null
   counterparty?: Prisma.StringFilter<"bank_flow_entries"> | string
   summary?: Prisma.StringFilter<"bank_flow_entries"> | string
@@ -413,6 +423,7 @@ export type bank_flow_entriesOrderByWithAggregationInput = {
   payment_method_id?: Prisma.SortOrder
   txn_at?: Prisma.SortOrder
   platform?: Prisma.SortOrder
+  txn_group?: Prisma.SortOrderInput | Prisma.SortOrder
   source_date?: Prisma.SortOrderInput | Prisma.SortOrder
   counterparty?: Prisma.SortOrder
   summary?: Prisma.SortOrder
@@ -443,6 +454,7 @@ export type bank_flow_entriesScalarWhereWithAggregatesInput = {
   payment_method_id?: Prisma.BigIntWithAggregatesFilter<"bank_flow_entries"> | bigint | number
   txn_at?: Prisma.DateTimeWithAggregatesFilter<"bank_flow_entries"> | Date | string
   platform?: Prisma.StringWithAggregatesFilter<"bank_flow_entries"> | string
+  txn_group?: Prisma.StringNullableWithAggregatesFilter<"bank_flow_entries"> | string | null
   source_date?: Prisma.DateTimeNullableWithAggregatesFilter<"bank_flow_entries"> | Date | string | null
   counterparty?: Prisma.StringWithAggregatesFilter<"bank_flow_entries"> | string
   summary?: Prisma.StringWithAggregatesFilter<"bank_flow_entries"> | string
@@ -465,6 +477,7 @@ export type bank_flow_entriesCreateInput = {
   payment_method_id: bigint | number
   txn_at: Date | string
   platform: string
+  txn_group?: string | null
   source_date?: Date | string | null
   counterparty?: string
   summary?: string
@@ -487,6 +500,7 @@ export type bank_flow_entriesUncheckedCreateInput = {
   payment_method_id: bigint | number
   txn_at: Date | string
   platform: string
+  txn_group?: string | null
   source_date?: Date | string | null
   counterparty?: string
   summary?: string
@@ -509,6 +523,7 @@ export type bank_flow_entriesUpdateInput = {
   payment_method_id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   txn_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   platform?: Prisma.StringFieldUpdateOperationsInput | string
+  txn_group?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   source_date?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   counterparty?: Prisma.StringFieldUpdateOperationsInput | string
   summary?: Prisma.StringFieldUpdateOperationsInput | string
@@ -531,6 +546,7 @@ export type bank_flow_entriesUncheckedUpdateInput = {
   payment_method_id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   txn_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   platform?: Prisma.StringFieldUpdateOperationsInput | string
+  txn_group?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   source_date?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   counterparty?: Prisma.StringFieldUpdateOperationsInput | string
   summary?: Prisma.StringFieldUpdateOperationsInput | string
@@ -553,6 +569,7 @@ export type bank_flow_entriesCreateManyInput = {
   payment_method_id: bigint | number
   txn_at: Date | string
   platform: string
+  txn_group?: string | null
   source_date?: Date | string | null
   counterparty?: string
   summary?: string
@@ -575,6 +592,7 @@ export type bank_flow_entriesUpdateManyMutationInput = {
   payment_method_id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   txn_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   platform?: Prisma.StringFieldUpdateOperationsInput | string
+  txn_group?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   source_date?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   counterparty?: Prisma.StringFieldUpdateOperationsInput | string
   summary?: Prisma.StringFieldUpdateOperationsInput | string
@@ -597,6 +615,7 @@ export type bank_flow_entriesUncheckedUpdateManyInput = {
   payment_method_id?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
   txn_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   platform?: Prisma.StringFieldUpdateOperationsInput | string
+  txn_group?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   source_date?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   counterparty?: Prisma.StringFieldUpdateOperationsInput | string
   summary?: Prisma.StringFieldUpdateOperationsInput | string
@@ -625,6 +644,7 @@ export type bank_flow_entriesCountOrderByAggregateInput = {
   payment_method_id?: Prisma.SortOrder
   txn_at?: Prisma.SortOrder
   platform?: Prisma.SortOrder
+  txn_group?: Prisma.SortOrder
   source_date?: Prisma.SortOrder
   counterparty?: Prisma.SortOrder
   summary?: Prisma.SortOrder
@@ -658,6 +678,7 @@ export type bank_flow_entriesMaxOrderByAggregateInput = {
   payment_method_id?: Prisma.SortOrder
   txn_at?: Prisma.SortOrder
   platform?: Prisma.SortOrder
+  txn_group?: Prisma.SortOrder
   source_date?: Prisma.SortOrder
   counterparty?: Prisma.SortOrder
   summary?: Prisma.SortOrder
@@ -680,6 +701,7 @@ export type bank_flow_entriesMinOrderByAggregateInput = {
   payment_method_id?: Prisma.SortOrder
   txn_at?: Prisma.SortOrder
   platform?: Prisma.SortOrder
+  txn_group?: Prisma.SortOrder
   source_date?: Prisma.SortOrder
   counterparty?: Prisma.SortOrder
   summary?: Prisma.SortOrder
@@ -715,6 +737,7 @@ export type bank_flow_entriesSelect<ExtArgs extends runtime.Types.Extensions.Int
   payment_method_id?: boolean
   txn_at?: boolean
   platform?: boolean
+  txn_group?: boolean
   source_date?: boolean
   counterparty?: boolean
   summary?: boolean
@@ -739,6 +762,7 @@ export type bank_flow_entriesSelectScalar = {
   payment_method_id?: boolean
   txn_at?: boolean
   platform?: boolean
+  txn_group?: boolean
   source_date?: boolean
   counterparty?: boolean
   summary?: boolean
@@ -754,7 +778,7 @@ export type bank_flow_entriesSelectScalar = {
   updated_at?: boolean
 }
 
-export type bank_flow_entriesOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "team_id" | "month" | "payment_method_id" | "txn_at" | "platform" | "source_date" | "counterparty" | "summary" | "amount" | "currency" | "expected_amount" | "fee" | "breakdown" | "remark" | "created_by" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["bank_flow_entries"]>
+export type bank_flow_entriesOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "team_id" | "month" | "payment_method_id" | "txn_at" | "platform" | "txn_group" | "source_date" | "counterparty" | "summary" | "amount" | "currency" | "expected_amount" | "fee" | "breakdown" | "remark" | "created_by" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["bank_flow_entries"]>
 
 export type $bank_flow_entriesPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "bank_flow_entries"
@@ -766,6 +790,7 @@ export type $bank_flow_entriesPayload<ExtArgs extends runtime.Types.Extensions.I
     payment_method_id: bigint
     txn_at: Date
     platform: string
+    txn_group: string | null
     source_date: Date | null
     counterparty: string
     summary: string
@@ -1154,6 +1179,7 @@ export interface bank_flow_entriesFieldRefs {
   readonly payment_method_id: Prisma.FieldRef<"bank_flow_entries", 'BigInt'>
   readonly txn_at: Prisma.FieldRef<"bank_flow_entries", 'DateTime'>
   readonly platform: Prisma.FieldRef<"bank_flow_entries", 'String'>
+  readonly txn_group: Prisma.FieldRef<"bank_flow_entries", 'String'>
   readonly source_date: Prisma.FieldRef<"bank_flow_entries", 'DateTime'>
   readonly counterparty: Prisma.FieldRef<"bank_flow_entries", 'String'>
   readonly summary: Prisma.FieldRef<"bank_flow_entries", 'String'>

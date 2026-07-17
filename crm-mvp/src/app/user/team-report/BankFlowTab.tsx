@@ -9,13 +9,17 @@
  * 同一半月多笔到账（如 6-16、6-18 各一笔）各自预填各自批次，不混算。
  * 手续费 = 员工明细合计 − 实际到账，自动计算。
  * 支持导出正规「账户交易明细清单」（银行流水单版式）+「打款对账明细」。
+ *
+ * C-180：BSH+CG 等多平台一起提现（银行只到账一笔总额）时，
+ * 明细支持「手动添加」勾选任意平台的逐笔打款记录；保存时按平台拆成多条流水
+ * （各自独立编辑/删除，同一笔到账共享 txn_group），导出流水单时自动合并回一笔。
  */
 
 import { useState, useEffect, useMemo, useCallback } from "react";
 import {
   Card, DatePicker, Button, Space, Spin, Empty, Typography, Table, Modal, Form,
   Select, InputNumber, Input, Popconfirm, Statistic, Row, Col, App, Tag, Tooltip,
-  Descriptions,
+  Descriptions, Alert,
 } from "antd";
 import {
   PlusOutlined, ReloadOutlined, FileExcelOutlined, DeleteOutlined, EditOutlined,
@@ -25,6 +29,7 @@ import dayjs, { type Dayjs } from "dayjs";
 import type { ColumnsType } from "antd/es/table";
 import { REPORT_PLATFORM_ORDER } from "@/lib/report-metrics";
 import { apportionFee } from "@/lib/bank-flow-fee";
+import { splitByPlatform } from "@/lib/bank-flow-split";
 
 const { Text } = Typography;
 
@@ -44,6 +49,22 @@ interface BreakdownItem {
   platform: string;
   account: string;
   amount: number;
+  /** C-180：该行来源批次日（平台实际打款日），预填/手动添加时随行携带，防重复预填 */
+  sourceDate?: string | null;
+}
+
+/** C-180 手动添加候选（逐笔打款单粒度） */
+interface CandidateItem {
+  paymentNo: string;
+  platform: string;
+  date: string;
+  userId: string;
+  username: string;
+  displayName: string;
+  account: string;
+  usd: number;
+  amount: number;
+  used: boolean;
 }
 
 interface FlowEntry {
@@ -52,6 +73,8 @@ interface FlowEntry {
   paymentMethodId: string;
   txnAt: string;
   platform: string;
+  /** C-180：同一笔银行到账拆分组号（多平台合并提现拆出的条目共享） */
+  txnGroup: string | null;
   sourceDate: string | null;
   counterparty: string;
   summary: string;
@@ -86,6 +109,11 @@ export default function BankFlowTab() {
   const [breakdown, setBreakdown] = useState<BreakdownItem[]>([]);
   // 预填来源批次日（平台实际打款日）：随保存写库，已登记过的批次不再重复预填
   const [sourceDate, setSourceDate] = useState<string | null>(null);
+  // C-180 手动添加候选弹层
+  const [candOpen, setCandOpen] = useState(false);
+  const [candLoading, setCandLoading] = useState(false);
+  const [candItems, setCandItems] = useState<CandidateItem[]>([]);
+  const [candSelected, setCandSelected] = useState<string[]>([]);
 
   const monthStr = month.format("YYYY-MM");
 
@@ -170,14 +198,19 @@ export default function BankFlowTab() {
         return;
       }
       const { items, note, matchedDate } = res.data as { items: BreakdownItem[]; note: string; matchedDate: string | null };
-      setBreakdown(items.map((it) => ({
-        userId: it.userId,
-        username: it.username,
-        displayName: it.displayName,
-        platform: it.platform,
-        account: it.account,
-        amount: it.amount,
-      })));
+      // C-180：只替换当前平台的行，保留手动添加的其他平台明细
+      setBreakdown((prev) => [
+        ...prev.filter((b) => (b.platform || platform) !== platform),
+        ...items.map((it) => ({
+          userId: it.userId,
+          username: it.username,
+          displayName: it.displayName,
+          platform: it.platform,
+          account: it.account,
+          amount: it.amount,
+          sourceDate: matchedDate,
+        })),
+      ]);
       setSourceDate(items.length > 0 ? matchedDate : null);
       if (items.length === 0) message.info(note || "没有匹配的打款记录，可手动添加明细行");
       else message.success(`${note}，共 ${items.length} 条`);
@@ -186,6 +219,75 @@ export default function BankFlowTab() {
     } finally {
       setPrefilling(false);
     }
+  };
+
+  // ── C-180 手动添加：拉取本卡名下、到账日 ±5 天、不限平台的逐笔打款记录候选 ──
+  const candKey = (c: CandidateItem) => `${c.platform}|${c.paymentNo}`;
+
+  const openManualAdd = async () => {
+    const { paymentMethodId, txnAt } = form.getFieldsValue(["paymentMethodId", "txnAt"]) as {
+      paymentMethodId?: string; txnAt?: Dayjs | null;
+    };
+    if (!paymentMethodId || !txnAt) {
+      message.warning("请先选择收款方式和到账日期");
+      return;
+    }
+    setCandOpen(true);
+    setCandLoading(true);
+    setCandSelected([]);
+    setCandItems([]);
+    try {
+      const params = new URLSearchParams({ methodId: paymentMethodId, date: txnAt.format("YYYY-MM-DD") });
+      if (editing) params.set("excludeId", editing.id);
+      const res = await fetch(`/api/user/team/report/bank-flow/candidates?${params}`).then((r) => r.json());
+      if (res.code !== 0) {
+        message.error(res.message || "加载候选打款记录失败");
+        setCandOpen(false);
+        return;
+      }
+      const { items, note } = res.data as { items: CandidateItem[]; note: string | null };
+      setCandItems(items);
+      if (items.length === 0) message.info(note || "到账日前后 5 天内没有可添加的打款记录");
+    } catch {
+      message.error("网络错误");
+      setCandOpen(false);
+    } finally {
+      setCandLoading(false);
+    }
+  };
+
+  /** 当前明细中已有的行（平台+账号+批次日），候选里同款禁选防重复添加 */
+  const inBreakdown = useCallback(
+    (c: CandidateItem) =>
+      breakdown.some((b) => b.platform === c.platform && b.account === c.account && (b.sourceDate || "") === c.date),
+    [breakdown],
+  );
+
+  /** 勾选确认：同 组员×平台×账号×批次日 的多笔合并成一行明细追加 */
+  const confirmManualAdd = () => {
+    const chosen = candItems.filter((c) => candSelected.includes(candKey(c)));
+    if (chosen.length === 0) {
+      setCandOpen(false);
+      return;
+    }
+    const map = new Map<string, BreakdownItem>();
+    const merged: BreakdownItem[] = [];
+    for (const c of chosen) {
+      const key = `${c.userId}|${c.platform}|${c.account}|${c.date}`;
+      let row = map.get(key);
+      if (!row) {
+        row = {
+          userId: c.userId, username: c.username, displayName: c.displayName,
+          platform: c.platform, account: c.account, amount: 0, sourceDate: c.date,
+        };
+        map.set(key, row);
+        merged.push(row);
+      }
+      row.amount = Math.round((row.amount + c.amount) * 100) / 100;
+    }
+    setBreakdown((prev) => [...prev, ...merged]);
+    setCandOpen(false);
+    message.success(`已添加 ${merged.length} 行明细（${chosen.length} 笔打款）`);
   };
 
   const breakdownTotal = useMemo(
@@ -202,6 +304,13 @@ export default function BankFlowTab() {
   const modalFees = useMemo(
     () => apportionFee(breakdown.map((b) => b.amount || 0), modalFee),
     [breakdown, modalFee],
+  );
+
+  // C-180：明细混含多平台时的拆分预览（与后端保存口径同一函数）
+  const watchedPlatform = Form.useWatch("platform", form) as string | undefined;
+  const splitGroups = useMemo(
+    () => splitByPlatform(breakdown, Number(watchedAmount) || 0, watchedPlatform || breakdown[0]?.platform || "", sourceDate),
+    [breakdown, watchedAmount, watchedPlatform, sourceDate],
   );
 
   const handleSave = async () => {
@@ -314,7 +423,19 @@ export default function BankFlowTab() {
         ) : <Text type="secondary">已删除的收款方式</Text>;
       },
     },
-    { title: "平台", dataIndex: "platform", width: 70, render: (p: string) => <Tag color="green">{p}</Tag> },
+    {
+      title: "平台", dataIndex: "platform", width: 100,
+      render: (p: string, e) => (
+        <Space size={4}>
+          <Tag color="green" style={{ marginInlineEnd: 0 }}>{p}</Tag>
+          {e.txnGroup && (
+            <Tooltip title="多平台合并提现：同一笔银行到账按平台拆分出的条目，导出流水单时自动合并回一笔">
+              <Tag color="orange" style={{ marginInlineEnd: 0 }}>合</Tag>
+            </Tooltip>
+          )}
+        </Space>
+      ),
+    },
     {
       title: "到账时间", dataIndex: "txnAt", width: 150,
       render: (t: string) => dayjs(t).format("YYYY-MM-DD HH:mm"),
@@ -367,6 +488,10 @@ export default function BankFlowTab() {
 
   const breakdownColumns: ColumnsType<BreakdownItem> = [
     { title: "组员", key: "member", width: 100, render: (_, b) => b.displayName || b.username },
+    {
+      title: "平台", dataIndex: "platform", width: 64,
+      render: (p: string) => (p ? <Tag color="green" style={{ marginInlineEnd: 0 }}>{p}</Tag> : <Text type="secondary">—</Text>),
+    },
     { title: "平台账号", dataIndex: "account", ellipsis: true },
     {
       title: "金额(¥)", dataIndex: "amount", width: 135, align: "right",
@@ -526,7 +651,9 @@ export default function BankFlowTab() {
                 账号归属与月度报表一致（按该月收款人/卡号快照区分，如龚建成、张文俊各自名下账号分开；当天没有记录时取最近一天的那批，按打款日汇率折成 CNY），
                 同一半月多笔到账各自预填各自批次，可逐人修改；手续费 = 员工明细合计 − 实际到账，自动计算；
                 个人手续费 = 明细金额 × 费率（费率 = 手续费 ÷ 明细合计），尾差调整到金额最大者，净到手 = 明细金额 − 个人手续费。
-                导出的「账户交易明细清单」按期初余额逐笔滚动余额，可直接作为对账材料。
+                多平台一起提现（如 BSH+CG 一笔总额到账）时用「手动添加」勾选其他平台的打款记录，保存后按平台拆成多条流水（带「合」标记），
+                每条到账 = 该平台明细合计 − 按比例分摊手续费，各自独立编辑/删除。
+                导出的「账户交易明细清单」按期初余额逐笔滚动余额（拆分条目自动合并回一笔，与真实银行一致），可直接作为对账材料。
               </Text>
             </div>
           </Card>
@@ -558,7 +685,14 @@ export default function BankFlowTab() {
                   {m?.payChannel && <Tag color="geekblue" style={{ marginLeft: 8 }}>{m.payChannel}</Tag>}
                   {m?.cardNo && <Text type="secondary" style={{ marginLeft: 8 }}>{m.cardNo}</Text>}
                 </Descriptions.Item>
-                <Descriptions.Item label="平台"><Tag color="green">{viewing.platform}</Tag></Descriptions.Item>
+                <Descriptions.Item label="平台">
+                  <Tag color="green">{viewing.platform}</Tag>
+                  {viewing.txnGroup && (
+                    <Tooltip title="多平台合并提现：同一笔银行到账按平台拆分出的条目，导出流水单时自动合并回一笔">
+                      <Tag color="orange">合并到账</Tag>
+                    </Tooltip>
+                  )}
+                </Descriptions.Item>
                 <Descriptions.Item label="到账时间">{dayjs(viewing.txnAt).format("YYYY-MM-DD HH:mm")}</Descriptions.Item>
                 <Descriptions.Item label="实际到账"><Text strong>¥{fmt(viewing.amount)}</Text></Descriptions.Item>
                 <Descriptions.Item label="员工明细合计">¥{fmt(viewing.expectedAmount)}</Descriptions.Item>
@@ -680,9 +814,14 @@ export default function BankFlowTab() {
             size="small"
             title="员工收款明细"
             extra={
-              <Button size="small" icon={<ThunderboltOutlined />} onClick={doPrefill} loading={prefilling}>
-                按到账日打款记录预填
-              </Button>
+              <Space size={8}>
+                <Button size="small" icon={<ThunderboltOutlined />} onClick={doPrefill} loading={prefilling}>
+                  按到账日打款记录预填
+                </Button>
+                <Tooltip title="多平台一起提现（如 BSH+CG 一笔总额到账）时，勾选其他平台/批次的打款记录加进本笔明细">
+                  <Button size="small" icon={<PlusOutlined />} onClick={openManualAdd}>手动添加</Button>
+                </Tooltip>
+              </Space>
             }
           >
             <Table<BreakdownItem>
@@ -691,7 +830,7 @@ export default function BankFlowTab() {
               rowKey={(b, i) => `${b.userId}-${b.account}-${i}`}
               size="small"
               pagination={false}
-              locale={{ emptyText: "暂无明细，点右上角自动预填或直接保存" }}
+              locale={{ emptyText: "暂无明细，点右上角自动预填 / 手动添加，或直接保存" }}
             />
             <div style={{ marginTop: 8, textAlign: "right" }}>
               <Space size={16}>
@@ -707,8 +846,71 @@ export default function BankFlowTab() {
                 </Text>
               </Space>
             </div>
+            {splitGroups.length > 1 && (
+              <Alert
+                style={{ marginTop: 8 }}
+                type="info"
+                showIcon
+                message={
+                  <Text style={{ fontSize: 12 }}>
+                    明细含 {splitGroups.length} 个平台，保存后将拆分为 {splitGroups.map((g) => `${g.platform} ¥${fmt(g.amount)}`).join(" + ")}
+                    （手续费全部明细统一按比例分摊；拆出的条目各自独立编辑，导出流水单时自动合并回一笔）
+                  </Text>
+                }
+              />
+            )}
           </Card>
         </Form>
+      </Modal>
+
+      {/* C-180 手动添加候选弹层 */}
+      <Modal
+        title="手动添加打款记录"
+        open={candOpen}
+        onCancel={() => setCandOpen(false)}
+        onOk={confirmManualAdd}
+        okText={candSelected.length > 0 ? `添加所选（${candSelected.length} 笔）` : "确定"}
+        width={720}
+        destroyOnHidden
+      >
+        <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 8 }}>
+          本收款卡名下、到账日前后 5 天内、全部平台的逐笔打款记录（按实际打款日 paid_date，含逐笔修正归属）。
+          已登记过的批次不可再选；勾选确认后同 组员×平台×账号×批次日 自动合并成明细行，金额按打款日汇率折 CNY，可再修改。
+        </Text>
+        <Table<CandidateItem>
+          columns={[
+            { title: "打款日", dataIndex: "date", width: 100 },
+            { title: "平台", dataIndex: "platform", width: 64, render: (p: string) => <Tag color="green" style={{ marginInlineEnd: 0 }}>{p}</Tag> },
+            { title: "组员", key: "member", width: 90, render: (_, c) => c.displayName || c.username },
+            { title: "平台账号", dataIndex: "account", ellipsis: true },
+            {
+              title: "金额", dataIndex: "amount", width: 130, align: "right",
+              render: (v: number, c) => (
+                <Space direction="vertical" size={0} style={{ lineHeight: 1.2 }}>
+                  <Text strong>¥{fmt(v)}</Text>
+                  <Text type="secondary" style={{ fontSize: 11 }}>${fmt(c.usd)}</Text>
+                </Space>
+              ),
+            },
+            {
+              title: "状态", key: "state", width: 80,
+              render: (_, c) =>
+                c.used ? <Tag>已登记</Tag> : inBreakdown(c) ? <Tag>已在明细</Tag> : <Tag color="blue">可选</Tag>,
+            },
+          ]}
+          dataSource={candItems}
+          rowKey={candKey}
+          size="small"
+          loading={candLoading}
+          pagination={false}
+          scroll={{ y: 360 }}
+          rowSelection={{
+            selectedRowKeys: candSelected,
+            onChange: (keys) => setCandSelected(keys as string[]),
+            getCheckboxProps: (c) => ({ disabled: c.used || inBreakdown(c) }),
+          }}
+          locale={{ emptyText: candLoading ? " " : "到账日前后 5 天内没有可添加的打款记录" }}
+        />
       </Modal>
     </div>
   );

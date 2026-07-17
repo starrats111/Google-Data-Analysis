@@ -23,7 +23,10 @@ export interface BankFlowExportEntry {
   id: string;
   paymentMethodId: string;
   txnAt: Date;
+  /** C-180 合并导出后可能是 "CG+BSH" 形式的组合标签 */
   platform: string;
+  /** C-180：同一笔银行到账拆分组号（导出前已按组合并，仅作标识） */
+  txnGroup?: string | null;
   counterparty: string;
   summary: string;
   amount: number;
