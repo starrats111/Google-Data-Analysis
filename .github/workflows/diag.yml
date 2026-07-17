@@ -1,0 +1,121 @@
+name: Remote Diag (temp)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Trace BSH link through proxy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT }}
+          timeout: 60s
+          command_timeout: 10m
+          script: |
+            set +e
+            cd /home/ubuntu/Google-Data-Analysis/crm-mvp || exit 1
+            cat > /tmp/_trace_bsh.mjs <<'EOF'
+            import crypto from 'node:crypto'
+            import https from 'node:https'
+            import http from 'node:http'
+            import mysql from 'mysql2/promise'
+            import fs from 'node:fs'
+
+            const env = fs.readFileSync('.env','utf8')
+            const pick = (k) => { const m = env.match(new RegExp('^'+k+'=(.*)$','m')); return m ? m[1].replace(/^"|"$/g,'').trim() : '' }
+            const dbUrl = pick('DATABASE_URL')
+            const SECRET = pick('ENCRYPTION_SECRET') || 'crm-default-secret-key-change-in-production'
+            const u = new URL(dbUrl)
+            const conn = await mysql.createConnection({ host:u.hostname, port:u.port||3306, user:decodeURIComponent(u.username), password:decodeURIComponent(u.password), database:u.pathname.slice(1) })
+
+            function decryptPassword(v){
+              if(!v) return ''
+              const parts=v.split(':'); if(parts.length!==3) return v
+              try{
+                const salt=Buffer.from(parts[0],'hex'), iv=Buffer.from(parts[1],'hex'), enc=Buffer.from(parts[2],'hex')
+                if(salt.length!==16||iv.length!==16) return v
+                const key=crypto.scryptSync(SECRET,salt,32)
+                const d=crypto.createDecipheriv('aes-256-cbc',key,iv)
+                return Buffer.concat([d.update(enc),d.final()]).toString('utf8')
+              }catch{ return v }
+            }
+            function procTemplate(t,country){
+              if(!t) return ''
+              const up=country.toUpperCase()
+              const code = up==='GB'?'UK':up
+              return t.replace(/\{COUNTRY\}/g,code.toUpperCase()).replace(/\{country\}/g,code.toLowerCase())
+                .replace(/\{COUNTRY_ISO\}/g,up).replace(/\{country_iso\}/g,country.toLowerCase())
+                .replace(/\{random:(\d+)\}/gi,(_,n)=>{let s='';for(let i=0;i<+n;i++)s+='abcdefghijklmnopqrstuvwxyz0123456789'[Math.floor(Math.random()*36)];return s})
+                .replace(/\{session:(\d+)\}/gi,(_,n)=>{let s='';for(let i=0;i<+n;i++)s+=Math.floor(Math.random()*10);return s})
+                .replace(/\*\*/g,code.toUpperCase())
+            }
+
+            const [prox] = await conn.query("SELECT id,name,host,port,proxy_type,username_template,password,country_code_map FROM kyads_proxies WHERE status='active' AND is_deleted=0 ORDER BY priority ASC LIMIT 1")
+            if(!prox.length){ console.log('NO PROXY'); process.exit(0) }
+            const p = prox[0]
+            const user = procTemplate(p.username_template||'', 'US')
+            const pass = decryptPassword(p.password||'')
+            const scheme = (p.proxy_type||'socks5').toLowerCase().includes('http') ? 'http' : 'socks5'
+            const proxyUrl = `${scheme}://${encodeURIComponent(user)}:${encodeURIComponent(pass)}@${p.host}:${p.port}`
+            console.log(`PROXY provider=${p.name} type=${p.proxy_type} -> scheme=${scheme} host=${p.host}:${p.port} user=${user.slice(0,24)}...`)
+
+            async function makeAgent(){
+              if(scheme==='socks5'){ const {SocksProxyAgent}=await import('socks-proxy-agent'); return new SocksProxyAgent(proxyUrl,{rejectUnauthorized:false}) }
+              const {HttpsProxyAgent}=await import('https-proxy-agent'); return new HttpsProxyAgent(proxyUrl,{rejectUnauthorized:false})
+            }
+            const agent = await makeAgent()
+
+            function once(target){
+              return new Promise((resolve)=>{
+                let parsed; try{parsed=new URL(target)}catch{return resolve({err:'invalid_url'})}
+                const isH=parsed.protocol==='https:'; const mod=isH?https:http
+                const req=mod.request({hostname:parsed.hostname,port:parsed.port?+parsed.port:(isH?443:80),path:(parsed.pathname||'/')+parsed.search,method:'GET',
+                  headers:{'User-Agent':'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1','Accept':'text/html,application/xhtml+xml,*/*;q=0.9','Accept-Encoding':'identity'},
+                  agent,timeout:25000,rejectUnauthorized:false},(res)=>{
+                    const status=res.statusCode||0, loc=res.headers['location']
+                    res.resume()
+                    resolve({status,loc,ctype:res.headers['content-type']||''})
+                  })
+                req.on('error',(e)=>resolve({err:String(e).slice(0,120)}))
+                req.on('timeout',()=>{req.destroy();resolve({err:'timeout'})})
+                req.end()
+              })
+            }
+
+            async function trace(label, startUrl){
+              console.log(`\n===== TRACE ${label} =====`)
+              console.log('START', startUrl.slice(0,160))
+              let target=startUrl
+              for(let hop=0; hop<=10; hop++){
+                const r=await once(target)
+                if(r.err){ console.log(`  hop${hop} ERR ${r.err}  @${new URL(target).hostname}`); break }
+                console.log(`  hop${hop} ${r.status} @${new URL(target).hostname}  loc=${r.loc?String(r.loc).slice(0,120):'-'}`)
+                if([301,302,303,307,308].includes(r.status)&&r.loc){ try{target=new URL(r.loc,target).toString()}catch{break}; continue }
+                if(r.status>=400){
+                  // mimic extractEmbeddedTarget
+                  try{ const o=new URL(target); for(const k of ['url','dest','redirect','landing','goto','target','redir','new','u']){ const v=o.searchParams.get(k); if(v&&/^https?:\/\//i.test(decodeURIComponent(v))){ console.log(`  -> 4xx fallback extract ${k}= ${decodeURIComponent(v).slice(0,100)}`); target=decodeURIComponent(v); break } } }catch{}
+                  if(new URL(target).hostname!==new URL(startUrl).hostname) continue
+                }
+                console.log(`  FINAL status=${r.status} url=${target.slice(0,160)}`)
+                break
+              }
+            }
+
+            // failing merchant: BellaDahl 8001831 (user5 conn56)
+            const [bd] = await conn.query("SELECT tracking_link FROM user_merchants WHERE platform='BSH' AND merchant_id='8001831' AND is_deleted=0 AND tracking_link<>'' LIMIT 1")
+            if(bd.length) await trace('BSH BellaDahl 8001831 (FAILING)', bd[0].tracking_link)
+
+            // a working BSH merchant that got clicks recently (any other merchant on BSH)
+            const [wk] = await conn.query("SELECT m.merchant_id,m.tracking_link FROM user_merchants m JOIN affiliate_click_daily cd ON cd.platform=m.platform AND cd.merchant_id=m.merchant_id AND cd.user_id=m.user_id WHERE m.platform='BSH' AND m.merchant_id<>'8001831' AND m.is_deleted=0 AND m.tracking_link<>'' AND cd.click_date>=CURDATE()-INTERVAL 1 DAY AND cd.clicks>0 GROUP BY m.id ORDER BY SUM(cd.clicks) DESC LIMIT 1")
+            if(wk.length){ console.log(`\n(working BSH merchant = ${wk[0].merchant_id})`); await trace('BSH working merchant '+wk[0].merchant_id, wk[0].tracking_link) }
+            else console.log('\n(no working BSH merchant with recent clicks found)')
+
+            await conn.end()
+            EOF
+            node /tmp/_trace_bsh.mjs 2>&1 | head -80
