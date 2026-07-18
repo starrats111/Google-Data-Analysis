@@ -15,6 +15,7 @@ export type SuffixAlertType =
   | 'low_stock' // 库存持续偏低且补货跟不上
   | 'replenish_failed' // 补货批量全部失败
   | 'brush_blocked' // 有订单需当天净化转化率，但补刷无法进行（无链接/任务创建失败），需人工介入
+  | 'link_forbidden' // 联盟跳板在自己的重定向端点返回 4xx（403 等）拒绝点击：商家目录仍在但 token 已失效/被停用，需人工到平台重新获取链接
 
 export type SuffixAlertLevel = 'info' | 'warning' | 'error'
 
@@ -202,6 +203,7 @@ export async function getAlertSummary(userId: bigint) {
     low_stock: 0,
     replenish_failed: 0,
     brush_blocked: 0,
+    link_forbidden: 0,
   }
   let totalOpen = 0
   for (const r of rows) {

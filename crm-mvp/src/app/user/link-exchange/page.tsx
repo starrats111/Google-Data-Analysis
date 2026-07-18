@@ -121,6 +121,7 @@ const ALERT_TYPE_LABEL: Record<string, string> = {
   low_stock: "库存偏低",
   replenish_failed: "补货失败",
   brush_blocked: "补刷受阻·挂人工",
+  link_forbidden: "链接被联盟拒绝·换链接",
 };
 
 function LinkStatusTag({ status, reason }: { status: string; reason?: string | null }) {
@@ -355,7 +356,7 @@ export default function LinkExchangePage() {
           message.success("链接已保存，正在后台验证，稍后刷新查看状态");
         } else {
           const ts = res.data.trackingStatus;
-          const label = ts === "ok" ? "有效" : ts === "forbidden_network" ? "命中黑名单" : ts === "no_tracking" ? "未取到追踪参数" : ts === "resolve_failed" ? "解析失败" : (ts ?? "已保存");
+          const label = ts === "ok" ? "有效" : ts === "forbidden_network" ? "命中黑名单" : ts === "no_tracking" ? "未取到追踪参数" : ts === "resolve_failed" ? "解析失败" : ts === "tracker_forbidden" ? "被联盟拒绝（HTTP 4xx），请到平台重新取链接" : (ts ?? "已保存");
           message.success(`链接已保存并验证：${label}`);
         }
         setEditingLinkId(null);
@@ -747,7 +748,7 @@ export default function LinkExchangePage() {
 
   // ───────── 告警中心列（D-178：每类告警配处理动作，不止报警） ─────────
   const alertColumns: ColumnsType<AlertRow> = [
-    { title: "类型", dataIndex: "type", width: 130, render: (t: string) => <Tag color={t === "merchant_not_found" || t === "invalid_link" || t === "brush_blocked" ? "red" : t === "replenish_failed" ? "volcano" : "orange"}>{ALERT_TYPE_LABEL[t] ?? t}</Tag> },
+    { title: "类型", dataIndex: "type", width: 130, render: (t: string) => <Tag color={t === "merchant_not_found" || t === "invalid_link" || t === "brush_blocked" || t === "link_forbidden" ? "red" : t === "replenish_failed" ? "volcano" : "orange"}>{ALERT_TYPE_LABEL[t] ?? t}</Tag> },
     { title: "级别", dataIndex: "level", width: 80, render: (l: string) => <Tag color={l === "error" ? "error" : l === "warning" ? "warning" : "default"}>{l}</Tag> },
     { title: "告警内容", dataIndex: "message", ellipsis: true, render: (m: string) => <Tooltip title={m}><Text style={{ fontSize: 13 }}>{m}</Text></Tooltip> },
     { title: "次数", dataIndex: "occurCount", width: 70, align: "center", render: (c: number) => <Badge count={c} overflowCount={999} style={{ backgroundColor: "#faad14" }} /> },
@@ -756,8 +757,8 @@ export default function LinkExchangePage() {
       title: "操作", width: 230, align: "center",
       render: (_: unknown, row) => {
         const cid = row.campaignId;
-        const canRecheck = !!cid && (row.type === "invalid_link" || row.type === "replenish_failed");
-        const canEditLink = !!cid && (row.type === "invalid_link" || row.type === "replenish_failed" || row.type === "merchant_not_found" || row.type === "brush_blocked");
+        const canRecheck = !!cid && (row.type === "invalid_link" || row.type === "replenish_failed" || row.type === "link_forbidden");
+        const canEditLink = !!cid && (row.type === "invalid_link" || row.type === "replenish_failed" || row.type === "merchant_not_found" || row.type === "brush_blocked" || row.type === "link_forbidden");
         const canReplenish = !!cid && row.type === "low_stock";
         return (
           <Space size={0}>
@@ -823,6 +824,12 @@ export default function LinkExchangePage() {
       "② 点「换链接」把该系列所属联盟账号的追踪链接补上，保存后系统会立即验证并恢复补刷，本告警随之自动解除。",
       "③ 若确认该商家不参与刷点击/无需净化：点「已处理」点掉即可。",
       "④ 注意：联盟只看当天转化率，过去某天已落空的净化补不回来，处理越及时越好。",
+    ],
+    link_forbidden: [
+      "① 含义：联盟跳板对该追踪链接直接返回 HTTP 403/4xx（点击根本没登记）——商家目录还在、每日同步也在正常拉，但这个 token 已被联盟停用。等系统自愈无用：同步只会把同一条死链反复写回。",
+      "② 去联盟平台（BSH/LB/CG 等）后台找到该商家，重新生成一条追踪链接。",
+      "③ 点「换链接」粘贴新链接保存，系统立即验证 + 补货，验证通过本告警自动解除。",
+      "④ 若平台里该 offer 已下架/停止合作：暂停该系列广告，关掉换链开关，然后点「已处理」。",
     ],
   };
   const renderAlertGuide = (row: AlertRow) => {

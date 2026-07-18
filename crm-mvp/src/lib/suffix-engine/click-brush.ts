@@ -389,7 +389,7 @@ async function executeItem(rt: TaskRuntime, itemId: bigint): Promise<{ ok: boole
     // 但 low_stock/replenish_failed/invalid_link 告警因只有 cron 补货成功才清而常驻」的问题。
     if (!rt.alertsResolved) {
       rt.alertsResolved = true
-      await resolveAlertsByType(rt.userId, rt.campaignId, ['low_stock', 'replenish_failed', 'invalid_link', 'brush_blocked']).catch(() => {})
+      await resolveAlertsByType(rt.userId, rt.campaignId, ['low_stock', 'replenish_failed', 'invalid_link', 'brush_blocked', 'link_forbidden']).catch(() => {})
     }
     return { ok: true }
   }
@@ -412,6 +412,19 @@ async function executeItem(rt: TaskRuntime, itemId: bigint): Promise<{ ok: boole
       })
       .catch(() => {})
     return { ok: false }
+  }
+
+  // 联盟跳板 4xx 拒绝点击（tracker_forbidden）：商家目录仍在、但 token 已失效/被停用，
+  // 每天同步只会把同一条死链反复写回，靠系统自愈无解 → 升级成高优告警挂人工去平台重取链接。
+  // raiseAlert 对同 user+type+campaign 收敛为一条（累加 occur_count），不会因每条子项刷屏。
+  if (r.reason === 'tracker_forbidden') {
+    await raiseAlert(rt.userId, {
+      type: 'link_forbidden',
+      campaignId: rt.campaignId,
+      level: 'error',
+      message: `广告系列「${rt.campaignName ?? rt.campaignId.toString()}」的联盟追踪链接被平台拒绝：${r.error}。商家目录仍在但跳板已失效，需人工到平台重新获取链接后替换`,
+      context: { affiliateUrl: rt.affiliateUrl.slice(0, 300), platform: rt.platform, merchantId: rt.merchantIdStr, finalUrl: r.finalUrl ?? null },
+    }).catch(() => {})
   }
 
   await prisma.kyads_click_task_items
@@ -454,7 +467,7 @@ async function finalizeTask(taskId: bigint): Promise<boolean> {
   })
 
   if (done > 0) {
-    await resolveAlertsByType(task.user_id, task.campaign_id, ['low_stock', 'replenish_failed', 'invalid_link', 'brush_blocked'])
+    await resolveAlertsByType(task.user_id, task.campaign_id, ['low_stock', 'replenish_failed', 'invalid_link', 'brush_blocked', 'link_forbidden'])
   } else {
     const campaign = await prisma.campaigns.findUnique({ where: { id: task.campaign_id }, select: { campaign_name: true } })
     await raiseAlert(task.user_id, {

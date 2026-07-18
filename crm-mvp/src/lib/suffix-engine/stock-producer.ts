@@ -381,7 +381,7 @@ async function doReplenish(
     // 只要出现过重复即证明内容静态、库存无法超过不同内容数，本轮零星代理失败不改变结论。
     // 不是故障——现有库存即是全部可能内容，消费后 lease 会触发按需重生成。
     // 清掉此前误报的告警，并交由调用方长冷却，停止每轮空烧 20 次生成。
-    await resolveAlertsByType(campaign.user_id, campaignId, ['low_stock', 'replenish_failed', 'invalid_link', 'merchant_not_found'])
+    await resolveAlertsByType(campaign.user_id, campaignId, ['low_stock', 'replenish_failed', 'invalid_link', 'merchant_not_found', 'link_forbidden'])
     // 学习「静态后缀」标记：写回 campaigns，前端库存列据此不再按低水位误标红（1⚠）。
     await setStaticFlag(campaign, 1)
     return { campaignId: cid, skipped: false, reason: 'static_suffix', before, generated: 0, after: before, failed: 0, needsBrowser: probe.usedBrowser }
@@ -404,8 +404,8 @@ async function doReplenish(
       },
     })
   } else {
-    // 有产出：解决该系列旧的库存类告警
-    await resolveAlertsByType(campaign.user_id, campaignId, ['low_stock', 'replenish_failed', 'invalid_link', 'merchant_not_found'])
+    // 有产出：解决该系列旧的库存类告警（含 link_forbidden——能产出即证明新链接已被联盟接受）
+    await resolveAlertsByType(campaign.user_id, campaignId, ['low_stock', 'replenish_failed', 'invalid_link', 'merchant_not_found', 'link_forbidden'])
     // 双向学习「静态后缀」：批量产出全为新内容（零重复）说明落地参数随会话变化（商家换了带 token 的链接），清 0 恢复正常水位口径。
     // need=1 的单条按需生成无法判定静态性（静态商家消费后重生成同样是 1 条新内容），不作依据。
     if (duplicates === 0 && need > 1) await setStaticFlag(campaign, 0)
@@ -481,6 +481,28 @@ async function handleProbeFailure(
   if (fail.reason === 'proxy_unavailable') {
     await setFailCooldown(campaign, campaign.suffix_fail_count, new Date(Date.now() + STOCK_CONFIG.PROXY_UNAVAILABLE_COOLDOWN_MS))
     return 'proxy_unavailable'
+  }
+
+  // 1b) 联盟跳板 4xx 拒绝点击（tracker_forbidden）：不同于代理抖动/慢站，这是跳板对该 token 的确定性
+  //     拒绝——不必等连续阈值，立刻升级 link_forbidden 高优告警并长冷却（8h），停止每 5min 空刷死链。
+  //     商家目录仍在但 token 失效，需人工到平台重取链接（新链首次补货成功会自动清此告警）。
+  if (fail.reason === 'tracker_forbidden') {
+    await setFailCooldown(campaign, campaign.suffix_fail_count + 1, new Date(Date.now() + STOCK_CONFIG.DEAD_LINK_COOLDOWN_MS))
+    await raiseAlert(campaign.user_id, {
+      type: 'link_forbidden',
+      campaignId: campaign.id,
+      level: 'error',
+      message: `广告系列「${campaign.campaign_name ?? cid}」的联盟追踪链接被平台拒绝：${fail.error}。商家目录仍在但跳板已失效，需人工到平台重新获取链接后替换`,
+      context: {
+        campaignName: campaign.campaign_name,
+        merchantName,
+        country: campaign.target_country,
+        affiliateUrl: affiliateUrl.slice(0, 300),
+        reason: fail.reason,
+        finalUrl: fail.finalUrl ?? null,
+      },
+    })
+    return 'tracker_forbidden'
   }
 
   // 2) 域名匹配 = 活链（kyads matched 判定）：落到了商家官网、只是无追踪参数

@@ -24,7 +24,10 @@ import { pickMobileUserAgent } from "@/lib/mobile-user-agents";
 import { registerBrowser, closeBrowserSafely, getStealthLauncher } from "@/lib/puppeteer-browser-registry";
 import { sameRootDomain } from "@/lib/root-domain";
 
-export type LinkStatus = "ok" | "no_tracking" | "forbidden_network" | "resolve_failed";
+// tracker_forbidden：联盟跳板在「自己的重定向端点」返回 4xx（401/403/404/410/451 等）拒绝了这次点击——
+//   点击从未在联盟侧登记。绝不能因链接自带 ?url=<广告主> 参数而被兜底空降到广告主首页、伪装成
+//   no_tracking「到站无参数」的软失败（BellaDahl/BSH 2026-07-11 起 403 即此：目录仍在、token 已失效）。
+export type LinkStatus = "ok" | "no_tracking" | "forbidden_network" | "resolve_failed" | "tracker_forbidden";
 
 /**
  * 剔除 URL 中「未展开的模板变量字面量」，如 `${http.request.uri.path}`（商家 Cloudflare
@@ -453,7 +456,8 @@ function extractEmbeddedTarget(rawUrl: string): string | null {
 /**
  * 通过代理（或直连）手动跟随重定向，记录整条跳转链。
  * 移植 kylink 健壮性：单跳失败按可重试错误「重拨换出口」重试，禁用 TLS 校验，
- * 失败/4xx 时尝试从 URL 参数提取嵌入目标继续跟（联盟跳板封 IP 兜底）。
+ * 网络层失败 / 5xx 时尝试从 URL 参数提取嵌入目标继续跟（联盟跳板临时故障兜底）。
+ * ⚠️ 4xx 不兜底：403/401/451 等是跳板主动拒绝点击，原样上抛由上层判 tracker_forbidden。
  */
 export async function fetchChain(
   startUrl: string,
@@ -590,8 +594,11 @@ export async function fetchChain(
       return { finalUrl: targetUrl, chain, status: res.status };
     }
 
-    // type === final：4xx/5xx 时尝试联盟跳板兜底
-    if (res.status >= 400) {
+    // type === final：仅 5xx（跳板临时故障）才尝试从 url= 参数兜底取广告主目标继续跟。
+    // 4xx 一律不兜底：尤其 403/401/451 是跳板「主动拒绝这次点击」，兜底空降到 ?url= 广告主首页会把
+    // 「点击根本没登记」的硬失败伪装成 no_tracking 软失败（BellaDahl/BSH 事故根因）。4xx 直接把跳板
+    // 状态原样上抛，交 evaluate 判成 tracker_forbidden。
+    if (res.status >= 500) {
       const embed = extractEmbeddedTarget(targetUrl);
       if (embed && !chain.includes(embed) && hop < maxRedirects) {
         targetUrl = embed;
@@ -923,8 +930,16 @@ export async function resolveAffiliateLink(
   const cc = (country || "US").toUpperCase();
 
   // 把「一次抓取结果」评估成 ResolveResult（深链解包/上级联盟+黑名单/落地页/跳板/追踪后缀判定）
+  // 起始（联盟跳板）域名：用于判定「跳板在自己的端点上 4xx 拒绝了点击」。
+  let startAffiliateHost = "";
+  try {
+    startAffiliateHost = new URL(affiliateUrl).hostname;
+  } catch {
+    /* ignore */
+  }
+
   const evaluate = async (
-    res: { finalUrl: string; chain: string[]; error?: string },
+    res: { finalUrl: string; chain: string[]; error?: string; status?: number },
     usedProxy: boolean,
     usedBrowser: boolean,
   ): Promise<ResolveResult> => {
@@ -1031,6 +1046,20 @@ export async function resolveAffiliateLink(
       return r;
     }
 
+    // 联盟跳板在「自己的重定向端点」返回 4xx（403/401/404/410/451…）= 点击被拒、从未登记。
+    // 此时仍停在跳板自身域名（因 fetchChain 对 4xx 不再兜底空降），且链接自带 ?url=<广告主> 参数会让
+    // 下方 landingUrl/trackingLink 误判成 ok/no_tracking（假成功）。故在此拦截，判成 tracker_forbidden 硬失败。
+    // 仅 HTTP 路径带回 status（浏览器路径 status=undefined，不在此判）。
+    const chainStatus = res.status ?? 0;
+    if (chainStatus >= 400 && chainStatus < 500 && finalParsed.hostname === startAffiliateHost) {
+      r.status = "tracker_forbidden";
+      r.error = `联盟跳板拒绝点击：${finalParsed.hostname} 返回 HTTP ${chainStatus}（追踪链接可能已失效/被联盟停用，商家目录仍在但需人工重新获取链接）`;
+      r.landingUrl = null;
+      r.trackingLink = null;
+      r.finalUrl = null;
+      return r;
+    }
+
     r.landingUrl = `${finalParsed.origin}${finalParsed.pathname}`;
     r.trackingLink = finalParsed.search.replace(/^\?/, "").trim() || null;
 
@@ -1060,13 +1089,7 @@ export async function resolveAffiliateLink(
       return failAtNonLanding(`停在联盟点击中转域名 ${finalParsed.hostname}，未跟到广告主落地页（该网络靠 JS 跳转，需真实浏览器跟随）`);
     }
 
-    let startHost = "";
-    try {
-      startHost = new URL(affiliateUrl).hostname;
-    } catch {
-      /* ignore */
-    }
-    if (res.error && finalParsed.hostname === startHost) {
+    if (res.error && finalParsed.hostname === startAffiliateHost) {
       r.status = "resolve_failed";
       r.error = res.error;
       return r;

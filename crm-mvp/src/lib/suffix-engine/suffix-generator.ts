@@ -20,6 +20,9 @@ export type GenFailReason =
   | 'resolve_failed'
   | 'timeout'
   | 'bad_input'
+  // 联盟跳板在自己的重定向端点 4xx 拒绝点击（403 等）：链接失效/被停用，需人工重新获取。
+  // 与 no_tracking 区分——no_tracking 是「到站了但页面没参数」，此项是「点击根本没登记」。
+  | 'tracker_forbidden'
   // D-177：换链接代理不可用（kookeey 余额耗尽/熔断/供应商池空）。瞬时环境故障，
   // 不代表链接死活——调用方短冷却重试即可，绝不计入死链失败计数/invalid_link 告警。
   | 'proxy_unavailable'
@@ -145,6 +148,15 @@ export async function generateOneSuffix(
       if (!finalExitIp && !r.usedBrowser && proxyUrl) finalExitIp = await probeExitIp(proxyUrl)
       reportProxy(true) // 代理健康：成功跟到落地页并取到追踪参数
       return { ok: true, suffix: r.trackingLink, finalUrl: r.finalUrl, exitIp: finalExitIp, usedBrowser: r.usedBrowser }
+    }
+    if (r.status === 'tracker_forbidden') {
+      reportProxy(true) // 代理健康：请求已送达跳板，是跳板自己 4xx 拒绝（非代理故障）
+      return {
+        ok: false,
+        reason: 'tracker_forbidden',
+        error: r.error || '联盟跳板拒绝点击（HTTP 4xx），追踪链接可能已失效，需人工重新获取',
+        finalUrl: r.finalUrl,
+      }
     }
     if (r.status === 'no_tracking') {
       reportProxy(true) // 代理健康：已到落地页，只是页面无追踪参数（下游问题）

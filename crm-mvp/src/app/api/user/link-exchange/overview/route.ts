@@ -90,6 +90,9 @@ export async function GET(req: NextRequest) {
         return 'valid'
       case 'forbidden_network':
         return 'invalid'
+      // tracker_forbidden：联盟跳板 4xx 明确拒绝该 token（非代理/基础设施波动），确定性无效，需人工换链接
+      case 'tracker_forbidden':
+        return 'invalid'
       case 'no_tracking':
       case 'resolve_failed':
         return m.link_status === 'invalid' ? 'invalid' : 'recheck'

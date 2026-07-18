@@ -120,6 +120,9 @@ export async function POST(req: NextRequest) {
     } else if (r.reason === 'probe_failed') {
       verdict = 'dead'
       advice = `重验仍失败：${r.probeError ?? '未跟到商家落地页'}${r.probeFinalUrl ? `（实际落到 ${r.probeFinalUrl.slice(0, 120)}）` : ''}。请到联盟平台后台重新生成该商家的追踪链接，然后点告警行的「换链接」按钮替换，保存后会自动验证。`
+    } else if (r.reason === 'tracker_forbidden') {
+      verdict = 'dead'
+      advice = `联盟跳板明确拒绝该追踪链接（${r.probeError ?? 'HTTP 4xx'}）——token 已失效/被联盟停用，等系统自愈无用。请到联盟平台后台重新生成该商家的追踪链接，然后点告警行的「换链接」按钮替换，保存后会自动验证。`
     } else {
       verdict = 'other'
       advice = `未完成重验（${r.reason ?? '未知原因'}），请稍后重试；若反复出现请联系管理员。`
