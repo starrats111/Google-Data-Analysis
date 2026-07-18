@@ -5,11 +5,13 @@ import { withLeader } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
 import { nowCST, isTodayCST, dateColumnStart, dateColumnEndExclusive, dateColumnTodayEndExclusive, todayCST, parseTxnDateStart, parseTxnDateEndExclusive, txnStartOfMonthUTC } from "@/lib/date-utils";
+import { countActiveRunningMerchants } from "@/lib/active-running";
 
 /**
  * 获取小组统计数据（组长专用）
  * 查询逻辑与 /api/user/data-center/campaigns 保持一致：
  *   campaigns（排除幽灵、去重） → ads_daily_stats + affiliate_transactions
+ * D-183：「在跑商家」与数据中心「在跑广告数」同一口径（活跃 MCC + 有 gcid 的 ENABLED 商家去重）
  */
 export const GET = withLeader(async (req: NextRequest, { user }) => {
   const { searchParams } = new URL(req.url);
@@ -34,46 +36,9 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
 
   const memberIds = members.map((m) => m.id);
 
-  // 查询每位成员的在跑商家数（有 ENABLED 广告系列的商家去重计数）
-  const activeMerchantsByUser = new Map<string, number>();
-  let teamActiveMerchantCount = 0;
-  if (memberIds.length > 0) {
-    const activeUms = await prisma.user_merchants.findMany({
-      where: { user_id: { in: memberIds }, is_deleted: 0, status: { in: ["claimed", "paused"] } },
-      select: { id: true, user_id: true, merchant_id: true, platform: true },
-    });
-    if (activeUms.length > 0) {
-      const umIds = activeUms.map((um) => um.id);
-      const umToMerchant = new Map(activeUms.map((um) => [um.id.toString(), `${um.merchant_id}:${um.platform}`]));
-
-      const activeCampaigns = await prisma.campaigns.findMany({
-        where: {
-          user_merchant_id: { in: umIds },
-          google_status: "ENABLED",
-          customer_id: { not: null },
-          is_deleted: 0,
-        },
-        select: { user_id: true, user_merchant_id: true },
-      });
-
-      // 按成员统计有 ENABLED 广告的去重商家数，同时统计团队级别去重集合
-      const userMerchantSets = new Map<string, Set<string>>();
-      const teamMerchantSet = new Set<string>();
-      for (const c of activeCampaigns) {
-        const uid = c.user_id.toString();
-        const umKey = c.user_merchant_id.toString();
-        const merchantKey = umToMerchant.get(umKey);
-        if (!merchantKey) continue;
-        if (!userMerchantSets.has(uid)) userMerchantSets.set(uid, new Set());
-        userMerchantSets.get(uid)!.add(merchantKey);
-        teamMerchantSet.add(merchantKey);
-      }
-      for (const [uid, merchantSet] of userMerchantSets) {
-        activeMerchantsByUser.set(uid, merchantSet.size);
-      }
-      teamActiveMerchantCount = teamMerchantSet.size;
-    }
-  }
+  // D-183：与数据中心「在跑广告数」同一口径
+  const { byUser: activeMerchantsByUser, teamTotal: teamActiveMerchantCount } =
+    await countActiveRunningMerchants(memberIds);
 
   const cstNow = nowCST();
   const monthStartStr = cstNow.startOf("month").format("YYYY-MM-DD");

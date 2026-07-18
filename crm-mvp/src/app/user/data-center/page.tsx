@@ -879,7 +879,7 @@ export default function DataCenterPage() {
         </Col>
         <Col xs={12} sm={8} md={4}>
           <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
-            <Tooltip title="当前处于「已启用」状态的广告系列数量（去重后）">
+            <Tooltip title="当前名下活跃 MCC 中，有「已启用」广告系列的商家数（与小组总览「在跑商家」同一口径）">
               <Statistic
                 title="在跑广告数"
                 value={summary.enabledCount}

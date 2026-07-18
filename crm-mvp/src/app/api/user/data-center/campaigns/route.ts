@@ -6,6 +6,7 @@ import { cachedQuery, cacheDelete } from "@/lib/cache";
 import { nowCST, isTodayCST, dateColumnStart, dateColumnEndExclusive, dateColumnTodayEndExclusive, parseTxnDateStart, parseTxnDateEndExclusive, txnStartOfMonthUTC } from "@/lib/date-utils";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
 import { mergeMerchantCampaigns, routeCommissionToRows, type CommissionGroup } from "@/lib/merchant-campaign-merge";
+import { countEnabledMerchantsFromCampaigns, healEnabledUnderSoftDeletedMcc } from "@/lib/active-running";
 
 /**
  * GET /api/user/data-center/campaigns
@@ -100,6 +101,9 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // D-183：软删 MCC 下残留 ENABLED 同步自愈（与小组总览口径一致，避免换链等链路误当成在跑）
+  await healEnabledUnderSoftDeletedMcc([userId]);
+
   // 日期范围（默认本月，东八区）
   const cstNow = nowCST();
   const monthStartStr = cstNow.startOf("month").format("YYYY-MM-DD");
@@ -126,10 +130,20 @@ export async function GET(req: NextRequest) {
   };
   if (mccAccountId) {
     campaignWhere.mcc_id = BigInt(mccAccountId);
-  } else if (mccIds.length === 1) {
-    campaignWhere.mcc_id = mccIds[0];
-  } else if (mccIds.length > 1) {
-    campaignWhere.mcc_id = { in: mccIds };
+  } else if (mccIds.length >= 1) {
+    campaignWhere.mcc_id = mccIds.length === 1 ? mccIds[0] : { in: mccIds };
+  } else {
+    // 无活跃 MCC：排除软删 MCC 上的系列（不把历史软删 MCC 当成「全部」展示）
+    const deletedMccs = await prisma.google_mcc_accounts.findMany({
+      where: { user_id: userId, is_deleted: 1 },
+      select: { id: true },
+    });
+    if (deletedMccs.length > 0) {
+      campaignWhere.NOT = [
+        ...(campaignWhere.NOT as object[]),
+        { mcc_id: { in: deletedMccs.map((m) => m.id) } },
+      ];
+    }
   }
   if (statusFilter && statusFilter !== "all") {
     campaignWhere.google_status = statusFilter;
@@ -391,7 +405,7 @@ export async function GET(req: NextRequest) {
 
   // ─── 全量计算总览 summary 和 costByMcc ───
   let totalCost = 0, totalClicks = 0, totalImpressions = 0;
-  let enabledCount = 0, pausedCount = 0;
+  let pausedCount = 0;
   const mccCostAccum = new Map<string, number>();
 
   for (const c of dedupedCampaigns) {
@@ -400,7 +414,6 @@ export async function GET(req: NextRequest) {
     totalCost += cost;
     totalClicks += (s?.clicks || 0);
     totalImpressions += (s?.impressions || 0);
-    if (c.google_status === "ENABLED") enabledCount++;
     if (c.google_status === "PAUSED") pausedCount++;
 
     const cMccId = String(c.mcc_id);
@@ -517,9 +530,10 @@ export async function GET(req: NextRequest) {
     avgCpc: totalClicks > 0 ? Number((totalCost / totalClicks).toFixed(4)) : 0,
     roi: totalCost > 0 ? Number(((summaryCommission - summaryRejected - totalCost) / totalCost).toFixed(2)) : 0,
     campaignCount: dedupedCampaigns.length,
-    enabledCount,
+    // D-183：在跑广告数 = 有 ENABLED 系列的商家去重（与小组总览「在跑商家」同一口径）
+    enabledCount: countEnabledMerchantsFromCampaigns(dedupedCampaigns),
     pausedCount,
-    // 今日投放数（null=脚本缓存缺失）；在跑广告数直接用 enabledCount
+    // 今日投放数（null=脚本缓存缺失）
     todayAdsCount,
     // 是否已配置统一脚本（MCC sheet_url），false 时前端提示「脚本未同步」
     scriptConfigured,

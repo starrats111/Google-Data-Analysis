@@ -247,9 +247,11 @@ export default function TeamOverviewPage() {
       width: 100,
       sorter: (a: MemberRanking, b: MemberRanking) => a.active_merchants - b.active_merchants,
       render: (v: number) => (
-        v > 0
-          ? <Badge count={v} color="#52c41a" overflowCount={99} style={{ fontSize: 12 }} />
-          : <Text type="secondary">—</Text>
+        <Tooltip title="有「已启用」广告系列的商家数（与数据中心「在跑广告数」同一口径，仅计活跃 MCC）">
+          {v > 0
+            ? <Badge count={v} color="#52c41a" overflowCount={99} style={{ fontSize: 12 }} />
+            : <Text type="secondary">—</Text>}
+        </Tooltip>
       ),
     },
     {
@@ -373,7 +375,7 @@ export default function TeamOverviewPage() {
                   title: <><ShopOutlined /> 在跑商家</>,
                   value: `${teamStats.active_merchants} 家`,
                   color: teamStats.active_merchants > 0 ? "#52c41a" : "#8c8c8c",
-                  tooltip: "全组正在跑广告的商家数（跨成员去重）",
+                  tooltip: "全组有「已启用」广告的商家数（跨成员去重；与数据中心「在跑广告数」同一口径，仅计活跃 MCC）",
                 },
                 {
                   key: "cost",
