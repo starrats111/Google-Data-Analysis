@@ -27,6 +27,17 @@ type TestResult = { ok: boolean; msg?: string; error?: string; suggest?: string;
 
 type PaymentMethod = { id: string; payee_name: string; pay_channel: string; card_no: string };
 
+// D-161: 测试连接超时后 Cloudflare/网关会返回 HTML 错误页（524/504），
+// 直接 r.json() 会抛 "Unexpected token '<'"，先按文本解析给出可读提示。
+async function parseTestResponse(r: Response): Promise<{ code?: number; message?: string; data?: TestResult }> {
+  const text = await r.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`服务响应超时（HTTP ${r.status}）：平台 API 响应过慢，请稍后重试`);
+  }
+}
+
 function PlatformConnectionsTab() {
   const { message } = App.useApp();
   const [connections, setConnections] = useState<Record<string, unknown>[]>([]);
@@ -63,8 +74,8 @@ function PlatformConnectionsTab() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ conn_id: connId }),
-      }).then((r) => r.json());
-      const data: TestResult = res.data || {};
+      }).then(parseTestResponse);
+      const data: TestResult = res.data || { ok: false };
       if (data.ok) {
         message.success(data.msg || "API 连接正常");
       } else {
@@ -101,8 +112,8 @@ function PlatformConnectionsTab() {
           api_key: apiKey,
           conn_id: editConn ? String(editConn.id) : undefined,
         }),
-      }).then((r) => r.json());
-      const data: TestResult = res.data || {};
+      }).then(parseTestResponse);
+      const data: TestResult = res.data || { ok: false };
       setModalTestResult(data);
       setModalTestPassed(!!data.ok);
       if (data.ok) message.success(data.msg || "测试通过");

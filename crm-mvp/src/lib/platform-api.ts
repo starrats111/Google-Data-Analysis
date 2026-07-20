@@ -597,7 +597,13 @@ const PLATFORM_TXN_CONFIG: Record<string, PlatformTxnConfig> = {
   RW: {
     mode: "post_form",
     url: "https://admin.rewardoo.com/api.php?mod=medium&op=transaction_details",
-    dateFormat: "snake", pageKey: "page", sizeKey: "limit", maxSize: 1000,
+    // D-161：RW 服务端响应时间随 limit 陡增，limit>=50 稳定撞其网关 60s 超时（HTTP 504），
+    // 叠加两次退避重试后整个请求 >100s，再撞 Cloudflare 100s 硬超时（前端收到 <!DOCTYPE 524 页）。
+    // 2026-07-20 生产实测（14 天窗口）：limit=20→34.8s / 30→38.4s / 40→38.7s / 50→60.7s(504) / ≥100→必 504。
+    // 取 30：单页 ~38s，留一次 5s 退避重试仍在 CF 100s 内。同 2026-07-15 商家接口 1000→200 的先例。
+    dateFormat: "snake", pageKey: "page", sizeKey: "limit", maxSize: 30,
+    // maxSize 降到 30 后单段 50 页封顶只覆盖 1500 条，加 14 天切片防大窗口（daily-sync 365 天）截断。
+    maxDateSpanDays: 14,
   },
   LH: {
     mode: "get",
