@@ -13,6 +13,10 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+import { execSync } from "child_process";
+import fs from "fs";
+import path from "path";
+
 type Entry = { browser: any; startedAt: number; label: string };
 
 const registry = new Set<Entry>();
@@ -32,6 +36,8 @@ function killBrowser(browser: any): void {
   }
 }
 
+let _sweepsSinceProfileClean = 0;
+
 function sweep(): void {
   const now = Date.now();
   for (const entry of registry) {
@@ -41,6 +47,16 @@ function sweep(): void {
         `[BrowserReaper] 强杀超龄 Chrome（${entry.label}，存活 ${Math.round((now - entry.startedAt) / 1000)}s）`,
       );
       killBrowser(entry.browser);
+    }
+  }
+  // D-184：每 ~2 分钟（4 次 × 30s）扫一次孤儿 profile，避免每次 sweep 都 ps
+  _sweepsSinceProfileClean++;
+  if (_sweepsSinceProfileClean >= 4) {
+    _sweepsSinceProfileClean = 0;
+    try {
+      cleanupOrphanPuppeteerProfiles();
+    } catch {
+      /* ignore */
     }
   }
   if (registry.size === 0 && sweeper) {
@@ -121,6 +137,54 @@ export async function closePageSafely(page: any): Promise<void> {
   }
 }
 
+/**
+ * D-184：清理无对应 chrome 进程的 /tmp/puppeteer_dev_profile-* 目录。
+ * 强杀/异常退出路径常残留 profile，堆积挤占磁盘与 inode；仅删孤儿，不动活跃 browser。
+ * 非 Linux 或 /tmp 不可读时静默 no-op。
+ */
+export function cleanupOrphanPuppeteerProfiles(): number {
+  if (process.platform !== "linux") return 0;
+  let cleaned = 0;
+  try {
+    const tmpDir = "/tmp";
+    const entries = fs.readdirSync(tmpDir).filter((n) => n.startsWith("puppeteer_dev_profile-"));
+    if (entries.length === 0) return 0;
+
+    const active = new Set<string>();
+    try {
+      const out = execSync("ps -eo args=", {
+        encoding: "utf8",
+        maxBuffer: 4 * 1024 * 1024,
+        timeout: 5000,
+      });
+      for (const line of out.split("\n")) {
+        const m = line.match(/user-data-dir=(\/tmp\/puppeteer_dev_profile-[A-Za-z0-9]+)/);
+        if (m) active.add(m[1]);
+      }
+    } catch {
+      // ps 失败时宁可不清理，避免误删正在用的 profile
+      return 0;
+    }
+
+    for (const name of entries) {
+      const full = path.join(tmpDir, name);
+      if (active.has(full)) continue;
+      try {
+        fs.rmSync(full, { recursive: true, force: true });
+        cleaned++;
+      } catch {
+        // 并发删除 / 权限，忽略
+      }
+    }
+  } catch {
+    return 0;
+  }
+  if (cleaned > 0) {
+    console.warn(`[BrowserReaper] D-184 清理孤儿 puppeteer profile ${cleaned} 个`);
+  }
+  return cleaned;
+}
+
 export async function closeBrowserSafely(browser: any): Promise<void> {
   if (!browser) return;
   // 正常关闭即注销，避免收割器扫到已关的实例
@@ -140,5 +204,13 @@ export async function closeBrowserSafely(browser: any): Promise<void> {
     killBrowser(browser);
   } finally {
     clearTimeout(timer);
+    // D-184：全部 browser 已关时顺手清孤儿 profile（避免每次 close 都 ps）
+    if (registry.size === 0) {
+      try {
+        cleanupOrphanPuppeteerProfiles();
+      } catch {
+        /* ignore */
+      }
+    }
   }
 }

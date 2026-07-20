@@ -2271,7 +2271,19 @@ export async function buildCrawlCache(
       const hasMinImages = result.images.length >= 5;
       if (quality.score >= QUALITY_THRESHOLD && (hasMinLinks || hasMinImages)) break;
     } catch (e) {
-      console.warn(`[CrawlPipeline] 策略 ${strategy.name} 失败:`, e instanceof Error ? e.message : e);
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn(`[CrawlPipeline] 策略 ${strategy.name} 失败:`, msg);
+      // D-184：空 HTML 视同 Puppeteer 路径止损——跳过后续 puppeteer_*，避免再烧一轮 30–90s main 槽。
+      // 不标 soft404 / 不削弱 HTTP 策略（空 HTML ≠ 商家页不存在）。
+      if (
+        isPuppeteerStrategy &&
+        (msg.includes("Puppeteer 返回空 HTML") || msg.includes("Puppeteer 直连返回空 HTML"))
+      ) {
+        puppeteerChallenged = true;
+        console.warn(
+          `[CrawlPipeline] D-184：策略 ${strategy.name} 空 HTML，跳过后续 puppeteer 策略（止损省预算）`,
+        );
+      }
     }
   }
 

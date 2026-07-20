@@ -1169,10 +1169,17 @@ export async function crawlPageWithPuppeteer(url: string, timeoutMs = 35000, pro
 export async function batchFetchMetaViaPuppeteer(
   urls: string[],
   proxyUrl?: string,
-  options: { concurrency?: number; perPageTimeoutMs?: number; country?: string } = {},
+  options: { concurrency?: number; perPageTimeoutMs?: number; country?: string; maxUrls?: number } = {},
 ): Promise<Map<string, { title: string; description: string; finalUrl: string; ok: boolean; isSoft404: boolean }>> {
   const result = new Map<string, { title: string; description: string; finalUrl: string; ok: boolean; isSoft404: boolean }>();
   if (urls.length === 0) return result;
+
+  // D-184：单批最多 8 条，避免 15+ URL × (12s+6s CF) 把 normal 槽占满数分钟
+  const maxUrls = Math.max(1, Math.min(options.maxUrls ?? 8, 16));
+  const urlsCapped = urls.length > maxUrls ? urls.slice(0, maxUrls) : urls;
+  if (urls.length > maxUrls) {
+    console.warn(`[Crawler] batchFetchMetaViaPuppeteer：截断 ${urls.length}→${maxUrls} 条，释放槽位给其他任务`);
+  }
 
   const concurrency = Math.max(1, Math.min(options.concurrency ?? 2, 3));
   const perPageTimeoutMs = options.perPageTimeoutMs ?? 10000;
@@ -1342,10 +1349,24 @@ export async function batchFetchMetaViaPuppeteer(
       }
     };
 
-    // 并发控制：分批
-    for (let i = 0; i < urls.length; i += concurrency) {
-      const batch = urls.slice(i, i + concurrency);
+    // 并发控制：分批。D-184：连续 3 条 ok=false 早退（同源同代理同指纹，后续大概率同败）
+    let consecutiveFails = 0;
+    const EARLY_EXIT_FAILS = 3;
+    for (let i = 0; i < urlsCapped.length; i += concurrency) {
+      const batch = urlsCapped.slice(i, i + concurrency);
       await Promise.all(batch.map(fetchOne));
+      for (const u of batch) {
+        const meta = result.get(u);
+        if (meta && !meta.ok) consecutiveFails++;
+        else consecutiveFails = 0;
+      }
+      if (consecutiveFails >= EARLY_EXIT_FAILS) {
+        console.warn(
+          `[Crawler] batchFetchMetaViaPuppeteer 连续 ${consecutiveFails} 条失败，早退释放槽 ` +
+            `(已处理 ${Math.min(i + batch.length, urlsCapped.length)}/${urlsCapped.length})`,
+        );
+        break;
+      }
     }
   } catch (e) {
     console.warn("[Crawler] batchFetchMetaViaPuppeteer 异常:", e instanceof Error ? e.message : e);
@@ -1356,13 +1377,13 @@ export async function batchFetchMetaViaPuppeteer(
 
   // C-015 §2 proxy fallback：若传了代理且本轮全军覆没（所有条都 ok=false），再跑一次**无代理** batch
   // 原理同 fetchUrlMeta 的 L0b：服务器直连出口可达 ≈ 审核可达
+  // D-184：fallback 同样受 maxUrls=8 + 连续失败早退约束（递归走同一函数）
   const hasProxy = !!proxyUrl;
   const allFailed = result.size > 0 && Array.from(result.values()).every(v => !v.ok);
   if (hasProxy && allFailed) {
     console.warn(`[Crawler] batchFetchMetaViaPuppeteer 代理全灭 (${result.size} 条全败)，回退无代理再试一次`);
-    // 递归一次但去掉 proxyUrl；失败结果允许被覆盖
     try {
-      const fallbackResult = await batchFetchMetaViaPuppeteer(urls, undefined, options);
+      const fallbackResult = await batchFetchMetaViaPuppeteer(urlsCapped, undefined, options);
       for (const [u, v] of fallbackResult.entries()) {
         if (v.ok) result.set(u, v); // 只覆盖 ok=true 的，避免退化
       }
@@ -1391,13 +1412,27 @@ export async function fetchImagesViaPuppeteerBatch(
   imageUrls: string[],
   refererOrigin: string,
   proxyUrl?: string,
-  options: { perFetchTimeoutMs?: number; navigationTimeoutMs?: number } = {},
+  options: {
+    perFetchTimeoutMs?: number;
+    navigationTimeoutMs?: number;
+    maxImages?: number;
+    totalBudgetMs?: number;
+  } = {},
 ): Promise<Map<string, { buffer: Buffer; contentType: string }>> {
   const result = new Map<string, { buffer: Buffer; contentType: string }>();
   if (imageUrls.length === 0) return result;
 
-  const perFetchTimeoutMs = options.perFetchTimeoutMs ?? 15000;
+  // D-184：条数封顶 + 总预算，避免 15 张并行把 normal 槽占 ~43s
+  const maxImages = Math.max(1, Math.min(options.maxImages ?? 8, 20));
+  const totalBudgetMs = Math.max(5000, options.totalBudgetMs ?? 25000);
+  const urlsCapped = imageUrls.length > maxImages ? imageUrls.slice(0, maxImages) : imageUrls;
+  if (imageUrls.length > maxImages) {
+    console.warn(`[Crawler] fetchImagesViaPuppeteerBatch：截断 ${imageUrls.length}→${maxImages} 张`);
+  }
+
+  const perFetchTimeoutMs = options.perFetchTimeoutMs ?? 8000;
   const navigationTimeoutMs = options.navigationTimeoutMs ?? 20000;
+  const batchDeadlineAt = Date.now() + totalBudgetMs;
 
   const browserPath = findBrowserPath();
   if (!browserPath) {
@@ -1502,14 +1537,29 @@ export async function fetchImagesViaPuppeteerBatch(
         // 8s 内没过挑战也继续，下面 fetch 大概率仍 403，但极少数情况下 cookie 已经下发
       }
 
-      // 在 page context 内并发 fetch 所有图片，转 base64 + content-type
+      // D-184：导航+CF 已耗尽总预算则直接收工，不再并行拉图拖槽
+      if (Date.now() >= batchDeadlineAt) {
+        console.warn(`[Crawler] fetchImagesViaPuppeteerBatch：导航阶段已耗尽 ${totalBudgetMs}ms 总预算，跳过图片拉取`);
+        return result;
+      }
+
+      // 在 page context 内并发 fetch 图片，转 base64 + content-type
+      // D-184：总预算 deadline——超时未完成的 URL 记 err，已拿到的照常返回
+      const remainingBudgetMs = Math.max(1000, batchDeadlineAt - Date.now());
       const pageOut = await page.evaluate(
-        async (urls: string[], ref: string, timeoutMs: number) => {
+        async (urls: string[], ref: string, timeoutMs: number, budgetMs: number) => {
           const out: Record<string, { dataUrl: string; ct: string } | { err: string }> = {};
+          const deadline = Date.now() + budgetMs;
           await Promise.all(
             urls.map(async (u) => {
+              const left = deadline - Date.now();
+              if (left <= 0) {
+                out[u] = { err: "total_budget_exhausted" };
+                return;
+              }
               const ac = new AbortController();
-              const tm = setTimeout(() => ac.abort(), timeoutMs);
+              const effectiveTimeout = Math.min(timeoutMs, left);
+              const tm = setTimeout(() => ac.abort(), effectiveTimeout);
               try {
                 const r = await fetch(u, {
                   referrer: ref,
@@ -1538,9 +1588,10 @@ export async function fetchImagesViaPuppeteerBatch(
           );
           return out;
         },
-        imageUrls,
+        urlsCapped,
         refererOrigin,
         perFetchTimeoutMs,
+        remainingBudgetMs,
       );
 
       for (const [u, v] of Object.entries(pageOut || {})) {

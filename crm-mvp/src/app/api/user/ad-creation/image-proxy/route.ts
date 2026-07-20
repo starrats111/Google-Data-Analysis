@@ -198,14 +198,15 @@ async function fireImageBatch(refererOrigin: string): Promise<void> {
       );
 
       const t0 = Date.now();
-      // D-028 v8：图片单张 timeout 15s→8s，CF 强反爬站快速放弃，
-      // 让 host 失败计数器更快累计到 3 次触发 fast-fail，避免无效等待
+      // D-184：maxImages=8 + totalBudgetMs=25s，单次占槽 ≤25s；多出的图走 HTTP/降级
       result = await fetchImagesViaPuppeteerBatch(urls, refererOrigin, proxyUrl, {
         perFetchTimeoutMs: 8000,
         navigationTimeoutMs: 12000,
+        maxImages: 8,
+        totalBudgetMs: 25000,
       });
       console.warn(
-        `[ImageProxy] L1 Puppeteer 批量完成: 成功 ${result.size}/${urls.length} 张, 耗时 ${Date.now() - t0}ms`,
+        `[ImageProxy] L1 Puppeteer 批量完成: 成功 ${result.size}/${Math.min(urls.length, 8)} 张(请求 ${urls.length}), 耗时 ${Date.now() - t0}ms`,
       );
     } catch (e) {
       console.warn("[ImageProxy] L1 Puppeteer batch 异常:", e instanceof Error ? e.message : e);
