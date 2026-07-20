@@ -339,8 +339,9 @@ function chunkDateRange(startDate: string, endDate: string, maxDays: number): Ar
   return out;
 }
 
-/** LB 打款单生成后的审核确认期：paid_date 距今不足 N 天视为 processing（审核中） */
-const LB_PAYMENT_CONFIRM_DAYS = 7;
+/** LB 打款单生成后的审核确认期：paid_date 距今不足 N 天视为 processing（审核中）
+ *  2026-07-20 D-180：07 拍板由 7 天调短为 5 天（17520 实测 LB 打款单日当天即到账，7 天偏保守）。 */
+const LB_PAYMENT_CONFIRM_DAYS = 5;
 /** LB 全历史起点：接口按 settlement_date 过滤而打款单跨多月，必须整段拉取防止部分聚合 */
 const LB_HISTORY_START = "2025-01-01";
 
