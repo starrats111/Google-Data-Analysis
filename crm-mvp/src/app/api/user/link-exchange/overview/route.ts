@@ -28,6 +28,7 @@ export async function GET(req: NextRequest) {
       platform_connection_id: true,
       suffix_exchange_enabled: true,
       suffix_is_static: true,
+      suffix_needs_browser: true,
       suffix_last_apply_at: true,
       suffix_last_content: true,
     },
@@ -218,6 +219,35 @@ export async function GET(req: NextRequest) {
     stockMap.set(key, cur)
   }
 
+  // ── 每系列自适应目标水位（与补货引擎 computeAdaptiveTarget 完全同口径）──
+  // 引擎按「近 N 天真实消费」动态定目标：低消费系列目标可低至 6、浏览器系列固定 5，
+  // 都低于/等于旧的固定飘红线(≤6)，导致这些系列永远飘红（明明已按自身目标补满）。
+  // 前端「库存偏低」必须按各系列自己的目标判定：available < 自身目标 且 <= 自身低水位 才标红。
+  const consumedByCampaign = new Map<string, number>()
+  if (campaignIds.length > 0) {
+    const since = new Date(Date.now() - STOCK_CONFIG.CONSUMPTION_LOOKBACK_DAYS * 24 * 3600_000)
+    const consumedRows = await prisma.suffix_assignments.groupBy({
+      by: ['campaign_id'],
+      where: { campaign_id: { in: campaignIds }, write_success: 1, reported_at: { gte: since }, is_deleted: 0 },
+      _count: { _all: true },
+    })
+    for (const r of consumedRows) consumedByCampaign.set(r.campaign_id.toString(), r._count._all)
+  }
+  /** 该系列的 [目标水位, 低水位]（浏览器系列 / 自适应 HTTP 系列口径与引擎一致） */
+  const stockTargets = (c: { id: bigint; suffix_needs_browser: number | null }): { target: number; watermark: number } => {
+    if (c.suffix_needs_browser === 1) {
+      return { target: STOCK_CONFIG.BROWSER_TARGET_STOCK, watermark: STOCK_CONFIG.BROWSER_LOW_WATERMARK }
+    }
+    if (!STOCK_CONFIG.ADAPTIVE_TARGET_ENABLED) {
+      return { target: STOCK_CONFIG.TARGET_STOCK, watermark: STOCK_CONFIG.LOW_WATERMARK }
+    }
+    const consumed = consumedByCampaign.get(c.id.toString()) ?? 0
+    const dailyAvg = consumed / STOCK_CONFIG.CONSUMPTION_LOOKBACK_DAYS
+    const desired = Math.ceil(dailyAvg * (STOCK_CONFIG.TARGET_COVERAGE_HOURS / 24))
+    const target = Math.min(STOCK_CONFIG.TARGET_STOCK, Math.max(STOCK_CONFIG.MIN_TARGET_STOCK, desired))
+    return { target, watermark: STOCK_CONFIG.LOW_WATERMARK }
+  }
+
   // 每个 campaign 最新刷点击任务（JS 去重取最新，展示进度）
   const allClickTasks =
     campaignIds.length > 0
@@ -242,6 +272,7 @@ export async function GET(req: NextRequest) {
       (c.platform && c.mid ? merchantByKey.get(`${c.platform}:${c.mid}`) : null) ??
       null
     const stock = stockMap.get(c.id.toString()) ?? { available: 0, leased: 0, consumed: 0 }
+    const { target, watermark } = stockTargets(c)
     const clickTask = clickTaskMap.get(c.id.toString()) ?? null
     const referer = resolveReferer(merchant)
     // 今日点击/订单/转化率（按商家口径；同一商家的多个系列展示相同值）
@@ -280,8 +311,12 @@ export async function GET(req: NextRequest) {
       lastApplyAt: c.suffix_last_apply_at,
       lastSuffix: c.suffix_last_content,
       stock,
-      // 静态后缀商家不计入「库存偏低」：其库存无法超过不同内容数，低水位是常态而非缺货
-      lowStock: c.suffix_is_static !== 1 && stock.available <= STOCK_CONFIG.LOW_WATERMARK,
+      // 该系列自己的目标水位（自适应/浏览器口径），供前端展示「当前/目标」
+      stockTarget: target,
+      // 「库存偏低」与补货引擎告警同语义：低于自身目标 且 不高于自身低水位 才算缺货。
+      // 旧口径 available<=6 会把「目标本来就是 6 的低消费系列」「目标 5 的浏览器系列」永久误标红。
+      // 静态后缀商家不计入：其库存无法超过不同内容数，低水位是常态而非缺货。
+      lowStock: c.suffix_is_static !== 1 && stock.available < target && stock.available <= watermark,
       clickTask: clickTask
         ? {
             status: clickTask.status,
@@ -346,7 +381,13 @@ export async function GET(req: NextRequest) {
         alertOpen: totalOpen,
       },
       alertSummary,
-      stockConfig: { target: STOCK_CONFIG.TARGET_STOCK, lowWatermark: STOCK_CONFIG.LOW_WATERMARK },
+      stockConfig: {
+        target: STOCK_CONFIG.TARGET_STOCK,
+        lowWatermark: STOCK_CONFIG.LOW_WATERMARK,
+        adaptive: STOCK_CONFIG.ADAPTIVE_TARGET_ENABLED,
+        minTarget: STOCK_CONFIG.MIN_TARGET_STOCK,
+        browserTarget: STOCK_CONFIG.BROWSER_TARGET_STOCK,
+      },
       proxyStatus,
     },
   })

@@ -45,6 +45,9 @@ interface CampaignRow {
   lastApplyAt: string | null;
   lastSuffix: string | null;
   stock: StockInfo;
+  /** 该系列自己的目标水位（按近 3 天真实消费自适应 6~20；浏览器系列 5） */
+  stockTarget: number;
+  /** 服务端按「低于自身目标且不高于自身低水位」判定，与补货引擎同口径 */
   lowStock: boolean;
   clickTask: ClickTaskInfo | null;
 }
@@ -69,7 +72,7 @@ interface OverviewData {
   scriptLoopIntervalDefault: number;
   summary: { total: number; matched: number; totalAvailable: number; lowStockCount: number; alertOpen: number };
   alertSummary: Record<string, number>;
-  stockConfig: { target: number; lowWatermark: number };
+  stockConfig: { target: number; lowWatermark: number; adaptive: boolean; minTarget: number; browserTarget: number };
   proxyStatus: { kookeeyLow: boolean; kookeeyLeftGB: number | null; thresholdGB: number } | null;
 }
 
@@ -520,7 +523,6 @@ export default function LinkExchangePage() {
 
   const rows = data?.rows ?? [];
   const summary = data?.summary;
-  const lowWatermark = data?.stockConfig.lowWatermark ?? 6;
   const defaultClickCount = data?.defaultClickCount ?? 10;
   // 链接管理只展示已启用（Google Ads ENABLED / 默认）的广告系列
   const enabledRows = rows.filter((r) => (r.googleStatus ?? "ENABLED") === "ENABLED");
@@ -722,12 +724,18 @@ export default function LinkExchangePage() {
             </Tooltip>
           );
         }
-        const isLow = row.matched && row.suffixEnabled && row.stock.available <= lowWatermark;
+        // 飘红口径与补货引擎一致：低于该系列自身目标水位才算缺货。
+        // 目标是动态的（按消费自适应 6~20，浏览器系列 5），达到自身目标即绿色——
+        // 旧版固定 ≤6 标红会把低消费/浏览器系列（目标本来就 ≤6）永久误标红。
+        const isLow = row.matched && row.suffixEnabled && row.lowStock;
         return (
-          <Text style={{ fontSize: 14, fontWeight: 600, color: row.stock.available <= lowWatermark ? "#ff4d4f" : "#52c41a" }}>
-            {row.stock.available}
-            {isLow && <WarningOutlined style={{ marginLeft: 4 }} />}
-          </Text>
+          <Tooltip title={`目标水位 ${row.stockTarget}（按该系列近 3 天真实消费动态计算），补到目标即视为库存充足`}>
+            <Text style={{ fontSize: 14, fontWeight: 600, color: isLow ? "#ff4d4f" : "#52c41a" }}>
+              {row.stock.available}
+              <Text type="secondary" style={{ fontSize: 11, fontWeight: 400 }}>/{row.stockTarget}</Text>
+              {isLow && <WarningOutlined style={{ marginLeft: 4, color: "#ff4d4f" }} />}
+            </Text>
+          </Tooltip>
         );
       },
     },
@@ -1061,12 +1069,12 @@ export default function LinkExchangePage() {
                     <Popconfirm title="将为所有低库存且已启用换链的广告系列触发后台补货，确认？" onConfirm={handleReplenishAll} okText="确认" cancelText="取消">
                       <Button type="primary" icon={<ThunderboltOutlined />} loading={replenishingAll}>一键补货（低库存）</Button>
                     </Popconfirm>
-                    <Text type="secondary" style={{ fontSize: 12 }}>低水位 ≤ {lowWatermark}，目标 {data?.stockConfig.target ?? 20}；进入此页每 10 秒自动刷新</Text>
+                    <Text type="secondary" style={{ fontSize: 12 }}>目标水位按各系列近 3 天真实消费动态计算（{data?.stockConfig.minTarget ?? 6}~{data?.stockConfig.target ?? 20}，浏览器系列 {data?.stockConfig.browserTarget ?? 5}），达到自身目标即绿色；进入此页每 10 秒自动刷新</Text>
                   </Space>
                   <Table<CampaignRow>
                     columns={stockColumns} dataSource={enabledRows.filter((r) => r.matched)} rowKey="campaignId" size="small" loading={loading}
                     pagination={{ defaultPageSize: 50, showTotal: (t) => `共 ${t} 条`, showSizeChanger: true }}
-                    rowClassName={(row) => !row.isStatic && row.suffixEnabled && row.stock.available <= lowWatermark ? "row-invalid-link" : ""}
+                    rowClassName={(row) => row.suffixEnabled && row.lowStock ? "row-invalid-link" : ""}
                     scroll={{ x: 900 }}
                   />
                 </>
