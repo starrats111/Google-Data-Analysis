@@ -1410,11 +1410,26 @@ export default function MerchantsPage() {
             options={AD_LANGUAGES.map((l) => ({ value: l.code, label: l.name }))}
           />
         </Form.Item>
-        {platformConns.length > 1 && (
-          <Form.Item name="platform_connection_id" label="使用账号" rules={[{ required: true, message: "请选择使用的平台账号" }]}>
-            <Select placeholder="选择平台账号" options={platformConns.map((c) => ({ value: c.id, label: `${c.account_name || c.platform} (${c.platform})` }))} />
-          </Form.Item>
-        )}
+        {platformConns.length > 1 && (() => {
+          // 该商家「真的有追踪链接」的账号 id 集合（来自 API connection_accounts，只含已配链接的账号）。
+          // 没链接的账号选了也刷不了点击（后端会拦），这里直接禁选并标注，从源头避免建哑广告。
+          const linkedIds = new Set((claimM?.connection_accounts || []).map((a) => String(a.id)));
+          const hasLinkInfo = linkedIds.size > 0;
+          return (
+            <Form.Item name="platform_connection_id" label="使用账号" rules={[{ required: true, message: "请选择使用的平台账号" }]}
+              extra={hasLinkInfo ? "灰色账号未配置该商家追踪链接，选了将无法刷点击/换链接" : undefined}>
+              <Select placeholder="选择平台账号" optionFilterProp="label"
+                options={platformConns.map((c) => {
+                  const noLink = hasLinkInfo && !linkedIds.has(String(c.id));
+                  return {
+                    value: c.id,
+                    label: `${c.account_name || c.platform} (${c.platform})${noLink ? " · 无该商家链接" : ""}`,
+                    disabled: noLink,
+                  };
+                })} />
+            </Form.Item>
+          );
+        })()}
         <Form.Item name="holiday_name" label="关联节日（可选）"><Input placeholder="输入节日名称" /></Form.Item>
       </Form>
     </Modal>

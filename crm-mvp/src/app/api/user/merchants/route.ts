@@ -4,7 +4,7 @@ import { apiSuccess, apiError } from "@/lib/constants";
 import { withUser } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import { buildDraftCampaignName } from "@/lib/campaign-naming";
-import { loadConnectionAccountMap, buildConnectionAccounts } from "@/lib/merchant-connection";
+import { loadConnectionAccountMap, buildConnectionAccounts, pickCampaignAffiliateLink } from "@/lib/merchant-connection";
 import { extractDomain } from "@/lib/atc-service";
 import { parseTxnDateStart, parseTxnDateEndExclusive } from "@/lib/date-utils";
 import { getTeamVisibility, getVisibleUserIdSet } from "@/lib/team-visibility";
@@ -699,12 +699,22 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
     if (!conn) connId = null;
   }
   if (!connId && merchant.platform) {
-    const defaultConn = await prisma.platform_connections.findFirst({
+    // 未指定账号时，优先挑「对该商家真的有追踪链接」的账号（按 account_index/创建序），
+    // 避免默认落到第一个号却没链接 → 产生哑广告。都没链接才回退第一个号（走后面的校验拦截）。
+    const platformConns = await prisma.platform_connections.findMany({
       where: { user_id: BigInt(user.userId), platform: merchant.platform, is_deleted: 0 },
       select: { id: true },
-      orderBy: { created_at: "asc" },
+      orderBy: [{ account_index: "asc" }, { created_at: "asc" }, { id: "asc" }],
     });
-    if (defaultConn) connId = defaultConn.id;
+    const linked = platformConns.find((c) =>
+      pickCampaignAffiliateLink(c.id, {
+        tracking_link: merchant.tracking_link,
+        campaign_link: merchant.campaign_link,
+        connection_campaign_links: merchant.connection_campaign_links,
+        platform_connection_id: merchant.platform_connection_id,
+      }),
+    );
+    connId = linked?.id ?? platformConns[0]?.id ?? null;
   }
 
   // 根据选定的 platform_connection_id 从 connection_campaign_links 取对应推广链接
@@ -712,6 +722,43 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
   if (connId && merchant.connection_campaign_links && typeof merchant.connection_campaign_links === "object") {
     const links = merchant.connection_campaign_links as Record<string, string>;
     selectedCampaignLink = links[String(connId)] || null;
+  }
+
+  // ── 根因防护（BUG-哑广告）：所选账号必须对该商家有真实追踪链接，否则拒绝领取/再投 ──
+  // 病因：领取弹窗把该平台「全部账号」都列出来供选，但商家只在部分账号同步到了追踪链接。
+  //   选了没有该商家链接的账号 → 建成一条名头是该号、却取不到链接的哑广告，
+  //   pickCampaignAffiliateLink 返回空 → 换链/刷点击对它全程静默跳过，点击数永远刷不上。
+  // 这里在写库前拦截，并提示哪些账号真的有链接，避免继续产生哑广告。
+  if (connId) {
+    const pickedLink = pickCampaignAffiliateLink(connId, {
+      tracking_link: merchant.tracking_link,
+      campaign_link: merchant.campaign_link,
+      connection_campaign_links: merchant.connection_campaign_links,
+      platform_connection_id: merchant.platform_connection_id,
+    });
+    if (!pickedLink) {
+      // 找出该商家在同平台下「真的有链接」的账号，给出可选提示
+      const linkKeys = new Set<string>();
+      if (merchant.connection_campaign_links && typeof merchant.connection_campaign_links === "object" && !Array.isArray(merchant.connection_campaign_links)) {
+        for (const [k, v] of Object.entries(merchant.connection_campaign_links as Record<string, string>)) {
+          if (typeof v === "string" && v.trim()) linkKeys.add(k);
+        }
+      }
+      const primary = (merchant.campaign_link?.trim() || merchant.tracking_link?.trim() || "");
+      if (primary && merchant.platform_connection_id != null) linkKeys.add(merchant.platform_connection_id.toString());
+
+      let hint = "";
+      if (linkKeys.size > 0) {
+        const linkedConns = await prisma.platform_connections.findMany({
+          where: { id: { in: [...linkKeys].map((s) => BigInt(s)) }, user_id: BigInt(user.userId), is_deleted: 0 },
+          select: { account_name: true, platform: true },
+        });
+        const names = linkedConns.map((c) => c.account_name || c.platform).filter(Boolean);
+        if (names.length > 0) hint = `请改用以下已配置该商家追踪链接的账号：${names.join("、")}`;
+      }
+      if (!hint) hint = "该商家在你名下所有账号都还没有追踪链接，请先在「换链接」同步该商家链接后再投放";
+      return apiError(`所选账号未配置该商家「${merchant.merchant_name || merchant.merchant_id}」的追踪链接，若强行投放将无法刷点击/换链接。${hint}`);
+    }
   }
 
   // relaunch（再投一次）：只允许对「已领取/已暂停」商家再建一条独立广告。
