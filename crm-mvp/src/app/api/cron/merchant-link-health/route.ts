@@ -1,23 +1,26 @@
 /**
- * GET /api/cron/merchant-link-health — 换链接「断链商家」健康巡检（按有无交易数据分流）
+ * GET /api/cron/merchant-link-health — 换链接「断链商家」健康巡检（账号感知 + 分级告警）
  *
  * 背景（需求口径）：
- *   广告系列的联盟链接断裂有多种自愈中的中间态——未关联(user_merchant_id=0)、
- *   换平台账号后旧商家被同步清理导致的孤儿引用、商家在库但还没拿到 tracking_link 等。
- *   这些只要「商家同步 / 手动填链接」流程跑起来，多数会自愈，不应反复刷「商家库找不到」。
+ *   广告系列的联盟链接断裂有多种中间态——未关联(user_merchant_id=0)、
+ *   换平台账号后旧商家被同步清理导致的孤儿引用、商家在库但还没拿到 tracking_link、
+ *   以及「哑广告」：商家在别的账号有链接，但广告归属的那个联盟账号没有（wj04 DAZN/PM8 事故）。
  *   注：曾有「Google 回拉」自动兜底（final_url+final_url_suffix 拼链接回填），2026-07 起废弃——
  *   拼出来的是落地页+冻结令牌（静态后缀），对换链无价值且会覆盖人工填的真实平台链接，改为一律人工补链。
  *
- * 分流规则（唯一权威判定点；补货 / lease 路径已全部静默）：
- *   - 断链系列若关联商家「近 N 天有真实交易(affiliate_transactions)」→ 这是正在赚钱却断链的真问题，
- *     写一条高优先 merchant_not_found 告警（level=error，context.hasRevenue=true），让人工补链接。
- *   - 断链系列若无任何交易 → 视为「自愈流程中」，解决该系列遗留的 merchant_not_found 噪音告警，静默。
- *   - 已自愈（不再断链）的系列 → 一并解决其遗留 merchant_not_found 告警。
- *   - 「有交易却断链」的高优先告警若被人工点掉(resolved)，且点掉之后没有新的佣金回流 →
- *     视为「确实没佣金、人工已确认」，尊重人工判断、不再重复刷告警；
- *     一旦点掉之后又出现新交易（说明确实是在赚钱却断链），才会重新升级告警。
+ * 断链判定（与补货/刷点击引擎同口径，账号感知）：
+ *   pickCampaignAffiliateLink(campaign.platform_connection_id, merchant) 为空即断链。
+ *   商家主链接在别的号上而归属账号没链接 → 也是断链（哑广告），旧版只看主链接字段会漏判。
  *
- * 返回观察统计，便于「先观察」阶段评估真问题规模。
+ * 分级规则（唯一权威判定点；补货 / lease 路径保持静默，判定集中在这里）：
+ *   - 断链 + 近 N 天有真实交易(affiliate_transactions) → 正在赚钱却断链，
+ *     merchant_not_found 告警 level=error（context.hasRevenue=true），最高优先人工补链接。
+ *   - 断链 + 无交易 → 不再静默（07 2026-07-21 定调：致命缺陷必须提醒，让员工手动补链接）：
+ *     merchant_not_found 告警 level=warning，文案区分「哑广告(别的账号有链接)」和「全缺链」。
+ *   - 已自愈（不再断链）的系列 → 解决其遗留 merchant_not_found 告警。
+ *   - 「有交易却断链」的 error 告警若被人工点掉(resolved)，且点掉之后没有新的佣金回流 →
+ *     尊重人工判断、不再重复刷；一旦点掉后又出现新交易才重新升级。
+ *     无交易的 warning 告警被人工点掉后：只要链接仍断，下轮会重新提醒（修好或下架才消停）。
  *
  * 鉴权：CRON_SECRET（Authorization: Bearer ...）
  * crontab 示例（每 30 分钟）：
@@ -28,6 +31,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { raiseAlert, resolveAlertsByType } from '@/lib/suffix-engine/alerts'
 import { parseCampaignNameFull } from '@/lib/campaign-merchant-link'
+import { pickCampaignAffiliateLink } from '@/lib/merchant-connection'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
@@ -45,13 +49,13 @@ function verifyCron(req: NextRequest): boolean {
 
 interface UserHealth {
   brokenTotal: number
-  withRevenue: number // 有交易→已升级高优先告警
-  selfHealing: number // 无交易→静默/清噪音
+  withRevenue: number // 有交易→已升级高优先 error 告警
+  noRevenueAlerted: number // 无交易→warning 告警提醒补链接（07 定调：不再静默）
   dismissed: number // 有交易断链，但人工已点掉告警且之后无新佣金回流 → 尊重人工判断、静默不再刷
 }
 
 async function checkUser(userId: bigint): Promise<UserHealth> {
-  const health: UserHealth = { brokenTotal: 0, withRevenue: 0, selfHealing: 0, dismissed: 0 }
+  const health: UserHealth = { brokenTotal: 0, withRevenue: 0, noRevenueAlerted: 0, dismissed: 0 }
 
   // 1. 该用户「已启用」广告系列（与告警可见性口径一致）
   const campaigns = await prisma.campaigns.findMany({
@@ -66,6 +70,7 @@ async function checkUser(userId: bigint): Promise<UserHealth> {
       id: true,
       campaign_name: true,
       user_merchant_id: true,
+      platform_connection_id: true,
       google_campaign_id: true,
       customer_id: true,
       mcc_id: true,
@@ -74,7 +79,7 @@ async function checkUser(userId: bigint): Promise<UserHealth> {
   })
   if (campaigns.length === 0) return health
 
-  // 2. 解析仍存活的被引用商家（有可用联盟链接才算「不断链」）
+  // 2. 解析仍存活的被引用商家（账号感知判定断链要用全部链接字段）
   const refIds = campaigns
     .map((c) => c.user_merchant_id)
     .filter((id): id is bigint => !!id && id > BigInt(0))
@@ -82,14 +87,26 @@ async function checkUser(userId: bigint): Promise<UserHealth> {
     refIds.length > 0
       ? await prisma.user_merchants.findMany({
           where: { id: { in: refIds }, user_id: userId, is_deleted: 0 },
-          select: { id: true, tracking_link: true, campaign_link: true },
+          select: {
+            id: true,
+            tracking_link: true,
+            campaign_link: true,
+            connection_campaign_links: true,
+            platform_connection_id: true,
+          },
         })
       : []
-  // id → 是否有可用链接
-  const aliveLinkOk = new Map<string, boolean>()
-  for (const m of aliveMerchants) {
-    const hasLink = !!(m.tracking_link?.trim() || m.campaign_link?.trim())
-    aliveLinkOk.set(m.id.toString(), hasLink)
+  const aliveById = new Map(aliveMerchants.map((m) => [m.id.toString(), m]))
+  /** 商家在任意账号是否有任何可用链接（区分「哑广告」与「全缺链」文案用） */
+  const merchantHasAnyLink = (m: (typeof aliveMerchants)[number]): boolean => {
+    if (m.tracking_link?.trim() || m.campaign_link?.trim()) return true
+    const raw = m.connection_campaign_links
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      for (const v of Object.values(raw as Record<string, string>)) {
+        if (typeof v === 'string' && v.trim()) return true
+      }
+    }
+    return false
   }
 
   // 3. 近 N 天「有交易」的商家维度集合 + 最新交易时间（两条 groupBy 查询，避免按 user_merchant_id 全表扫）
@@ -136,12 +153,16 @@ async function checkUser(userId: bigint): Promise<UserHealth> {
     if (!prev || d.resolved_at > prev) dismissedByCampaign.set(k, d.resolved_at)
   }
 
-  // 4. 逐系列判定断链 + 分流
+  // 4. 逐系列判定断链 + 分级
   for (const c of campaigns) {
     const mid = c.user_merchant_id
     const isUnmatched = !mid || mid <= BigInt(0)
-    const isOrphan = !isUnmatched && !aliveLinkOk.has(mid.toString())
-    const isNoLink = !isUnmatched && aliveLinkOk.get(mid.toString()) === false
+    const merchant = isUnmatched ? undefined : aliveById.get(mid.toString())
+    const isOrphan = !isUnmatched && !merchant
+    // 账号感知：广告归属账号取不到链接即断链（与补货/刷点击引擎完全同口径）。
+    // 哑广告（商家在别的账号有链接、归属账号没有）在这里也会被判为断链，旧版只看主链接字段会漏。
+    const effectiveLink = merchant ? pickCampaignAffiliateLink(c.platform_connection_id, merchant) : ''
+    const isNoLink = !!merchant && !effectiveLink
     const broken = isUnmatched || isOrphan || isNoLink
 
     if (!broken) {
@@ -163,6 +184,16 @@ async function checkUser(userId: bigint): Promise<UserHealth> {
     }
     const hasRevenue = latestTxn !== null
 
+    // 断链原因（哑广告单独点名：商家在别的账号有链接，是领取时选错号/归属错位，改归属或补该号链接即可修）
+    const isDumbAd = isNoLink && merchant ? merchantHasAnyLink(merchant) : false
+    const reason = isUnmatched
+      ? '未匹配商家'
+      : isOrphan
+        ? '关联商家已不在商家库（孤儿）'
+        : isDumbAd
+          ? '广告归属的联盟账号没有该商家链接（商家在其他账号有链接，疑似领取时选错账号）'
+          : '商家缺联盟追踪链接'
+
     if (hasRevenue) {
       // 人工已点掉(resolved) 且 之后没有新的佣金回流 → 真的可能就是没佣金，尊重人工判断：
       // 静默跳过（既不重新刷告警，也不耗 Google 回拉配额）。一旦点掉之后又来新交易，才重新升级告警。
@@ -173,8 +204,6 @@ async function checkUser(userId: bigint): Promise<UserHealth> {
       }
 
       health.withRevenue++
-      const reason = isUnmatched ? '未匹配商家' : isOrphan ? '关联商家已不在商家库（孤儿）' : '商家缺联盟追踪链接'
-
       // 不再做 Google 自动回拉：final_url + final_url_suffix 拼出来的是「落地页 + 冻结令牌」，
       // 每次生成的后缀内容相同（静态后缀），对换链无价值，还会覆盖人工填的平台真实追踪链接。
       // 断链一律升级高优先告警，要求人工到商家库填平台原始追踪链接。
@@ -189,12 +218,28 @@ async function checkUser(userId: bigint): Promise<UserHealth> {
           reason,
           campaignName: c.campaign_name,
           userMerchantId: mid ? mid.toString() : '0',
+          connId: c.platform_connection_id != null ? c.platform_connection_id.toString() : null,
         },
       })
     } else {
-      // 自愈中：清噪音、静默
-      await resolveAlertsByType(userId, c.id, ['merchant_not_found'])
-      health.selfHealing++
+      // 无交易断链：不再静默（07 2026-07-21 定调「致命缺陷该提醒提醒，让员工手动补链接总好过静默报错」）。
+      // 刷点击/换链接对这类系列全程跳过，若不提醒，点击数永远刷不上且无人知晓（wj04 DAZN 教训）。
+      // level=warning 与「有交易」的 error 区分轻重；人工点掉后若链接仍断，下轮重新提醒。
+      health.noRevenueAlerted++
+      await raiseAlert(userId, {
+        type: 'merchant_not_found',
+        campaignId: c.id,
+        level: 'warning',
+        message: `广告系列「${c.campaign_name ?? c.id}」断链（${reason}），刷点击/换链接已停摆，请到商家库补链接或下架该系列`,
+        context: {
+          hasRevenue: false,
+          kind: isDumbAd ? 'dumb_ad_wrong_connection' : 'broken_link_no_revenue',
+          reason,
+          campaignName: c.campaign_name,
+          userMerchantId: mid ? mid.toString() : '0',
+          connId: c.platform_connection_id != null ? c.platform_connection_id.toString() : null,
+        },
+      })
     }
   }
 
@@ -219,14 +264,14 @@ export async function GET(req: NextRequest) {
       select: { id: true, username: true },
     })
 
-    const totals = { usersScanned: 0, brokenTotal: 0, withRevenue: 0, selfHealing: 0, dismissed: 0 }
+    const totals = { usersScanned: 0, brokenTotal: 0, withRevenue: 0, noRevenueAlerted: 0, dismissed: 0 }
     for (const u of users) {
       try {
         const h = await checkUser(u.id)
         totals.usersScanned++
         totals.brokenTotal += h.brokenTotal
         totals.withRevenue += h.withRevenue
-        totals.selfHealing += h.selfHealing
+        totals.noRevenueAlerted += h.noRevenueAlerted
         totals.dismissed += h.dismissed
       } catch (e) {
         console.error('[cron/merchant-link-health] user error:', u.username, e instanceof Error ? e.message : e)
@@ -235,7 +280,7 @@ export async function GET(req: NextRequest) {
 
     console.log(
       `[cron/merchant-link-health] users=${totals.usersScanned} broken=${totals.brokenTotal} ` +
-        `withRevenue=${totals.withRevenue} selfHealing(silenced)=${totals.selfHealing} ` +
+        `withRevenue(error)=${totals.withRevenue} noRevenue(warning)=${totals.noRevenueAlerted} ` +
         `dismissed(manual)=${totals.dismissed} cost=${Date.now() - startedAt}ms`,
     )
     return NextResponse.json({ code: 0, data: { ...totals, lookbackDays: REVENUE_LOOKBACK_DAYS } })

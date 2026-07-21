@@ -247,10 +247,9 @@ async function doReplenish(
   // 归属账号没配链接 → 静默跳过（判定是否人工处理交给 merchant-link-health）。
   const affiliateUrl = pickCampaignAffiliateLink(campaign.platform_connection_id, merchant)
   if (!affiliateUrl) {
-    // 商家在库但该账号缺联盟追踪链接：补货路径一律静默跳过、不再报警。
-    // 「断链是否要人工处理」的判定统一交给 /api/cron/merchant-link-health：
-    // 只有「该商家近 30 天有真实交易(affiliate_transactions)却仍断链」才升级为高优先告警，
-    // 其余视为「仍在自愈流程中」（商家同步 / Google 回拉 / 手动填链接会修复），静默不刷屏。
+    // 商家在库但该账号缺联盟追踪链接：补货路径本身不报警（避免 5 分钟一轮刷屏），
+    // 「断链提醒」统一交给 /api/cron/merchant-link-health（30 分钟一轮、告警收敛）：
+    // 有交易断链 → error 高优先；无交易断链 → warning 提醒补链接（07 2026-07-21 定调不再静默）。
     return { campaignId: cid, skipped: true, reason: 'merchant_no_tracking_link', before, generated: 0, after: before, failed: 0 }
   }
   // 落地无参数自愈兜底：pickCampaignAffiliateLink 优先返回「冻结的 campaign_link/账号链接」，
