@@ -395,6 +395,10 @@ export async function PUT(req: NextRequest) {
     if (keywords !== undefined) data.keywords = keywords;
     if (publish_site_id !== undefined) data.publish_site_id = publish_site_id ? BigInt(publish_site_id) : null;
     if (status !== undefined) {
+      // C-186：发布必须经过 publish-to-site 的 Humanizer 门禁，禁止通过 PUT 直接标记 published
+      if (status === "published" && article.status !== "published") {
+        return apiError("发布必须通过「发布到站点」流程（含 Humanizer 检测），不能直接修改状态", 422);
+      }
       data.status = status;
       if (status === "published") data.published_at = new Date();
     }

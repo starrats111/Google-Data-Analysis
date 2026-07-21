@@ -80,7 +80,9 @@ function removeAiWords(text: string): string {
   let result = text;
   for (const word of AI_WORDS) {
     if (result.includes(word)) {
-      result = result.replace(word, "");
+      // C-186：替换全部出现（原来只替换第一处，多次出现的 AI 词会漏网，
+      // 导致发布门禁 runHumanizerGate 的自动清洗兜底失效）
+      result = result.split(word).join("");
     }
   }
   return result;

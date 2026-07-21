@@ -3,6 +3,8 @@ import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { publishArticleToSite, unpublishArticleFromSite, updateArticleDateOnSite } from "@/lib/remote-publisher";
+import { runHumanizerGate, describeGateViolations } from "@/lib/humanizer-gate";
+import { humanize } from "@/lib/humanizer";
 
 // POST — 发布文章到站点（SSH 推送文件到宝塔）
 export async function POST(req: NextRequest) {
@@ -31,6 +33,29 @@ export async function POST(req: NextRequest) {
     if (!article) return apiError("文章不存在", 404);
     if (!article.title || !article.content) return apiError("文章标题或内容为空，无法发布");
 
+    // C-186：Humanizer 发布门禁 —— 所有文章必须通过 AI 痕迹检测才能发布。
+    // 未通过时先自动清洗（humanize）一次，清洗后仍未通过则拒绝发布。
+    let contentForPublish = article.content;
+    let gate = runHumanizerGate(contentForPublish);
+    if (!gate.passed) {
+      const cleaned = humanize(contentForPublish);
+      const gateAfterClean = runHumanizerGate(cleaned);
+      if (gateAfterClean.passed && cleaned.trim().length >= 200) {
+        console.warn(`[PublishToSite] 文章 ${article_id} Humanizer 首检未通过（${describeGateViolations(gate)}），自动清洗后通过`);
+        contentForPublish = cleaned;
+        await prisma.articles.update({
+          where: { id: BigInt(article_id) },
+          data: { content: cleaned },
+        });
+        gate = gateAfterClean;
+      } else {
+        return apiError(
+          `Humanizer 检测未通过，禁止发布：${describeGateViolations(gateAfterClean.passed ? gate : gateAfterClean)}。请修改正文中的 AI 痕迹后重试`,
+          422,
+        );
+      }
+    }
+
     // 查询站点（全局站点，不再按 user_id 过滤）
     const site = await prisma.publish_sites.findFirst({
       where: { id: BigInt(site_id), is_deleted: 0, status: "active" },
@@ -51,7 +76,7 @@ export async function POST(req: NextRequest) {
         id: String(article.id),
         title: article.title,
         slug,
-        content: article.content,
+        content: contentForPublish,
         category: article.category || "General",
         images: article.images,
         trackingLink: article.tracking_link,
@@ -80,7 +105,7 @@ export async function POST(req: NextRequest) {
         status: "published",
         published_at: resolvedDate,
         published_url: result.url || null,
-        content: result.updatedContent || article.content,
+        content: result.updatedContent || contentForPublish,
       },
     });
 

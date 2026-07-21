@@ -23,6 +23,7 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { analyzeUrl, generateMerchantArticle } from "@/lib/article-gen";
 import { publishArticleToSite, verifyConnection } from "@/lib/remote-publisher";
+import { runHumanizerGate, describeGateViolations } from "@/lib/humanizer-gate";
 
 const CRON_SECRET = process.env.CRON_SECRET || "";
 
@@ -200,6 +201,20 @@ export async function POST(req: NextRequest) {
         ok: false,
         stage: "self-check",
         error: "新生成 content 仍含 reasoning 残留（修复未生效？）",
+        contentHead: result.content.slice(0, 300),
+      },
+      { status: 500 },
+    );
+  }
+
+  // C-186：重生成的内容同样必须通过 Humanizer 门禁（重生成路径会直接重推外站）
+  const gate = runHumanizerGate(result.content);
+  if (!gate.passed) {
+    return NextResponse.json(
+      {
+        ok: false,
+        stage: "humanizer-gate",
+        error: `新生成 content 未通过 Humanizer 检测：${describeGateViolations(gate)}`,
         contentHead: result.content.slice(0, 300),
       },
       { status: 500 },
