@@ -36,11 +36,29 @@ export async function GET(req: NextRequest) {
       recentMap.get(key)!.push({ merchant_name: r.merchant_name, last_published_at: r._max.published_at });
     }
 
+    // HM-D24：各联盟连接绑定的站点（Hermes 正常发文走绑定站；违规链接绝不发绑定站）
+    const ownerUsername = process.env.HERMES_ARTICLE_USERNAME || "wj07";
+    const owner = await prisma.users.findFirst({
+      where: { username: ownerUsername, is_deleted: 0 },
+      select: { id: true },
+    });
+    const bindings = owner
+      ? (await prisma.platform_connections.findMany({
+          where: { user_id: owner.id, is_deleted: 0, publish_site_id: { not: null } },
+          select: { platform: true, account_name: true, publish_site_id: true },
+        })).map((b) => ({
+          platform: b.platform,
+          account_name: b.account_name.trim(),
+          site_id: String(b.publish_site_id),
+        }))
+      : [];
+
     return apiSuccess(serializeData({
       sites: sites.map((s) => ({
         ...s,
         recent_merchants: recentMap.get(String(s.id)) || [],
       })),
+      bindings,
     }));
   } catch (err) {
     console.error("[HermesSites] GET 异常:", err);
