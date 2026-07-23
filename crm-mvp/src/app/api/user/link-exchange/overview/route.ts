@@ -7,7 +7,7 @@ import { STOCK_CONFIG } from '@/lib/suffix-engine/config'
 import { parseCampaignNameFull } from '@/lib/campaign-merchant-link'
 import { pickCampaignAffiliateLink } from '@/lib/merchant-connection'
 import { normalizePlatformCode } from '@/lib/constants'
-import { todayCST, parseCSTDateStart, parseCSTDateEndExclusive } from '@/lib/date-utils'
+import { todayCST, parseCSTDateStart, parseCSTDateEndExclusive, dateColumnStart, dateColumnTodayEndExclusive } from '@/lib/date-utils'
 
 export async function GET(req: NextRequest) {
   const user = await getUserFromRequest(req)
@@ -143,6 +143,36 @@ export async function GET(req: NextRequest) {
     ])
     for (const r of clickRows) clicksByKey.set(`${normalizePlatformCode(r.platform)}:${r.merchant_id}`, r._sum.clicks ?? 0)
     for (const r of orderRows) ordersByKey.set(`${normalizePlatformCode(r.platform)}:${r.merchant_id}`, r._count._all)
+  }
+
+  // ── RW（Rewardoo）点击特例：RW 是聚合联盟，点击在下游域名注册，其 click API 对我方 token 恒返回 0，
+  //   affiliate_click_daily 里 RW 永远是 0 → 会误显示为「订单>点击」。改用 Google 侧真实点击
+  //   （ads_daily_stats，按系列聚合到商家）作为 RW 商家的点击口径——同一条 RW 跟链上，Google 点击≈联盟可见点击。
+  //   非 RW 平台仍以联盟 API 点击为准，不受影响。
+  const rwCampaigns = parsed.filter((c) => c.platform === 'RW')
+  const rwCampaignIds = rwCampaigns.map((c) => c.id)
+  if (rwCampaignIds.length > 0) {
+    const gadsRows = await prisma.ads_daily_stats.groupBy({
+      by: ['campaign_id'],
+      where: {
+        user_id: userId,
+        campaign_id: { in: rwCampaignIds },
+        is_deleted: 0,
+        date: { gte: dateColumnStart(todayStr), lt: dateColumnTodayEndExclusive() },
+      },
+      _sum: { clicks: true },
+    })
+    const gadsByCampaign = new Map(gadsRows.map((r) => [r.campaign_id.toString(), r._sum.clicks ?? 0]))
+    // 按商家键(平台:MID)累加到 clicksByKey，覆盖 RW 恒为 0 的联盟点击
+    for (const c of rwCampaigns) {
+      const m =
+        (c.user_merchant_id && c.user_merchant_id > BigInt(0) ? merchantById.get(c.user_merchant_id.toString()) : null) ??
+        (c.mid ? merchantByKey.get(`RW:${c.mid}`) : null)
+      const mkey = m ? `${normalizePlatformCode(m.platform)}:${m.merchant_id}` : c.mid ? `RW:${c.mid}` : ''
+      if (!mkey) continue
+      const g = gadsByCampaign.get(c.id.toString()) ?? 0
+      clicksByKey.set(mkey, (clicksByKey.get(mkey) ?? 0) + g)
+    }
   }
 
   // ── 来路来源批量预取（与 referer-resolver 同口径）：文章 published_url / 联盟账号绑定网站 domain ──
