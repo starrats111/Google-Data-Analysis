@@ -201,33 +201,37 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // 手动重填即以新链接为准，必须清掉可能盖住 tracking_link 的「冻结链接」：
-    //   - campaign_link（历史同步冻结的落地链接）
-    //   - connection_campaign_links 里本广告归属账号(platform_connection_id)的项
-    // 否则 pickCampaignAffiliateLink 仍优先返回旧冻结链接，用户重填不生效
-    // （FC-Moto/xcaret 类「落地无追踪参数」误报根因）。只删本账号的项，不动同商家其他账号链接。
-    let cleanedConnLinks: Record<string, string> | undefined = undefined
+    // 手动重填：链接必须落到「本广告归属账号」的槽位（RW 双账号哑广告修复）。
+    // 旧逻辑一律写主链接 tracking_link、并删掉归属账号在 connection_campaign_links 里的键——
+    // 当系列归属账号 ≠ 商家主连接时（如商家主连接 RW1、系列归 RW2），人工填的链接落进 RW1 槽位，
+    // pickCampaignAffiliateLink 对 RW2 系列依旧取不到链接（宁缺不串号），断链告警怎么补都不消。
+    // 现在：归属账号的 per-conn 键始终写入新链接（取链第一优先级，同时天然清掉旧冻结链接）；
+    // 仅当归属账号 = 商家主连接（或系列未回填归属）时才同步写主链接 tracking_link 并清 campaign_link，
+    // 不碰其他账号的链接。
     const connKey = campaign.platform_connection_id?.toString()
+    let newConnLinks: Record<string, string> | undefined = undefined
+    let touchPrimary = true
     if (connKey) {
       const cur = await prisma.user_merchants.findUnique({
         where: { id: merchantId },
-        select: { connection_campaign_links: true },
+        select: { connection_campaign_links: true, platform_connection_id: true },
       })
       const raw = cur?.connection_campaign_links
-      if (raw && typeof raw === 'object' && !Array.isArray(raw) && connKey in (raw as Record<string, string>)) {
-        const obj = { ...(raw as Record<string, string>) }
-        delete obj[connKey]
-        cleanedConnLinks = obj
-      }
+      const obj: Record<string, string> =
+        raw && typeof raw === 'object' && !Array.isArray(raw) ? { ...(raw as Record<string, string>) } : {}
+      obj[connKey] = link
+      newConnLinks = obj
+      const mainConnKey = cur?.platform_connection_id?.toString() ?? null
+      // 归属账号 ≠ 商家主连接：主链接是主连接账号的，不能被别号的链接覆盖
+      touchPrimary = !mainConnKey || mainConnKey === connKey
     }
 
     // 写入新链接并重置校验/上级联盟状态，等待重新巡航
     await prisma.user_merchants.update({
       where: { id: merchantId },
       data: {
-        tracking_link: link,
-        campaign_link: null,
-        ...(cleanedConnLinks !== undefined ? { connection_campaign_links: cleanedConnLinks } : {}),
+        ...(touchPrimary ? { tracking_link: link, campaign_link: null } : {}),
+        ...(newConnLinks !== undefined ? { connection_campaign_links: newConnLinks } : {}),
         tracking_status: 'unchecked',
         link_status: 'unchecked',
         parent_network: null,
