@@ -17,7 +17,7 @@ import * as https from "node:https";
 import * as http from "node:http";
 import { existsSync } from "node:fs";
 import prisma from "@/lib/prisma";
-import { getProxyUrlForCountry, ensureCountryEgressHttpProxy } from "@/lib/crawl-proxy";
+import { getProxyUrlForCountry, ensureCountryEgressHttpProxyDetailed } from "@/lib/crawl-proxy";
 import { acquireExchangeSlot } from "@/lib/puppeteer-semaphore";
 import { probeExitIp } from "@/lib/suffix-engine/exit-ip";
 import { pickMobileUserAgent } from "@/lib/mobile-user-agents";
@@ -672,7 +672,9 @@ async function resolveViaBrowser(
   // Chrome 只支持 http 代理 + 账号认证，用按出口国校验的 http 代理。
   // 本函数只服务换链接（resolveAffiliateLink 的所有调用方均为换链接场景）→ 强制 exchange:true，
   // 一律走 kookeey 的 http 代理（1000 端口双协议），绝不借用 AI 出口(arxlabs)；userId 仅用于选该用户分配的供应商。
-  const httpProxy = await ensureCountryEgressHttpProxy(country, { userId, exchange: true }).catch((e) => {
+  // 降耗（2026-07-24）：maxRetries 3→2 少开一轮废弃粘性会话；fallbackToUnverified=true——探活反复超时
+  // 时不再丢会话报 proxy_unavailable（模板锁国家、实测定向 100% 准），只有真探到错国出口才放弃。
+  const httpProxy = await ensureCountryEgressHttpProxyDetailed(country, { userId, exchange: true, maxRetries: 2, fallbackToUnverified: true }).catch((e) => {
     console.warn(
       `[AffiliateResolver] 浏览器兜底取 ${country} http 代理异常: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`,
     );
@@ -688,7 +690,7 @@ async function resolveViaBrowser(
   }
   let proxyAuth: { server: string; username: string; password: string } | null = null;
   try {
-    const u = new URL(httpProxy);
+    const u = new URL(httpProxy.proxyUrl);
     proxyAuth = {
       server: `http://${u.hostname}:${u.port}`,
       username: decodeURIComponent(u.username),
@@ -871,9 +873,10 @@ async function resolveViaBrowser(
       console.warn(`[AffiliateResolver] 浏览器兜底重试后终态仍非 http（${finalUrl.slice(0, 60)}），按导航失败返回 url=${startUrl.slice(0, 120)}`);
       return { finalUrl: "", chain: dedup, error: `browser_nav_error: ${finalUrl.slice(0, 80)}` };
     }
-    // 探本次浏览器出口 IP：复用同一 http 代理 URL（会话粘性期内出口 IP 稳定），即为浏览器实际点击出口。
-    // 失败/无代理返回 null（不阻断换链）。让上层把「真实点击出口 IP」准确落库，修复浏览器兜底路径 exit_ip 丢失。
-    const exitIp = httpProxy ? await probeExitIp(httpProxy) : null;
+    // 本次浏览器出口 IP：优先复用出口校验时已探到的 IP（同一粘性会话出口稳定），砍掉成功路径上对同一
+    // 会话的第二次 ipinfo 探活（降耗 2026-07-24）；未验证放行的会话（exitIp=null）才补探一次。
+    // 失败返回 null（不阻断换链）。让上层把「真实点击出口 IP」准确落库，修复浏览器兜底路径 exit_ip 丢失。
+    const exitIp = httpProxy.exitIp ?? (await probeExitIp(httpProxy.proxyUrl));
     return { finalUrl, chain: dedup, exitIp };
   } catch (e) {
     const msg = e instanceof Error ? e.message.slice(0, 200) : String(e);

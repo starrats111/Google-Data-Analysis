@@ -100,9 +100,33 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // 3) kookeey 剩余流量：仅记录日志用于运维观测。用户要求「≤阈值只在换链接页面横幅提醒重置，
-    //    不发站内通知」，故此处不再写 notification —— 横幅由 overview 接口的 proxyStatus 驱动。
+    // 3) kookeey 剩余流量 ≤ 阈值（默认 20GB）→ 主动写 admin 通知 + sendAlert 推送。
+    //    2026-07-24 07 定调升级：此前「只做页面横幅、不发通知」，结果流量真实耗尽当天无人知晓、
+    //    换链接补货断供才被动发现。现改为提前主动推送（24h 同标题去重防刷屏）；剩余 ≤5GB 时
+    //    标题升级为「即将耗尽」，可在同一天内再触发一次更高优先级提醒。页面横幅保留不变。
     const traffic = await checkKookeeyTraffic()
+    if (traffic.ok && traffic.low.length > 0) {
+      const critical = traffic.low.some((s) => s.trafficLeftGB <= 5)
+      const title = critical
+        ? '[换链接代理] kookeey 动态住宅流量即将耗尽'
+        : '[换链接代理] kookeey 动态住宅流量偏低'
+      const content = [
+        `kookeey 动态住宅流量已低于告警阈值 ${traffic.thresholdGB} GB：`,
+        ...traffic.low.map((s) => `  • 子账号 ${s.authname}（${s.name}）：剩余 ${s.trafficLeftGB} GB`),
+        '',
+        '流量耗尽后 SOCKS5 会认证失败、换链接补货全面中断（参考 D-176 事故）。',
+        '请尽快登录 kookeey 后台购买/重置动态代理流量包。',
+      ].join('\n')
+      const meta = {
+        source: 'proxy-health',
+        scope: 'kookeey_traffic_low',
+        thresholdGB: traffic.thresholdGB,
+        low: traffic.low.map((s) => ({ authname: s.authname, trafficLeftGB: s.trafficLeftGB })),
+      }
+      if (await notifyAdminOnce(title, content, meta)) {
+        notified++
+      }
+    }
 
     console.log(
       `[cron/proxy-health] active=${report.activeCount} healthy=${report.healthy.length} failed=${report.failed.length}` +

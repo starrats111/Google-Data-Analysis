@@ -3,7 +3,8 @@
  *
  * 探活（proxy-health）只能测「通/不通」，测不出「还剩多少流量」——等到流量耗尽、
  * SOCKS5 认证开始失败时，换链接补货已经断供。本模块通过 kookeey 开放 API 主动查询
- * 子账户的剩余动态住宅流量，剩余 ≤ 阈值（默认 5GB）时提前告警，做到「快用完就提醒」。
+ * 子账户的剩余动态住宅流量，剩余 ≤ 阈值（默认 20GB）时提前告警，做到「快用完就提醒」。
+ * （2026-07-24 阈值 5→20GB：真实耗尽事故复盘——按当日消耗速度 5GB 不足半天缓冲，预警形同虚设。）
  *
  * kookeey API：
  *   - 路径 https://www.kookeey.com/clientapi/<method>
@@ -20,7 +21,7 @@ import { prisma } from '@/lib/prisma'
 
 const KOOKEEY_API_BASE = 'https://www.kookeey.com/clientapi'
 const MB_PER_GB = 1024
-export const DEFAULT_TRAFFIC_ALERT_GB = 5
+export const DEFAULT_TRAFFIC_ALERT_GB = 20
 
 export interface KookeeySubAccount {
   uid: number

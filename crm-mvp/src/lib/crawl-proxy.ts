@@ -209,16 +209,35 @@ export function toIsoCountryCode(code: string): string {
   return upper;
 }
 
-export async function ensureCountryEgressHttpProxy(
+export interface CountryEgressHttpProxyResult {
+  proxyUrl: string;
+  /** 出口校验时探到的出口 IP（egressVerified=false 时为 null）。调用方可直接复用，免对同一粘性会话重复探活。 */
+  exitIp: string | null;
+  /** true=ipinfo 出口国校验通过；false=探活反复超时、按模板国家未验证放行（仅 fallbackToUnverified 时出现） */
+  egressVerified: boolean;
+}
+
+export async function ensureCountryEgressHttpProxyDetailed(
   country: string,
-  options: { maxRetries?: number; checkTimeoutMs?: number; userId?: bigint | null; exchange?: boolean } = {},
-): Promise<string | null> {
+  options: {
+    maxRetries?: number;
+    checkTimeoutMs?: number;
+    userId?: bigint | null;
+    exchange?: boolean;
+    /** 降耗（2026-07-24）：住宅代理访问 ipinfo 易超时，线上绝大多数校验失败是「探活超时」而非出口国真不符
+     *  （模板锁国家、实测地理定向 100% 准确）。true 时若所有尝试均为超时/网络错（从未探到「出口国不符」的
+     *  确定性结论），放行最后一个会话而不是丢弃——旧行为把好会话白白废弃（仍占上游 IP 5 分钟），还让上层
+     *  报 proxy_unavailable 触发整条链路冷却重试，是流量白烧的放大器。出口国真不符时仍返回 null。 */
+    fallbackToUnverified?: boolean;
+  } = {},
+): Promise<CountryEgressHttpProxyResult | null> {
   if (!country) return null;
   const maxRetries = options.maxRetries ?? 3;
   const checkTimeoutMs = options.checkTimeoutMs ?? 5000;
   const targetCountry = toIsoCountryCode(country);
 
   let lastProxyUrl: string | null = null;
+  let lastFailure: "probe_error" | "mismatch" | null = null;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     // exchange=换链接路径（kookeey http，每次新会话换出口 IP）；否则=AI 路径（arxlabs http 模板）
     const proxyUrl = await getHttpProxyUrlForCountry(country, { userId: options.userId, exchange: options.exchange }).catch(() => null);
@@ -231,17 +250,34 @@ export async function ensureCountryEgressHttpProxy(
       const egress = await checkProxyEgress(proxyUrl, checkTimeoutMs);
       if (egress.country === targetCountry) {
         console.log(`[CrawlProxy] 代理出口校验通过 (尝试${attempt}/${maxRetries}): country=${egress.country} ip=${egress.ip}`);
-        return proxyUrl;
+        return { proxyUrl, exitIp: egress.ip, egressVerified: true };
       }
+      lastFailure = "mismatch";
       console.warn(`[CrawlProxy] 代理出口国不符 (尝试${attempt}/${maxRetries}): 期望=${targetCountry} 实际=${egress.country} ip=${egress.ip}，换 sid 重试`);
     } catch (err) {
+      lastFailure = "probe_error";
       console.warn(`[CrawlProxy] 代理探活失败 (尝试${attempt}/${maxRetries}): ${err instanceof Error ? err.message : err}，换 sid 重试`);
     }
+  }
+  // 最后一次尝试仅是探活超时/网络错（没有「出口国不符」的确定性证据）→ 按模板国家未验证放行，
+  // 保住会话避免白烧；真探到错国出口才彻底放弃。
+  if (options.fallbackToUnverified && lastProxyUrl && lastFailure === "probe_error") {
+    console.warn(`[CrawlProxy] ${targetCountry} 出口校验 ${maxRetries} 次均为探活超时（非出口国不符），按模板国家未验证放行，避免丢弃可用会话`);
+    return { proxyUrl: lastProxyUrl, exitIp: null, egressVerified: false };
   }
   console.warn(`[CrawlProxy] 代理出口校验 ${maxRetries} 次均不符 ${targetCountry}，降级处理`);
   // 校验失败：返回 null 让上层降级直连（直连虽然出口在腾讯云 CN，但很多站点接受）；
   // 经验数据：直连拿 4000+ 字 vs 错国代理拿 0 字，直连胜出
   return null;
+}
+
+/** 兼容旧签名（AI 爬虫路径 crawl-pipeline 在用）：仅返回校验通过的 proxyUrl，行为与改造前完全一致。 */
+export async function ensureCountryEgressHttpProxy(
+  country: string,
+  options: { maxRetries?: number; checkTimeoutMs?: number; userId?: bigint | null; exchange?: boolean } = {},
+): Promise<string | null> {
+  const res = await ensureCountryEgressHttpProxyDetailed(country, options);
+  return res?.proxyUrl ?? null;
 }
 
 /**
