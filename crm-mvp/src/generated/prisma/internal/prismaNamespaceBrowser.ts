@@ -76,6 +76,7 @@ export const ModelName = {
   site_migrations: 'site_migrations',
   articles: 'articles',
   ads_daily_stats: 'ads_daily_stats',
+  spend_guard_actions: 'spend_guard_actions',
   google_mcc_accounts: 'google_mcc_accounts',
   affiliate_transactions: 'affiliate_transactions',
   affiliate_click_daily: 'affiliate_click_daily',
@@ -669,6 +670,22 @@ export const Ads_daily_statsScalarFieldEnum = {
 } as const
 
 export type Ads_daily_statsScalarFieldEnum = (typeof Ads_daily_statsScalarFieldEnum)[keyof typeof Ads_daily_statsScalarFieldEnum]
+
+
+export const Spend_guard_actionsScalarFieldEnum = {
+  id: 'id',
+  campaign_id: 'campaign_id',
+  user_id: 'user_id',
+  status: 'status',
+  attempts: 'attempts',
+  cost_usd: 'cost_usd',
+  cap_usd: 'cap_usd',
+  last_error: 'last_error',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Spend_guard_actionsScalarFieldEnum = (typeof Spend_guard_actionsScalarFieldEnum)[keyof typeof Spend_guard_actionsScalarFieldEnum]
 
 
 export const Google_mcc_accountsScalarFieldEnum = {
@@ -1759,6 +1776,14 @@ export const ads_daily_statsOrderByRelevanceFieldEnum = {
 } as const
 
 export type ads_daily_statsOrderByRelevanceFieldEnum = (typeof ads_daily_statsOrderByRelevanceFieldEnum)[keyof typeof ads_daily_statsOrderByRelevanceFieldEnum]
+
+
+export const spend_guard_actionsOrderByRelevanceFieldEnum = {
+  status: 'status',
+  last_error: 'last_error'
+} as const
+
+export type spend_guard_actionsOrderByRelevanceFieldEnum = (typeof spend_guard_actionsOrderByRelevanceFieldEnum)[keyof typeof spend_guard_actionsOrderByRelevanceFieldEnum]
 
 
 export const google_mcc_accountsOrderByRelevanceFieldEnum = {

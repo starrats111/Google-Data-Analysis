@@ -409,6 +409,7 @@ export const ModelName = {
   site_migrations: 'site_migrations',
   articles: 'articles',
   ads_daily_stats: 'ads_daily_stats',
+  spend_guard_actions: 'spend_guard_actions',
   google_mcc_accounts: 'google_mcc_accounts',
   affiliate_transactions: 'affiliate_transactions',
   affiliate_click_daily: 'affiliate_click_daily',
@@ -465,7 +466,7 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
     omit: GlobalOmitOptions
   }
   meta: {
-    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "parent_networks" | "platform_blacklist" | "ad_rejection_feedback" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "holiday_calendar" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "ad_generation_jobs" | "ad_submit_jobs" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "google_mcc_accounts" | "affiliate_transactions" | "affiliate_click_daily" | "affiliate_payments" | "notifications" | "notification_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "kyads_click_task_items" | "proxy_exit_ip_usage" | "suffix_alerts" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "user_serpapi_keys" | "user_semrush_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log" | "semrush_keyword_cache" | "semrush_health_logs" | "payment_methods" | "report_overrides" | "payment_binding_snapshots" | "bank_flow_entries" | "policy_violations" | "team_developer_tokens" | "token_usage_daily" | "google_ads_api_usage" | "ad_decision_journal"
+    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "parent_networks" | "platform_blacklist" | "ad_rejection_feedback" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "holiday_calendar" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "ad_generation_jobs" | "ad_submit_jobs" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "spend_guard_actions" | "google_mcc_accounts" | "affiliate_transactions" | "affiliate_click_daily" | "affiliate_payments" | "notifications" | "notification_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "kyads_click_task_items" | "proxy_exit_ip_usage" | "suffix_alerts" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "user_serpapi_keys" | "user_semrush_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log" | "semrush_keyword_cache" | "semrush_health_logs" | "payment_methods" | "report_overrides" | "payment_binding_snapshots" | "bank_flow_entries" | "policy_violations" | "team_developer_tokens" | "token_usage_daily" | "google_ads_api_usage" | "ad_decision_journal"
     txIsolationLevel: TransactionIsolationLevel
   }
   model: {
@@ -2116,6 +2117,72 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         count: {
           args: Prisma.ads_daily_statsCountArgs<ExtArgs>
           result: runtime.Types.Utils.Optional<Prisma.Ads_daily_statsCountAggregateOutputType> | number
+        }
+      }
+    }
+    spend_guard_actions: {
+      payload: Prisma.$spend_guard_actionsPayload<ExtArgs>
+      fields: Prisma.spend_guard_actionsFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.spend_guard_actionsFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$spend_guard_actionsPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.spend_guard_actionsFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$spend_guard_actionsPayload>
+        }
+        findFirst: {
+          args: Prisma.spend_guard_actionsFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$spend_guard_actionsPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.spend_guard_actionsFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$spend_guard_actionsPayload>
+        }
+        findMany: {
+          args: Prisma.spend_guard_actionsFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$spend_guard_actionsPayload>[]
+        }
+        create: {
+          args: Prisma.spend_guard_actionsCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$spend_guard_actionsPayload>
+        }
+        createMany: {
+          args: Prisma.spend_guard_actionsCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.spend_guard_actionsDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$spend_guard_actionsPayload>
+        }
+        update: {
+          args: Prisma.spend_guard_actionsUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$spend_guard_actionsPayload>
+        }
+        deleteMany: {
+          args: Prisma.spend_guard_actionsDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.spend_guard_actionsUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.spend_guard_actionsUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$spend_guard_actionsPayload>
+        }
+        aggregate: {
+          args: Prisma.Spend_guard_actionsAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateSpend_guard_actions>
+        }
+        groupBy: {
+          args: Prisma.spend_guard_actionsGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Spend_guard_actionsGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.spend_guard_actionsCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Spend_guard_actionsCountAggregateOutputType> | number
         }
       }
     }
@@ -5400,6 +5467,22 @@ export const Ads_daily_statsScalarFieldEnum = {
 export type Ads_daily_statsScalarFieldEnum = (typeof Ads_daily_statsScalarFieldEnum)[keyof typeof Ads_daily_statsScalarFieldEnum]
 
 
+export const Spend_guard_actionsScalarFieldEnum = {
+  id: 'id',
+  campaign_id: 'campaign_id',
+  user_id: 'user_id',
+  status: 'status',
+  attempts: 'attempts',
+  cost_usd: 'cost_usd',
+  cap_usd: 'cap_usd',
+  last_error: 'last_error',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Spend_guard_actionsScalarFieldEnum = (typeof Spend_guard_actionsScalarFieldEnum)[keyof typeof Spend_guard_actionsScalarFieldEnum]
+
+
 export const Google_mcc_accountsScalarFieldEnum = {
   id: 'id',
   user_id: 'user_id',
@@ -6490,6 +6573,14 @@ export const ads_daily_statsOrderByRelevanceFieldEnum = {
 export type ads_daily_statsOrderByRelevanceFieldEnum = (typeof ads_daily_statsOrderByRelevanceFieldEnum)[keyof typeof ads_daily_statsOrderByRelevanceFieldEnum]
 
 
+export const spend_guard_actionsOrderByRelevanceFieldEnum = {
+  status: 'status',
+  last_error: 'last_error'
+} as const
+
+export type spend_guard_actionsOrderByRelevanceFieldEnum = (typeof spend_guard_actionsOrderByRelevanceFieldEnum)[keyof typeof spend_guard_actionsOrderByRelevanceFieldEnum]
+
+
 export const google_mcc_accountsOrderByRelevanceFieldEnum = {
   mcc_id: 'mcc_id',
   mcc_name: 'mcc_name',
@@ -7088,6 +7179,7 @@ export type GlobalOmitConfig = {
   site_migrations?: Prisma.site_migrationsOmit
   articles?: Prisma.articlesOmit
   ads_daily_stats?: Prisma.ads_daily_statsOmit
+  spend_guard_actions?: Prisma.spend_guard_actionsOmit
   google_mcc_accounts?: Prisma.google_mcc_accountsOmit
   affiliate_transactions?: Prisma.affiliate_transactionsOmit
   affiliate_click_daily?: Prisma.affiliate_click_dailyOmit

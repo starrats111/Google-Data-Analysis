@@ -21,6 +21,8 @@ SUFFIX_REPLENISH_CRON="*/5 * * * * curl -s -H 'Authorization: Bearer ${CRON_SECR
 # 上级联盟巡航验证回填（每 30 分钟）：扫描有链接但 parent_network 为空的商家并巡航识别上级联盟
 # 注意：日志须写到 ubuntu 可写目录 /var/log/crm-cron/，否则 cron 重定向失败、整条命令不执行
 PARENT_BACKFILL_CRON="*/30 * * * * curl -s -H 'Authorization: Bearer ${CRON_SECRET}' '${APP_URL}/api/cron/parent-network-backfill?limit=40' >> /var/log/crm-cron/parent-network-backfill.log 2>&1"
+# D-190 花费哨兵（每 15 分钟）：测试窗口内零出单且累计花费超止损线的系列自动暂停
+SPEND_GUARD_CRON="*/15 * * * * curl -s -H 'Authorization: Bearer ${CRON_SECRET}' '${APP_URL}/api/cron/spend-guard' >> /var/log/crm-cron/spend-guard.log 2>&1"
 
 echo "=== Will add the following cron jobs ==="
 echo ""
@@ -39,15 +41,19 @@ echo ""
 echo "parent-network backfill (every 30 minutes):"
 echo "  $PARENT_BACKFILL_CRON"
 echo ""
+echo "spend guard (every 15 minutes):"
+echo "  $SPEND_GUARD_CRON"
+echo ""
 
 # 添加到 crontab（保留现有条目，避免重复）
 TEMP_CRON=$(mktemp)
-crontab -l 2>/dev/null | grep -v '/api/cron/daily-sync' | grep -v '/api/cron/weekly-merchant-check' | grep -v '/api/cron/kylink-sync' | grep -v '/api/cron/suffix-replenish' | grep -v '/api/cron/parent-network-backfill' > "$TEMP_CRON" || true
+crontab -l 2>/dev/null | grep -v '/api/cron/daily-sync' | grep -v '/api/cron/weekly-merchant-check' | grep -v '/api/cron/kylink-sync' | grep -v '/api/cron/suffix-replenish' | grep -v '/api/cron/parent-network-backfill' | grep -v '/api/cron/spend-guard' > "$TEMP_CRON" || true
 echo "$DAILY_CRON" >> "$TEMP_CRON"
 echo "$MERCHANT_CRON" >> "$TEMP_CRON"
 echo "$KYLINK_SYNC_CRON" >> "$TEMP_CRON"
 echo "$SUFFIX_REPLENISH_CRON" >> "$TEMP_CRON"
 echo "$PARENT_BACKFILL_CRON" >> "$TEMP_CRON"
+echo "$SPEND_GUARD_CRON" >> "$TEMP_CRON"
 crontab "$TEMP_CRON"
 rm -f "$TEMP_CRON"
 

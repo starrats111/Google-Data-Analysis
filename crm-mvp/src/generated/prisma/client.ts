@@ -167,6 +167,11 @@ export type articles = Prisma.articlesModel
  */
 export type ads_daily_stats = Prisma.ads_daily_statsModel
 /**
+ * Model spend_guard_actions
+ * 
+ */
+export type spend_guard_actions = Prisma.spend_guard_actionsModel
+/**
  * Model google_mcc_accounts
  * 
  */
