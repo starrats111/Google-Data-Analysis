@@ -15,6 +15,7 @@
 
 import * as https from "node:https";
 import * as http from "node:http";
+import * as zlib from "node:zlib";
 import { existsSync } from "node:fs";
 import prisma from "@/lib/prisma";
 import { getProxyUrlForCountry, ensureCountryEgressHttpProxyDetailed } from "@/lib/crawl-proxy";
@@ -494,7 +495,10 @@ export async function fetchChain(
       const headers: Record<string, string> = {
         "User-Agent": ua,
         Accept: "text/html,application/xhtml+xml,*/*;q=0.9",
-        "Accept-Encoding": "identity",
+        // 降耗（2026-07-24）：identity → gzip。fetchChain 是 kookeey 流量消耗主体（后缀生成 ~2 万次/天），
+        // 未压缩 HTML 是 gzip 的 3~6 倍。压缩体走 zlib 流式解压（服务器没压缩则原样透传），
+        // 解压后仍按 120KB 截断——body 唯一用途是 extractClientRedirect（meta/JS 跳转都在页面头部）。
+        "Accept-Encoding": "gzip",
       };
       if (hop === 0 && fp.referer) headers["Referer"] = fp.referer;
       const reqOptions = {
@@ -516,20 +520,42 @@ export async function fetchChain(
         }
         const ctype = String(res.headers["content-type"] || "").toLowerCase();
         if (status >= 200 && status < 300 && (ctype.includes("html") || ctype === "")) {
+          // 降耗（2026-07-24）：旧逻辑 total<120000 只是「不再缓存」，socket 不断开——多 MB 的电商落地页
+          // 仍全量流经 kookeey 代理白烧流量。现改为：攒够 120KB 立即 destroy 断开；gzip 压缩体流式解压
+          // （我们主动截断会让 gunzip 报 unexpected end / res 报 aborted，此时已有字节足够，按成功完成）。
+          const enc = String(res.headers["content-encoding"] || "").toLowerCase();
+          const source: NodeJS.ReadableStream = enc.includes("gzip")
+            ? res.pipe(zlib.createGunzip())
+            : enc.includes("br")
+              ? res.pipe(zlib.createBrotliDecompress()) // 个别服务器无视 Accept-Encoding 硬回 br，防乱码
+              : enc.includes("deflate")
+                ? res.pipe(zlib.createInflate())
+                : res;
           const chunks: Buffer[] = [];
           let total = 0;
-          res.on("data", (c: Buffer) => {
-            if (total < 120000) {
-              chunks.push(c);
-              total += c.length;
+          let settled = false;
+          const finish = () => {
+            if (settled) return;
+            settled = true;
+            resolve({ type: "body", body: Buffer.concat(chunks).toString("utf8"), status });
+          };
+          source.on("data", (c: Buffer) => {
+            if (settled) return;
+            chunks.push(c);
+            total += c.length;
+            if (total >= 120000) {
+              finish();
+              res.destroy();
             }
           });
-          res.on("end", () => resolve({ type: "body", body: Buffer.concat(chunks).toString("utf8"), status }));
-          res.on("error", () => resolve({ type: "final", status }));
+          source.on("end", finish);
+          source.on("error", finish);
+          res.on("error", finish);
         } else {
-          res.resume();
-          res.on("end", () => resolve({ type: "final", status }));
-          res.on("error", () => resolve({ type: "final", status }));
+          // 非 HTML/非 2xx：body 无用途。旧逻辑 res.resume() 会把整个 body（403 挑战页/大文件）拉完才 resolve，
+          // 状态码此刻已知，直接断开省流量。
+          resolve({ type: "final", status });
+          res.destroy();
         }
       });
       req.on("error", (e) => reject(e));
