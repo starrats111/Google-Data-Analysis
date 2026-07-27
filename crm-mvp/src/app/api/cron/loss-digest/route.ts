@@ -227,7 +227,7 @@ export async function GET(req: NextRequest) {
       data: {
         user_id: BigInt(uid),
         type: "alert",
-        title: `每日亏损提醒：${sl.count + sz.count} 个在投系列净亏 ${money(sl.net + sz.net)}`,
+        title: `每日亏损提醒：${sl.count + sz.count} 个在投系列净亏 ${money(-(sl.net + sz.net))}`,
         content: body.join("\n"),
         metadata: JSON.stringify({
           source: "D-191 loss-digest",
@@ -251,7 +251,7 @@ export async function GET(req: NextRequest) {
   if (!dry && perUserSummary.length) {
     void sendAlert({
       level: activeNet <= -50 ? "warning" : "info",
-      title: `每日亏损提醒（${today}）：${activeCount} 个还在花钱的亏损系列，净 ${money(activeNet)}`,
+      title: `每日亏损提醒（${today}）：${activeCount} 个还在花钱的亏损系列，净亏 ${money(-activeNet)}`,
       content: [
         `口径：有单亏损线 ${money(minLoss)}｜零出单花费线 ${money(zeroCap)}｜近 ${activeDays} 天有花费才逐条列`,
         `全量（含近 ${activeDays} 天没花钱的）：${lossRows.length + zeroRows.length} 个，净 ${money(totalNet)}`,
