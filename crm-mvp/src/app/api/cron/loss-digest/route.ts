@@ -47,6 +47,7 @@ type LossRow = {
   total_comm: string;
   total_rejected: string;
   last_order_date: Date | null;
+  recent_cost: string;
 };
 
 type Item = {
@@ -59,6 +60,7 @@ type Item = {
   roi: number | null;
   days: number;
   lastOrder: string | null;
+  recentCost: number;
 };
 
 const money = (n: number) => `$${n.toFixed(2)}`;
@@ -81,6 +83,7 @@ function toItem(r: LossRow): Item {
     roi: cost > 0 ? (commission - cost) / cost : null,
     days,
     lastOrder: r.last_order_date ? new Date(r.last_order_date).toISOString().slice(0, 10) : null,
+    recentCost: Number(r.recent_cost || 0),
   };
 }
 
@@ -95,6 +98,9 @@ export async function GET(req: NextRequest) {
   const minLoss = Number(process.env.LOSS_DIGEST_MIN_USD || 3);
   const zeroCap = Number(process.env.LOSS_DIGEST_ZERO_CAP || process.env.SPEND_GUARD_CAP_USD || 9);
   const maxRows = Math.max(3, Math.floor(Number(process.env.LOSS_DIGEST_MAX_ROWS || 15)));
+  // 近 N 天没花过钱的（预算耗尽/没量的老系列）不逐条列，只报个数——首轮实测全量是
+  // 429 个系列 / -$8372，全推出去就是一堵噪音墙，人只会直接忽略
+  const activeDays = Math.max(1, Math.floor(Number(process.env.LOSS_DIGEST_ACTIVE_DAYS || 7)));
   const dry = req.nextUrl.searchParams.get("dry") === "1";
   const today = nowCST().format("YYYY-MM-DD");
   const startedAt = Date.now();
@@ -106,14 +112,16 @@ export async function GET(req: NextRequest) {
            COALESCE(h.orders, 0)   AS total_orders,
            COALESCE(h.comm, 0)     AS total_comm,
            COALESCE(h.rejected, 0) AS total_rejected,
-           h.last_order_date
+           h.last_order_date,
+           COALESCE(h.recent_cost, 0) AS recent_cost
     FROM campaigns c
     JOIN users u ON u.id = c.user_id AND u.is_deleted = 0
     LEFT JOIN (
       SELECT campaign_id,
              SUM(cost) AS cost, SUM(orders) AS orders,
              SUM(commission) AS comm, SUM(rejected_commission) AS rejected,
-             MAX(CASE WHEN orders > 0 THEN date END) AS last_order_date
+             MAX(CASE WHEN orders > 0 THEN date END) AS last_order_date,
+             SUM(CASE WHEN date >= DATE_SUB('${today}', INTERVAL ${activeDays - 1} DAY) THEN cost ELSE 0 END) AS recent_cost
       FROM ads_daily_stats
       WHERE is_deleted = 0 AND date <= '${today}'
       GROUP BY campaign_id
@@ -164,7 +172,7 @@ export async function GET(req: NextRequest) {
       const orderText = i.orders > 0
         ? `${i.orders} 单，末单 ${i.lastOrder || "—"}`
         : "零出单";
-      return `· ${i.name}｜花费 ${money(i.cost)} / 佣金 ${money(i.commission)} → 净 ${money(i.net)}（${roiText}，${orderText}，已跑 ${i.days} 天）`;
+      return `· ${i.name}｜花费 ${money(i.cost)} / 佣金 ${money(i.commission)} → 净 ${money(i.net)}（${roiText}，${orderText}，近 ${activeDays} 天花 ${money(i.recentCost)}）`;
     });
     const rest = items.slice(maxRows);
     if (rest.length) {
@@ -173,30 +181,45 @@ export async function GET(req: NextRequest) {
     return shown;
   };
 
-  const perUserSummary: Array<{ userId: string; username: string; lossCount: number; zeroCount: number; net: number }> = [];
+  const perUserSummary: Array<{
+    userId: string; username: string;
+    lossCount: number; zeroCount: number; dormantCount: number; net: number; activeNet: number;
+  }> = [];
   let notified = 0;
 
   for (const [uid, b] of byUser) {
-    const sl = summarize(b.loss);
-    const sz = summarize(b.zero);
+    // 还在花钱的先说，睡着的只报个数——同样是亏，今天还在烧的才需要今天处理
+    const spending = (items: Item[]) => items.filter((i) => i.recentCost > 0);
+    const idle = (items: Item[]) => items.filter((i) => i.recentCost <= 0);
+    const loss = spending(b.loss);
+    const zero = spending(b.zero);
+    const dormant = [...idle(b.loss), ...idle(b.zero)];
+    const sl = summarize(loss);
+    const sz = summarize(zero);
+    const sd = summarize(dormant);
     perUserSummary.push({
       userId: uid,
       username: b.username,
       lossCount: sl.count,
       zeroCount: sz.count,
-      net: sl.net + sz.net,
+      dormantCount: sd.count,
+      net: sl.net + sz.net + sd.net,
+      activeNet: sl.net + sz.net,
     });
-    if (dry) continue;
+    if (dry || (!sl.count && !sz.count)) continue;
 
     const body: string[] = [
-      `你名下还在投放的系列里，有 ${sl.count + sz.count} 个正在亏钱，合计净 ${money(sl.net + sz.net)}。CRM 不会自动关停，请自己判断留还是关。`,
+      `你名下有 ${sl.count + sz.count} 个系列**近 ${activeDays} 天还在花钱、但一直是亏的**，合计净 ${money(sl.net + sz.net)}。CRM 不会自动关停，请自己判断留还是关。`,
       ``,
     ];
     if (sl.count) {
-      body.push(`【有单但亏损】${sl.count} 个，合计净 ${money(sl.net)}（出过单容易看着像在赚，实际一直倒贴）：`, ...lines(b.loss), ``);
+      body.push(`【有单但亏损】${sl.count} 个，合计净 ${money(sl.net)}（出过单容易看着像在赚，实际一直倒贴）：`, ...lines(loss), ``);
     }
     if (sz.count) {
-      body.push(`【零出单超线】${sz.count} 个，花费共 ${money(sz.cost)}，一单没出还开着：`, ...lines(b.zero), ``);
+      body.push(`【零出单超线】${sz.count} 个，花费共 ${money(sz.cost)}，一单没出还开着：`, ...lines(zero), ``);
+    }
+    if (sd.count) {
+      body.push(`另有 ${sd.count} 个亏损系列近 ${activeDays} 天没花钱（合计净 ${money(sd.net)}），还是 ENABLED 状态，有空一并清一下。`, ``);
     }
     body.push(`处理入口：数据中心 → 找到系列 → 暂停；确认要继续养的可以忽略本条，明天还会提醒。`);
 
@@ -209,8 +232,9 @@ export async function GET(req: NextRequest) {
         metadata: JSON.stringify({
           source: "D-191 loss-digest",
           date: today,
-          loss_campaign_ids: b.loss.map((i) => i.campaignId),
-          zero_campaign_ids: b.zero.map((i) => i.campaignId),
+          loss_campaign_ids: loss.map((i) => i.campaignId),
+          zero_campaign_ids: zero.map((i) => i.campaignId),
+          dormant_count: sd.count,
           min_loss_usd: minLoss,
           zero_cap_usd: zeroCap,
         }),
@@ -219,20 +243,23 @@ export async function GET(req: NextRequest) {
     notified++;
   }
 
-  perUserSummary.sort((a, b) => a.net - b.net);
+  perUserSummary.sort((a, b) => a.activeNet - b.activeNet);
   const totalNet = perUserSummary.reduce((s, u) => s + u.net, 0);
+  const activeNet = perUserSummary.reduce((s, u) => s + u.activeNet, 0);
+  const activeCount = perUserSummary.reduce((s, u) => s + u.lossCount + u.zeroCount, 0);
 
   if (!dry && perUserSummary.length) {
     void sendAlert({
-      level: totalNet <= -50 ? "warning" : "info",
-      title: `每日亏损提醒（${today}）：${lossRows.length + zeroRows.length} 个在投系列净亏 ${money(totalNet)}`,
+      level: activeNet <= -50 ? "warning" : "info",
+      title: `每日亏损提醒（${today}）：${activeCount} 个还在花钱的亏损系列，净 ${money(activeNet)}`,
       content: [
-        `有单亏损 ${lossRows.length} 个（线 ${money(minLoss)}）｜零出单超线 ${zeroRows.length} 个（线 ${money(zeroCap)}）`,
+        `口径：有单亏损线 ${money(minLoss)}｜零出单花费线 ${money(zeroCap)}｜近 ${activeDays} 天有花费才逐条列`,
+        `全量（含近 ${activeDays} 天没花钱的）：${lossRows.length + zeroRows.length} 个，净 ${money(totalNet)}`,
         `已给 ${notified} 个人推了站内通知，明细在各自的通知里。`,
         ``,
-        ...perUserSummary.map(
-          (u) => `${u.username}：亏损 ${u.lossCount} + 零出单 ${u.zeroCount} 个，净 ${money(u.net)}`,
-        ),
+        ...perUserSummary
+          .filter((u) => u.lossCount + u.zeroCount > 0)
+          .map((u) => `${u.username}：有单亏损 ${u.lossCount} + 零出单 ${u.zeroCount} 个，净 ${money(u.activeNet)}（另有 ${u.dormantCount} 个已停花费）`),
       ].join("\n"),
       source: "cron/loss-digest",
     });
@@ -244,9 +271,12 @@ export async function GET(req: NextRequest) {
     date: today,
     min_loss_usd: minLoss,
     zero_cap_usd: zeroCap,
+    active_days: activeDays,
     loss_campaigns: lossRows.length,
     zero_order_campaigns: zeroRows.length,
+    active_campaigns: activeCount,
     total_net_usd: Number(totalNet.toFixed(2)),
+    active_net_usd: Number(activeNet.toFixed(2)),
     users_notified: notified,
     per_user: perUserSummary,
     ...(dry
@@ -254,8 +284,8 @@ export async function GET(req: NextRequest) {
         detail: [...byUser.entries()].map(([uid, b]) => ({
           userId: uid,
           username: b.username,
-          loss: b.loss.slice(0, 30),
-          zero: b.zero.slice(0, 30),
+          loss: b.loss.filter((i) => i.recentCost > 0).slice(0, 20),
+          zero: b.zero.filter((i) => i.recentCost > 0).slice(0, 20),
         })),
       }
       : {}),
