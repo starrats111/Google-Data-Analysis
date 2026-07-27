@@ -23,6 +23,8 @@ SUFFIX_REPLENISH_CRON="*/5 * * * * curl -s -H 'Authorization: Bearer ${CRON_SECR
 PARENT_BACKFILL_CRON="*/30 * * * * curl -s -H 'Authorization: Bearer ${CRON_SECRET}' '${APP_URL}/api/cron/parent-network-backfill?limit=40' >> /var/log/crm-cron/parent-network-backfill.log 2>&1"
 # D-190 花费哨兵（每 15 分钟）：测试窗口内零出单且累计花费超止损线的系列自动暂停
 SPEND_GUARD_CRON="*/15 * * * * curl -s -H 'Authorization: Bearer ${CRON_SECRET}' '${APP_URL}/api/cron/spend-guard' >> /var/log/crm-cron/spend-guard.log 2>&1"
+# D-191 每日亏损提醒（每天 09:30 CST）：在投但一直亏钱的系列，按归属人推站内通知 + 飞书汇总
+LOSS_DIGEST_CRON="30 9 * * * curl -s -H 'Authorization: Bearer ${CRON_SECRET}' '${APP_URL}/api/cron/loss-digest' >> /var/log/crm-cron/loss-digest.log 2>&1"
 
 echo "=== Will add the following cron jobs ==="
 echo ""
@@ -44,16 +46,20 @@ echo ""
 echo "spend guard (every 15 minutes):"
 echo "  $SPEND_GUARD_CRON"
 echo ""
+echo "loss digest (09:30 every day):"
+echo "  $LOSS_DIGEST_CRON"
+echo ""
 
 # 添加到 crontab（保留现有条目，避免重复）
 TEMP_CRON=$(mktemp)
-crontab -l 2>/dev/null | grep -v '/api/cron/daily-sync' | grep -v '/api/cron/weekly-merchant-check' | grep -v '/api/cron/kylink-sync' | grep -v '/api/cron/suffix-replenish' | grep -v '/api/cron/parent-network-backfill' | grep -v '/api/cron/spend-guard' > "$TEMP_CRON" || true
+crontab -l 2>/dev/null | grep -v '/api/cron/daily-sync' | grep -v '/api/cron/weekly-merchant-check' | grep -v '/api/cron/kylink-sync' | grep -v '/api/cron/suffix-replenish' | grep -v '/api/cron/parent-network-backfill' | grep -v '/api/cron/spend-guard' | grep -v '/api/cron/loss-digest' > "$TEMP_CRON" || true
 echo "$DAILY_CRON" >> "$TEMP_CRON"
 echo "$MERCHANT_CRON" >> "$TEMP_CRON"
 echo "$KYLINK_SYNC_CRON" >> "$TEMP_CRON"
 echo "$SUFFIX_REPLENISH_CRON" >> "$TEMP_CRON"
 echo "$PARENT_BACKFILL_CRON" >> "$TEMP_CRON"
 echo "$SPEND_GUARD_CRON" >> "$TEMP_CRON"
+echo "$LOSS_DIGEST_CRON" >> "$TEMP_CRON"
 crontab "$TEMP_CRON"
 rm -f "$TEMP_CRON"
 
