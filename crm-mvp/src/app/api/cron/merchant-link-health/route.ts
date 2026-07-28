@@ -31,7 +31,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { raiseAlert, resolveAlertsByType } from '@/lib/suffix-engine/alerts'
 import { parseCampaignNameFull } from '@/lib/campaign-merchant-link'
-import { pickCampaignAffiliateLink } from '@/lib/merchant-connection'
+import { loadConnectionAliasMap, pickCampaignAffiliateLink } from '@/lib/merchant-connection'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
@@ -154,6 +154,8 @@ async function checkUser(userId: bigint): Promise<UserHealth> {
   }
 
   // 4. 逐系列判定断链 + 分级
+  // D-192：同一联盟账号被重复录成多条连接时按账号等价取链接，避免把「同号另一条连接有链接」误报为断链
+  const connAliasMap = await loadConnectionAliasMap(userId)
   for (const c of campaigns) {
     const mid = c.user_merchant_id
     const isUnmatched = !mid || mid <= BigInt(0)
@@ -161,7 +163,7 @@ async function checkUser(userId: bigint): Promise<UserHealth> {
     const isOrphan = !isUnmatched && !merchant
     // 账号感知：广告归属账号取不到链接即断链（与补货/刷点击引擎完全同口径）。
     // 哑广告（商家在别的账号有链接、归属账号没有）在这里也会被判为断链，旧版只看主链接字段会漏。
-    const effectiveLink = merchant ? pickCampaignAffiliateLink(c.platform_connection_id, merchant) : ''
+    const effectiveLink = merchant ? pickCampaignAffiliateLink(c.platform_connection_id, merchant, connAliasMap) : ''
     const isNoLink = !!merchant && !effectiveLink
     const broken = isUnmatched || isOrphan || isNoLink
 

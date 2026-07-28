@@ -17,7 +17,7 @@ import { generateOneSuffix, type GenFailure } from './suffix-generator'
 import { raiseAlert, resolveAlertsByType } from './alerts'
 import { recordExitIp } from './exit-ip'
 import { resolveMerchantReferer } from './referer-resolver'
-import { pickCampaignAffiliateLink } from '@/lib/merchant-connection'
+import { loadConnectionAliasMap, pickCampaignAffiliateLink } from '@/lib/merchant-connection'
 import { sameRootDomain } from '@/lib/root-domain'
 
 const inflight = new Map<string, Promise<ReplenishResult>>()
@@ -245,7 +245,11 @@ async function doReplenish(
   // 账号感知：按广告归属账号(platform_connection_id)挑该号的链接。生成的 suffix 会应用到 live 广告，
   // 必须用广告自己账号的链接，否则真实转化会记到别的号（wj02 CG1/CG2 串号根治点）。
   // 归属账号没配链接 → 静默跳过（判定是否人工处理交给 merchant-link-health）。
-  const affiliateUrl = pickCampaignAffiliateLink(campaign.platform_connection_id, merchant)
+  const affiliateUrl = pickCampaignAffiliateLink(
+    campaign.platform_connection_id,
+    merchant,
+    await loadConnectionAliasMap(campaign.user_id),
+  )
   if (!affiliateUrl) {
     // 商家在库但该账号缺联盟追踪链接：补货路径本身不报警（避免 5 分钟一轮刷屏），
     // 「断链提醒」统一交给 /api/cron/merchant-link-health（30 分钟一轮、告警收敛）：
