@@ -61,6 +61,52 @@ export async function loadConnectionAccountMap(
 }
 
 /**
+ * D-192 账号等价表：connId → 指向「同一个联盟账号」的其他 connId 列表。
+ *
+ * 同一物理账号被重复录成多条连接时（api_key 完全相同），订单/点击回传会落到其中一条，
+ * 而商家链接可能存在另一条名下，`pickCampaignAffiliateLink` 会误判为串号而拒绝取链接
+ * ——wj04 的 PM1(conn13) 与 PM8(conn217) 就是同一个 Partnermatic 账号，导致 garrett wade
+ * 有单却一次点击都刷不出去。入口去重已于 c7f780e9 上线，本表用于消化其之前的存量残留。
+ *
+ * 刻意**包含已删连接**：连接删掉重加后，链接键仍留在旧 conn 上，只要凭据相同就是同一个号。
+ */
+export type ConnectionAliasMap = Map<string, string[]>;
+
+// 补货（stock-producer）是每几分钟遍历全部在投系列的热路径，逐条查连接会在低配生产机上放大成
+// 上千次查询。等价关系只取决于连接凭据，变动极少，短 TTL memo 足够且不会让新配的链接延迟生效。
+const ALIAS_CACHE_TTL_MS = 60_000;
+const aliasCache = new Map<string, { at: number; map: ConnectionAliasMap }>();
+
+export async function loadConnectionAliasMap(userId: bigint): Promise<ConnectionAliasMap> {
+  const cacheKey = userId.toString();
+  const cached = aliasCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < ALIAS_CACHE_TTL_MS) return cached.map;
+
+  const conns = await prisma.platform_connections.findMany({
+    where: { user_id: userId },
+    select: { id: true, platform: true, api_key: true },
+  });
+
+  const byCredential = new Map<string, string[]>();
+  for (const c of conns) {
+    const key = (c.api_key ?? "").trim();
+    if (!key) continue;
+    const group = `${c.platform}\u0000${key}`;
+    const ids = byCredential.get(group);
+    if (ids) ids.push(c.id.toString());
+    else byCredential.set(group, [c.id.toString()]);
+  }
+
+  const aliasMap: ConnectionAliasMap = new Map();
+  for (const ids of byCredential.values()) {
+    if (ids.length < 2) continue;
+    for (const id of ids) aliasMap.set(id, ids.filter((other) => other !== id));
+  }
+  aliasCache.set(cacheKey, { at: Date.now(), map: aliasMap });
+  return aliasMap;
+}
+
+/**
  * 把单个 merchant 的 connection_campaign_links 解析为 connection_accounts[]
  * 只保留 connAccountMap 内出现的 conn_id（即属于 current_user 的）
  */
@@ -70,11 +116,13 @@ export async function loadConnectionAccountMap(
  * 规则（核心：广告归属账号 campaignConnId 优先，绝不回退到别的号，避免串号）：
  *   1) campaignConnId 有值 且 connection_campaign_links 里有它的链接 → 用该链接（最精确）
  *   2) campaignConnId 有值 但仅等于商家主连接 → 用商家 campaign_link / tracking_link（主连接主链接）
- *   3) campaignConnId 有值 却找不到对应链接（该号没配链接）→ 返回 ''（宁可不刷/不换，也不刷到错号）
- *   4) campaignConnId 为空（存量未回填）→ 回退旧逻辑：tracking_link / campaign_link / 主连接链接
+ *   3) campaignConnId 有值 但同一联盟账号的其他连接（api_key 相同）有链接 → 用该链接（D-192，同号不算串号）
+ *   4) campaignConnId 有值 却找不到对应链接（该号没配链接）→ 返回 ''（宁可不刷/不换，也不刷到错号）
+ *   5) campaignConnId 为空（存量未回填）→ 回退旧逻辑：tracking_link / campaign_link / 主连接链接
  *
  * @param campaignConnId 广告 campaigns.platform_connection_id（该广告归属的联盟账号）
  * @param merchant 商家行（需含 tracking_link / campaign_link / connection_campaign_links / platform_connection_id）
+ * @param aliasMap loadConnectionAliasMap 的产物；不传则退化为改动前行为
  */
 export function pickCampaignAffiliateLink(
   campaignConnId: bigint | null | undefined,
@@ -84,6 +132,7 @@ export function pickCampaignAffiliateLink(
     connection_campaign_links?: unknown;
     platform_connection_id?: bigint | null;
   },
+  aliasMap?: ConnectionAliasMap,
 ): string {
   const links =
     merchant.connection_campaign_links &&
@@ -100,6 +149,12 @@ export function pickCampaignAffiliateLink(
     // 该账号在 connection_campaign_links 里没链接：只有当它就是商家主连接时，主链接才属于它
     if (merchant.platform_connection_id != null && merchant.platform_connection_id.toString() === key) {
       return primary;
+    }
+    // D-192：同一联盟账号被重复录入成多条连接（api_key 相同）时，另一条名下的链接同样属于本号
+    for (const alias of aliasMap?.get(key) ?? []) {
+      const aliasLink = links && typeof links[alias] === "string" ? links[alias].trim() : "";
+      if (aliasLink) return aliasLink;
+      if (primary && merchant.platform_connection_id?.toString() === alias) return primary;
     }
     // 归属账号明确、却没有它的链接 → 不返回别号链接，交由调用方跳过（不刷错号）
     return "";

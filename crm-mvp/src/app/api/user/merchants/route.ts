@@ -4,7 +4,7 @@ import { apiSuccess, apiError } from "@/lib/constants";
 import { withUser } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import { buildDraftCampaignName } from "@/lib/campaign-naming";
-import { loadConnectionAccountMap, buildConnectionAccounts, pickCampaignAffiliateLink } from "@/lib/merchant-connection";
+import { loadConnectionAccountMap, buildConnectionAccounts, loadConnectionAliasMap, pickCampaignAffiliateLink } from "@/lib/merchant-connection";
 import { extractDomain } from "@/lib/atc-service";
 import { parseTxnDateStart, parseTxnDateEndExclusive } from "@/lib/date-utils";
 import { getTeamVisibility, getVisibleUserIdSet } from "@/lib/team-visibility";
@@ -689,6 +689,9 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
     });
   }
 
+  // D-192：同一联盟账号被重复录成多条连接时按账号等价取链接，避免把同号的另一条连接判成「没链接」
+  const connAliasMap = await loadConnectionAliasMap(BigInt(user.userId));
+
   // 如果未指定 platform_connection_id，自动选择该平台的第一个连接
   let connId = platform_connection_id ? BigInt(platform_connection_id) : null;
   if (connId) {
@@ -707,12 +710,16 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
       orderBy: [{ account_index: "asc" }, { created_at: "asc" }, { id: "asc" }],
     });
     const linked = platformConns.find((c) =>
-      pickCampaignAffiliateLink(c.id, {
-        tracking_link: merchant.tracking_link,
-        campaign_link: merchant.campaign_link,
-        connection_campaign_links: merchant.connection_campaign_links,
-        platform_connection_id: merchant.platform_connection_id,
-      }),
+      pickCampaignAffiliateLink(
+        c.id,
+        {
+          tracking_link: merchant.tracking_link,
+          campaign_link: merchant.campaign_link,
+          connection_campaign_links: merchant.connection_campaign_links,
+          platform_connection_id: merchant.platform_connection_id,
+        },
+        connAliasMap,
+      ),
     );
     connId = linked?.id ?? platformConns[0]?.id ?? null;
   }
@@ -730,12 +737,16 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
   //   pickCampaignAffiliateLink 返回空 → 换链/刷点击对它全程静默跳过，点击数永远刷不上。
   // 这里在写库前拦截，并提示哪些账号真的有链接，避免继续产生哑广告。
   if (connId) {
-    const pickedLink = pickCampaignAffiliateLink(connId, {
-      tracking_link: merchant.tracking_link,
-      campaign_link: merchant.campaign_link,
-      connection_campaign_links: merchant.connection_campaign_links,
-      platform_connection_id: merchant.platform_connection_id,
-    });
+    const pickedLink = pickCampaignAffiliateLink(
+      connId,
+      {
+        tracking_link: merchant.tracking_link,
+        campaign_link: merchant.campaign_link,
+        connection_campaign_links: merchant.connection_campaign_links,
+        platform_connection_id: merchant.platform_connection_id,
+      },
+      connAliasMap,
+    );
     if (!pickedLink) {
       // 找出该商家在同平台下「真的有链接」的账号，给出可选提示
       const linkKeys = new Set<string>();

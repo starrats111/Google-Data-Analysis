@@ -25,7 +25,7 @@ import { normalizePlatformCode } from '@/lib/constants'
 import { PLATFORM_CLICK_CONFIG } from '@/lib/platform-api'
 import { randomInt } from '@/lib/suffix-engine/click-scheduler'
 import { startBrushTaskWindowed } from '@/lib/suffix-engine/click-brush'
-import { pickCampaignAffiliateLink } from '@/lib/merchant-connection'
+import { loadConnectionAliasMap, pickCampaignAffiliateLink } from '@/lib/merchant-connection'
 import { raiseAlert, resolveAlertsByType } from '@/lib/suffix-engine/alerts'
 
 /** 转化率目标改为按用户配置（click_control_ratio_min/max_pct）运行时计算，默认 5%~10%（每订单 10~20 点击） */
@@ -131,6 +131,8 @@ export async function runAutoClickForUser(
     select: { id: true, platform: true, merchant_id: true, tracking_link: true, campaign_link: true, connection_campaign_links: true, platform_connection_id: true },
   })
   const merchantById = new Map(merchants.map((m) => [m.id.toString(), m]))
+  // D-192：同一联盟账号被重复录成多条连接时，链接可能挂在另一条名下，取链接需按账号等价放行
+  const connAliasMap = await loadConnectionAliasMap(userId)
 
   // 时间边界
   const todayStr = todayCST()
@@ -184,7 +186,7 @@ export async function runAutoClickForUser(
     // ★ 有订单 → 当天必须净化转化率。此时才校验链接：拿不到该号链接 = 「该刷却刷不了」，
     // 不再静默跳过，而是报警挂人工（D-186）——正是 lenstore 7/15「有单无链接被跳过」的堵漏。
     // 账号感知选链接：宁可不刷（也不刷到没配链接/别的号），但必须让人看见。
-    const affiliateUrl = pickCampaignAffiliateLink(connId, merchant)
+    const affiliateUrl = pickCampaignAffiliateLink(connId, merchant, connAliasMap)
     if (!affiliateUrl) {
       await raiseAlert(userId, {
         type: 'brush_blocked',

@@ -5,7 +5,7 @@ import { getAlertSummary } from '@/lib/suffix-engine/alerts'
 import { getKookeeyTrafficCached } from '@/lib/suffix-engine/kookeey-quota'
 import { STOCK_CONFIG } from '@/lib/suffix-engine/config'
 import { parseCampaignNameFull } from '@/lib/campaign-merchant-link'
-import { pickCampaignAffiliateLink } from '@/lib/merchant-connection'
+import { loadConnectionAliasMap, pickCampaignAffiliateLink } from '@/lib/merchant-connection'
 import { normalizePlatformCode } from '@/lib/constants'
 import { todayCST, parseCSTDateStart, parseCSTDateEndExclusive, dateColumnStart, dateColumnTodayEndExclusive } from '@/lib/date-utils'
 
@@ -293,6 +293,9 @@ export async function GET(req: NextRequest) {
     if (!clickTaskMap.has(key)) clickTaskMap.set(key, t)
   }
 
+  // D-192：同一联盟账号被重复录成多条连接时按账号等价取链接，与补货/刷点击引擎保持同口径
+  const connAliasMap = await loadConnectionAliasMap(userId)
+
   const rows = parsed.map((c) => {
     // 先用权威关联取商家，未关联再按名称解析的 (平台, MID) 回退匹配
     const merchant =
@@ -313,7 +316,7 @@ export async function GET(req: NextRequest) {
     const todayOrders = mkey ? (ordersByKey.get(mkey) ?? 0) : 0
     const conversion = todayClicks > 0 ? todayOrders / todayClicks : null // 订单/点击；无点击为 null（前端显示 —）
     // 账号感知有效链接：与补货/刷点击引擎同口径（广告归属连接的 per-conn 键 > 主连接主链接）
-    const effectiveLink = merchant ? pickCampaignAffiliateLink(c.platform_connection_id, merchant) : ''
+    const effectiveLink = merchant ? pickCampaignAffiliateLink(c.platform_connection_id, merchant, connAliasMap) : ''
     return {
       campaignId: c.id.toString(),
       googleCampaignId: c.google_campaign_id,
