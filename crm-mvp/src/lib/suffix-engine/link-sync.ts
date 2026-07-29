@@ -43,6 +43,7 @@ async function resolveOne(
   m: {
     id: bigint
     platform: string | null
+    merchant_url: string | null
     target_country: string | null
     tracking_link: string | null
     campaign_link: string | null
@@ -65,7 +66,11 @@ async function resolveOne(
   try {
     const cruise = await Promise.race([
       // 开启无头浏览器兜底：no_tracking/停跳板时自动重试，纠正 pepperjam/impact 等 JS 联盟误判
-      resolveAffiliateLink(affiliateUrl, country, m.platform || null, { userId, browserFallback: true }),
+      resolveAffiliateLink(affiliateUrl, country, m.platform || null, {
+        userId,
+        browserFallback: true,
+        targetDomain: m.merchant_url,
+      }),
       new Promise<null>((r) => setTimeout(() => r(null), ITEM_TIMEOUT_MS)),
     ])
     if (!cruise) {
@@ -113,6 +118,7 @@ export async function resolveMerchantNow(
     select: {
       id: true,
       platform: true,
+      merchant_url: true,
       target_country: true,
       tracking_link: true,
       campaign_link: true,
@@ -164,6 +170,7 @@ export async function syncUserLinks(
     select: {
       id: true,
       platform: true,
+      merchant_url: true,
       target_country: true,
       tracking_link: true,
       campaign_link: true,

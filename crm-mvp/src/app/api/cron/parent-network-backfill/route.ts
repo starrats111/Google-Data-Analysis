@@ -147,6 +147,7 @@ export async function GET(req: NextRequest) {
       select: {
         id: true,
         platform: true,
+        merchant_url: true,
         target_country: true,
         tracking_link: true,
         campaign_link: true,
@@ -180,7 +181,10 @@ export async function GET(req: NextRequest) {
         const cruise = await Promise.race([
           // 开启无头浏览器兜底：纠正 pepperjam/impact 等 JS 联盟的 no_tracking 误判
           // （受 limit 每轮条数 + puppeteer 信号量限并发，低配机安全）
-          resolveAffiliateLink(affiliateUrl, country, m.platform || null, { browserFallback: true }),
+          resolveAffiliateLink(affiliateUrl, country, m.platform || null, {
+            browserFallback: true,
+            targetDomain: m.merchant_url,
+          }),
           new Promise<null>((r) => setTimeout(() => r(null), ITEM_TIMEOUT_MS)),
         ])
         if (!cruise) {

@@ -47,6 +47,32 @@ export interface GenFailure {
 
 export type GenResult = GenSuccess | GenFailure
 
+/**
+ * D-197：「必须浏览器」系列的每日 HTTP 回探台账（进程内，键=campaignId，值=UTC 日期串）。
+ *
+ * `campaigns.suffix_needs_browser` 是靠「probe 有没有用上浏览器」双向学出来的
+ * （见 stock-producer 的学习回写）。一旦对这类系列全面跳过 HTTP，就再也观测不到
+ * 「联盟改了实现、纯 HTTP 又能跟通了」，系列会被永久锁死在浏览器档——每条反而更贵。
+ * 故每系列每天放行第一条仍走 HTTP 优先，保留降档能力。
+ *
+ * 用进程内 Map 而非落库：pm2 重启后台账清空、当天最多多回探一次，代价仅一条约 42KB 的
+ * HTTP 请求，不值得为它加一次表结构变更；与本模块既有的冷却台账做法一致。
+ */
+const httpRecheckDay = new Map<string, string>()
+
+/**
+ * 今天这个系列是否还没做过 HTTP 回探。返回 true 表示「本次让它走 HTTP」，并就地占掉今天的名额。
+ * 导出仅为单测可验证「每系列每天恰好放行一条」这一保险，业务代码不应在别处调用。
+ */
+export function claimHttpRecheck(campaignId: bigint | null | undefined): boolean {
+  if (campaignId == null) return false
+  const key = campaignId.toString()
+  const today = new Date().toISOString().slice(0, 10)
+  if (httpRecheckDay.get(key) === today) return false
+  httpRecheckDay.set(key, today)
+  return true
+}
+
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('GEN_TIMEOUT')), ms)
@@ -82,6 +108,12 @@ export async function generateOneSuffix(
     merchantId?: string | null
     userAgent?: string | null
     referer?: string | null
+    /** D-193：商家官网域名（`user_merchants.merchant_url`），启用跟跳目标域早停 */
+    targetDomain?: string | null
+    /** D-197：本系列已学到「纯 HTTP 跟不动」（`campaigns.suffix_needs_browser=1`）。
+     *  为真时跳过注定失败的 HTTP 第一步、直接浏览器优先，每条省约 42KB。
+     *  每系列每天仍自动放行一条走 HTTP 回探（见 httpRecheckDay），以便该标记能降回 0。 */
+    needsBrowser?: boolean
   } = {},
 ): Promise<GenResult> {
   if (!affiliateUrl || !/^https?:\/\//i.test(affiliateUrl)) {
@@ -124,17 +156,23 @@ export async function generateOneSuffix(
     if (selectedProviderId) reportProviderResult(selectedProviderId, ok)
   }
 
+  // D-197：本系列已知纯 HTTP 跟不动 → 直接浏览器优先，省掉注定失败的第一步（约 42KB/条）。
+  // 每天首条例外：仍走 HTTP，用于回探「是否已能降回纯 HTTP」，否则标记永远降不回去。
+  const preferBrowser = opts.needsBrowser === true && !claimHttpRecheck(opts.campaignId)
+
   try {
     const r = await withTimeout(
       resolveAffiliateLink(affiliateUrl, country || 'US', platform, {
-        useBrowser: false,
+        useBrowser: preferBrowser,
         // 轻量抓取拿不到追踪参数 / 停跳板时，自动用无头浏览器重试一次
         // （pepperjam/impact/ultrainfluence 等需真实浏览器执行 JS 才会附加 clickId/utm）
+        // preferBrowser 时顺序相反：浏览器先跑，跑不出来才回退 HTTP，且不会重复开浏览器。
         browserFallback: true,
         userId: opts.userId,
         userAgent: opts.userAgent,
         referer: opts.referer,
         proxyUrl,
+        targetDomain: opts.targetDomain,
       }),
       STOCK_CONFIG.GEN_TIMEOUT_MS,
     )

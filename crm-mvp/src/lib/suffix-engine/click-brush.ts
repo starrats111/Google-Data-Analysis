@@ -272,6 +272,8 @@ interface TaskRuntime {
   /** F-IPDEDUP-01 组级去重键：联盟平台商家 ID（字符串，跨用户对同一真实商家一致） */
   merchantIdStr: string | null
   existingSuffixes: Set<string>
+  /** D-197：本系列已学到「纯 HTTP 跟不动」（suffix_needs_browser=1），刷点击同样跳过必败的 HTTP 第一步 */
+  needsBrowser: boolean
   /** 本任务是否已顺带清过库存类告警（刷点击也在产出库存，成功一次即清一次，避免高消耗系列告警常驻） */
   alertsResolved?: boolean
 }
@@ -294,7 +296,7 @@ async function buildTaskRuntime(taskId: bigint): Promise<TaskRuntime | null> {
 
   const campaign = await prisma.campaigns.findFirst({
     where: { id: task.campaign_id, is_deleted: 0 },
-    select: { id: true, user_id: true, user_merchant_id: true, target_country: true, campaign_name: true },
+    select: { id: true, user_id: true, user_merchant_id: true, target_country: true, campaign_name: true, suffix_needs_browser: true },
   })
   if (!campaign) return null
 
@@ -324,6 +326,7 @@ async function buildTaskRuntime(taskId: bigint): Promise<TaskRuntime | null> {
     teamId: owner?.team_id ?? null,
     merchantIdStr: merchant?.merchant_id ?? null,
     existingSuffixes: new Set(existing.map((r) => r.suffix_content)),
+    needsBrowser: campaign.suffix_needs_browser === 1,
   }
 }
 
@@ -354,6 +357,9 @@ async function executeItem(rt: TaskRuntime, itemId: bigint): Promise<{ ok: boole
     userAgent: randomPick(USER_AGENTS),
     // 优先用商家自定义来路，未配置才回退随机 REFERERS（更贴近真实站点引流）
     referer: rt.refererUrl || randomPick(REFERERS) || null,
+    // D-197：这类系列今天已回探过就直接浏览器优先。点击语义不变——纯 HTTP 本来也跟不通、
+    // 最终仍是靠浏览器完成这次点击，只是不再先白跑一次注定失败的 HTTP。
+    needsBrowser: rt.needsBrowser,
   })
   const duration = Date.now() - startedAt
 

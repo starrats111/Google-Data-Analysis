@@ -27,7 +27,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const merchant = await prisma.user_merchants.findFirst({
     where: { id: BigInt(id), user_id: BigInt(user.userId), is_deleted: 0 },
     select: {
-      id: true, merchant_name: true, platform: true, platform_connection_id: true,
+      id: true, merchant_name: true, merchant_url: true, platform: true, platform_connection_id: true,
       target_country: true, tracking_link: true, campaign_link: true, connection_campaign_links: true,
     },
   });
@@ -50,6 +50,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   const cruise = await resolveAffiliateLink(affiliateUrl, country, merchant.platform || null, {
     useBrowser: true,
+    targetDomain: merchant.merchant_url,
   });
 
   await prisma.user_merchants.update({

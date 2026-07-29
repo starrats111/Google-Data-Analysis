@@ -24,11 +24,25 @@ import { probeExitIp } from "@/lib/suffix-engine/exit-ip";
 import { pickMobileUserAgent } from "@/lib/mobile-user-agents";
 import { registerBrowser, closeBrowserSafely, getStealthLauncher } from "@/lib/puppeteer-browser-registry";
 import { sameRootDomain } from "@/lib/root-domain";
+import { fetchChainViaKy } from "@/lib/link-resolver";
 
 // tracker_forbidden：联盟跳板在「自己的重定向端点」返回 4xx（401/403/404/410/451 等）拒绝了这次点击——
 //   点击从未在联盟侧登记。绝不能因链接自带 ?url=<广告主> 参数而被兜底空降到广告主首页、伪装成
 //   no_tracking「到站无参数」的软失败（BellaDahl/BSH 2026-07-11 起 403 即此：目录仍在、token 已失效）。
 export type LinkStatus = "ok" | "no_tracking" | "forbidden_network" | "resolve_failed" | "tracker_forbidden";
+
+/**
+ * D-193 两步取链接引擎总开关（`AFFILIATE_RESOLVER_V2=1` 开启）。
+ *
+ * 开启后一次性改四件事，回滚也只需摘掉这一个环境变量：
+ *   ① 第一步换成移植自 kylink 的跟跳引擎（Cookie Jar 跨跳、内联 JS 跳转、base64 解包、目标域早停）；
+ *   ② 严格双条件分流——第一步没同时拿到广告主域名和追踪参数就升级浏览器，不再只挑几种特定错误；
+ *   ③ 浏览器沿用第一步的粘性会话，两步同一出口 IP，不再出现「同链接两个 IP 各点一次」；
+ *   ④ 已知广告主域名时落地早停，整页 HTML 不下载。
+ *
+ * 关闭时走原有 fetchChain 路径，行为与 D-193 之前逐字节一致。
+ */
+const RESOLVER_V2 = process.env.AFFILIATE_RESOLVER_V2 === "1";
 
 /**
  * 剔除 URL 中「未展开的模板变量字面量」，如 `${http.request.uri.path}`（商家 Cloudflare
@@ -58,6 +72,9 @@ export interface ResolveResult {
   // 内部提示：本结果来自 EV/MUI 中转域名的静态参数解包（只拿回广告主域名、缺网络追踪参数），
   // 外层应再用真实浏览器跟随一次以补全完整落地页（带追踪 query）。
   requiresBrowserEnrich?: boolean;
+  /** D-193：本次解析走了「第一步 HTTP 未达标 → 升级浏览器」的两步流程。
+   *  用于把这次点击标成升级点击（同一出口 IP 上对同一链接的第二次请求），排障与风控对账时能区分。 */
+  escalated?: boolean;
 }
 
 // 跟链/换链一律用「移动端」UA（安卓 Chrome + iPhone Safari，见 @/lib/mobile-user-agents），不再用 Windows 桌面：
@@ -683,10 +700,32 @@ const BROWSER_BLOCK_RESOURCE_TYPES = new Set([
 const BROWSER_BLOCK_HOST_RE =
   /(google-analytics|googletagmanager|googlesyndication|googleadservices|doubleclick|adservice\.google|connect\.facebook|facebook\.com|fbcdn\.net|hotjar|clarity\.ms|fullstory|mouseflow|luckyorange|cdn\.segment|api\.segment|mixpanel|amplitude|heapanalytics|analytics\.tiktok|analytics\.twitter|static\.ads-twitter|bat\.bing|criteo|taboola|outbrain|scorecardresearch|quantserve|adroll|mc\.yandex|newrelic|nr-data|sentry\.io|datadoghq|bugsnag|optimizely|onetrust|cookielaw|adnxs|pubmatic|rubiconproject|casalemedia|openx|3lift|33across|ct\.pinterest|klaviyo|cloudflareinsights|hs-analytics|matomo|piwik|tr\.snapchat|sc-static\.net|adsrvr\.org|bidswitch|smartadserver|teads|moatads|adsafeprotected|branch\.io|appsflyer|kochava|adjust\.com)/i;
 
+/**
+ * 把任意协议的代理 URL 改写成 http:// 形式（host/port/凭据原样保留）。
+ * kookeey 网关同端口双协议，凭据里的会话 ID 不变 → 出口 IP 与第一步一致。
+ * 解析失败返回 null，调用方按「无复用」走正常取代理流程。
+ */
+export function toHttpProxyUrl(proxyUrl: string): string | null {
+  try {
+    const u = new URL(proxyUrl);
+    if (!u.hostname || !u.port) return null;
+    const auth = u.username || u.password ? `${u.username}:${u.password}@` : "";
+    return `http://${auth}${u.hostname}:${u.port}`;
+  } catch {
+    return null;
+  }
+}
+
 async function resolveViaBrowser(
   startUrl: string,
   country: string,
   userId?: bigint | null,
+  browserOpts: {
+    /** D-193：第一步（HTTP 跟跳）实际用过的代理 URL。传入时浏览器沿用同一粘性会话 = 同一出口 IP。 */
+    reuseProxyUrl?: string | null;
+    /** D-193：第一步已探到的广告主域名。命中即掐断导航、不下整页 HTML（见落地早停）。 */
+    targetHost?: string | null;
+  } = {},
 ): Promise<BrowserChainResult> {
   const chain: string[] = [];
   const browserPath = findBrowserPath();
@@ -700,12 +739,19 @@ async function resolveViaBrowser(
   // 一律走 kookeey 的 http 代理（1000 端口双协议），绝不借用 AI 出口(arxlabs)；userId 仅用于选该用户分配的供应商。
   // 降耗（2026-07-24）：maxRetries 3→2 少开一轮废弃粘性会话；fallbackToUnverified=true——探活反复超时
   // 时不再丢会话报 proxy_unavailable（模板锁国家、实测定向 100% 准），只有真探到错国出口才放弃。
-  const httpProxy = await ensureCountryEgressHttpProxyDetailed(country, { userId, exchange: true, maxRetries: 2, fallbackToUnverified: true }).catch((e) => {
-    console.warn(
-      `[AffiliateResolver] 浏览器兜底取 ${country} http 代理异常: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`,
-    );
-    return null;
-  });
+  // D-193 复用出口：第一步 HTTP 跟跳已在某个粘性会话上点过一次，浏览器再取新会话就是「换个 IP 又点一次」——
+  // 联盟侧会看到同一链接来自两个 IP 的两次点击（重复点击/风控）。kookeey 用户名模板里带会话 ID、每取一次
+  // 换一个出口，所以复用只能原样沿用第一步那串凭据、仅把协议换成 http（同端口双协议，Chrome 不支持 SOCKS5 认证）。
+  // 出口国不必再校验：第一步用的就是这个会话，国家已由模板锁定。
+  const reused = browserOpts.reuseProxyUrl ? toHttpProxyUrl(browserOpts.reuseProxyUrl) : null;
+  const httpProxy = reused
+    ? { proxyUrl: reused, exitIp: null as string | null }
+    : await ensureCountryEgressHttpProxyDetailed(country, { userId, exchange: true, maxRetries: 2, fallbackToUnverified: true }).catch((e) => {
+        console.warn(
+          `[AffiliateResolver] 浏览器兜底取 ${country} http 代理异常: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`,
+        );
+        return null;
+      });
   // D-177（采纳 kyads「代理不可用不下结论」）：拿不到换链接代理（余额耗尽/熔断/出口校验全败）时
   // 一律不再「无代理直连」——腾讯云 CN 出口跟联盟 JS 跳板得到的必然是无追踪参数的假落地页，
   // 会被误判成 no_tracking「死链」（D-176 事故：余额 0 当天 3316 次假死全由此产生）。
@@ -788,6 +834,14 @@ async function resolveViaBrowser(
       /* ignore */
     }
     let reachedLanding = false;
+    // D-193 落地早停：第一步已探明广告主域名时，主框架一导航到该域名就把 URL 记下并 abort。
+    // 两个收益：① 整页 HTML 一个字节都不下（子资源拦截之后剩下的最大一笔流量就是它）；
+    // ② 保住联盟追踪参数——不少广告主前端一加载就把 ?clickref=... 洗成干净路径（D-182 记录的
+    // Partnerize/gilt 即此），等页面跑完再读 page.url() 参数已经没了。
+    // 只在有第一步的域名提示时才启用：没提示就不敢猜哪一跳算落地，误判会直接掐断整条跟链。
+    const targetHost = browserOpts.targetHost || "";
+    let earlyStopUrl = "";
+    let navCount = 0;
     await page.setRequestInterception(true);
     page.on("request", (reqUnknown: unknown) => {
       const r = reqUnknown as {
@@ -800,9 +854,28 @@ async function resolveViaBrowser(
       };
       const t = r.resourceType();
       const isNav = r.isNavigationRequest() && r.frame() === page.mainFrame();
-      // 导航请求（document 主跳转链）永不拦，否则会中断跟链。
+      // 导航请求（document 主跳转链）永不拦，否则会中断跟链。唯一例外是下面的落地早停。
       if (isNav) {
-        chain.push(r.url());
+        const navUrl = r.url();
+        chain.push(navUrl);
+        navCount += 1;
+        if (targetHost && !earlyStopUrl && navCount > 1) {
+          let navHost = "";
+          try {
+            navHost = new URL(navUrl).hostname;
+          } catch {
+            /* 非法 URL：不早停，按常规放行 */
+          }
+          // 与入口同根域名的一跳绝不早停：联盟入口常和广告主同根（go.merchant.com → www.merchant.com），
+          // 掐在这里等于把整条跟链在第一跳就切断，拿回一个没有追踪参数的入口 URL。
+          // 这种情况退回常规全程跟随即可——只是多下一个页面，不会出错。
+          if (navHost && !sameRootDomain(navHost, startHost) && sameRootDomain(navHost, targetHost)) {
+            earlyStopUrl = navUrl;
+            reachedLanding = true;
+            r.abort().catch(() => {});
+            return;
+          }
+        }
         r.continue().catch(() => {});
         return;
       }
@@ -850,7 +923,9 @@ async function resolveViaBrowser(
     // D-172：导航落在 chrome-error://（代理隧道断连/网关瞬时故障最常见）→ 同会话立即重导航一次。
     // 轮换住宅网关下新建连接即换出口节点，实测这类瞬时故障重试一次多半即恢复；
     // 复用已启动的 browser + slot，重试成本仅一次 goto，远低于整条生成失败后等下轮 cron。
-    if (String(page.url()).startsWith("chrome-error://")) {
+    // 早停已拿到落地页 URL：page 停在被 abort 前的那一跳，后面的 chrome-error 判定、
+    // 网络空闲等待、JS 跳转轮询全部没有意义（也会把 abort 误读成导航失败），一律跳过。
+    if (!earlyStopUrl && String(page.url()).startsWith("chrome-error://")) {
       console.warn(`[AffiliateResolver] 浏览器兜底导航落在 chrome-error（代理/网络瞬时故障），同会话重试一次 url=${startUrl.slice(0, 120)}`);
       try {
         await page.goto(startUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
@@ -862,12 +937,15 @@ async function resolveViaBrowser(
     // 单纯 waitForNetworkIdle 会在 JS 跳转触发前（跳板页此刻已网络空闲）提前返回，把 page.url() 快照在
     // 跳板域名上 → 误判 resolve_failed 并丢弃浏览器结果（这正是 LH 商家被大量误报 no_tracking 的根因）。
     // 故：先短等空闲；若仍停在跳板/中转域名，再主动轮询等它 JS 跳离，跳离后再等落地页网络稳定。
-    try {
-      await page.waitForNetworkIdle({ idleTime: 1200, timeout: 12000 });
-    } catch {
-      /* 超时无妨 */
+    if (!earlyStopUrl) {
+      try {
+        await page.waitForNetworkIdle({ idleTime: 1200, timeout: 12000 });
+      } catch {
+        /* 超时无妨 */
+      }
     }
     const onJumpHost = (): boolean => {
+      if (earlyStopUrl) return false;
       try {
         const h = new URL(page.url()).hostname;
         return isTrackerHost(h) || isNetworkClickHost(h);
@@ -889,7 +967,7 @@ async function resolveViaBrowser(
         }
       }
     }
-    const finalUrl = page.url();
+    const finalUrl = earlyStopUrl || page.url();
     chain.push(finalUrl);
     const dedup = chain.filter((u, i) => i === 0 || u !== chain[i - 1]);
     // D-172：终态仍是非 http(s)（chrome-error:// / about:blank 等）= 导航彻底失败，
@@ -917,6 +995,36 @@ async function resolveViaBrowser(
 }
 
 /**
+ * 第一步结果是否需要升级到浏览器（D-193 严格双条件分流）。
+ *
+ * v2：只有 status="ok"（既落到广告主域名、又带追踪参数）才直出，其余一律升级。旧逻辑只挑
+ * no_tracking / 停在跳板 / 停在中转这三种错误升级，把 resolve_failed 的其他成因（单跳超时、连接重置、
+ * 跟丢）全判成死链——基准集实测这类恰恰是浏览器能救回来的大头。
+ *
+ * 两个例外方向相反：
+ *   forbidden_network 是业务终态（命中平台黑名单），再跑浏览器也不会改变结论，白费一次点击；
+ *   requiresBrowserEnrich 则是「status 已 ok 但只是静态解包、缺网络追踪参数」，必须补跑。
+ *
+ * tracker_forbidden 在此不拦截：它只是「第一步看到跳板 4xx」的归类，浏览器仍有机会跑通。真跑不通时
+ * 调用处的「结果未被采用」分支会把它原样保留为终态，供告警区分「链接被联盟停用」和「单纯没跟到」。
+ *
+ * v2=false 时逐条复刻改造前的判定，保证开关关闭即完全回滚。
+ */
+export function shouldEscalateToBrowser(
+  r: Pick<ResolveResult, "status" | "error" | "requiresBrowserEnrich">,
+  v2: boolean,
+): boolean {
+  if (r.requiresBrowserEnrich === true) return true;
+  if (v2) return r.status !== "ok" && r.status !== "forbidden_network";
+  if (r.status === "no_tracking") return true;
+  return (
+    r.status === "resolve_failed" &&
+    !!r.error &&
+    (r.error.startsWith("停在跳板域名") || r.error.startsWith("停在联盟点击中转域名"))
+  );
+}
+
+/**
  * 解析联盟追踪链接 → 落地页 + 追踪参数 + 上级联盟判定 + 黑名单拦截
  * @param affiliateUrl 联盟追踪链接
  * @param country 投放国（切换代理出口国）
@@ -937,6 +1045,8 @@ export async function resolveAffiliateLink(
     referer?: string | null
     /** 预先取好的粘性代理 URL（出口 IP 去重场景：探 IP 与生成复用同一会话）。传入时跳过内部取代理 */
     proxyUrl?: string | null
+    /** D-193：商家官网域名（`user_merchants.merchant_url`）。传了就启用目标域早停，见 effectiveTargetDomain。 */
+    targetDomain?: string | null
   } = {}
 ): Promise<ResolveResult> {
   const base: ResolveResult = {
@@ -1165,8 +1275,56 @@ export async function resolveAffiliateLink(
   let result: ResolveResult;
   let httpProxyUsed: string | null = null;
   let browserExitIp: string | null = null;
+  // D-193 目标域早停的域名来源，两级：
+  //   ① 调用方传的商家官网域名（`user_merchants.merchant_url`）——基准测试用的就是这一列，最准；
+  //   ② 没传就从联盟链接自带的 `?url=`/`destination=` 参数里解（LinkBux/LB 这类跳板普遍内嵌目标地址）。
+  // 有了它，跟跳一命中商家根域名就停手：既抢在广告主前端洗掉 ?clickref= 之前拿到参数，
+  // 又能跳过整个落地页正文的下载（skipBody）。两头都拿不到时早停关闭，退化成全程跟随。
+  const effectiveTargetDomain = (() => {
+    const explicit = (opts.targetDomain || "").trim();
+    if (explicit) {
+      try {
+        return new URL(/^https?:\/\//i.test(explicit) ? explicit : `https://${explicit}`).hostname;
+      } catch {
+        return "";
+      }
+    }
+    const embedded = unwrapDeeplink(affiliateUrl);
+    if (!embedded) return "";
+    try {
+      const h = new URL(embedded).hostname;
+      // 内嵌参数指回跳板自己（少数联盟会把自己的域名塞进 url=）时无意义，弃用
+      return h && !sameRootDomain(h, startAffiliateHost) && !isTrackerHost(h) ? h : "";
+    } catch {
+      return "";
+    }
+  })();
+
+  // D-193：第一步跟跳引擎。开关关闭时保持原生 fetchChain，行为与上线前完全一致。
+  const runHttpChain = (proxyUrl: string) =>
+    RESOLVER_V2
+      ? fetchChainViaKy(
+          affiliateUrl,
+          proxyUrl,
+          10,
+          18000,
+          { userAgent: opts.userAgent, referer: opts.referer },
+          2,
+          effectiveTargetDomain || null,
+        )
+      : fetchChain(affiliateUrl, proxyUrl, 10, 18000, { userAgent: opts.userAgent, referer: opts.referer });
+  // D-197：浏览器是否已经跑过一次（含跑失败后回退 HTTP 的情况）。跑过就不再进第二步——
+  // 否则同一条链接会连开两次整页浏览器，白烧一次约 99KB 且第二次不会有新结果。
+  let browserAttempted = false;
   if (opts.useBrowser) {
-    const br = await resolveViaBrowser(affiliateUrl, cc, opts.userId);
+    browserAttempted = true;
+    const br = await resolveViaBrowser(affiliateUrl, cc, opts.userId, {
+      // D-197：浏览器优先路径沿用调用方预取的粘性会话。此路径不存在「第一步已经点过一次」的
+      // 重复点击顾虑（HTTP 根本没跑），复用只是为了让出口 IP 去重挑中的免重 IP 真正生效——
+      // 否则浏览器另取一个会话，写进 suffix_pool.exit_ip 的就不是去重台账认可的那个出口。
+      reuseProxyUrl: opts.proxyUrl ?? null,
+      targetHost: RESOLVER_V2 ? effectiveTargetDomain || null : null,
+    });
     if (br.finalUrl) {
       browserExitIp = br.exitIp ?? null;
       result = await evaluate(br, false, true);
@@ -1174,31 +1332,44 @@ export async function resolveAffiliateLink(
       const proxyUrl = await acquireProxy();
       if (!proxyUrl) return proxyUnavailable();
       httpProxyUsed = proxyUrl;
-      const r0 = await fetchChain(affiliateUrl, proxyUrl, 10, 18000, { userAgent: opts.userAgent, referer: opts.referer });
-      result = await evaluate(r0, true, false);
+      result = await evaluate(await runHttpChain(proxyUrl), true, false);
     }
   } else {
     const proxyUrl = await acquireProxy();
     if (!proxyUrl) return proxyUnavailable();
     httpProxyUsed = proxyUrl;
-    const r0 = await fetchChain(affiliateUrl, proxyUrl, 10, 18000, { userAgent: opts.userAgent, referer: opts.referer });
-    result = await evaluate(r0, true, false);
+    result = await evaluate(await runHttpChain(proxyUrl), true, false);
   }
 
-  // ── 无头浏览器兜底 ──
-  // 轻量抓取拿不到追踪参数(no_tracking)、停在跳板/联盟点击中转域名，或只从 EV/MUI 中转链接静态解出广告主
-  // 域名（requiresBrowserEnrich，缺网络追踪参数）时——这类联盟（pepperjam/impact/EngageVantage/UltraInfluence 等）
-  // 多半要真实浏览器执行 JS 才会跟到广告主落地页并附加 clickId/utm。用 puppeteer+stealth 重试一次（受信号量限并发）。
-  if (
-    opts.browserFallback &&
-    !result.usedBrowser &&
-    (result.status === "no_tracking" ||
-      result.requiresBrowserEnrich === true ||
-      (result.status === "resolve_failed" &&
-        !!result.error &&
-        (result.error.startsWith("停在跳板域名") || result.error.startsWith("停在联盟点击中转域名"))))
-  ) {
-    const br = await resolveViaBrowser(affiliateUrl, cc, opts.userId).catch(
+  // ── 第二步：无头浏览器 ──
+  // 这类联盟（pepperjam/impact/EngageVantage/UltraInfluence 等）多半要真实浏览器执行 JS 才会跟到
+  // 广告主落地页并附加 clickId/utm。用 puppeteer+stealth 重试一次（受信号量限并发）。
+  if (opts.browserFallback && !browserAttempted && !result.usedBrowser && shouldEscalateToBrowser(result, RESOLVER_V2)) {
+    // 第一步若已跟到广告主域名（典型 no_tracking：域名对了但参数被洗掉），把该域名作为落地早停提示
+    // 传给浏览器，省掉整页 HTML 并抢在前端洗参之前取到 query。跟丢时没有提示，浏览器走常规全程跟随。
+    let targetHost: string | null = null;
+    try {
+      const h = result.finalUrl ? new URL(result.finalUrl).hostname : "";
+      if (
+        h &&
+        !sameRootDomain(h, startAffiliateHost) &&
+        !isTrackerHost(h) &&
+        !isNetworkClickHost(h) &&
+        !isDeeplinkHost(h)
+      ) {
+        targetHost = h;
+      }
+    } catch {
+      /* 无提示即可 */
+    }
+    // 第一步彻底跟丢（停在跳板上）时也还有商家域名可用，浏览器照样能早停省掉整页
+    if (!targetHost && effectiveTargetDomain) targetHost = effectiveTargetDomain;
+    const br = await resolveViaBrowser(
+      affiliateUrl,
+      cc,
+      opts.userId,
+      RESOLVER_V2 ? { reuseProxyUrl: httpProxyUsed, targetHost } : {},
+    ).catch(
       (e) =>
         ({
           finalUrl: "",
@@ -1207,10 +1378,15 @@ export async function resolveAffiliateLink(
           error: `fallback_rejected: ${e instanceof Error ? e.message.slice(0, 150) : String(e)}`,
         }) as BrowserChainResult,
     );
+    // D-193 升级打标：只要浏览器真的发起了导航，这条链接本轮就被点了第二次（复用同一出口 IP）。
+    // 起飞前就失败的三种情况（无代理/无浏览器/抢不到槽位）没有产生点击，不打标。
+    const preflightFailed = br.error === "proxy_unavailable" || br.error === "no_browser" || br.error === "no_puppeteer_slot";
+    if (!preflightFailed) result.escalated = true;
     if (br.finalUrl) {
       const r2 = await evaluate(br, false, true);
       // 仅当浏览器结果更优（拿到 ok / 命中黑名单）才采用，否则保留首次结果
       if (r2.status === "ok" || r2.status === "forbidden_network") {
+        r2.escalated = true;
         result = r2;
         browserExitIp = br.exitIp ?? null;
       } else {

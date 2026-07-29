@@ -324,10 +324,12 @@ async function doReplenish(
   let effectiveUrl = affiliateUrl
 
   // ── probe：先探一条 ──
-  let probe = await generateOneSuffix(effectiveUrl, country, platform, { userId: campaign.user_id, campaignId, teamId, merchantId: merchantIdStr, referer: refererUrl })
+  // D-197：needsBrowser 系列跳过必败的 HTTP 第一步。probe 一定跑在 batch 之前，所以每天的
+  // 「HTTP 回探名额」总是落在 probe 上——正好是负责学习 suffix_needs_browser 的那一条。
+  let probe = await generateOneSuffix(effectiveUrl, country, platform, { userId: campaign.user_id, campaignId, teamId, merchantId: merchantIdStr, referer: refererUrl, targetDomain: merchant.merchant_url, needsBrowser })
   if (!probe.ok && probe.reason === 'no_tracking' && trackingFallback && trackingFallback !== effectiveUrl) {
     // 挑中链接落地无追踪参数：改用商家动态 tracking_link 重试一次。
-    const retry = await generateOneSuffix(trackingFallback, country, platform, { userId: campaign.user_id, campaignId, teamId, merchantId: merchantIdStr, referer: refererUrl })
+    const retry = await generateOneSuffix(trackingFallback, country, platform, { userId: campaign.user_id, campaignId, teamId, merchantId: merchantIdStr, referer: refererUrl, targetDomain: merchant.merchant_url, needsBrowser })
     if (retry.ok) {
       effectiveUrl = trackingFallback
       probe = retry
@@ -344,6 +346,8 @@ async function doReplenish(
   }
   // 学习「必须浏览器」标记：probe 成功即知本系列纯 HTTP 能否跟到（usedBrowser）。
   // 双向回写——变为需要 → 置 1（下轮起低频补货）；恢复纯 HTTP 可跟 → 清 0（恢复正常水位）。仅变化时写库。
+  // D-197：本轮 probe 若走的是浏览器优先（当天回探名额已用掉），usedBrowser 恒为 true、不含新信息，
+  // 此时 observed 与库里的 1 相等，自然不写库；真正的降档判断只发生在每天那条 HTTP 回探上。
   const observedNeedsBrowser = probe.usedBrowser ? 1 : 0
   if (observedNeedsBrowser !== campaign.suffix_needs_browser) {
     try {
@@ -364,7 +368,7 @@ async function doReplenish(
     let circuitOpen = false
     await runWithConcurrency(remaining, STOCK_CONFIG.CONCURRENCY, async () => {
       if (circuitOpen) return
-      const r = await generateOneSuffix(effectiveUrl, country, platform, { userId: campaign.user_id, campaignId, teamId, merchantId: merchantIdStr, referer: refererUrl })
+      const r = await generateOneSuffix(effectiveUrl, country, platform, { userId: campaign.user_id, campaignId, teamId, merchantId: merchantIdStr, referer: refererUrl, targetDomain: merchant.merchant_url, needsBrowser })
       if (r.ok) {
         consecutiveFail = 0
         if (await persist(r.suffix, r.exitIp)) generated++
