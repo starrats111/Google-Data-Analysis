@@ -27,7 +27,7 @@ function log(msg: string) {
  *
  * 每日 06:00 自动执行：
  * 1. 同步违规/推荐商家（Google Sheet）
- * 2. 同步 MCC 广告数据（Sheet + API）
+ * 2. 同步 MCC 广告数据（只走 Google Sheet，D-198 起不再用 API 查花费）
  * 3. 同步广告系列状态 & 商家状态
  * 4. 同步交易数据（各联盟平台）
  * 5. 自动修复已发布文章
@@ -275,6 +275,8 @@ async function syncAllUsersMcc(): Promise<unknown> {
           await preloadRates(mcc.currency, startStr, endStr);
 
           let sheetUpserted = 0;
+          // HM-D50：本轮回写过名字/预算的 campaign 数
+          let campaignMetaUpdated = 0;
 
           // 1. Sheet 同步（近31天，截止昨日——今日数据不完整，只用于统计投放商家数，不计入费用）
           if (mcc.sheet_url) {
@@ -284,7 +286,12 @@ async function syncAllUsersMcc(): Promise<unknown> {
               const existingCampaigns = gcids.length > 0
                 ? await prisma.campaigns.findMany({
                     where: { user_id: uid, google_campaign_id: { in: gcids as string[] }, is_deleted: 0 },
-                    select: { id: true, google_campaign_id: true, customer_id: true },
+                    // HM-D50：多取 campaign_name / daily_budget 是为了跟 Sheet 回来的值比对，
+                    // 好让外部改动（Hermes 调预算、07 在 Google 后台改名）能同步到 CRM
+                    select: {
+                      id: true, google_campaign_id: true, customer_id: true,
+                      campaign_name: true, daily_budget: true,
+                    },
                     orderBy: { id: "desc" },
                   })
                 : [];
@@ -297,16 +304,18 @@ async function syncAllUsersMcc(): Promise<unknown> {
                 }
               }
 
+              // Sheet 一个 campaign 会有多行（一天一行），取首行代表其名字/预算
+              const firstRowByGcid = new Map<string, typeof sheetResult.rows[0]>();
+              for (const row of sheetResult.rows) {
+                if (row.campaign_id && !firstRowByGcid.has(row.campaign_id)) {
+                  firstRowByGcid.set(row.campaign_id, row);
+                }
+              }
+
               // 新广告系列自动创建：Sheet 中出现但 DB 中不存在的 campaign，
               // 说明是手动同步后在 Google Ads 里新建的广告系列，需要补录进 DB。
               const missingGcids = gcids.filter(id => id && !campaignByGcid.has(id));
               if (missingGcids.length > 0) {
-                const firstRowByGcid = new Map<string, typeof sheetResult.rows[0]>();
-                for (const row of sheetResult.rows) {
-                  if (row.campaign_id && !firstRowByGcid.has(row.campaign_id)) {
-                    firstRowByGcid.set(row.campaign_id, row);
-                  }
-                }
                 for (const gcid of missingGcids) {
                   const sample = firstRowByGcid.get(gcid);
                   if (!sample) continue;
@@ -316,15 +325,24 @@ async function syncAllUsersMcc(): Promise<unknown> {
                     // 完全无任何同 gcid 行时才补录。
                     const existingAny = await prisma.campaigns.findFirst({
                       where: { user_id: uid, google_campaign_id: gcid },
-                      select: { id: true, google_campaign_id: true, customer_id: true, is_deleted: true },
+                      select: {
+                        id: true, google_campaign_id: true, customer_id: true, is_deleted: true,
+                        campaign_name: true, daily_budget: true,
+                      },
                       orderBy: { id: "desc" },
                     });
                     if (existingAny && existingAny.is_deleted === 1) {
                       log(`  [跳过软删 gcid] ${gcid}（避免回灌已清洗的 campaign）`);
                       continue;
                     }
-                    let newC: { id: bigint; google_campaign_id: string | null; customer_id: string | null } | null =
-                      existingAny ? { id: existingAny.id, google_campaign_id: existingAny.google_campaign_id, customer_id: existingAny.customer_id } : null;
+                    let newC: (typeof existingCampaigns)[0] | null =
+                      existingAny
+                        ? {
+                            id: existingAny.id, google_campaign_id: existingAny.google_campaign_id,
+                            customer_id: existingAny.customer_id,
+                            campaign_name: existingAny.campaign_name, daily_budget: existingAny.daily_budget,
+                          }
+                        : null;
                     if (!newC) {
                       newC = await prisma.campaigns.create({
                         data: {
@@ -340,10 +358,40 @@ async function syncAllUsersMcc(): Promise<unknown> {
                       });
                       log(`  [新campaign] ${gcid} ${sample.campaign_name} (from Sheet)`);
                     }
-                    campaignByGcid.set(gcid, { id: newC.id, google_campaign_id: gcid, customer_id: newC.customer_id });
+                    campaignByGcid.set(gcid, {
+                      id: newC.id, google_campaign_id: gcid, customer_id: newC.customer_id,
+                      campaign_name: newC.campaign_name, daily_budget: newC.daily_budget,
+                    });
                   } catch (e) {
                     log(`  [新campaign创建失败] ${gcid}: ${e instanceof Error ? e.message.slice(0, 80) : String(e)}`);
                   }
+                }
+              }
+
+              // HM-D50：把 Sheet 回来的名字/预算写回 campaigns。
+              // 原先这段挂在 API 补数据里，D-198 拆掉 API 后改由 Sheet 承担——
+              // DailyData 本来就带 CampaignName 和 Budget 两列，等于零额外成本。
+              // 覆盖的是 Hermes 推送（campaign-state）走不通、以及 07 直接在
+              // Google 后台改预算/改名这两种 CRM 看不到的情况。
+              for (const [gcid, campaign] of campaignByGcid) {
+                const sample = firstRowByGcid.get(gcid);
+                if (!sample) continue;
+                const nameChanged = !!sample.campaign_name && sample.campaign_name !== campaign.campaign_name;
+                const budgetChanged = sample.budget > 0
+                  && Number(campaign.daily_budget ?? 0) !== sample.budget;
+                if (!nameChanged && !budgetChanged) continue;
+                try {
+                  await prisma.campaigns.update({
+                    where: { id: campaign.id },
+                    data: {
+                      ...(nameChanged ? { campaign_name: sample.campaign_name } : {}),
+                      ...(budgetChanged ? { daily_budget: sample.budget } : {}),
+                      last_google_sync_at: new Date(),
+                    },
+                  });
+                  campaignMetaUpdated++;
+                } catch (e) {
+                  log(`  [campaigns 元信息更新失败] ${gcid}: ${e instanceof Error ? e.message.slice(0, 80) : String(e)}`);
                 }
               }
 
@@ -376,250 +424,19 @@ async function syncAllUsersMcc(): Promise<unknown> {
             }
           }
 
-          // 2. API 补数据（近 2 天：昨天+今天），弥补 Sheet 延迟
-          let apiUpserted = 0;
-          // HM-D50：本轮已比对过名字/预算的 campaign，避免同一个 campaign 的多天数据重复写
-          let campaignMetaUpdated = 0;
-          const metaDone = new Set<string>();
-          if (mcc.service_account_json) {
-            try {
-              const { fetchCampaignDataByDateRange } = await import("@/lib/google-ads");
-              const credentials = {
-                mcc_id: mcc.mcc_id,
-                developer_token: mcc.developer_token || "",
-                service_account_json: mcc.service_account_json,
-              };
+          // D-198：原「2. API 补数据（昨天+今天）」与「D-040 v3 S1 REMOVED 全月扫」已整块删除。
+          // 花费同步只走 Sheet——这是 07 定的原则，原先那两条 API 查询本身就是偏离设计。
+          // 实测（2026-07-29）Sheet 供了当日花费的 96%（$1,446.85 / 456 行），API 仅 $55.49 / 36 行；
+          // 而它们要烧的配额是每天约 3,246 次操作 + 约 167 万 queryResourceConsumption，
+          // 占 Basic 等级 15,000 操作/天 的 22%，直接把与 kyads 共用的 developer token 打爆。
+          // 原先挂在这块的另外四项职责，Sheet 侧都已覆盖：
+          //   - 名字/预算回写（HM-D50）→ 已上移到 Step 1，用 DailyData 的 CampaignName / Budget 两列
+          //   - 新系列补录 → Step 1 本来就做（[新campaign] ... (from Sheet)）
+          //   - google_status / customer_id 回填、含 REMOVED → sheet-status-sync 读 CampaignInfo tab
+          //   - REMOVED 有花费的系列入库 → DailyData 含 REMOVED 行，由 Step 1 补录
+          //     （实测近 60 天 REMOVED 有花费的行里 Sheet 供了 115 行 / $569.15，API 仅 20 行 / $54.45）
 
-              const cids = await prisma.mcc_cid_accounts.findMany({
-                where: { mcc_account_id: mcc.id, is_deleted: 0, status: "active" },
-                take: 50,
-              });
-
-              if (cids.length > 0) {
-                const existingCampaigns = await prisma.campaigns.findMany({
-                  where: { user_id: uid, mcc_id: mcc.id, is_deleted: 0 },
-                  // HM-D50：多取 campaign_name / daily_budget 是为了跟 API 回来的值比对。
-                  // 原来这轮只写 ads_daily_stats，campaigns 上的名字和预算一次都不更新，
-                  // 结果外部改过的（Hermes 调预算、07 在 Google 后台改名）CRM 永远看不到
-                  select: {
-                    id: true, google_campaign_id: true, customer_id: true,
-                    campaign_name: true, daily_budget: true,
-                  },
-                });
-                const campaignByGcid = new Map<string, (typeof existingCampaigns)[0]>();
-                for (const c of existingCampaigns) {
-                  if (!c.google_campaign_id) continue;
-                  const existing = campaignByGcid.get(c.google_campaign_id);
-                  if (!existing || (!existing.customer_id && c.customer_id)) {
-                    campaignByGcid.set(c.google_campaign_id, c);
-                  }
-                }
-
-                log(`    API 补数据 ${yesterdayStr} → ${endStr}, ${cids.length} CIDs`);
-                const CID_CONCURRENCY = 3;
-                for (let ci = 0; ci < cids.length; ci += CID_CONCURRENCY) {
-                  const batch = cids.slice(ci, ci + CID_CONCURRENCY);
-                  const batchResults = await Promise.all(batch.map(async (cid) => {
-                    try {
-                      return await fetchCampaignDataByDateRange(credentials, cid.customer_id, yesterdayStr, endStr);
-                    } catch (err) {
-                      log(`    CID ${cid.customer_id} API err: ${err instanceof Error ? err.message.slice(0, 80) : String(err)}`);
-                      return [];
-                    }
-                  }));
-
-                  for (const data of batchResults) {
-                    for (const cd of data) {
-                      let campaign = campaignByGcid.get(cd.campaign_id);
-                      if (!campaign) {
-                        try {
-                          const existingAny = await prisma.campaigns.findFirst({
-                            where: { user_id: uid, google_campaign_id: cd.campaign_id },
-                            select: {
-                              id: true, google_campaign_id: true, customer_id: true, is_deleted: true,
-                              campaign_name: true, daily_budget: true,
-                            },
-                            orderBy: { id: "desc" },
-                          });
-                          if (existingAny && existingAny.is_deleted === 1) {
-                            log(`  [跳过软删 gcid] ${cd.campaign_id}（避免回灌已清洗的 campaign）`);
-                            continue;
-                          }
-                          if (!existingAny) {
-                            const newC = await prisma.campaigns.create({
-                              data: {
-                                user_id: uid, user_merchant_id: BigInt(0),
-                                google_campaign_id: cd.campaign_id, mcc_id: mcc.id,
-                                customer_id: cd.customer_id,
-                                campaign_name: cd.campaign_name,
-                                daily_budget: cd.budget_dollars,
-                                target_country: parseCampaignNameFull(cd.campaign_name || "")?.country || "US",
-                                google_status: cd.campaign_status,
-                                last_google_sync_at: new Date(),
-                              },
-                            });
-                            log(`  [新campaign] ${cd.campaign_id} ${cd.campaign_name} (from API)`);
-                            campaign = {
-                              id: newC.id, google_campaign_id: cd.campaign_id, customer_id: newC.customer_id,
-                              campaign_name: newC.campaign_name, daily_budget: newC.daily_budget,
-                            };
-                          } else {
-                            await prisma.campaigns.update({
-                              where: { id: existingAny.id },
-                              data: { customer_id: cd.customer_id || undefined, google_status: cd.campaign_status },
-                            });
-                            campaign = {
-                              id: existingAny.id, google_campaign_id: cd.campaign_id,
-                              customer_id: existingAny.customer_id || cd.customer_id,
-                              campaign_name: existingAny.campaign_name, daily_budget: existingAny.daily_budget,
-                            };
-                          }
-                          campaignByGcid.set(cd.campaign_id, campaign);
-                        } catch (e) {
-                          log(`  [新campaign创建失败] ${cd.campaign_id}: ${e instanceof Error ? e.message.slice(0, 80) : String(e)}`);
-                          continue;
-                        }
-                      }
-
-                      // HM-D50 兜底：API 这轮本来就把 campaign.name 和
-                      // campaign_budget.amount_micros 查回来了（sync.ts 的 GAQL 里有），
-                      // 之前只往 ads_daily_stats 写、campaigns 上一个字都不改。
-                      // 补上这一段是零额外 API 成本的，Hermes 的推送（campaign-state）走不通时
-                      // 靠它保底，也能覆盖 07 直接在 Google 后台改预算/改名的情况。
-                      // API 一个 campaign 会回多行（一天一行），只在第一行比对写库
-                      if (!metaDone.has(cd.campaign_id)) {
-                        metaDone.add(cd.campaign_id);
-                        const nameChanged = !!cd.campaign_name && cd.campaign_name !== campaign.campaign_name;
-                        const budgetChanged = cd.budget_dollars > 0
-                          && Number(campaign.daily_budget ?? 0) !== cd.budget_dollars;
-                        if (nameChanged || budgetChanged) {
-                          try {
-                            await prisma.campaigns.update({
-                              where: { id: campaign.id },
-                              data: {
-                                ...(nameChanged ? { campaign_name: cd.campaign_name } : {}),
-                                ...(budgetChanged ? { daily_budget: cd.budget_dollars } : {}),
-                                last_google_sync_at: new Date(),
-                              },
-                            });
-                            campaignMetaUpdated++;
-                          } catch (e) {
-                            log(`  [campaigns 元信息更新失败] ${cd.campaign_id}: ${e instanceof Error ? e.message.slice(0, 80) : String(e)}`);
-                          }
-                        }
-                      }
-
-                      const dateObj = new Date(cd.date);
-                      const rate = await getExchangeRate(mcc.currency, cd.date);
-                      if (rate <= 0) continue;
-
-                      const costUsd = cd.cost_dollars * rate;
-                      await prisma.ads_daily_stats.upsert({
-                        where: { campaign_id_date: { campaign_id: campaign.id, date: dateObj } },
-                        update: { cost: costUsd, clicks: cd.clicks, impressions: cd.impressions, cpc: cd.cpc_dollars * rate, data_source: "api" },
-                        create: {
-                          user_id: uid, campaign_id: campaign.id, date: dateObj,
-                          cost: costUsd, clicks: cd.clicks, impressions: cd.impressions,
-                          cpc: cd.cpc_dollars * rate,
-                          data_source: "api", user_merchant_id: BigInt(0),
-                        },
-                      });
-                      apiUpserted++;
-                    }
-                  }
-                }
-
-                // ── D-040 v3 S1：显式拉本月 REMOVED 且有花费的 campaign，入库为独立 REMOVED 行 ──
-                // GAQL `FROM campaign` 默认过滤 REMOVED，导致后台删除/重发广告的花费永远进不了 CRM，
-                // CRM 总花费长期低于 GAds 后台。这里把本月有花费的 REMOVED 显式拉回，作为 google_status=REMOVED 行入库。
-                try {
-                  const { fetchRemovedCampaignData } = await import("@/lib/google-ads");
-                  const monthStartStr = cstNow.startOf("month").format("YYYY-MM-DD");
-                  for (let ci = 0; ci < cids.length; ci += CID_CONCURRENCY) {
-                    const batch = cids.slice(ci, ci + CID_CONCURRENCY);
-                    const removedResults = await Promise.all(batch.map(async (cid) => {
-                      try {
-                        return await fetchRemovedCampaignData(credentials, cid.customer_id, monthStartStr, endStr);
-                      } catch (err) {
-                        log(`    [REMOVED] CID ${cid.customer_id} err: ${err instanceof Error ? err.message.slice(0, 80) : String(err)}`);
-                        return [];
-                      }
-                    }));
-                    for (const data of removedResults) {
-                      for (const cd of data) {
-                        let campaign = campaignByGcid.get(cd.campaign_id);
-                        if (!campaign) {
-                          try {
-                            const existingAny = await prisma.campaigns.findFirst({
-                              where: { user_id: uid, google_campaign_id: cd.campaign_id },
-                              select: {
-                                id: true, google_campaign_id: true, customer_id: true, is_deleted: true,
-                                campaign_name: true, daily_budget: true,
-                              },
-                              orderBy: { id: "desc" },
-                            });
-                            // 防回灌：被刻意清洗的软删行不重建
-                            if (existingAny && existingAny.is_deleted === 1) continue;
-                            if (existingAny) {
-                              await prisma.campaigns.update({
-                                where: { id: existingAny.id },
-                                data: { google_status: "REMOVED", status: "paused", last_google_sync_at: new Date() },
-                              });
-                              campaign = {
-                                id: existingAny.id, google_campaign_id: cd.campaign_id,
-                                customer_id: existingAny.customer_id,
-                                campaign_name: existingAny.campaign_name, daily_budget: existingAny.daily_budget,
-                              };
-                            } else {
-                              const newC = await prisma.campaigns.create({
-                                data: {
-                                  user_id: uid, user_merchant_id: BigInt(0),
-                                  google_campaign_id: cd.campaign_id, mcc_id: mcc.id,
-                                  customer_id: cd.customer_id, campaign_name: cd.campaign_name,
-                                  daily_budget: cd.budget_dollars, target_country: parseCampaignNameFull(cd.campaign_name || "")?.country || "US",
-                                  status: "paused", google_status: "REMOVED",
-                                  last_google_sync_at: new Date(),
-                                },
-                              });
-                              log(`  [REMOVED入库] ${cd.campaign_id} ${cd.campaign_name} cost=$${cd.cost_dollars}`);
-                              campaign = {
-                                id: newC.id, google_campaign_id: cd.campaign_id, customer_id: newC.customer_id,
-                                campaign_name: newC.campaign_name, daily_budget: newC.daily_budget,
-                              };
-                            }
-                            campaignByGcid.set(cd.campaign_id, campaign);
-                          } catch (e) {
-                            log(`  [REMOVED入库失败] ${cd.campaign_id}: ${e instanceof Error ? e.message.slice(0, 80) : String(e)}`);
-                            continue;
-                          }
-                        }
-                        const dateObj = new Date(cd.date);
-                        const rate = await getExchangeRate(mcc.currency, cd.date);
-                        if (rate <= 0) continue;
-                        const costUsd = cd.cost_dollars * rate;
-                        await prisma.ads_daily_stats.upsert({
-                          where: { campaign_id_date: { campaign_id: campaign.id, date: dateObj } },
-                          update: { cost: costUsd, clicks: cd.clicks, impressions: cd.impressions, cpc: cd.cpc_dollars * rate, data_source: "api" },
-                          create: {
-                            user_id: uid, campaign_id: campaign.id, date: dateObj,
-                            cost: costUsd, clicks: cd.clicks, impressions: cd.impressions,
-                            cpc: cd.cpc_dollars * rate, data_source: "api", user_merchant_id: BigInt(0),
-                          },
-                        });
-                        apiUpserted++;
-                      }
-                    }
-                  }
-                } catch (e) {
-                  log(`    REMOVED 同步失败: ${e instanceof Error ? e.message : String(e)}`);
-                }
-              }
-            } catch (e) {
-              log(`    API 补数据失败: ${e instanceof Error ? e.message : String(e)}`);
-            }
-          }
-
-          results[`mcc_${mcc.mcc_id}`] = { sheetUpserted, apiUpserted, campaignMetaUpdated };
+          results[`mcc_${mcc.mcc_id}`] = { sheetUpserted, campaignMetaUpdated };
         } catch (e) {
           results[`mcc_${mcc.mcc_id}`] = { error: e instanceof Error ? e.message : String(e) };
         }
