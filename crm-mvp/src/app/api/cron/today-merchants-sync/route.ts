@@ -91,9 +91,15 @@ async function backfillNewCampaigns(
               last_google_sync_at: new Date(),
             },
           });
+          // D-196：与 daily-sync 的复活闸门一致，把随系列软删的历史花费一并恢复
+          const restored = await prisma.ads_daily_stats.updateMany({
+            where: { campaign_id: softId, is_deleted: 1 },
+            data: { is_deleted: 0 },
+          });
           out.resurrected++;
           touchedUsers.add(userId);
-          log(`  [复活] Sheet 实时 ENABLED 的软删系列 gcid=${gcid} campaign#${softId} (user ${userId})`);
+          log(`  [复活] Sheet 实时 ENABLED 的软删系列 gcid=${gcid} campaign#${softId} (user ${userId})` +
+              (restored.count > 0 ? `，同时恢复 ${restored.count} 天花费` : ""));
           continue;
         }
 

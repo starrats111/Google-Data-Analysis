@@ -100,7 +100,9 @@ export async function syncTodayCostFromSheets(): Promise<TodayCostResult> {
         }
         await prisma.ads_daily_stats.upsert({
           where: { campaign_id_date: { campaign_id: campaignId, date: dateObj } },
-          update: { cost: agg.cost * rate, clicks: agg.clicks, impressions: agg.impressions },
+          // is_deleted 归零：campaign 已复活（上面只查 is_deleted=0 的系列）但花费行还停留在
+          // 软删态时，唯一键会命中那一行；不清标记的话花费写进去了却依然不可见
+          update: { cost: agg.cost * rate, clicks: agg.clicks, impressions: agg.impressions, is_deleted: 0 },
           create: {
             user_id: mcc.user_id,
             campaign_id: campaignId,

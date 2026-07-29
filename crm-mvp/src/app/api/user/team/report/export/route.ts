@@ -293,6 +293,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     SELECT user_id, DATE_FORMAT(date,'%Y-%m') AS month, SUM(CAST(cost AS DECIMAL(14,4))) AS cost
     FROM ads_daily_stats
     WHERE user_id IN (${memberIds.map(() => "?").join(",")}) AND date>=? AND date<?
+      AND is_deleted = 0
     GROUP BY user_id, month
   `, ...memberIds, yearStart, yearEnd);
 

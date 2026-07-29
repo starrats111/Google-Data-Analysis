@@ -73,6 +73,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     FROM ads_daily_stats
     WHERE user_id IN (${memberIds.map(() => "?").join(",")})
       AND date >= ? AND date < ?
+      AND is_deleted = 0
     GROUP BY user_id, month
     ORDER BY user_id, month
   `, ...memberIds, yearStart, yearEnd);

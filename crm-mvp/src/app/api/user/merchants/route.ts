@@ -1043,8 +1043,16 @@ export const PUT = withUser(async (req: NextRequest, { user }) => {
         });
       }
 
-      await prisma.ads_daily_stats.deleteMany({
-        where: { campaign_id: { in: campaignIds } },
+      // D-196：这里原本是 deleteMany——释放商家会把广告系列的历史花费**物理抹掉**，
+      // 而系列本身只是软删。后果是「换 CID 重开」（释放 → 重新领取再投）之后，
+      // 老系列花的钱在库里一行都不剩，佣金却因为按商家归集而存活，
+      // 于是新系列上挂着一堆佣金、费用却是 0（wj08 的 mmlafleur 实测：
+      // 21031 花了钱带来 16 单 $999.14，被释放后 ads_daily_stats 零行）。
+      // 改成软删：所有读侧本来就过滤 is_deleted=0，可见行为完全不变，但数据留得下来，
+      // 系列被复活时能一并恢复。
+      await prisma.ads_daily_stats.updateMany({
+        where: { campaign_id: { in: campaignIds }, is_deleted: 0 },
+        data: { is_deleted: 1 },
       });
 
       await prisma.campaigns.updateMany({

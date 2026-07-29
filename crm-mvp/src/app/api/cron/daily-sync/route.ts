@@ -793,8 +793,14 @@ async function syncAllCampaignStatuses(): Promise<unknown> {
                   last_google_sync_at: new Date(),
                 },
               });
+              // D-196：系列复活时把随它软删的历史花费一并恢复，否则复活出来的是一条零花费空壳
+              const restored = await prisma.ads_daily_stats.updateMany({
+                where: { campaign_id: softRow.id, is_deleted: 1 },
+                data: { is_deleted: 0 },
+              });
               updated++;
-              log(`  [复活] Google 实时 ENABLED 的软删活广告 gcid=${s.campaign_id} campaign#${softRow.id} cid=${s.customer_id}`);
+              log(`  [复活] Google 实时 ENABLED 的软删活广告 gcid=${s.campaign_id} campaign#${softRow.id} cid=${s.customer_id}` +
+                  (restored.count > 0 ? `，同时恢复 ${restored.count} 天花费` : ""));
             }
           }
         }
