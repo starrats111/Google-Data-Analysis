@@ -39,8 +39,22 @@
  *         （不碰主爬预留），唤醒优先级排在 normal 之后——突发不饿死 sitelinks，也不比旧行为差。
  *   - 代价评估：最坏情况主爬多等一个换链接会话（通常 25-40s，主爬超时 60s 内可承受）；
  *     换链接 Chrome 因重资源拦截（图/媒体/CSS 全 abort）显著轻于爬虫 Chrome，内存风险不变（总并发仍 ≤3）。
+ *     ⚠️ D-199 实测推翻了本行的「显著轻」：换链接 352MB vs 爬虫 323MB，只轻 7%。拦截省的是流量，
+ *     内存花在 Chromium 进程结构上（单会话 1 gpu + 5 renderer + 2 utility，跟链每过一个域名按站点隔离
+ *     各起一个渲染器），与页面里有没有图基本无关。总并发 ≤3 的内存结论不变，但依据不是「换链接更轻」。
+ *
+ * D-199 借用预留槽（2026-07-29，第 3 槽空转事件）：
+ *   - 实证：当日 29 次 no_puppeteer_slot 全部来自换链接、爬虫车道 0 次；每次现场快照都是
+ *     `active=2/3, mainQ=0` —— 快车道已占满（_activeExchangeFast=1）、normal 判定 `_active < 2`
+ *     也不成立，两条路全断，而第 3 槽空着且无人排队。属调度浪费，不是资源不足
+ *     （同期看门狗强制释放 0 次、实测并发从未超过 3，无泄漏）。
+ *   - 改造：exchange 增加第三条路 exchangeReserve —— 主爬队列为空且总池未满时借用预留槽，
+ *     唤醒优先级垫最底（main > 快车道 > normal > 弹性 > 借预留），main/normal 一到即抢回。
+ *   - 代价评估：主爬排队拿的是**第一个释放**的槽，等的是「剩余最短」而非多个会话之和，故最坏仍与
+ *     D-172 已接受的口径同量级；且实测换链接会话仅 1-14s，远低于当初假设的 25-40s 和主爬 60s 超时。
  *
  * 环境变量 PUPPETEER_SEMAPHORE_OFF=1 可一键 bypass（用于快速回滚定位）。
+ * 环境变量 PUPPETEER_EXCHANGE_RESERVE_OFF=1 可单独回滚 D-199 借预留（无需重新部署）。
  */
 
 const MAX_PUPPETEER_SLOTS = 3;
@@ -55,8 +69,8 @@ const EXCHANGE_FAST_SLOTS = 1;
 const MAX_SLOT_HOLD_MS = 150000;
 
 type SlotLane = "main" | "exchange" | "normal";
-/** 实际授予的槽位种类（exchange 分快车道/弹性两种，释放时分别扣减计数） */
-type GrantKind = "main" | "exchangeFast" | "exchangeElastic" | "normal";
+/** 实际授予的槽位种类（exchange 分快车道/弹性/借预留三种，释放时分别扣减计数） */
+type GrantKind = "main" | "exchangeFast" | "exchangeElastic" | "exchangeReserve" | "normal";
 
 let _active = 0;
 let _activeExchangeFast = 0;
@@ -78,6 +92,25 @@ function canGrantNormalPool(): boolean {
   return _active < NORMAL_SLOTS;
 }
 
+/**
+ * D-199：exchange 借用主爬预留槽——仅当主爬队列为空且总池未满。
+ *
+ * 真因（2026-07-29 生产实测）：当日 29 次 no_puppeteer_slot 全部来自换链接、爬虫车道 0 次，
+ * 每次现场快照都是 `active=2/3, mainQ=0`。此时快车道已被占（_activeExchangeFast=1）、
+ * normal 判定 `_active < 2` 也不成立，两条路全断，而第 3 槽空着且无人排队 —— 换链接干等
+ * 30s 后失败，纯属调度浪费而非资源不足。
+ *
+ * 代价与 D-172 已接受的口径同量级：主爬排队时拿的是**第一个释放**的槽，等的是「剩余最短」
+ * 而非三个会话之和，故最坏仍是「多等一个换链接会话」。实测换链接会话仅 1-14s，远低于主爬
+ * 60s 超时。且唤醒优先级里 main 永远排第一，借用不改变主爬的抢回顺序。
+ *
+ * PUPPETEER_EXCHANGE_RESERVE_OFF=1 可单独回滚这一条，无需重新部署。
+ */
+function canGrantExchangeReserve(): boolean {
+  if (process.env.PUPPETEER_EXCHANGE_RESERVE_OFF === "1") return false;
+  return _waitersMain.length === 0 && _active < MAX_PUPPETEER_SLOTS;
+}
+
 /** 请求到达时的授予判定；exchange 返回实际授予的种类，不可授予返回 null */
 function tryClassifyGrant(lane: SlotLane): GrantKind | null {
   if (lane === "main") return _active < MAX_PUPPETEER_SLOTS ? "main" : null;
@@ -85,6 +118,8 @@ function tryClassifyGrant(lane: SlotLane): GrantKind | null {
     if (canGrantExchangeFast()) return "exchangeFast";
     // 弹性配额：换链接突发（补货批量/点击补刷）时额外会话用 normal 池余量，与旧行为等价
     if (canGrantNormalPool()) return "exchangeElastic";
+    // D-199 借预留：主爬没在排队时，空着的预留槽给换链接用，主爬一到按最高优先级抢回
+    if (canGrantExchangeReserve()) return "exchangeReserve";
     return null;
   }
   // normal：维持原语义（总活跃 < NORMAL_SLOTS，不碰预留余量）——保住 D-027「主爬到达即有槽」的
@@ -176,7 +211,7 @@ function makeReleaser(kind: GrantKind): () => void {
     _active = Math.max(0, _active - 1);
     if (kind === "exchangeFast") _activeExchangeFast = Math.max(0, _activeExchangeFast - 1);
 
-    // 唤醒优先级：main > exchange 快车道 > normal > exchange 弹性
+    // 唤醒优先级：main > exchange 快车道 > normal > exchange 弹性 > exchange 借预留
     if (_waitersMain.length > 0 && _active < MAX_PUPPETEER_SLOTS) {
       const next = _waitersMain.shift()!;
       next(grant("main"));
@@ -196,6 +231,12 @@ function makeReleaser(kind: GrantKind): () => void {
     if (_waitersExchange.length > 0 && canGrantNormalPool()) {
       const next = _waitersExchange.shift()!;
       next(grant("exchangeElastic"));
+      return;
+    }
+    // D-199 借预留垫最底：main/normal 队列都空了才把预留槽让给换链接，两者一到即按上面的顺序抢回
+    if (_waitersExchange.length > 0 && canGrantExchangeReserve()) {
+      const next = _waitersExchange.shift()!;
+      next(grant("exchangeReserve"));
       return;
     }
   };
