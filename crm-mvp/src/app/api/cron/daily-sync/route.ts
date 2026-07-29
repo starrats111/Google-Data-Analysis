@@ -376,6 +376,9 @@ async function syncAllUsersMcc(): Promise<unknown> {
 
           // 2. API 补数据（近 2 天：昨天+今天），弥补 Sheet 延迟
           let apiUpserted = 0;
+          // HM-D50：本轮已比对过名字/预算的 campaign，避免同一个 campaign 的多天数据重复写
+          let campaignMetaUpdated = 0;
+          const metaDone = new Set<string>();
           if (mcc.service_account_json) {
             try {
               const { fetchCampaignDataByDateRange } = await import("@/lib/google-ads");
@@ -393,7 +396,13 @@ async function syncAllUsersMcc(): Promise<unknown> {
               if (cids.length > 0) {
                 const existingCampaigns = await prisma.campaigns.findMany({
                   where: { user_id: uid, mcc_id: mcc.id, is_deleted: 0 },
-                  select: { id: true, google_campaign_id: true, customer_id: true },
+                  // HM-D50：多取 campaign_name / daily_budget 是为了跟 API 回来的值比对。
+                  // 原来这轮只写 ads_daily_stats，campaigns 上的名字和预算一次都不更新，
+                  // 结果外部改过的（Hermes 调预算、07 在 Google 后台改名）CRM 永远看不到
+                  select: {
+                    id: true, google_campaign_id: true, customer_id: true,
+                    campaign_name: true, daily_budget: true,
+                  },
                 });
                 const campaignByGcid = new Map<string, (typeof existingCampaigns)[0]>();
                 for (const c of existingCampaigns) {
@@ -424,16 +433,18 @@ async function syncAllUsersMcc(): Promise<unknown> {
                         try {
                           const existingAny = await prisma.campaigns.findFirst({
                             where: { user_id: uid, google_campaign_id: cd.campaign_id },
-                            select: { id: true, google_campaign_id: true, customer_id: true, is_deleted: true },
+                            select: {
+                              id: true, google_campaign_id: true, customer_id: true, is_deleted: true,
+                              campaign_name: true, daily_budget: true,
+                            },
                             orderBy: { id: "desc" },
                           });
                           if (existingAny && existingAny.is_deleted === 1) {
                             log(`  [跳过软删 gcid] ${cd.campaign_id}（避免回灌已清洗的 campaign）`);
                             continue;
                           }
-                          let newC: { id: bigint; google_campaign_id: string | null; customer_id: string | null } | null = null;
                           if (!existingAny) {
-                            newC = await prisma.campaigns.create({
+                            const newC = await prisma.campaigns.create({
                               data: {
                                 user_id: uid, user_merchant_id: BigInt(0),
                                 google_campaign_id: cd.campaign_id, mcc_id: mcc.id,
@@ -446,18 +457,53 @@ async function syncAllUsersMcc(): Promise<unknown> {
                               },
                             });
                             log(`  [新campaign] ${cd.campaign_id} ${cd.campaign_name} (from API)`);
+                            campaign = {
+                              id: newC.id, google_campaign_id: cd.campaign_id, customer_id: newC.customer_id,
+                              campaign_name: newC.campaign_name, daily_budget: newC.daily_budget,
+                            };
                           } else {
                             await prisma.campaigns.update({
                               where: { id: existingAny.id },
                               data: { customer_id: cd.customer_id || undefined, google_status: cd.campaign_status },
                             });
-                            newC = { id: existingAny.id, google_campaign_id: existingAny.google_campaign_id, customer_id: existingAny.customer_id };
+                            campaign = {
+                              id: existingAny.id, google_campaign_id: cd.campaign_id,
+                              customer_id: existingAny.customer_id || cd.customer_id,
+                              campaign_name: existingAny.campaign_name, daily_budget: existingAny.daily_budget,
+                            };
                           }
-                          campaign = { id: newC.id, google_campaign_id: cd.campaign_id, customer_id: newC.customer_id };
                           campaignByGcid.set(cd.campaign_id, campaign);
                         } catch (e) {
                           log(`  [新campaign创建失败] ${cd.campaign_id}: ${e instanceof Error ? e.message.slice(0, 80) : String(e)}`);
                           continue;
+                        }
+                      }
+
+                      // HM-D50 兜底：API 这轮本来就把 campaign.name 和
+                      // campaign_budget.amount_micros 查回来了（sync.ts 的 GAQL 里有），
+                      // 之前只往 ads_daily_stats 写、campaigns 上一个字都不改。
+                      // 补上这一段是零额外 API 成本的，Hermes 的推送（campaign-state）走不通时
+                      // 靠它保底，也能覆盖 07 直接在 Google 后台改预算/改名的情况。
+                      // API 一个 campaign 会回多行（一天一行），只在第一行比对写库
+                      if (!metaDone.has(cd.campaign_id)) {
+                        metaDone.add(cd.campaign_id);
+                        const nameChanged = !!cd.campaign_name && cd.campaign_name !== campaign.campaign_name;
+                        const budgetChanged = cd.budget_dollars > 0
+                          && Number(campaign.daily_budget ?? 0) !== cd.budget_dollars;
+                        if (nameChanged || budgetChanged) {
+                          try {
+                            await prisma.campaigns.update({
+                              where: { id: campaign.id },
+                              data: {
+                                ...(nameChanged ? { campaign_name: cd.campaign_name } : {}),
+                                ...(budgetChanged ? { daily_budget: cd.budget_dollars } : {}),
+                                last_google_sync_at: new Date(),
+                              },
+                            });
+                            campaignMetaUpdated++;
+                          } catch (e) {
+                            log(`  [campaigns 元信息更新失败] ${cd.campaign_id}: ${e instanceof Error ? e.message.slice(0, 80) : String(e)}`);
+                          }
                         }
                       }
 
@@ -504,7 +550,10 @@ async function syncAllUsersMcc(): Promise<unknown> {
                           try {
                             const existingAny = await prisma.campaigns.findFirst({
                               where: { user_id: uid, google_campaign_id: cd.campaign_id },
-                              select: { id: true, google_campaign_id: true, customer_id: true, is_deleted: true },
+                              select: {
+                                id: true, google_campaign_id: true, customer_id: true, is_deleted: true,
+                                campaign_name: true, daily_budget: true,
+                              },
                               orderBy: { id: "desc" },
                             });
                             // 防回灌：被刻意清洗的软删行不重建
@@ -514,7 +563,11 @@ async function syncAllUsersMcc(): Promise<unknown> {
                                 where: { id: existingAny.id },
                                 data: { google_status: "REMOVED", status: "paused", last_google_sync_at: new Date() },
                               });
-                              campaign = { id: existingAny.id, google_campaign_id: cd.campaign_id, customer_id: existingAny.customer_id };
+                              campaign = {
+                                id: existingAny.id, google_campaign_id: cd.campaign_id,
+                                customer_id: existingAny.customer_id,
+                                campaign_name: existingAny.campaign_name, daily_budget: existingAny.daily_budget,
+                              };
                             } else {
                               const newC = await prisma.campaigns.create({
                                 data: {
@@ -527,7 +580,10 @@ async function syncAllUsersMcc(): Promise<unknown> {
                                 },
                               });
                               log(`  [REMOVED入库] ${cd.campaign_id} ${cd.campaign_name} cost=$${cd.cost_dollars}`);
-                              campaign = { id: newC.id, google_campaign_id: cd.campaign_id, customer_id: newC.customer_id };
+                              campaign = {
+                                id: newC.id, google_campaign_id: cd.campaign_id, customer_id: newC.customer_id,
+                                campaign_name: newC.campaign_name, daily_budget: newC.daily_budget,
+                              };
                             }
                             campaignByGcid.set(cd.campaign_id, campaign);
                           } catch (e) {
@@ -561,7 +617,7 @@ async function syncAllUsersMcc(): Promise<unknown> {
             }
           }
 
-          results[`mcc_${mcc.mcc_id}`] = { sheetUpserted, apiUpserted };
+          results[`mcc_${mcc.mcc_id}`] = { sheetUpserted, apiUpserted, campaignMetaUpdated };
         } catch (e) {
           results[`mcc_${mcc.mcc_id}`] = { error: e instanceof Error ? e.message : String(e) };
         }
