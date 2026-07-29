@@ -304,11 +304,16 @@ async function syncAllUsersMcc(): Promise<unknown> {
                 }
               }
 
-              // Sheet 一个 campaign 会有多行（一天一行），取首行代表其名字/预算
-              const firstRowByGcid = new Map<string, typeof sheetResult.rows[0]>();
+              // Sheet 一个 campaign 会有多行（一天一行），取「日期最新」的那行代表其名字/预算。
+              // 必须按日期挑，不能图省事取遍历到的第一行：这批 rows 跨 31 天，
+              // 首行可能是一个月前的，拿它回写会用旧名字/旧预算覆盖当前值。
+              // （原先这段逻辑挂在 API 上，API 只查昨天+今天，首行天然是最近的，换到 Sheet 后不成立）
+              const latestRowByGcid = new Map<string, typeof sheetResult.rows[0]>();
               for (const row of sheetResult.rows) {
-                if (row.campaign_id && !firstRowByGcid.has(row.campaign_id)) {
-                  firstRowByGcid.set(row.campaign_id, row);
+                if (!row.campaign_id) continue;
+                const prev = latestRowByGcid.get(row.campaign_id);
+                if (!prev || row.date > prev.date) {
+                  latestRowByGcid.set(row.campaign_id, row);
                 }
               }
 
@@ -317,7 +322,7 @@ async function syncAllUsersMcc(): Promise<unknown> {
               const missingGcids = gcids.filter(id => id && !campaignByGcid.has(id));
               if (missingGcids.length > 0) {
                 for (const gcid of missingGcids) {
-                  const sample = firstRowByGcid.get(gcid);
+                  const sample = latestRowByGcid.get(gcid);
                   if (!sample) continue;
                   try {
                     // 防回灌：先查所有同 gcid 行（含已软删）。
@@ -373,9 +378,14 @@ async function syncAllUsersMcc(): Promise<unknown> {
               // DailyData 本来就带 CampaignName 和 Budget 两列，等于零额外成本。
               // 覆盖的是 Hermes 推送（campaign-state）走不通、以及 07 直接在
               // Google 后台改预算/改名这两种 CRM 看不到的情况。
+              //
+              // 只认近 3 天的 Sheet 行。原 API 版本只查昨天+今天，天生就是「近期真相」；
+              // Sheet 这批 rows 跨 31 天，若不设闸门，早已停投的系列会拿一个月前的旧值
+              // 回写，既可能盖掉更新的值，也会在首轮产生一大批无意义的 UPDATE。
+              const metaFreshFrom = cstNow.subtract(3, "day").format("YYYY-MM-DD");
               for (const [gcid, campaign] of campaignByGcid) {
-                const sample = firstRowByGcid.get(gcid);
-                if (!sample) continue;
+                const sample = latestRowByGcid.get(gcid);
+                if (!sample || sample.date < metaFreshFrom) continue;
                 const nameChanged = !!sample.campaign_name && sample.campaign_name !== campaign.campaign_name;
                 const budgetChanged = sample.budget > 0
                   && Number(campaign.daily_budget ?? 0) !== sample.budget;
