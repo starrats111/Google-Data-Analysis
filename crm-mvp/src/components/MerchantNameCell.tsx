@@ -13,6 +13,7 @@
 import { useState } from "react";
 import { App, Button, Popover, Space, Tooltip, Typography } from "antd";
 import { CopyOutlined, ShopOutlined } from "@ant-design/icons";
+import { connectionLabel } from "@/lib/connection-label";
 
 const { Text } = Typography;
 
@@ -22,6 +23,7 @@ const { Text } = Typography;
 export interface ConnectionAccount {
   id: string; // platform_connection.id
   account_name: string; // platform_connection.account_name（可读名称）
+  account_index?: number | null; // platform_connection.account_index（D-199：同名账号靠它区分）
   platform: string; // platform_connection.platform
   link: string; // 该账号在该商家上的追踪链接（connection_campaign_links[id]）
 }
@@ -128,7 +130,7 @@ export default function MerchantNameCell({
           >
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 600, fontSize: 13 }}>
-                {acc.account_name || acc.platform || acc.id}
+                {connectionLabel(acc) || acc.id}
               </div>
               <Text type="secondary" style={{ fontSize: 11, display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                 {acc.link}
@@ -140,7 +142,7 @@ export default function MerchantNameCell({
               icon={<CopyOutlined />}
               onClick={(e) => {
                 e.stopPropagation();
-                doCopy(acc.link, acc.account_name || acc.platform);
+                doCopy(acc.link, connectionLabel(acc));
                 setPopoverOpen(false);
               }}
             >

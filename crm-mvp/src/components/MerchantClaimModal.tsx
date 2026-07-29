@@ -17,6 +17,7 @@ import { App, Form, Input, Modal, Select, Space, Tag, Typography, Tooltip } from
 import { WarningOutlined } from "@ant-design/icons";
 import { useRouter } from "next/navigation";
 import { ALL_COUNTRIES } from "@/lib/constants";
+import { compareConnections, connectionLabel, type ConnectionLabelInput } from "@/lib/connection-label";
 import { mutateApi } from "@/lib/swr";
 
 const { Text } = Typography;
@@ -60,7 +61,7 @@ export default function MerchantClaimModal({
   const { message, modal } = App.useApp();
   const router = useRouter();
   const [form] = Form.useForm();
-  const [platformConns, setPlatformConns] = useState<{ id: string; platform: string; account_name: string }[]>([]);
+  const [platformConns, setPlatformConns] = useState<({ id: string } & ConnectionLabelInput)[]>([]);
   const [mccAccounts, setMccAccounts] = useState<{ id: string; mcc_id: string; mcc_name: string }[]>([]);
   const [confirmedHighChargeback, setConfirmedHighChargeback] = useState(false);
 
@@ -75,7 +76,9 @@ export default function MerchantClaimModal({
           fetch("/api/user/settings/mcc").then((r) => r.json()),
         ]);
         if (platRes.code === 0) {
-          const conns = (platRes.data || []).filter((c: { platform: string }) => c.platform === merchant.platform);
+          const conns = ((platRes.data || []) as ({ id: string } & ConnectionLabelInput)[])
+            .filter((c) => c.platform === merchant.platform)
+            .sort(compareConnections);
           setPlatformConns(conns);
           if (conns.length === 1) form.setFieldValue("platform_connection_id", conns[0].id);
         }
@@ -218,7 +221,8 @@ export default function MerchantClaimModal({
           <Form.Item name="platform_connection_id" label="使用账号" rules={[{ required: true, message: "请选择使用的平台账号" }]}>
             <Select
               placeholder="选择平台账号"
-              options={platformConns.map((c) => ({ value: c.id, label: `${c.account_name || c.platform} (${c.platform})` }))}
+              optionFilterProp="label"
+              options={platformConns.map((c) => ({ value: c.id, label: connectionLabel(c) }))}
             />
           </Form.Item>
         )}

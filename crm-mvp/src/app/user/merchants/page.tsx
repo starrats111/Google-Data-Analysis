@@ -3,6 +3,7 @@ import { useState, useCallback, useMemo, useEffect } from "react";
 import { Card, Row, Col, Table, Input, Select, Button, Space, Tag, Modal, Form, Typography, Popconfirm, Popover, Switch, InputNumber, Tabs, App, Tooltip, Radio, DatePicker, Slider, Progress, Alert, AutoComplete } from "antd";
 import { ShopOutlined, SearchOutlined, CheckOutlined, DollarOutlined, CalendarOutlined, SaveOutlined, SyncOutlined, WarningOutlined, StarOutlined, ReloadOutlined, RobotOutlined, DeleteOutlined, CloseCircleOutlined, ThunderboltOutlined, EditOutlined } from "@ant-design/icons";
 import { PLATFORMS, BIDDING_STRATEGIES, ALL_COUNTRIES } from "@/lib/constants";
+import { compareConnections, connectionLabel, type ConnectionLabelInput } from "@/lib/connection-label";
 // D-004：使用共享 MerchantNameCell（支持多账号 Popover 修复 BUG-1）
 import MerchantNameCell from "@/components/MerchantNameCell";
 import type { ConnectionAccount } from "@/components/MerchantNameCell";
@@ -569,7 +570,7 @@ export default function MerchantsPage() {
   const [claimModal, setClaimModal] = useState(false); const [claimM, setClaimM] = useState<Merchant | null>(null); const [claimForm] = Form.useForm();
   // 再投一次（同一商家多广告，非破坏性）：复用领取弹窗，提交时带 relaunch=true
   const [relaunchMode, setRelaunchMode] = useState(false);
-  const [platformConns, setPlatformConns] = useState<{ id: string; platform: string; account_name: string }[]>([]);
+  const [platformConns, setPlatformConns] = useState<({ id: string } & ConnectionLabelInput)[]>([]);
   const [mccAccounts, setMccAccounts] = useState<{ id: string; mcc_id: string; mcc_name: string }[]>([]);
   const [rModal, setRModal] = useState(false); const [rTitle, setRTitle] = useState(""); const [rContent, setRContent] = useState("");
   const [aiModalOpen, setAiModalOpen] = useState(false);
@@ -687,7 +688,9 @@ export default function MerchantsPage() {
         fetch("/api/user/settings/mcc").then((r) => r.json()),
       ]);
       if (platRes.code === 0) {
-        const conns = (platRes.data || []).filter((c: any) => c.platform === m.platform);
+        const conns = ((platRes.data || []) as ({ id: string } & ConnectionLabelInput)[])
+          .filter((c) => c.platform === m.platform)
+          .sort(compareConnections);
         setPlatformConns(conns);
         if (conns.length === 1) claimForm.setFieldValue("platform_connection_id", conns[0].id);
       }
@@ -1423,7 +1426,7 @@ export default function MerchantsPage() {
                   const noLink = hasLinkInfo && !linkedIds.has(String(c.id));
                   return {
                     value: c.id,
-                    label: `${c.account_name || c.platform} (${c.platform})${noLink ? " · 无该商家链接" : ""}`,
+                    label: `${connectionLabel(c)}${noLink ? "（无该商家链接）" : ""}`,
                     disabled: noLink,
                   };
                 })} />

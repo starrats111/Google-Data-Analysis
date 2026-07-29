@@ -12,6 +12,7 @@ import {
   CalendarOutlined, SendOutlined, CheckCircleOutlined, LoadingOutlined, SaveOutlined,
   InboxOutlined, LinkOutlined,
 } from "@ant-design/icons";
+import { compareConnections, connectionLabel } from "@/lib/connection-label";
 import { sanitizeHtml, proxifyImgSrcs } from "@/lib/sanitize";
 import PublishSiteSelect from "@/components/PublishSiteSelect";
 import AppPageHeader from "@/components/AppPageHeader";
@@ -35,6 +36,7 @@ interface Merchant {
 
 interface PlatformConnection {
   id: string; platform: string; account_name: string;
+  account_index?: number | null;
   publish_site_id: string | null;
 }
 
@@ -716,9 +718,10 @@ export default function ArticlePublishPage() {
                   placeholder="选择用于发起这次投放的平台账号"
                   value={urlFormConnId || undefined}
                   onChange={(v) => setUrlFormConnId(v || "")}
-                  options={platformConns.map((c) => ({
+                  optionFilterProp="label"
+                  options={[...platformConns].sort(compareConnections).map((c) => ({
                     value: c.id,
-                    label: `${c.platform} · ${c.account_name}`,
+                    label: connectionLabel(c),
                   }))}
                   allowClear
                 />

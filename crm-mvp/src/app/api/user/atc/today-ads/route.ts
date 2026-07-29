@@ -340,7 +340,7 @@ function formatMerchant(
     connection_campaign_links: unknown;
     logo_url: string | null;
   },
-  connAccountMap: Map<string, { account_name: string; platform: string }>,
+  connAccountMap: Map<string, { account_name: string; account_index: number | null; platform: string }>,
 ): {
   id: string;
   merchant_id: string;

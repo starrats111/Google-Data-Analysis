@@ -9,7 +9,8 @@ export async function GET(req: NextRequest) {
 
   const connections = await prisma.platform_connections.findMany({
     where: { user_id: BigInt(user.userId), is_deleted: 0 },
-    orderBy: [{ platform: "asc" }, { created_at: "asc" }],
+    // D-199：按位次排，下拉框才是 PM1→PM8 的自然顺序（按 created_at 排会乱序，用户对不上号）
+    orderBy: [{ platform: "asc" }, { account_index: "asc" }, { created_at: "asc" }],
   });
   return apiSuccess(serializeData(connections));
 }

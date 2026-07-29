@@ -13,6 +13,8 @@ import prisma from "@/lib/prisma";
 export interface ConnectionAccount {
   id: string;
   account_name: string;
+  /** D-199：账号位次，前端据此显示 `PM8 · weilixia`（account_name 同平台常同名，单靠它认不出号） */
+  account_index: number | null;
   platform: string;
   link: string;
 }
@@ -27,7 +29,7 @@ export interface ConnectionAccount {
 export async function loadConnectionAccountMap(
   merchants: Array<{ connection_campaign_links: unknown }>,
   userId: bigint,
-): Promise<Map<string, { account_name: string; platform: string }>> {
+): Promise<Map<string, { account_name: string; account_index: number | null; platform: string }>> {
   const ids = new Set<string>();
   for (const m of merchants) {
     const links = m.connection_campaign_links;
@@ -55,9 +57,14 @@ export async function loadConnectionAccountMap(
       is_deleted: 0,
       id: { in: idBigInts },
     },
-    select: { id: true, account_name: true, platform: true },
+    select: { id: true, account_name: true, account_index: true, platform: true },
   });
-  return new Map(conns.map((c) => [c.id.toString(), { account_name: c.account_name, platform: c.platform }]));
+  return new Map(
+    conns.map((c) => [
+      c.id.toString(),
+      { account_name: c.account_name, account_index: c.account_index ?? null, platform: c.platform },
+    ]),
+  );
 }
 
 /**
@@ -67,6 +74,8 @@ export async function loadConnectionAccountMap(
  * 而商家链接可能存在另一条名下，`pickCampaignAffiliateLink` 会误判为串号而拒绝取链接
  * ——wj04 的 PM1(conn13) 与 PM8(conn217) 就是同一个 Partnermatic 账号，导致 garrett wade
  * 有单却一次点击都刷不出去。入口去重已于 c7f780e9 上线，本表用于消化其之前的存量残留。
+ * 该例已在 D-199 由合并连接根治（conn217 的行并入 conn13 并退役），本表仍保留：
+ * 等价关系是按 api_key 动态算的，其他用户的存量重复连接还需要它兜住。
  *
  * 刻意**包含已删连接**：连接删掉重加后，链接键仍留在旧 conn 上，只要凭据相同就是同一个号。
  */
@@ -172,7 +181,7 @@ export function pickCampaignAffiliateLink(
 
 export function buildConnectionAccounts(
   linksRaw: unknown,
-  connAccountMap: Map<string, { account_name: string; platform: string }>,
+  connAccountMap: Map<string, { account_name: string; account_index: number | null; platform: string }>,
 ): ConnectionAccount[] {
   const out: ConnectionAccount[] = [];
   if (!linksRaw || typeof linksRaw !== "object" || Array.isArray(linksRaw)) return out;
@@ -184,6 +193,7 @@ export function buildConnectionAccounts(
     out.push({
       id: connIdStr,
       account_name: info.account_name || info.platform || connIdStr,
+      account_index: info.account_index,
       platform: info.platform,
       link,
     });

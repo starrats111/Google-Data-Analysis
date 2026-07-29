@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
+import { connectionLabel } from "@/lib/connection-label";
 import prisma from "@/lib/prisma";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
 import { sqlTxnRange, nextDayStr } from "@/lib/report-metrics";
@@ -69,10 +70,11 @@ export async function GET(req: NextRequest) {
   if (connIds.length > 0) {
     const conns = await prisma.platform_connections.findMany({
       where: { id: { in: connIds } },
-      select: { id: true, account_name: true, platform: true, created_at: true },
+      select: { id: true, account_name: true, account_index: true, platform: true, created_at: true },
     });
     for (const c of conns) {
-      connMap.set(String(c.id), { name: c.account_name || c.platform, createdAt: c.created_at });
+      // D-199：带上位次（`PM8 · weilixia`）。同平台多号常同名，只显示 account_name 分不清是哪个号。
+      connMap.set(String(c.id), { name: connectionLabel(c), createdAt: c.created_at });
     }
   }
 
