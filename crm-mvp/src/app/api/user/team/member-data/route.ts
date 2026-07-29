@@ -3,274 +3,68 @@ import { serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import { withLeader } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
-import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
-import { nowCST, isTodayCST, dateColumnStart, dateColumnEndExclusive, dateColumnTodayEndExclusive, parseTxnDateStart, parseTxnDateEndExclusive, txnStartOfMonthUTC } from "@/lib/date-utils";
-import { mergeMerchantCampaigns, routeCommissionToRows, type CommissionGroup } from "@/lib/merchant-campaign-merge";
+import { queryCampaignBoard, CampaignBoardError } from "@/lib/campaign-board-query";
 
 /**
- * 获取指定组员的详细数据（组长专用）
- * 查询逻辑与 /api/user/data-center/campaigns 保持一致：
- *   campaigns → ads_daily_stats + affiliate_transactions
+ * GET /api/user/team/member-data
+ * 组长查看组员的广告系列看板。
+ *
+ * D-194：改为复用 `@/lib/campaign-board-query`，与组员自己看到的
+ * `/api/user/data-center/campaigns` 完全同源——行集合、状态自愈、MCC 过滤、
+ * REMOVED 隐藏规则、D-168 归集与 D-176 单 MCC 佣金口径全部一致。
+ * 响应结构也与数据中心对齐（rows / summary / costByMcc / rowMeta），
+ * 额外返回 mccAccounts 供弹窗切到与组员相同的 MCC 视图。
  */
 export const GET = withLeader(async (req: NextRequest, { user }) => {
   const { searchParams } = new URL(req.url);
   const targetUserId = searchParams.get("userId");
-  const startDate = searchParams.get("start_date");
-  const endDate = searchParams.get("end_date");
 
   if (!targetUserId) return apiError("缺少 userId 参数");
   if (!user.teamId) return apiError("未关联小组");
 
+  let targetIdBig: bigint;
+  try {
+    targetIdBig = BigInt(targetUserId);
+  } catch {
+    return apiError("userId 格式无效");
+  }
+
   const targetUser = await prisma.users.findFirst({
-    where: { id: BigInt(targetUserId), team_id: BigInt(user.teamId), is_deleted: 0 },
+    where: { id: targetIdBig, team_id: BigInt(user.teamId), is_deleted: 0 },
     select: { id: true, username: true, display_name: true },
   });
 
   if (!targetUser) return apiError("该用户不属于您的小组", 403);
 
-  const targetId = targetUser.id;
+  // 兼容组长弹窗历史参数名 start_date/end_date，同时接受数据中心的 date_start/date_end
+  const dateStart = searchParams.get("date_start") ?? searchParams.get("start_date");
+  const dateEnd = searchParams.get("date_end") ?? searchParams.get("end_date");
 
-  const cstNow = nowCST();
-  const monthStartStr = cstNow.startOf("month").format("YYYY-MM-DD");
-  const statsStart = startDate ? dateColumnStart(startDate) : dateColumnStart(monthStartStr);
-  const statsEnd = endDate
-    ? (isTodayCST(endDate, cstNow) ? dateColumnTodayEndExclusive() : dateColumnEndExclusive(endDate))
-    : dateColumnTodayEndExclusive();
-  // C-080：affiliate_transactions 按 UTC 切日，与平台后台口径一致
-  const txnStart = startDate ? parseTxnDateStart(startDate) : txnStartOfMonthUTC();
-  const txnEnd = endDate ? parseTxnDateEndExclusive(endDate) : new Date();
-
-  // 与数据中心一致：排除无 google_campaign_id 和空字符串的幽灵记录
-  const rawCampaigns = await prisma.campaigns.findMany({
-    where: {
-      user_id: targetId,
-      NOT: [
-        { google_campaign_id: null },
-        { google_campaign_id: "" },
-      ],
-      is_deleted: 0,
-    },
-    orderBy: { id: "desc" },
-    select: {
-      id: true,
-      google_campaign_id: true,
-      customer_id: true,
-      campaign_name: true,
-      google_status: true,
-      user_merchant_id: true,
-      platform_connection_id: true,
-      created_at: true,
-    },
-  });
-
-  // 按 google_campaign_id 去重，优先保留有 customer_id 的记录
-  const gcidGroups = new Map<string, typeof rawCampaigns>();
-  for (const c of rawCampaigns) {
-    const gcid = c.google_campaign_id || String(c.id);
-    if (!gcidGroups.has(gcid)) gcidGroups.set(gcid, []);
-    gcidGroups.get(gcid)!.push(c);
-  }
-  const campaigns: typeof rawCampaigns = [];
-  const extraCampaignIds: bigint[] = [];
-  for (const [, group] of gcidGroups) {
-    group.sort((a, b) => {
-      if (a.customer_id && !b.customer_id) return -1;
-      if (!a.customer_id && b.customer_id) return 1;
-      return Number(b.id) - Number(a.id);
+  try {
+    const board = await queryCampaignBoard(targetUser.id, {
+      mccAccountId: searchParams.get("mcc_account_id"),
+      dateStart,
+      dateEnd,
+      status: searchParams.get("status"),
+      platform: searchParams.get("platform"),
+      mid: searchParams.get("mid"),
+      search: searchParams.get("search"),
     });
-    campaigns.push(group[0]);
-    for (let i = 1; i < group.length; i++) extraCampaignIds.push(group[i].id);
-  }
 
-  const campaignIds = campaigns.map((c) => c.id);
-
-  if (campaignIds.length === 0) {
     return apiSuccess(serializeData({
-      user: { id: targetUser.id.toString(), username: targetUser.username, display_name: targetUser.display_name },
-      summary: emptySummary(),
-      campaigns: [],
+      user: {
+        id: targetUser.id.toString(),
+        username: targetUser.username,
+        display_name: targetUser.display_name,
+      },
+      rows: board.rows,
+      summary: board.summary,
+      costByMcc: board.costByMcc,
+      rowMeta: board.rowMeta,
+      mccAccounts: board.mccAccounts,
     }));
+  } catch (e) {
+    if (e instanceof CampaignBoardError) return apiError(e.message, e.status);
+    throw e;
   }
-
-  // 建立重复 campaign 映射
-  const cIdToGcid = new Map<string, string>();
-  for (const c of rawCampaigns) cIdToGcid.set(String(c.id), c.google_campaign_id || String(c.id));
-  const gcidToPrimary = new Map<string, string>();
-  for (const c of campaigns) gcidToPrimary.set(c.google_campaign_id || String(c.id), String(c.id));
-
-  const allIdsForStats = [...campaignIds, ...extraCampaignIds];
-
-  // 按 (campaign_id, date) 分天聚合 + 佣金（并行查询）— 与 data-center/campaigns 逻辑完全一致
-  const [rawStatsRows, commissionAgg] = await Promise.all([
-    allIdsForStats.length > 0
-      ? prisma.ads_daily_stats.groupBy({
-          by: ["campaign_id", "date"],
-          where: {
-            campaign_id: { in: allIdsForStats },
-            date: { gte: statsStart, lt: statsEnd },
-            is_deleted: 0,
-          } as never,
-          _sum: { cost: true, clicks: true, impressions: true },
-        })
-      : [],
-    // D-168：加 platform_connection_id 维度，与 data-center/campaigns 口径一致
-    prisma.$queryRawUnsafe<
-      { user_merchant_id: bigint; platform_connection_id: bigint | null; total_commission: number; rejected_commission: number; approved_commission: number; order_count: number }[]
-    >(`
-      SELECT
-        user_merchant_id,
-        platform_connection_id,
-        SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission,
-        SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as rejected_commission,
-        SUM(CASE WHEN status = 'approved' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as approved_commission,
-        COUNT(*) as order_count
-      FROM affiliate_transactions
-      WHERE user_id = ? AND is_deleted = 0
-        AND transaction_time >= ? AND transaction_time < ?
-        AND ${sqlAffiliateTxnValidPlatformConnection("affiliate_transactions")}
-      GROUP BY user_merchant_id, platform_connection_id
-    `, targetId, txnStart, txnEnd),
-  ]);
-
-  // 按 (gcid, date) 去重取 max cost，再按天累加 → 与 data-center/campaigns 完全一致
-  const statsMap = new Map<string, { cost: number; clicks: number; impressions: number }>();
-  if (rawStatsRows.length > 0) {
-    const gcidDateBest = new Map<string, { primaryId: string; cost: number; clicks: number; impressions: number }>();
-    for (const s of rawStatsRows) {
-      const gcid = cIdToGcid.get(String(s.campaign_id));
-      const primaryId = gcid ? (gcidToPrimary.get(gcid) || String(s.campaign_id)) : String(s.campaign_id);
-      const dateKey = s.date instanceof Date ? s.date.toISOString().split("T")[0] : String(s.date);
-      const dedupKey = `${primaryId}_${dateKey}`;
-      const cost = Number(s._sum?.cost || 0);
-      const clicks = Number(s._sum?.clicks || 0);
-      const impressions = Number(s._sum?.impressions || 0);
-      const prev = gcidDateBest.get(dedupKey);
-      if (!prev || cost > prev.cost) {
-        gcidDateBest.set(dedupKey, { primaryId, cost, clicks, impressions });
-      }
-    }
-    for (const entry of gcidDateBest.values()) {
-      const existing = statsMap.get(entry.primaryId);
-      if (existing) {
-        existing.cost += entry.cost;
-        existing.clicks += entry.clicks;
-        existing.impressions += entry.impressions;
-      } else {
-        statsMap.set(entry.primaryId, { cost: entry.cost, clicks: entry.clicks, impressions: entry.impressions });
-      }
-    }
-  }
-
-  // D-168：佣金按 (商家, 联盟账号) 分组，投放到对应账号组的代表行
-  const commissionGroups: CommissionGroup[] = [];
-  let totalCommissionFromTxn = 0;
-  let totalRejectedFromTxn = 0;
-  let totalOrdersFromTxn = 0;
-  for (const r of commissionAgg) {
-    const comm = Number(r.total_commission || 0);
-    const rej = Number(r.rejected_commission || 0);
-    commissionGroups.push({
-      merchantId: String(r.user_merchant_id),
-      connId: r.platform_connection_id ? String(r.platform_connection_id) : null,
-      commission: comm,
-      rejected: rej,
-      approved: Number(r.approved_commission || 0),
-      orders: Number(r.order_count || 0),
-    });
-    totalCommissionFromTxn += comm;
-    totalRejectedFromTxn += rej;
-    totalOrdersFromTxn += Number(r.order_count || 0);
-  }
-
-  // 同商家+同联盟账号汇总（D-168）：同 (商家,账号) 组的花费/佣金归集到组代表行，
-  // 交易连接无对应系列组时回退商家级代表行；总览合计不受影响（组内重新归集）。
-  const merge = mergeMerchantCampaigns(campaigns, statsMap);
-  const commissionByRow = routeCommissionToRows(commissionGroups, merge.commissionTarget);
-
-  // 展示排序：ENABLED→PAUSED→REMOVED，同状态内按广告系列名称中的序号升序
-  const STATUS_ORDER: Record<string, number> = { ENABLED: 0, PAUSED: 1, REMOVED: 2 };
-  const extractSeq = (name: string | null): number => {
-    if (!name) return 999999;
-    const first = name.split("-")[0] || "";
-    const digits = first.replace(/^[a-zA-Z]+/, "");
-    return /^\d+$/.test(digits) ? parseInt(digits, 10) : 999999;
-  };
-  const orderedCampaigns = [...campaigns].sort((a, b) => {
-    const pa = STATUS_ORDER[a.google_status || ""] ?? 2;
-    const pb = STATUS_ORDER[b.google_status || ""] ?? 2;
-    if (pa !== pb) return pa - pb;
-    return extractSeq(a.campaign_name) - extractSeq(b.campaign_name);
-  });
-
-  let totalCost = 0, totalClicks = 0, totalImpressions = 0;
-
-  const campaignDetails = orderedCampaigns.map((c) => {
-    const s = merge.displayStats.get(String(c.id));
-    const cost = s?.cost || 0;
-    const clicks = s?.clicks || 0;
-    const impressions = s?.impressions || 0;
-
-    // D-168：佣金已按 (商家,联盟账号) 预投放到行
-    const rowComm = commissionByRow.get(String(c.id));
-    const commission = rowComm?.commission || 0;
-    const rejectedComm = rowComm?.rejected || 0;
-    const orders = rowComm?.orders || 0;
-
-    const net = commission - rejectedComm - cost;
-    const roi = cost > 0 ? (net / cost) * 100 : 0;
-
-    totalCost += cost;
-    totalClicks += clicks;
-    totalImpressions += impressions;
-
-    return {
-      campaign_id: c.id.toString(),
-      campaign_name: c.campaign_name || "未知",
-      customer_id: c.customer_id || "",
-      status: c.google_status || "",
-      cost: Math.round(cost * 100) / 100,
-      commission: Math.round(commission * 100) / 100,
-      rejected_commission: Math.round(rejectedComm * 100) / 100,
-      clicks,
-      impressions,
-      orders,
-      roi: Math.round(roi * 10) / 10,
-    };
-  });
-
-  // 与数据中心一致：叠加 MCC 误差费用调整
-  const queryMonth = (startDate || cstNow.startOf("month").format("YYYY-MM-DD")).slice(0, 7);
-  const adjustments = await prisma.mcc_cost_adjustments.findMany({
-    where: { user_id: targetId, month: queryMonth, is_deleted: 0 },
-  });
-  for (const adj of adjustments) {
-    totalCost += Number(adj.amount || 0);
-  }
-
-  const avgCpc = totalClicks > 0 ? totalCost / totalClicks : 0;
-  const totalNet = totalCommissionFromTxn - totalRejectedFromTxn - totalCost;
-  const roi = totalCost > 0 ? (totalNet / totalCost) * 100 : 0;
-
-  return apiSuccess(serializeData({
-    user: { id: targetUser.id.toString(), username: targetUser.username, display_name: targetUser.display_name },
-    summary: {
-      total_cost: Math.round(totalCost * 100) / 100,
-      total_commission: Math.round(totalCommissionFromTxn * 100) / 100,
-      rejected_commission: Math.round(totalRejectedFromTxn * 100) / 100,
-      net_commission: Math.round(totalNet * 100) / 100,
-      total_clicks: totalClicks,
-      total_impressions: totalImpressions,
-      avg_cpc: Math.round(avgCpc * 10000) / 10000,
-      roi: Math.round(roi * 10) / 10,
-      total_orders: totalOrdersFromTxn,
-    },
-    campaigns: campaignDetails,
-  }));
 });
-
-function emptySummary() {
-  return {
-    total_cost: 0, total_commission: 0, rejected_commission: 0, net_commission: 0,
-    total_clicks: 0, total_impressions: 0, avg_cpc: 0, roi: 0, total_orders: 0,
-  };
-}

@@ -1,0 +1,710 @@
+/**
+ * 广告系列看板查询（组员数据中心 / 组长组员弹窗 共用）
+ *
+ * 背景（D-194）：`/api/user/data-center/campaigns` 与 `/api/user/team/member-data`
+ * 原本是两份复制粘贴出来的实现，member-data 的注释写着「与 data-center/campaigns 逻辑
+ * 完全一致」，但组员侧后续加的过滤与自愈没有同步过去，实测已漂移出 5 处差异：
+ *   1. member-data 不按活跃 MCC 过滤 → 组长多看到 435 行挂在软删/非本人 MCC 下的系列；
+ *   2. member-data 不隐藏零花费的 REMOVED 系列 → 组长多看到 232 行；
+ *   3. member-data 不跑「已移除 CID / 软删 MCC 下 ENABLED」自愈 → 146 行状态两边不一致；
+ *   4. member-data 无条件累加 mcc_cost_adjustments（含负数、含软删 MCC 的调整）；
+ *   5. member-data 无单 MCC 视图，佣金永远走全账号口径，与组员选了 MCC 时的 D-176 口径不符。
+ *
+ * 现在两个 route 都只负责鉴权与序列化，数据一律由本函数产出，从结构上杜绝再次漂移。
+ */
+
+import prisma from "@/lib/prisma";
+import { cachedQuery } from "@/lib/cache";
+import {
+  nowCST, isTodayCST, dateColumnStart, dateColumnEndExclusive,
+  dateColumnTodayEndExclusive, parseTxnDateStart, parseTxnDateEndExclusive, txnStartOfMonthUTC,
+} from "@/lib/date-utils";
+import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
+import { mergeMerchantCampaigns, routeCommissionToRows, type CommissionGroup } from "@/lib/merchant-campaign-merge";
+import { countEnabledMerchantsFromCampaigns, healEnabledUnderSoftDeletedMcc } from "@/lib/active-running";
+
+/** 调用方可直接把 status 映射成 HTTP 状态码返回 */
+export class CampaignBoardError extends Error {
+  constructor(message: string, public readonly status: number = 400) {
+    super(message);
+    this.name = "CampaignBoardError";
+  }
+}
+
+export interface CampaignBoardFilters {
+  /** MCC 账户主键；不传表示「全部 MCC」 */
+  mccAccountId?: string | null;
+  dateStart?: string | null;
+  dateEnd?: string | null;
+  /** ENABLED / PAUSED / REMOVED / all */
+  status?: string | null;
+  platform?: string | null;
+  mid?: string | null;
+  search?: string | null;
+}
+
+export interface CampaignBoardRow {
+  id: bigint;
+  google_campaign_id: string | null;
+  customer_id: string | null;
+  campaign_name: string | null;
+  status: string | null;
+  daily_budget: number;
+  max_cpc: number | null;
+  cost: number;
+  clicks: number;
+  impressions: number;
+  cpc: number;
+  commission: number;
+  rejected_commission: number;
+  approved_commission: number;
+  orders: number;
+  roi: number;
+  target_country: string | null;
+  last_synced: Date | null;
+  mcc_currency: string;
+  is_removed: boolean;
+  cid_removed: boolean;
+}
+
+export interface CampaignBoardSummary {
+  totalCost: number;
+  totalCommission: number;
+  totalRejectedCommission: number;
+  totalApprovedCommission: number;
+  totalPaidCommission: number;
+  totalPendingCommission: number;
+  totalClicks: number;
+  totalImpressions: number;
+  totalOrders: number;
+  avgCpc: number;
+  /** 小数口径（0.52 = 52%），前端统一 ×100 展示 */
+  roi: number;
+  campaignCount: number;
+  enabledCount: number;
+  pausedCount: number;
+  todayAdsCount: number | null;
+  scriptConfigured: boolean;
+  /** "mcc"=仅当前 MCC 归属佣金；"all"=全账号全量佣金 */
+  commissionScope: "mcc" | "all";
+}
+
+export interface CampaignBoardCostByMcc {
+  mcc_db_id: string;
+  mcc_id: string;
+  mcc_name: string;
+  currency: string;
+  cost_usd: number;
+  cost_original?: number;
+  adjustment?: number;
+}
+
+export interface CampaignBoardMccAccount {
+  id: string;
+  mcc_id: string;
+  mcc_name: string;
+  currency: string;
+}
+
+export interface CampaignBoardResult {
+  rows: CampaignBoardRow[];
+  summary: CampaignBoardSummary;
+  costByMcc: CampaignBoardCostByMcc[];
+  rowMeta: { displayedCount: number; totalCount: number; isLimited: boolean };
+  /** 该用户的活跃 MCC 列表（供筛选下拉使用；组长弹窗据此切到与组员相同的 MCC） */
+  mccAccounts: CampaignBoardMccAccount[];
+}
+
+/** 广告系列名前缀里的数字序号，用于同状态内排序 */
+function extractSeq(name: string | null): number {
+  if (!name) return 999999;
+  const first = name.split("-")[0] || "";
+  const digits = first.replace(/^[a-zA-Z]+/, "");
+  return /^\d+$/.test(digits) ? parseInt(digits, 10) : 999999;
+}
+
+const STATUS_ORDER: Record<string, number> = { ENABLED: 0, PAUSED: 1, REMOVED: 2 };
+
+export async function queryCampaignBoard(
+  userId: bigint,
+  filters: CampaignBoardFilters = {},
+): Promise<CampaignBoardResult> {
+  const { mccAccountId, dateStart, dateEnd, status: statusFilter, platform: platformFilter, mid: midFilter, search: searchFilter } = filters;
+
+  // ─── MCC 范围 ───
+  // 兼容场景：部分账号没有自己名下的 MCC 配置，但 campaigns 已关联到共享/历史 MCC。
+  // 这种情况下不能直接返回空，必须先按用户自己的 campaign 数据继续查询。
+  const activeMcc = await cachedQuery(
+    `mcc_all_v2:${userId}`,
+    () => prisma.google_mcc_accounts.findMany({
+      where: { user_id: userId, is_deleted: 0 },
+      select: { id: true, mcc_id: true, mcc_name: true, currency: true },
+      orderBy: { created_at: "desc" },
+    }),
+    30000,
+  );
+  const mccAccounts: CampaignBoardMccAccount[] = (activeMcc || []).map((m) => ({
+    id: String(m.id),
+    mcc_id: m.mcc_id,
+    mcc_name: m.mcc_name || m.mcc_id,
+    currency: m.currency || "USD",
+  }));
+
+  let mccIds: bigint[];
+  if (mccAccountId) {
+    const hit = (activeMcc || []).find((m) => String(m.id) === String(mccAccountId));
+    if (!hit) throw new CampaignBoardError("MCC 账户不存在", 404);
+    mccIds = [hit.id];
+  } else {
+    mccIds = (activeMcc || []).map((m) => m.id);
+  }
+
+  // D-040 v3：收集「已移除/已停用 CID」集合（status=cancelled 或 is_available=D），
+  // 这些 CID 下所有广告在前端标红
+  const removedCidSet = new Set<string>();
+  if (mccIds.length > 0) {
+    const removedCidRows = await prisma.mcc_cid_accounts.findMany({
+      where: {
+        mcc_account_id: { in: mccIds },
+        OR: [{ status: "cancelled" }, { is_available: "D" }],
+      },
+      select: { customer_id: true },
+    });
+    for (const r of removedCidRows) {
+      if (r.customer_id) removedCidSet.add(r.customer_id.replace(/-/g, ""));
+    }
+  }
+
+  // CID 已移除/停用 → 其下系列不可能真在投，本地却可能残留 ENABLED（历史同步路径只标
+  // CID 不动系列）。这里自愈改判 PAUSED，前端不再出现「已启用 + CID已移除」的矛盾状态。
+  if (removedCidSet.size > 0) {
+    try {
+      const healed = await prisma.campaigns.updateMany({
+        where: {
+          user_id: userId,
+          customer_id: { in: [...removedCidSet] },
+          is_deleted: 0,
+          google_status: "ENABLED",
+        },
+        data: { google_status: "PAUSED", status: "paused", last_google_sync_at: new Date() },
+      });
+      if (healed.count > 0) {
+        console.log(`[CampaignBoard] 自愈：已移除/停用 CID 下 ${healed.count} 条 ENABLED 系列改判 PAUSED（user=${userId}）`);
+      }
+    } catch (e) {
+      console.warn(`[CampaignBoard] 已移除 CID 系列自愈失败（忽略）: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+
+  // D-183：软删 MCC 下残留 ENABLED 同步自愈（与小组总览口径一致，避免换链等链路误当成在跑）
+  await healEnabledUnderSoftDeletedMcc([userId]);
+
+  // ─── 日期范围（默认本月，东八区） ───
+  const cstNow = nowCST();
+  const monthStartStr = cstNow.startOf("month").format("YYYY-MM-DD");
+  const todayStr = cstNow.format("YYYY-MM-DD");
+
+  // ads_daily_stats.date 是 DATE 列，必须用 UTC 午夜对齐，否则 CST→UTC 会偏移一天
+  const statsDateStart = dateStart ? dateColumnStart(dateStart) : dateColumnStart(monthStartStr);
+  const statsDateEnd = dateEnd
+    ? (isTodayCST(dateEnd, cstNow) ? dateColumnTodayEndExclusive() : dateColumnEndExclusive(dateEnd))
+    : dateColumnTodayEndExclusive();
+
+  // C-084：affiliate_transactions.transaction_time 按 CST 切日，与 ads_daily_stats 同口径
+  const txnStart = dateStart ? parseTxnDateStart(dateStart) : txnStartOfMonthUTC();
+  const txnEnd = dateEnd ? parseTxnDateEndExclusive(dateEnd) : new Date();
+
+  // ─── campaign 筛选条件 ───
+  const campaignWhere: Record<string, unknown> = {
+    user_id: userId,
+    NOT: [
+      { google_campaign_id: null },
+      { google_campaign_id: "" },
+    ],
+    is_deleted: 0,
+  };
+  if (mccAccountId) {
+    campaignWhere.mcc_id = mccIds[0];
+  } else if (mccIds.length >= 1) {
+    campaignWhere.mcc_id = mccIds.length === 1 ? mccIds[0] : { in: mccIds };
+  } else {
+    // 无活跃 MCC：排除软删 MCC 上的系列（不把历史软删 MCC 当成「全部」展示）
+    const deletedMccs = await prisma.google_mcc_accounts.findMany({
+      where: { user_id: userId, is_deleted: 1 },
+      select: { id: true },
+    });
+    if (deletedMccs.length > 0) {
+      campaignWhere.NOT = [
+        ...(campaignWhere.NOT as object[]),
+        { mcc_id: { in: deletedMccs.map((m) => m.id) } },
+      ];
+    }
+  }
+  if (statusFilter && statusFilter !== "all") {
+    campaignWhere.google_status = statusFilter;
+  }
+  if (searchFilter) {
+    campaignWhere.campaign_name = { contains: searchFilter };
+  }
+  if (platformFilter) {
+    campaignWhere.campaign_name = {
+      ...(campaignWhere.campaign_name as Record<string, unknown> || {}),
+      contains: `-${platformFilter}-`,
+    };
+  }
+  if (midFilter) {
+    campaignWhere.campaign_name = {
+      ...(campaignWhere.campaign_name as Record<string, unknown> || {}),
+      contains: midFilter,
+    };
+  }
+
+  // ─── 全量查询所有符合条件的 campaign（用于总览聚合） ───
+  const allCampaigns = await prisma.campaigns.findMany({
+    where: campaignWhere as never,
+    orderBy: { id: "desc" },
+    select: {
+      id: true,
+      mcc_id: true,
+      google_campaign_id: true,
+      customer_id: true,
+      campaign_name: true,
+      google_status: true,
+      daily_budget: true,
+      max_cpc_limit: true,
+      target_country: true,
+      last_google_sync_at: true,
+      user_merchant_id: true,
+      platform_connection_id: true,
+      created_at: true,
+    },
+  });
+
+  // 按 google_campaign_id 去重（Google Campaign ID 全局唯一）
+  // 优先保留有 customer_id 的记录；同条件下保留 id 最大的
+  const gcidGroups = new Map<string, typeof allCampaigns>();
+  for (const c of allCampaigns) {
+    const gcid = c.google_campaign_id || String(c.id);
+    if (!gcidGroups.has(gcid)) gcidGroups.set(gcid, []);
+    gcidGroups.get(gcid)!.push(c);
+  }
+  const dedupedCampaigns: typeof allCampaigns = [];
+  const extraCampaignIds: bigint[] = [];
+  for (const [, group] of gcidGroups) {
+    group.sort((a, b) => {
+      if (a.customer_id && !b.customer_id) return -1;
+      if (!a.customer_id && b.customer_id) return 1;
+      return Number(b.id) - Number(a.id);
+    });
+    dedupedCampaigns.push(group[0]);
+    for (let i = 1; i < group.length; i++) extraCampaignIds.push(group[i].id);
+  }
+
+  // MCC 信息映射
+  // 按当前页实际命中的 mcc_id 回查，避免「账号无本人 MCC 配置但已有 campaign 数据」时丢失名称/币种。
+  const usedMccIds = [...new Set(dedupedCampaigns.map((c) => c.mcc_id).filter((id): id is bigint => id !== null))];
+  const allMccInfo = usedMccIds.length > 0
+    ? await prisma.google_mcc_accounts.findMany({
+        where: { id: { in: usedMccIds }, is_deleted: 0 },
+        select: { id: true, mcc_id: true, mcc_name: true, currency: true },
+      })
+    : [];
+  const mccInfoMap = new Map(allMccInfo.map((m) => [String(m.id), { mcc_id: m.mcc_id, mcc_name: m.mcc_name || m.mcc_id, currency: m.currency || "USD" }]));
+
+  const allCampaignIds = dedupedCampaigns.map((c) => c.id);
+  const allCampaignIdsIncludingDupes = [...allCampaignIds, ...extraCampaignIds];
+
+  const campaignIdToGcid = new Map<string, string>();
+  for (const c of allCampaigns) {
+    campaignIdToGcid.set(String(c.id), c.google_campaign_id || String(c.id));
+  }
+  const gcidToPrimaryCampaignId = new Map<string, string>();
+  for (const c of dedupedCampaigns) {
+    gcidToPrimaryCampaignId.set(c.google_campaign_id || String(c.id), String(c.id));
+  }
+
+  // ─── 全量 stats 聚合 + 佣金聚合（并行查询） ───
+  const allStatsMap = new Map<string, { cost: number; clicks: number; impressions: number }>();
+
+  const [rawStatsRows, commissionAgg] = await Promise.all([
+    allCampaignIdsIncludingDupes.length > 0
+      ? prisma.ads_daily_stats.groupBy({
+          by: ["campaign_id", "date"],
+          where: {
+            campaign_id: { in: allCampaignIdsIncludingDupes },
+            date: { gte: statsDateStart, lt: statsDateEnd },
+            is_deleted: 0,
+          } as never,
+          _sum: { cost: true, clicks: true, impressions: true },
+        })
+      : [],
+    // D-168：加 platform_connection_id 维度——同商家被多个联盟账号投放时，佣金按交易归属的账号精确投行
+    prisma.$queryRawUnsafe<
+      {
+        user_merchant_id: bigint;
+        platform_connection_id: bigint | null;
+        merchant_name: string;
+        total_commission: number;
+        rejected_commission: number;
+        approved_commission: number;
+        paid_commission: number;
+        pending_commission: number;
+        order_count: number;
+      }[]
+    >(`
+      SELECT
+        user_merchant_id,
+        platform_connection_id,
+        MAX(merchant_name) as merchant_name,
+        SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission,
+        SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as rejected_commission,
+        SUM(CASE WHEN status = 'approved' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as approved_commission,
+        SUM(CASE WHEN status = 'paid' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as paid_commission,
+        SUM(CASE WHEN status = 'pending' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as pending_commission,
+        COUNT(*) as order_count
+      FROM affiliate_transactions
+      WHERE user_id = ? AND is_deleted = 0
+        AND transaction_time >= ? AND transaction_time < ?
+        AND ${sqlAffiliateTxnValidPlatformConnection("affiliate_transactions")}
+      GROUP BY user_merchant_id, platform_connection_id
+    `, userId, txnStart, txnEnd),
+  ]);
+
+  if (rawStatsRows.length > 0) {
+    const gcidDateBest = new Map<string, { primaryId: string; cost: number; clicks: number; impressions: number }>();
+    for (const s of rawStatsRows) {
+      const gcid = campaignIdToGcid.get(String(s.campaign_id));
+      const primaryId = gcid ? (gcidToPrimaryCampaignId.get(gcid) || String(s.campaign_id)) : String(s.campaign_id);
+      const dateKey = s.date instanceof Date ? s.date.toISOString().split("T")[0] : String(s.date);
+      const dedupKey = `${primaryId}_${dateKey}`;
+      const cost = Number(s._sum?.cost || 0);
+      const clicks = Number(s._sum?.clicks || 0);
+      const impressions = Number(s._sum?.impressions || 0);
+      const prev = gcidDateBest.get(dedupKey);
+      if (!prev || cost > prev.cost) {
+        gcidDateBest.set(dedupKey, { primaryId, cost, clicks, impressions });
+      }
+    }
+
+    for (const entry of gcidDateBest.values()) {
+      const existing = allStatsMap.get(entry.primaryId);
+      if (existing) {
+        existing.cost += entry.cost;
+        existing.clicks += entry.clicks;
+        existing.impressions += entry.impressions;
+      } else {
+        allStatsMap.set(entry.primaryId, { cost: entry.cost, clicks: entry.clicks, impressions: entry.impressions });
+      }
+    }
+  }
+
+  // D-168：佣金按 (商家, 联盟账号) 分组，投放到对应账号组的代表行
+  const commissionGroups: CommissionGroup[] = [];
+  let totalCommissionFromTxn = 0;
+  let totalRejectedFromTxn = 0;
+  let totalApprovedFromTxn = 0;
+  let totalPaidFromTxn = 0;
+  let totalPendingFromTxn = 0;
+  let totalOrdersFromTxn = 0;
+
+  for (const r of commissionAgg) {
+    commissionGroups.push({
+      merchantId: String(r.user_merchant_id),
+      connId: r.platform_connection_id ? String(r.platform_connection_id) : null,
+      commission: Number(r.total_commission || 0),
+      rejected: Number(r.rejected_commission || 0),
+      approved: Number(r.approved_commission || 0),
+      paid: Number(r.paid_commission || 0),
+      pending: Number(r.pending_commission || 0),
+      orders: Number(r.order_count || 0),
+    });
+    totalCommissionFromTxn += Number(r.total_commission || 0);
+    totalRejectedFromTxn += Number(r.rejected_commission || 0);
+    totalApprovedFromTxn += Number(r.approved_commission || 0);
+    totalPaidFromTxn += Number(r.paid_commission || 0);
+    totalPendingFromTxn += Number(r.pending_commission || 0);
+    totalOrdersFromTxn += Number(r.order_count || 0);
+  }
+
+  // 同商家+同联盟账号汇总（D-168）：把同一 (商家,账号) 组的花费/点击/展示/佣金归集到组代表行
+  //（已启用优先 → 多条已启用取 created_at 最近 → 无已启用回退到最高优先级状态里最近的一条）。
+  // 交易连接在该商家下无系列组时回退商家级代表行。
+  // 仅影响逐行展示；总览合计与按 MCC 花费分布继续基于原始 per-campaign 统计（allStatsMap）。
+  const merge = mergeMerchantCampaigns(dedupedCampaigns, allStatsMap);
+
+  // D-176 v2：单 MCC 模式下，佣金归属必须基于【全量 campaign（跨 MCC）】全局计算一次——
+  // 若只在筛选后的集合内路由，同商家在两个 MCC 各有系列时，每个 MCC 视图都会把该商家
+  // 全部佣金投给本视图的代表行，导致同一笔佣金在多个 MCC 重复计入（wj02 实测复现）。
+  const isSingleMccView = Boolean(mccAccountId);
+  let commissionRoutingTarget = merge.commissionTarget;
+  let globalPrimaryMcc: Map<string, string | null> | null = null;
+  if (isSingleMccView) {
+    const globalCampaigns = await prisma.campaigns.findMany({
+      where: {
+        user_id: userId,
+        NOT: [{ google_campaign_id: null }, { google_campaign_id: "" }],
+        is_deleted: 0,
+      },
+      select: {
+        id: true,
+        mcc_id: true,
+        google_campaign_id: true,
+        customer_id: true,
+        google_status: true,
+        user_merchant_id: true,
+        platform_connection_id: true,
+        created_at: true,
+      },
+    });
+    // 与上方筛选集合相同的 gcid 去重规则，保证组内组间 primaryId 一致
+    const gGroups = new Map<string, typeof globalCampaigns>();
+    for (const c of globalCampaigns) {
+      const gcid = c.google_campaign_id || String(c.id);
+      if (!gGroups.has(gcid)) gGroups.set(gcid, []);
+      gGroups.get(gcid)!.push(c);
+    }
+    const globalDeduped: typeof globalCampaigns = [];
+    for (const [, group] of gGroups) {
+      group.sort((a, b) => {
+        if (a.customer_id && !b.customer_id) return -1;
+        if (!a.customer_id && b.customer_id) return 1;
+        return Number(b.id) - Number(a.id);
+      });
+      globalDeduped.push(group[0]);
+    }
+    // 只取 commissionTarget（代表行选举不依赖花费统计，传空 stats 即可）
+    const globalMerge = mergeMerchantCampaigns(globalDeduped, new Map());
+    commissionRoutingTarget = globalMerge.commissionTarget;
+    globalPrimaryMcc = new Map(globalDeduped.map((c) => [String(c.id), c.mcc_id !== null ? String(c.mcc_id) : null]));
+  }
+  const commissionByRow = routeCommissionToRows(commissionGroups, commissionRoutingTarget);
+
+  // D-176：单 MCC 模式下，总佣金口径 =「全局归属到当前 MCC 广告系列的佣金之和」；
+  // 花费此时已按 MCC 过滤，两者口径一致后 ROI/净利润才有意义。
+  // 不选 MCC（全部）时保持全量交易聚合，避免商家无系列/纯自然成交的佣金被漏统计。
+  let mccCommission = 0, mccRejected = 0, mccApproved = 0, mccPaid = 0, mccPending = 0, mccOrders = 0;
+  if (isSingleMccView) {
+    const selectedMccIdStr = String(mccIds[0]);
+    for (const [rowId, rc] of commissionByRow) {
+      if (globalPrimaryMcc?.get(rowId) !== selectedMccIdStr) continue;
+      mccCommission += rc.commission;
+      mccRejected += rc.rejected;
+      mccApproved += rc.approved;
+      mccPaid += rc.paid;
+      mccPending += rc.pending;
+      mccOrders += rc.orders;
+    }
+  }
+
+  // ─── 全量计算总览 summary 和 costByMcc ───
+  let totalCost = 0, totalClicks = 0, totalImpressions = 0;
+  let pausedCount = 0;
+  const mccCostAccum = new Map<string, number>();
+
+  for (const c of dedupedCampaigns) {
+    const s = allStatsMap.get(String(c.id));
+    const cost = s?.cost || 0;
+    totalCost += cost;
+    totalClicks += (s?.clicks || 0);
+    totalImpressions += (s?.impressions || 0);
+    if (c.google_status === "PAUSED") pausedCount++;
+
+    const cMccId = String(c.mcc_id);
+    mccCostAccum.set(cMccId, (mccCostAccum.get(cMccId) || 0) + cost);
+  }
+
+  // ─── costByMcc（含 CNY 原始金额计算） ───
+  const costByMcc: CampaignBoardCostByMcc[] = [];
+  const cnyCostByDay = new Map<string, { mcc_db_id: string; dailyCosts: Map<string, number> }>();
+
+  for (const [mccDbId, costUsd] of mccCostAccum) {
+    const info = mccInfoMap.get(mccDbId);
+    if (!info) continue;
+    if (info.currency === "CNY" && costUsd > 0) {
+      cnyCostByDay.set(mccDbId, { mcc_db_id: mccDbId, dailyCosts: new Map() });
+    } else {
+      costByMcc.push({ mcc_db_id: mccDbId, mcc_id: info.mcc_id, mcc_name: info.mcc_name, currency: info.currency, cost_usd: Number(costUsd.toFixed(2)) });
+    }
+  }
+
+  if (cnyCostByDay.size > 0) {
+    const cnyCampaignIds = dedupedCampaigns.filter((c) => cnyCostByDay.has(String(c.mcc_id))).map((c) => c.id);
+    if (cnyCampaignIds.length > 0) {
+      const cnyDailyStats = await prisma.$queryRawUnsafe<
+        { mcc_id: bigint; date: Date; cost_usd: number; rate: number | null }[]
+      >(`
+        SELECT c.mcc_id, s.date, SUM(s.cost) as cost_usd,
+          (SELECT e.rate_to_usd FROM exchange_rate_snapshots e WHERE e.currency = 'CNY' AND e.date = s.date LIMIT 1) as rate
+        FROM ads_daily_stats s
+        JOIN campaigns c ON c.id = s.campaign_id
+        WHERE s.campaign_id IN (${cnyCampaignIds.map(() => "?").join(",")})
+          AND s.date >= ? AND s.date < ? AND s.is_deleted = 0
+        GROUP BY c.mcc_id, s.date
+      `, ...cnyCampaignIds.map(Number), statsDateStart, statsDateEnd);
+
+      for (const row of cnyDailyStats) {
+        const mccDbId = String(row.mcc_id);
+        const rate = Number(row.rate || 0);
+        const costCny = rate > 0 ? Number(row.cost_usd || 0) / rate : 0;
+        const entry = cnyCostByDay.get(mccDbId);
+        if (entry) entry.dailyCosts.set(row.date.toISOString(), costCny);
+      }
+
+      for (const [mccDbId, entry] of cnyCostByDay) {
+        const info = mccInfoMap.get(mccDbId)!;
+        const totalCostUsd = mccCostAccum.get(mccDbId) || 0;
+        let totalCostCny = 0;
+        for (const cny of entry.dailyCosts.values()) totalCostCny += cny;
+        costByMcc.push({
+          mcc_db_id: mccDbId, mcc_id: info.mcc_id, mcc_name: info.mcc_name,
+          currency: "CNY", cost_usd: Number(totalCostUsd.toFixed(2)),
+          cost_original: Number(totalCostCny.toFixed(2)),
+        });
+      }
+    }
+  }
+
+  // ─── 合并 MCC 误差费用 + 今日投放数缓存 + 脚本配置状态（并行） ───
+  const queryMonth = (dateStart || monthStartStr).slice(0, 7);
+  const [adjustments, todayAdsCache, sheetMccCount] = await Promise.all([
+    prisma.mcc_cost_adjustments.findMany({
+      where: { user_id: userId, month: queryMonth, is_deleted: 0 },
+    }),
+    // 今日投放数：cron today-merchants-sync 每 30 分钟写入的缓存
+    prisma.system_configs.findFirst({
+      where: { config_key: `today_merchants_${userId}`, is_deleted: 0 },
+      select: { config_value: true },
+    }),
+    // 脚本配置判定：统一 Google Ads Script 依赖 MCC 的 sheet_url，无一配置即视为脚本未同步
+    prisma.google_mcc_accounts.count({
+      where: { user_id: userId, is_deleted: 0, sheet_url: { not: null }, NOT: { sheet_url: "" } },
+    }),
+  ]);
+
+  // 今日投放数（今日 CST 新建且历史无同名系列，按 gcid 去重）；缓存缺失/非当日 → null
+  let todayAdsCount: number | null = null;
+  if (todayAdsCache?.config_value) {
+    try {
+      const parsed = JSON.parse(todayAdsCache.config_value) as { ads_count?: number; date?: string };
+      if (parsed.date === todayStr && typeof parsed.ads_count === "number") {
+        todayAdsCount = parsed.ads_count;
+      }
+    } catch { /* 解析失败视为无缓存 */ }
+  }
+  const scriptConfigured = sheetMccCount > 0;
+  const adjustMap = new Map(adjustments.map((a) => [String(a.mcc_account_id), Number(a.amount)]));
+  let totalAdjustment = 0;
+  for (const mcc of costByMcc) {
+    const adj = adjustMap.get(mcc.mcc_db_id) || 0;
+    if (adj > 0) {
+      mcc.adjustment = adj;
+      mcc.cost_usd = Number((mcc.cost_usd + adj).toFixed(2));
+      totalAdjustment += adj;
+    }
+  }
+  totalCost += totalAdjustment;
+
+  // D-176：单 MCC 视图用归属佣金，全部视图用全量交易佣金
+  const summaryCommission = isSingleMccView ? mccCommission : totalCommissionFromTxn;
+  const summaryRejected = isSingleMccView ? mccRejected : totalRejectedFromTxn;
+  const summaryApproved = isSingleMccView ? mccApproved : totalApprovedFromTxn;
+  const summaryPaid = isSingleMccView ? mccPaid : totalPaidFromTxn;
+  const summaryPending = isSingleMccView ? mccPending : totalPendingFromTxn;
+  const summaryOrders = isSingleMccView ? mccOrders : totalOrdersFromTxn;
+
+  const summary: CampaignBoardSummary = {
+    totalCost: Number(totalCost.toFixed(2)),
+    totalCommission: Number(summaryCommission.toFixed(2)),
+    totalRejectedCommission: Number(summaryRejected.toFixed(2)),
+    totalApprovedCommission: Number(summaryApproved.toFixed(2)),
+    totalPaidCommission: Number(summaryPaid.toFixed(2)),
+    totalPendingCommission: Number(summaryPending.toFixed(2)),
+    totalClicks,
+    totalImpressions,
+    totalOrders: summaryOrders,
+    avgCpc: totalClicks > 0 ? Number((totalCost / totalClicks).toFixed(4)) : 0,
+    roi: totalCost > 0 ? Number(((summaryCommission - summaryRejected - totalCost) / totalCost).toFixed(2)) : 0,
+    campaignCount: dedupedCampaigns.length,
+    // D-183：在跑广告数 = 有 ENABLED 系列的商家去重（与小组总览「在跑商家」同一口径）
+    enabledCount: countEnabledMerchantsFromCampaigns(dedupedCampaigns),
+    pausedCount,
+    todayAdsCount,
+    scriptConfigured,
+    commissionScope: isSingleMccView ? "mcc" : "all",
+  };
+
+  // ─── 表格行：按状态排序，同状态内按广告系列名称中的序号升序 ───
+  dedupedCampaigns.sort((a, b) => {
+    const pa = STATUS_ORDER[a.google_status || ""] ?? 2;
+    const pb = STATUS_ORDER[b.google_status || ""] ?? 2;
+    if (pa !== pb) return pa - pb;
+    return extractSeq(a.campaign_name) - extractSeq(b.campaign_name);
+  });
+
+  const showRemoved = statusFilter === "REMOVED" || statusFilter === "all";
+  // D-040 v3 Q-G2=b：默认也显示「本期有花费的已移除」广告（让删除/重发广告的花费可见并标红），
+  // 零花费的历史 REMOVED 仍隐藏避免列表噪声；显式筛 REMOVED/all 时全显示
+  const filteredForDisplay = dedupedCampaigns.filter((c) => {
+    if (c.google_status !== "REMOVED") return true;
+    if (showRemoved) return true;
+    // 汇总口径下按展示花费判断；代表行（携带同商家汇总花费/佣金）始终保留
+    const s = merge.displayStats.get(String(c.id));
+    return (s?.cost || 0) > 0 || merge.representativeIds.has(String(c.id));
+  });
+
+  const rows: CampaignBoardRow[] = filteredForDisplay.map((c) => {
+    const s = merge.displayStats.get(String(c.id));
+    const cost = s?.cost || 0;
+    const clicks = s?.clicks || 0;
+    const impressions = s?.impressions || 0;
+    const avgCpc = clicks > 0 ? Number((cost / clicks).toFixed(4)) : 0;
+
+    // D-168：佣金已按 (商家,联盟账号) 预投放到行
+    const rowComm = commissionByRow.get(String(c.id));
+    const commission = rowComm?.commission || 0;
+    const rejectedComm = rowComm?.rejected || 0;
+    const approvedComm = rowComm?.approved || 0;
+    const orders = rowComm?.orders || 0;
+
+    const roi = cost > 0 ? Number(((commission - rejectedComm - cost) / cost).toFixed(2)) : 0;
+
+    const mccInfo = mccInfoMap.get(String(c.mcc_id));
+    return {
+      id: c.id,
+      google_campaign_id: c.google_campaign_id,
+      customer_id: c.customer_id,
+      campaign_name: c.campaign_name,
+      status: c.google_status,
+      daily_budget: Number(c.daily_budget),
+      max_cpc: c.max_cpc_limit ? Number(c.max_cpc_limit) : null,
+      cost: Number(cost.toFixed(2)),
+      clicks,
+      impressions,
+      cpc: avgCpc,
+      commission: Number(commission.toFixed(2)),
+      rejected_commission: Number(rejectedComm.toFixed(2)),
+      approved_commission: Number(approvedComm.toFixed(2)),
+      orders,
+      roi,
+      target_country: c.target_country,
+      last_synced: c.last_google_sync_at,
+      mcc_currency: mccInfo?.currency || "USD",
+      // D-040 v3 Q-G2=b：前端据此标红——REMOVED 状态 或 属于已移除/停用 CID
+      is_removed: c.google_status === "REMOVED",
+      cid_removed: c.customer_id ? removedCidSet.has(c.customer_id.replace(/-/g, "")) : false,
+    };
+  });
+
+  return {
+    rows,
+    summary,
+    costByMcc,
+    rowMeta: {
+      displayedCount: rows.length,
+      totalCount: filteredForDisplay.length,
+      // D-040 v2 BUG-3：后端不再切片，永远 false（前端分页处理大量数据）
+      isLimited: false,
+    },
+    mccAccounts,
+  };
+}
