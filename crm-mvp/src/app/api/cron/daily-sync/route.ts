@@ -360,13 +360,15 @@ async function syncAllUsersMcc(): Promise<unknown> {
                 }
                 const costUsd = row.cost * rate;
 
+                // data_source 必须显式写：下面的 API 补数据会把标签改成 api 且从不改回，
+                // 不在 update 里重置的话，Sheet 明明是本行的真实来源却永久显示为 api（D-198）
                 await prisma.ads_daily_stats.upsert({
                   where: { campaign_id_date: { campaign_id: campaign.id, date: dateObj } },
-                  update: { cost: costUsd, clicks: row.clicks, impressions: row.impressions },
+                  update: { cost: costUsd, clicks: row.clicks, impressions: row.impressions, data_source: "sheet" },
                   create: {
                     user_id: uid, campaign_id: campaign.id, date: dateObj,
                     cost: costUsd, clicks: row.clicks, impressions: row.impressions,
-                    user_merchant_id: BigInt(0),
+                    user_merchant_id: BigInt(0), data_source: "sheet",
                   },
                 });
                 sheetUpserted++;

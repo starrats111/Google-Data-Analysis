@@ -102,7 +102,9 @@ export async function syncTodayCostFromSheets(): Promise<TodayCostResult> {
           where: { campaign_id_date: { campaign_id: campaignId, date: dateObj } },
           // is_deleted 归零：campaign 已复活（上面只查 is_deleted=0 的系列）但花费行还停留在
           // 软删态时，唯一键会命中那一行；不清标记的话花费写进去了却依然不可见
-          update: { cost: agg.cost * rate, clicks: agg.clicks, impressions: agg.impressions, is_deleted: 0 },
+          // data_source 必须显式写：API 路径会把标签改成 api 且从不改回，
+          // 不在 update 里重置的话，Sheet 明明是本行的真实来源却永久显示为 api（D-198）
+          update: { cost: agg.cost * rate, clicks: agg.clicks, impressions: agg.impressions, is_deleted: 0, data_source: "sheet" },
           create: {
             user_id: mcc.user_id,
             campaign_id: campaignId,
@@ -111,6 +113,7 @@ export async function syncTodayCostFromSheets(): Promise<TodayCostResult> {
             clicks: agg.clicks,
             impressions: agg.impressions,
             user_merchant_id: BigInt(0),
+            data_source: "sheet",
           },
         });
         out.upserted++;
