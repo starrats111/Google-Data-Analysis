@@ -24,6 +24,7 @@ import prisma from "@/lib/prisma";
 import { sqlTxnRange, sqlTxnMonth, REPORT_PLATFORM_ORDER, paymentDisplayAmount } from "@/lib/report-metrics";
 import { nowCST, dateColumnStart } from "@/lib/date-utils";
 import { apportionFee } from "@/lib/bank-flow-fee";
+import { countActiveRunningCampaigns } from "@/lib/active-running";
 
 /** 半月归批分界：请求日 ≤10号 归 5号批(H1)，>10号 归 15号批(H2)。
  *  平台名义 5号/15号 分两期请求打款，实际有 4-6号 / 14-16号 漂移，按就近原则判批。 */
@@ -586,9 +587,10 @@ export async function buildMemberMonthlyReport(
   const mccs = await buildMccSections(userId, month, monthStart, monthEnd, rate, overrides, warnings);
 
   // ── 7. 在投广告数 ──────────────────────────────────────────────────
-  const enabledCampaigns = await prisma.campaigns.count({
-    where: { user_id: userId, is_deleted: 0, google_status: "ENABLED" },
-  });
+  // D-195：接到与数据中心/小组总览同一口径。旧写法是裸 count(ENABLED)，会把无 gcid 的
+  // 草稿、软删 MCC 下的残留、已移除 CID 下的系列都算进来（wj07 实测 76 vs 真实 72）。
+  const { byUser: enabledByUser } = await countActiveRunningCampaigns([userId]);
+  const enabledCampaigns = enabledByUser.get(userId.toString()) || 0;
 
   // ── 8. 合计 & 利润 ────────────────────────────────────────────────
   const totals = {

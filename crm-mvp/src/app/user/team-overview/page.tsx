@@ -34,7 +34,7 @@ interface MemberRanking {
   today_ads: number | null;
   /** 是否已配置统一脚本（MCC sheet_url），false 时「今日投放」列显示备注 */
   script_configured?: boolean;
-  active_merchants: number;
+  active_campaigns: number;
   cost: number;
   commission: number;
   rejected_commission: number;
@@ -45,7 +45,7 @@ interface MemberRanking {
 
 interface TeamStats {
   member_count: number;
-  active_merchants: number;
+  active_campaigns: number;
   today_ads: number;
   total_cost: number;
   total_commission: number;
@@ -58,7 +58,7 @@ export default function TeamOverviewPage() {
   const { message } = App.useApp();
   const [memberRanking, setMemberRanking] = useState<MemberRanking[]>([]);
   const [memberCount, setMemberCount] = useState(0);
-  const [teamActiveMerchants, setTeamActiveMerchants] = useState(0);
+  const [teamActiveCampaigns, setTeamActiveCampaigns] = useState(0);
   const [teamTodayAds, setTeamTodayAds] = useState(0);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -84,7 +84,7 @@ export default function TeamOverviewPage() {
     const avg_roi = total_cost > 0 ? (net_commission / total_cost) * 100 : 0;
     return {
       member_count: memberCount,
-      active_merchants: teamActiveMerchants,
+      active_campaigns: teamActiveCampaigns,
       today_ads: teamTodayAds,
       total_cost: Math.round(total_cost * 100) / 100,
       total_commission: Math.round(total_commission * 100) / 100,
@@ -92,7 +92,7 @@ export default function TeamOverviewPage() {
       net_commission: Math.round(net_commission * 100) / 100,
       avg_roi: Math.round(avg_roi * 10) / 10,
     };
-  }, [memberRanking, memberCount, teamActiveMerchants, teamTodayAds]);
+  }, [memberRanking, memberCount, teamActiveCampaigns, teamTodayAds]);
 
   const loadData = useCallback(async (opts?: { silent?: boolean }) => {
     const silent = opts?.silent === true;
@@ -106,7 +106,7 @@ export default function TeamOverviewPage() {
       if (res.code === 0) {
         setMemberRanking(res.data.member_ranking);
         setMemberCount(res.data.team_stats?.member_count ?? res.data.member_ranking.length);
-        setTeamActiveMerchants(res.data.team_stats?.active_merchants ?? 0);
+        setTeamActiveCampaigns(res.data.team_stats?.active_campaigns ?? 0);
         setTeamTodayAds(res.data.team_stats?.today_ads ?? 0);
         setLastUpdated(dayjs().tz(TZ));
         setCountdown(AUTO_REFRESH_INTERVAL / 1000);
@@ -240,14 +240,14 @@ export default function TeamOverviewPage() {
       },
     },
     {
-      title: "在跑商家",
-      dataIndex: "active_merchants",
-      key: "active_merchants",
+      title: "在跑广告",
+      dataIndex: "active_campaigns",
+      key: "active_campaigns",
       align: "center" as const,
       width: 100,
-      sorter: (a: MemberRanking, b: MemberRanking) => a.active_merchants - b.active_merchants,
+      sorter: (a: MemberRanking, b: MemberRanking) => a.active_campaigns - b.active_campaigns,
       render: (v: number) => (
-        <Tooltip title="有「已启用」广告系列的商家数（与数据中心「在跑广告数」同一口径，仅计活跃 MCC）">
+        <Tooltip title="「已启用」广告系列条数（与数据中心「在跑广告数」同一口径，仅计活跃 MCC；同一商家投多个国家算多条）">
           {v > 0
             ? <Badge count={v} color="#52c41a" overflowCount={99} style={{ fontSize: 12 }} />
             : <Text type="secondary">—</Text>}
@@ -371,11 +371,11 @@ export default function TeamOverviewPage() {
                   tooltip: "全组今日新建（CST）且历史没出现过同名系列的广告数量，每 30 分钟同步",
                 },
                 {
-                  key: "active_merchants",
-                  title: <><ShopOutlined /> 在跑商家</>,
-                  value: `${teamStats.active_merchants} 家`,
-                  color: teamStats.active_merchants > 0 ? "#52c41a" : "#8c8c8c",
-                  tooltip: "全组有「已启用」广告的商家数（跨成员去重；与数据中心「在跑广告数」同一口径，仅计活跃 MCC）",
+                  key: "active_campaigns",
+                  title: <><ShopOutlined /> 在跑广告</>,
+                  value: `${teamStats.active_campaigns} 条`,
+                  color: teamStats.active_campaigns > 0 ? "#52c41a" : "#8c8c8c",
+                  tooltip: "全组「已启用」广告系列条数（与数据中心「在跑广告数」同一口径，仅计活跃 MCC；同一商家投多个国家算多条）",
                 },
                 {
                   key: "cost",
@@ -455,7 +455,7 @@ export default function TeamOverviewPage() {
               rowKey="user_id"
               pagination={false}
               columns={columns}
-              rowClassName={(record) => record.active_merchants > 0 ? "" : "row-no-active"}
+              rowClassName={(record) => record.active_campaigns > 0 ? "" : "row-no-active"}
             />
           ) : (
             <Empty description="暂无数据" />

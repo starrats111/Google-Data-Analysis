@@ -1,13 +1,13 @@
 import prisma from "@/lib/prisma";
 
 /**
- * 「在跑广告数 / 在跑商家」统一口径（D-183）：
- * 有 ENABLED 广告系列的商家去重计数；与数据中心可见范围一致。
+ * 「在跑」统一口径（D-195，推翻 D-183 的商家去重口径）：
+ * 数的是**广告系列条数**，同一商家投多个国家算多条。
+ * D-183 的过滤规则全部保留，只改计数单位。
  *
  * 计入条件：
  * - campaigns.is_deleted=0、google_status=ENABLED
  * - 有 google_campaign_id、有 customer_id
- * - 挂在 user_merchants（claimed/paused）上
  * - mcc_id 属于该用户未删除的 MCC；**软删 MCC 一律不计**
  * - 不计入已移除/停用 CID（cancelled / is_available=D）下的系列
  */
@@ -51,7 +51,7 @@ export async function healEnabledUnderSoftDeletedMcc(
   }
 }
 
-export async function countActiveRunningMerchants(
+export async function countActiveRunningCampaigns(
   userIds: bigint[],
 ): Promise<{ byUser: Map<string, number>; teamTotal: number }> {
   const byUser = new Map<string, number>();
@@ -92,24 +92,11 @@ export async function countActiveRunningMerchants(
     }
   }
 
-  const activeUms = await prisma.user_merchants.findMany({
-    where: {
-      user_id: { in: userIds },
-      is_deleted: 0,
-      status: { in: ["claimed", "paused"] },
-    },
-    select: { id: true, user_id: true, merchant_id: true, platform: true },
-  });
-  if (activeUms.length === 0) return { byUser, teamTotal: 0 };
-
-  const umToMerchant = new Map(
-    activeUms.map((um) => [um.id.toString(), `${um.merchant_id}:${um.platform}`]),
-  );
-  const umIds = activeUms.map((um) => um.id);
-
+  // D-195：不再经 user_merchants 收窄。旧写法要求系列挂在 claimed/paused 商家上，
+  // 会漏掉没挂商家的系列，而数据中心那侧把它们计入，两边规则本就不一致。
   const activeCampaigns = await prisma.campaigns.findMany({
     where: {
-      user_merchant_id: { in: umIds },
+      user_id: { in: userIds },
       google_status: "ENABLED",
       customer_id: { not: null },
       is_deleted: 0,
@@ -117,14 +104,12 @@ export async function countActiveRunningMerchants(
     },
     select: {
       user_id: true,
-      user_merchant_id: true,
       customer_id: true,
       mcc_id: true,
     },
   });
 
-  const userMerchantSets = new Map<string, Set<string>>();
-  const teamMerchantSet = new Set<string>();
+  let teamTotal = 0;
 
   for (const c of activeCampaigns) {
     const uid = c.user_id.toString();
@@ -142,36 +127,23 @@ export async function countActiveRunningMerchants(
     }
     if (c.customer_id && removedCidSet.has(c.customer_id.replace(/-/g, ""))) continue;
 
-    const merchantKey = umToMerchant.get(c.user_merchant_id.toString());
-    if (!merchantKey) continue;
-
-    if (!userMerchantSets.has(uid)) userMerchantSets.set(uid, new Set());
-    userMerchantSets.get(uid)!.add(merchantKey);
-    teamMerchantSet.add(merchantKey);
+    byUser.set(uid, (byUser.get(uid) || 0) + 1);
+    teamTotal += 1;
   }
 
-  for (const [uid, merchantSet] of userMerchantSets) {
-    byUser.set(uid, merchantSet.size);
-  }
-  return { byUser, teamTotal: teamMerchantSet.size };
+  return { byUser, teamTotal };
 }
 
 /**
- * 从已去重、已按数据中心可见范围过滤的 ENABLED 系列列表，
- * 统计有启用系列的商家去重数（无 user_merchant_id 的系列各计 1）。
+ * 从已按 gcid 去重、已按数据中心可见范围过滤的系列列表统计在跑条数（D-195）。
+ * 入参已经过滤过，这里只数 ENABLED。
  */
-export function countEnabledMerchantsFromCampaigns(
-  campaigns: { google_status: string | null; user_merchant_id: bigint | null }[],
+export function countEnabledCampaigns(
+  campaigns: { google_status: string | null }[],
 ): number {
-  const keys = new Set<string>();
-  let orphan = 0;
+  let n = 0;
   for (const c of campaigns) {
-    if (c.google_status !== "ENABLED") continue;
-    if (c.user_merchant_id == null) {
-      orphan += 1;
-      continue;
-    }
-    keys.add(c.user_merchant_id.toString());
+    if (c.google_status === "ENABLED") n += 1;
   }
-  return keys.size + orphan;
+  return n;
 }

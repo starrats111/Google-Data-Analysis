@@ -5,13 +5,13 @@ import { withLeader } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
 import { nowCST, isTodayCST, dateColumnStart, dateColumnEndExclusive, dateColumnTodayEndExclusive, todayCST, parseTxnDateStart, parseTxnDateEndExclusive, txnStartOfMonthUTC } from "@/lib/date-utils";
-import { countActiveRunningMerchants } from "@/lib/active-running";
+import { countActiveRunningCampaigns } from "@/lib/active-running";
 
 /**
  * 获取小组统计数据（组长专用）
  * 查询逻辑与 /api/user/data-center/campaigns 保持一致：
  *   campaigns（排除幽灵、去重） → ads_daily_stats + affiliate_transactions
- * D-183：「在跑商家」与数据中心「在跑广告数」同一口径（活跃 MCC + 有 gcid 的 ENABLED 商家去重）
+ * D-195：「在跑广告」与数据中心「在跑广告数」同一口径（活跃 MCC + 有 gcid 的 ENABLED 系列条数）
  */
 export const GET = withLeader(async (req: NextRequest, { user }) => {
   const { searchParams } = new URL(req.url);
@@ -36,9 +36,9 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
 
   const memberIds = members.map((m) => m.id);
 
-  // D-183：与数据中心「在跑广告数」同一口径
-  const { byUser: activeMerchantsByUser, teamTotal: teamActiveMerchantCount } =
-    await countActiveRunningMerchants(memberIds);
+  // D-195：与数据中心「在跑广告数」同一口径（ENABLED 系列条数）
+  const { byUser: activeCampaignsByUser, teamTotal: teamActiveCampaignCount } =
+    await countActiveRunningCampaigns(memberIds);
 
   const cstNow = nowCST();
   const monthStartStr = cstNow.startOf("month").format("YYYY-MM-DD");
@@ -234,7 +234,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       today_merchants: todayMerchantsMap.get(uid) ?? null,
       today_ads: todayAdsMap.get(uid) ?? null,
       script_configured: scriptConfiguredUsers.has(uid),
-      active_merchants: activeMerchantsByUser.get(uid) || 0,
+      active_campaigns: activeCampaignsByUser.get(uid) || 0,
       cost: Math.round(cost * 100) / 100,
       commission: Math.round(commission * 100) / 100,
       rejected_commission: Math.round(rejected * 100) / 100,
@@ -247,12 +247,12 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
 
   memberStats.sort((a, b) => b.roi - a.roi);
 
-  // team_stats 汇总数据由前端从 member_ranking 派生，此处仅返回 member_count 和 active_merchants
+  // team_stats 汇总数据由前端从 member_ranking 派生，此处仅返回 member_count 和 active_campaigns
   // （包含无 campaign 数据的成员，前端无法从 member_ranking 获知）
   return apiSuccess(serializeData({
     team_stats: {
       member_count: members.length,
-      active_merchants: teamActiveMerchantCount,
+      active_campaigns: teamActiveCampaignCount,
       // 团队今日投放广告总数（成员求和；成员级已按 gcid 去重，跨成员不会重复）
       today_ads: [...todayAdsMap.values()].reduce((s, v) => s + v, 0),
     },

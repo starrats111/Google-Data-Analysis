@@ -21,7 +21,7 @@ import {
 } from "@/lib/date-utils";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
 import { mergeMerchantCampaigns, routeCommissionToRows, type CommissionGroup } from "@/lib/merchant-campaign-merge";
-import { countEnabledMerchantsFromCampaigns, healEnabledUnderSoftDeletedMcc } from "@/lib/active-running";
+import { countEnabledCampaigns, healEnabledUnderSoftDeletedMcc } from "@/lib/active-running";
 
 /** 调用方可直接把 status 映射成 HTTP 状态码返回 */
 export class CampaignBoardError extends Error {
@@ -625,8 +625,8 @@ export async function queryCampaignBoard(
     avgCpc: totalClicks > 0 ? Number((totalCost / totalClicks).toFixed(4)) : 0,
     roi: totalCost > 0 ? Number(((summaryCommission - summaryRejected - totalCost) / totalCost).toFixed(2)) : 0,
     campaignCount: dedupedCampaigns.length,
-    // D-183：在跑广告数 = 有 ENABLED 系列的商家去重（与小组总览「在跑商家」同一口径）
-    enabledCount: countEnabledMerchantsFromCampaigns(dedupedCampaigns),
+    // D-195：在跑广告数 = ENABLED 系列条数，与下面的 pausedCount 同量纲
+    enabledCount: countEnabledCampaigns(dedupedCampaigns),
     pausedCount,
     todayAdsCount,
     scriptConfigured,
