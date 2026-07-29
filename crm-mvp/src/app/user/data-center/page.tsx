@@ -89,8 +89,13 @@ interface Summary {
   todayAdsCount?: number | null;
   /** 是否已配置统一脚本（MCC sheet_url），false 时显示「脚本未同步」备注 */
   scriptConfigured?: boolean;
-  /** D-176：佣金口径——"mcc"=仅当前 MCC 广告系列归属佣金，"all"=全账号全量佣金 */
-  commissionScope?: "mcc" | "all";
+  /**
+   * 佣金口径。D-176 引入 mcc，D-196 引入 filtered。
+   * "filtered"=有筛选条件，仅当前可见行的归属佣金；
+   * "mcc"=仅当前 MCC 广告系列归属佣金；
+   * "all"=全账号全量佣金
+   */
+  commissionScope?: "filtered" | "mcc" | "all";
 }
 
 function formatInt(value: number | null | undefined): string {
@@ -894,7 +899,9 @@ export default function DataCenterPage() {
       {/* ========== 口径说明 + 行数限制提示 ========== */}
       <div style={{ marginBottom: 8, padding: "4px 8px", background: "#fafafa", borderRadius: 4, fontSize: 12, color: "#888", lineHeight: 1.8 }}>
         <span>
-          {summary.commissionScope === "mcc"
+          {summary.commissionScope === "filtered"
+            ? "统计口径：已启用筛选条件——总花费 / 总佣金 / ROI 只统计筛选后剩下的广告系列（佣金按商家+联盟账号归属到系列），归不到这些系列的佣金不计入。清空筛选可看全量。"
+            : summary.commissionScope === "mcc"
             ? "统计口径：已选择单个 MCC——总花费 / 总佣金 / ROI 仅统计该 MCC 下广告系列（佣金按商家+联盟账号归属到系列），归不到该 MCC 系列的佣金不计入。"
             : "统计口径：总花费 / 总佣金 / ROI 基于全部去重 Campaign 聚合，不受表格展示行数限制。"}
         </span>

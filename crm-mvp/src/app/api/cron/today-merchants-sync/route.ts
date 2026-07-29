@@ -8,11 +8,15 @@
  *   2. 新广告快速回填：Sheet 近两日新建、CRM 尚无记录的系列立即补录进 campaigns，
  *      并自动关联商家。此前新广告只在每天 06:00 的 daily-sync 回填，
  *      用户上午在 Google 上的广告要等次日才出现在 CRM（yz03 投诉根因）。
+ *   3. D-196 当日花费同步：顺带读同一批 Sheet 的 DailyData Tab，把「今天」的
+ *      花费/点击/展示写回 ads_daily_stats。此前花费一天只在 daily-sync 写一次，
+ *      佣金却是每 30 分钟一轮，当天新起的系列必然「有佣金没费用」。
  */
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { fetchTodayMerchantsFromSheets, type CampaignInfoRow } from "@/lib/today-merchants-sheet";
 import { parseCampaignNameFull, syncMerchantStatusForUser } from "@/lib/campaign-merchant-link";
+import { syncTodayCostFromSheets } from "@/lib/today-cost-sheet";
 
 function verifyCron(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
@@ -26,7 +30,8 @@ function log(msg: string) {
 }
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 120;
+// D-196：多了一轮 DailyData 拉取（58 个 MCC），单轮从 ~50s 涨到 ~110s，放宽上限留余量
+export const maxDuration = 300;
 
 /**
  * 新广告快速回填：Sheet 近两日新建行 → campaigns 表。
@@ -255,6 +260,22 @@ export async function GET(req: NextRequest) {
       log(`回填错误 (${backfill.errors.length}): ${backfill.errors.join("; ")}`);
     }
 
+    // D-196 当日花费同步。放在回填之后，本轮新补录的系列这一轮就能拿到花费。
+    // 失败不影响前面已完成的投放商家统计与回填，只记录错误。
+    let cost: Awaited<ReturnType<typeof syncTodayCostFromSheets>> | null = null;
+    try {
+      cost = await syncTodayCostFromSheets();
+      log(
+        `当日花费：${cost.mccWithData}/${cost.mccCount} 个 MCC 有今日行，` +
+        `写入 ${cost.upserted} 条，跳过未知系列 ${cost.skippedUnknown} 条`
+      );
+      if (cost.errors.length > 0) {
+        log(`当日花费错误 (${cost.errors.length}): ${cost.errors.join("; ")}`);
+      }
+    } catch (e) {
+      log(`当日花费同步失败: ${e instanceof Error ? e.message : String(e)}`);
+    }
+
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     log(
       `同步完成：${result.mccCount} 个MCC，${result.mccWithData} 个有今日数据，` +
@@ -278,6 +299,12 @@ export async function GET(req: NextRequest) {
         resurrected: backfill.resurrected,
         users_linked: backfill.usersLinked,
         errors: backfill.errors,
+      },
+      today_cost: cost && {
+        mcc_with_data: cost.mccWithData,
+        upserted: cost.upserted,
+        skipped_unknown: cost.skippedUnknown,
+        errors: cost.errors,
       },
       errors: result.errors,
     });

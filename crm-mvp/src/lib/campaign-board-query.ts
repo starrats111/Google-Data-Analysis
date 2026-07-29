@@ -85,8 +85,12 @@ export interface CampaignBoardSummary {
   pausedCount: number;
   todayAdsCount: number | null;
   scriptConfigured: boolean;
-  /** "mcc"=仅当前 MCC 归属佣金；"all"=全账号全量佣金 */
-  commissionScope: "mcc" | "all";
+  /**
+   * "filtered"=有行级筛选，仅当前可见行的归属佣金；
+   * "mcc"=仅当前 MCC 归属佣金；
+   * "all"=全账号全量佣金（含无广告系列商家的佣金）
+   */
+  commissionScope: "filtered" | "mcc" | "all";
 }
 
 export interface CampaignBoardCostByMcc {
@@ -214,8 +218,10 @@ export async function queryCampaignBoard(
   const txnStart = dateStart ? parseTxnDateStart(dateStart) : txnStartOfMonthUTC();
   const txnEnd = dateEnd ? parseTxnDateEndExclusive(dateEnd) : new Date();
 
-  // ─── campaign 筛选条件 ───
-  const campaignWhere: Record<string, unknown> = {
+  // ─── campaign 范围条件（MCC 可见性，不含行级筛选） ───
+  // D-196：拆成「范围」与「行级筛选」两层。范围决定这个账号在这个 MCC 视图下总共有哪些系列，
+  // 用来做佣金归属；行级筛选（状态/平台/MID/搜索）只决定表格显示哪几行。
+  const campaignScopeWhere: Record<string, unknown> = {
     user_id: userId,
     NOT: [
       { google_campaign_id: null },
@@ -224,9 +230,9 @@ export async function queryCampaignBoard(
     is_deleted: 0,
   };
   if (mccAccountId) {
-    campaignWhere.mcc_id = mccIds[0];
+    campaignScopeWhere.mcc_id = mccIds[0];
   } else if (mccIds.length >= 1) {
-    campaignWhere.mcc_id = mccIds.length === 1 ? mccIds[0] : { in: mccIds };
+    campaignScopeWhere.mcc_id = mccIds.length === 1 ? mccIds[0] : { in: mccIds };
   } else {
     // 无活跃 MCC：排除软删 MCC 上的系列（不把历史软删 MCC 当成「全部」展示）
     const deletedMccs = await prisma.google_mcc_accounts.findMany({
@@ -234,30 +240,30 @@ export async function queryCampaignBoard(
       select: { id: true },
     });
     if (deletedMccs.length > 0) {
-      campaignWhere.NOT = [
-        ...(campaignWhere.NOT as object[]),
+      campaignScopeWhere.NOT = [
+        ...(campaignScopeWhere.NOT as object[]),
         { mcc_id: { in: deletedMccs.map((m) => m.id) } },
       ];
     }
   }
+
+  // ─── 行级筛选条件 ───
+  const campaignWhere: Record<string, unknown> = { ...campaignScopeWhere };
   if (statusFilter && statusFilter !== "all") {
     campaignWhere.google_status = statusFilter;
   }
-  if (searchFilter) {
-    campaignWhere.campaign_name = { contains: searchFilter };
-  }
-  if (platformFilter) {
-    campaignWhere.campaign_name = {
-      ...(campaignWhere.campaign_name as Record<string, unknown> || {}),
-      contains: `-${platformFilter}-`,
-    };
-  }
-  if (midFilter) {
-    campaignWhere.campaign_name = {
-      ...(campaignWhere.campaign_name as Record<string, unknown> || {}),
-      contains: midFilter,
-    };
-  }
+  // 三个名称条件必须叠加成 AND：写在同一个 campaign_name 对象里 contains 会互相覆盖，
+  // 导致「平台 + MID」同时选时只有最后一个生效。
+  const nameConditions: object[] = [];
+  if (searchFilter) nameConditions.push({ campaign_name: { contains: searchFilter } });
+  if (platformFilter) nameConditions.push({ campaign_name: { contains: `-${platformFilter}-` } });
+  if (midFilter) nameConditions.push({ campaign_name: { contains: midFilter } });
+  if (nameConditions.length > 0) campaignWhere.AND = nameConditions;
+
+  // 行级筛选是否生效——决定总览佣金要不要跟着收窄
+  const hasRowFilter = Boolean(
+    (statusFilter && statusFilter !== "all") || searchFilter || platformFilter || midFilter,
+  );
 
   // ─── 全量查询所有符合条件的 campaign（用于总览聚合） ───
   const allCampaigns = await prisma.campaigns.findMany({
@@ -435,16 +441,23 @@ export async function queryCampaignBoard(
   // D-176 v2：单 MCC 模式下，佣金归属必须基于【全量 campaign（跨 MCC）】全局计算一次——
   // 若只在筛选后的集合内路由，同商家在两个 MCC 各有系列时，每个 MCC 视图都会把该商家
   // 全部佣金投给本视图的代表行，导致同一笔佣金在多个 MCC 重复计入（wj02 实测复现）。
+  //
+  // D-196：行级筛选（状态/平台/MID/搜索）同理——若只在筛选后的集合内选举代表行，
+  // 被筛掉的系列的佣金会全部改投到留下来的那条上，同一条系列的佣金会随筛选条件变化。
+  // 所以只要有任何筛选生效，代表行选举都基于「未筛选的范围集合」做。
   const isSingleMccView = Boolean(mccAccountId);
   let commissionRoutingTarget = merge.commissionTarget;
   let globalPrimaryMcc: Map<string, string | null> | null = null;
-  if (isSingleMccView) {
+  if (isSingleMccView || hasRowFilter) {
     const globalCampaigns = await prisma.campaigns.findMany({
-      where: {
-        user_id: userId,
-        NOT: [{ google_campaign_id: null }, { google_campaign_id: "" }],
-        is_deleted: 0,
-      },
+      where: (isSingleMccView
+        ? {
+            // 单 MCC 视图必须跨 MCC 全量选举，否则同商家跨 MCC 的佣金会在每个 MCC 视图重复计入
+            user_id: userId,
+            NOT: [{ google_campaign_id: null }, { google_campaign_id: "" }],
+            is_deleted: 0,
+          }
+        : campaignScopeWhere) as never,
       select: {
         id: true,
         mcc_id: true,
@@ -482,11 +495,21 @@ export async function queryCampaignBoard(
   // D-176：单 MCC 模式下，总佣金口径 =「全局归属到当前 MCC 广告系列的佣金之和」；
   // 花费此时已按 MCC 过滤，两者口径一致后 ROI/净利润才有意义。
   // 不选 MCC（全部）时保持全量交易聚合，避免商家无系列/纯自然成交的佣金被漏统计。
+  //
+  // D-196：花费一直是「按当前筛选后的系列」求和，佣金却走全量交易聚合，两者分母不同源——
+  // 一填 MID/搜索，花费缩到那几条，佣金还是全账号的，总花费 $0 配总佣金 $4464 就是这么来的。
+  // 只要有行级筛选生效，佣金/拒付/订单一律只算当前可见行上的归属佣金，与花费同源。
+  const visibleRowIds = new Set(dedupedCampaigns.map((c) => String(c.id)));
+  const selectedMccIdStr = isSingleMccView ? String(mccIds[0]) : null;
+
   let mccCommission = 0, mccRejected = 0, mccApproved = 0, mccPaid = 0, mccPending = 0, mccOrders = 0;
-  if (isSingleMccView) {
-    const selectedMccIdStr = String(mccIds[0]);
+  if (hasRowFilter || isSingleMccView) {
     for (const [rowId, rc] of commissionByRow) {
-      if (globalPrimaryMcc?.get(rowId) !== selectedMccIdStr) continue;
+      if (hasRowFilter) {
+        if (!visibleRowIds.has(rowId)) continue;
+      } else if (globalPrimaryMcc?.get(rowId) !== selectedMccIdStr) {
+        continue;
+      }
       mccCommission += rc.commission;
       mccRejected += rc.rejected;
       mccApproved += rc.approved;
@@ -495,6 +518,7 @@ export async function queryCampaignBoard(
       mccOrders += rc.orders;
     }
   }
+  const useRowScopedCommission = hasRowFilter || isSingleMccView;
 
   // ─── 全量计算总览 summary 和 costByMcc ───
   let totalCost = 0, totalClicks = 0, totalImpressions = 0;
@@ -604,13 +628,13 @@ export async function queryCampaignBoard(
   }
   totalCost += totalAdjustment;
 
-  // D-176：单 MCC 视图用归属佣金，全部视图用全量交易佣金
-  const summaryCommission = isSingleMccView ? mccCommission : totalCommissionFromTxn;
-  const summaryRejected = isSingleMccView ? mccRejected : totalRejectedFromTxn;
-  const summaryApproved = isSingleMccView ? mccApproved : totalApprovedFromTxn;
-  const summaryPaid = isSingleMccView ? mccPaid : totalPaidFromTxn;
-  const summaryPending = isSingleMccView ? mccPending : totalPendingFromTxn;
-  const summaryOrders = isSingleMccView ? mccOrders : totalOrdersFromTxn;
+  // D-176 / D-196：单 MCC 或有行级筛选时用归属佣金，无筛选的「全部」视图才用全量交易佣金
+  const summaryCommission = useRowScopedCommission ? mccCommission : totalCommissionFromTxn;
+  const summaryRejected = useRowScopedCommission ? mccRejected : totalRejectedFromTxn;
+  const summaryApproved = useRowScopedCommission ? mccApproved : totalApprovedFromTxn;
+  const summaryPaid = useRowScopedCommission ? mccPaid : totalPaidFromTxn;
+  const summaryPending = useRowScopedCommission ? mccPending : totalPendingFromTxn;
+  const summaryOrders = useRowScopedCommission ? mccOrders : totalOrdersFromTxn;
 
   const summary: CampaignBoardSummary = {
     totalCost: Number(totalCost.toFixed(2)),
@@ -630,7 +654,7 @@ export async function queryCampaignBoard(
     pausedCount,
     todayAdsCount,
     scriptConfigured,
-    commissionScope: isSingleMccView ? "mcc" : "all",
+    commissionScope: hasRowFilter ? "filtered" : isSingleMccView ? "mcc" : "all",
   };
 
   // ─── 表格行：按状态排序，同状态内按广告系列名称中的序号升序 ───

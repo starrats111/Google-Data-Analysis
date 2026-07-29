@@ -38,7 +38,7 @@ interface Summary {
   /** 小数口径（0.52 = 52%） */
   roi: number;
   campaignCount: number;
-  commissionScope: "mcc" | "all";
+  commissionScope: "filtered" | "mcc" | "all";
 }
 
 /** 与数据中心表格行完全同构 */
