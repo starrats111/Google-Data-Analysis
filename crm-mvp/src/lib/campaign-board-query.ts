@@ -65,6 +65,14 @@ export interface CampaignBoardRow {
   mcc_currency: string;
   is_removed: boolean;
   cid_removed: boolean;
+  /**
+   * 佣金是不是「同商家合计」而非这一条自己挣的（D-197）。
+   * 佣金只能归到商家层，所以同商家多条系列时全额投在代表行上；花费是逐条真实的。
+   * 前端据此给佣金/ROI 加标注，避免把代表行的 ROI 当成这一条的战绩。
+   */
+  commission_is_merchant_level: boolean;
+  /** 同商家同联盟账号下的系列条数（>1 时佣金为合计口径） */
+  merchant_group_size: number;
 }
 
 export interface CampaignBoardSummary {
@@ -671,26 +679,34 @@ export async function queryCampaignBoard(
   const filteredForDisplay = dedupedCampaigns.filter((c) => {
     if (c.google_status !== "REMOVED") return true;
     if (showRemoved) return true;
-    // 汇总口径下按展示花费判断；代表行（携带同商家汇总花费/佣金）始终保留
-    const s = merge.displayStats.get(String(c.id));
+    // 按这一条自己的花费判断；代表行（携带商家级佣金）始终保留
+    const s = allStatsMap.get(String(c.id));
     return (s?.cost || 0) > 0 || merge.representativeIds.has(String(c.id));
   });
 
   const rows: CampaignBoardRow[] = filteredForDisplay.map((c) => {
-    const s = merge.displayStats.get(String(c.id));
+    // 花费/点击/展示逐条真实（D-197）：以前读 merge.displayStats，同商家多条会把花费全堆到
+    // 代表行、其余行显示 0。07 实证 wavespasus 的 US 行显示 $15.00、GB 行显示 $0，而真值
+    // 是 US $4.77、GB $10.23。花费本来就是逐条可分的，没必要为了迁就商家级佣金而挪走。
+    const s = allStatsMap.get(String(c.id));
     const cost = s?.cost || 0;
     const clicks = s?.clicks || 0;
     const impressions = s?.impressions || 0;
     const avgCpc = clicks > 0 ? Number((cost / clicks).toFixed(4)) : 0;
 
-    // D-168：佣金已按 (商家,联盟账号) 预投放到行
+    // D-168：佣金只能归到商家层，仍按 (商家,联盟账号) 投在代表行上
     const rowComm = commissionByRow.get(String(c.id));
     const commission = rowComm?.commission || 0;
     const rejectedComm = rowComm?.rejected || 0;
     const approvedComm = rowComm?.approved || 0;
     const orders = rowComm?.orders || 0;
 
-    const roi = cost > 0 ? Number(((commission - rejectedComm - cost) / cost).toFixed(2)) : 0;
+    // 佣金是商家合计、花费是这一条的，两者口径不同时 ROI 没有意义，置 0 并由前端标注
+    const groupSize = merge.groupSizeById.get(String(c.id)) || 1;
+    const commIsMerchantLevel = groupSize > 1 && commission > 0;
+    const roi = cost > 0 && !commIsMerchantLevel
+      ? Number(((commission - rejectedComm - cost) / cost).toFixed(2))
+      : 0;
 
     const mccInfo = mccInfoMap.get(String(c.mcc_id));
     return {
@@ -716,6 +732,8 @@ export async function queryCampaignBoard(
       // D-040 v3 Q-G2=b：前端据此标红——REMOVED 状态 或 属于已移除/停用 CID
       is_removed: c.google_status === "REMOVED",
       cid_removed: c.customer_id ? removedCidSet.has(c.customer_id.replace(/-/g, "")) : false,
+      commission_is_merchant_level: commIsMerchantLevel,
+      merchant_group_size: groupSize,
     };
   });
 
