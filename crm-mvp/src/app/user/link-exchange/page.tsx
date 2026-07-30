@@ -103,6 +103,7 @@ const ALERT_TYPE_LABEL: Record<string, string> = {
   replenish_failed: "补货失败",
   brush_blocked: "补刷受阻·挂人工",
   link_forbidden: "链接被联盟拒绝·换链接",
+  no_tracking_stuck: "链接不记点击·换链接",
 };
 
 function LinkStatusTag({ status, reason }: { status: string; reason?: string | null }) {
@@ -726,7 +727,7 @@ export default function LinkExchangePage() {
 
   // ───────── 告警中心列（D-178：每类告警配处理动作，不止报警） ─────────
   const alertColumns: ColumnsType<AlertRow> = [
-    { title: "类型", dataIndex: "type", width: 130, render: (t: string) => <Tag color={t === "merchant_not_found" || t === "invalid_link" || t === "brush_blocked" || t === "link_forbidden" ? "red" : t === "replenish_failed" ? "volcano" : "orange"}>{ALERT_TYPE_LABEL[t] ?? t}</Tag> },
+    { title: "类型", dataIndex: "type", width: 130, render: (t: string) => <Tag color={t === "merchant_not_found" || t === "invalid_link" || t === "brush_blocked" || t === "link_forbidden" || t === "no_tracking_stuck" ? "red" : t === "replenish_failed" ? "volcano" : "orange"}>{ALERT_TYPE_LABEL[t] ?? t}</Tag> },
     { title: "级别", dataIndex: "level", width: 80, render: (l: string) => <Tag color={l === "error" ? "error" : l === "warning" ? "warning" : "default"}>{l}</Tag> },
     { title: "告警内容", dataIndex: "message", ellipsis: true, render: (m: string) => <Tooltip title={m}><Text style={{ fontSize: 13 }}>{m}</Text></Tooltip> },
     { title: "次数", dataIndex: "occurCount", width: 70, align: "center", render: (c: number) => <Badge count={c} overflowCount={999} style={{ backgroundColor: "#faad14" }} /> },
@@ -735,8 +736,8 @@ export default function LinkExchangePage() {
       title: "操作", width: 230, align: "center",
       render: (_: unknown, row) => {
         const cid = row.campaignId;
-        const canRecheck = !!cid && (row.type === "invalid_link" || row.type === "replenish_failed" || row.type === "link_forbidden");
-        const canEditLink = !!cid && (row.type === "invalid_link" || row.type === "replenish_failed" || row.type === "merchant_not_found" || row.type === "brush_blocked" || row.type === "link_forbidden");
+        const canRecheck = !!cid && (row.type === "invalid_link" || row.type === "replenish_failed" || row.type === "link_forbidden" || row.type === "no_tracking_stuck");
+        const canEditLink = !!cid && (row.type === "invalid_link" || row.type === "replenish_failed" || row.type === "merchant_not_found" || row.type === "brush_blocked" || row.type === "link_forbidden" || row.type === "no_tracking_stuck");
         const canReplenish = !!cid && row.type === "low_stock";
         return (
           <Space size={0}>
@@ -808,6 +809,13 @@ export default function LinkExchangePage() {
       "② 去联盟平台（BSH/LB/CG 等）后台找到该商家，重新生成一条追踪链接。",
       "③ 点「换链接」粘贴新链接保存，系统立即验证 + 补货，验证通过本告警自动解除。",
       "④ 若平台里该 offer 已下架/停止合作：暂停该系列广告，关掉换链开关，然后点「已处理」。",
+    ],
+    no_tracking_stuck: [
+      "① 含义：跟链能到商家官网首页，但连一个追踪参数都拿不到——链接「活着却不记点击」。这类失败此前没有任何告警覆盖，系列会悄悄断供，同时每天白开上百次浏览器烧代理流量。",
+      "② 与「链接无效」的区别：那个是根本跟不到商家；这个是跟到了但点击不算你的，佣金归零。等系统自愈无用。",
+      "③ 到联盟平台后台重新生成该商家的追踪链接，点「换链接」粘贴保存，系统立即验证 + 补货，通过后本告警自动解除。",
+      "④ 想先确认一次：点「重验」会立刻再跟一遍（不受长冷却限制），当场返回结论。",
+      "⑤ 若该商家已下架/停止合作：暂停该系列广告，关掉换链开关，然后点「已处理」。",
     ],
   };
   const renderAlertGuide = (row: AlertRow) => {

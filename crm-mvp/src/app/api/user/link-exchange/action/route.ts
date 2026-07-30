@@ -76,7 +76,7 @@ export async function POST(req: NextRequest) {
     })
     if (!owns) return NextResponse.json({ code: -1, message: '广告系列不存在或无权限' }, { status: 404 })
 
-    const result = await replenishCampaign(campaignId, { force: true })
+    const result = await replenishCampaign(campaignId, { force: true, manual: true })
     return NextResponse.json({ code: 0, data: result })
   }
 
@@ -92,7 +92,10 @@ export async function POST(req: NextRequest) {
     })
     if (!owns) return NextResponse.json({ code: -1, message: '广告系列不存在或无权限' }, { status: 404 })
 
-    // 员工主动重验 = 从零开始判定：清连续失败计数与冷却（force 补货本就穿透冷却，这里清计数避免旧账累加）
+    // 员工主动重验 = 从零开始判定：清连续失败计数与冷却（force 补货本就穿透冷却，这里清计数避免旧账累加）。
+    // D-201 故意**不清** suffix_no_tracking_streak：那是「链接活着但永久不记点击」的唯一证据，
+    // 清掉会让重验对卡死系列回答「链接活着、无需换链接」，把人误导回死循环。
+    // 重验靠 manual 穿透冷却即可；真换了新链接时 probe 成功会自动把该计数清零。
     await prisma.campaigns.update({
       where: { id: campaignId },
       data: { suffix_fail_count: 0, suffix_cooldown_until: null },
@@ -103,7 +106,7 @@ export async function POST(req: NextRequest) {
     const available = await prisma.suffix_pool.count({
       where: { campaign_id: campaignId, status: 'available', is_deleted: 0 },
     })
-    const r = await replenishCampaign(campaignId, { force: true, target: available + 2 })
+    const r = await replenishCampaign(campaignId, { force: true, target: available + 2, manual: true })
 
     // 翻译成员工可执行的结论
     let verdict: 'ok' | 'alive' | 'dead' | 'proxy' | 'other'
@@ -114,6 +117,13 @@ export async function POST(req: NextRequest) {
     } else if (r.reason === 'alive_no_tracking') {
       verdict = 'alive'
       advice = '链接活着：已跟到商家官网，只是本次没拿到追踪参数（多为需浏览器执行 JS）。系统会自动重试，无需换链接；若持续无产出再考虑更换。'
+    } else if (r.reason === 'no_tracking_stuck') {
+      // D-201：与 alive_no_tracking 同为「落到官网」，但已连续多轮拿不到参数——不能再让人等自愈
+      verdict = 'dead'
+      advice = `已连续多轮跟到商家官网首页却拿不到任何追踪参数${r.probeFinalUrl ? `（落地 ${r.probeFinalUrl.slice(0, 120)}）` : ''}。链接可达但点击不会被联盟记录，等系统自愈无用——请到联盟平台后台重新生成该商家的追踪链接，再点「换链接」替换，保存后会自动验证并解除本告警。`
+    } else if (r.reason === 'no_tracking_stuck_cooldown') {
+      verdict = 'dead'
+      advice = '该系列已被判定为「链接活着但不记点击」并进入长冷却（避免每次 lease 都白开一次浏览器）。请直接点「换链接」替换成新的追踪链接，保存后会立即验证。'
     } else if (r.reason === 'proxy_unavailable') {
       verdict = 'proxy'
       advice = '代理暂不可用（流量耗尽或熔断中），这不是链接问题。请先到本页顶部查看 kookeey 剩余流量，稍后再点重验。'
@@ -142,7 +152,7 @@ export async function POST(req: NextRequest) {
         where: { campaign_id: c.id, status: 'available', is_deleted: 0 },
       })
       if (available <= STOCK_CONFIG.LOW_WATERMARK) {
-        triggerReplenishAsync(c.id, { force: true })
+        triggerReplenishAsync(c.id, { force: true, manual: true })
         queued++
       }
     }
@@ -246,9 +256,11 @@ export async function POST(req: NextRequest) {
 
     // D-178：换了新链接 = 旧链接的失败历史作废，立即清 D-177 失败计数与冷却，
     // 让新链接马上参与验证/补货，不用干等最长 8h 的疑似死链冷却到期。
+    // D-201：连续零参数计数同样作废——这里与「重验」相反，重验验的还是旧链接故保留证据，
+    // 而本路径链接已被替换，旧链接拿不到参数的历史对新链接无意义。
     await prisma.campaigns.update({
       where: { id: campaign.id },
-      data: { suffix_fail_count: 0, suffix_cooldown_until: null },
+      data: { suffix_fail_count: 0, suffix_cooldown_until: null, suffix_no_tracking_streak: 0 },
     })
 
     // 即时巡航验证（最多 ~35s）：成功即返回状态；超时则后台继续，前端稍后刷新
@@ -257,7 +269,7 @@ export async function POST(req: NextRequest) {
       new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), 35000)),
     ])
     // 验证后顺带触发该系列补货（链接可用即开始蓄库存）
-    triggerReplenishAsync(BigInt(body.campaignId), { force: true })
+    triggerReplenishAsync(BigInt(body.campaignId), { force: true, manual: true })
 
     if (result === 'timeout') {
       return NextResponse.json({ code: 0, data: { saved: true, validating: true } })

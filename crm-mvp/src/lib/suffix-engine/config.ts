@@ -63,6 +63,10 @@ export const STOCK_CONFIG = {
   DEAD_LINK_FAIL_THRESHOLD: 3,
   /** 疑似死链达阈值后的长冷却：期间不再重试（不烧浏览器/代理），到期自动再验一次 */
   DEAD_LINK_COOLDOWN_MS: 8 * 60 * 60_000,
+  /** D-201「落到官网但零追踪参数」连续多少轮判定为卡死（07 2026-07-30 定 N=3）。
+   *  达阈值后：升级 no_tracking_stuck 告警 + 长冷却，且 lease NO_STOCK 的 force 路径不再绕过冷却。
+   *  节奏说明：活链冷却 30min，故 3 轮约 1 小时暴露（不是 5min cron 的 15 分钟——force 路径更快）。 */
+  ALIVE_NO_TRACKING_STREAK_THRESHOLD: 3,
 } as const
 
 export type StockConfig = typeof STOCK_CONFIG

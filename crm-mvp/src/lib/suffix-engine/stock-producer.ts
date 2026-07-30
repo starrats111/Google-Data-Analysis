@@ -15,6 +15,7 @@ import { prisma } from '@/lib/prisma'
 import { STOCK_CONFIG } from './config'
 import { generateOneSuffix, type GenFailure } from './suffix-generator'
 import { raiseAlert, resolveAlertsByType } from './alerts'
+import { classifyNoTrackingRound, evaluateCooldownGate } from './replenish-gate'
 import { recordExitIp } from './exit-ip'
 import { resolveMerchantReferer } from './referer-resolver'
 import { loadConnectionAliasMap, pickCampaignAffiliateLink } from '@/lib/merchant-connection'
@@ -75,6 +76,7 @@ interface CampaignForReplenish {
   google_status: string | null
   google_campaign_id: string | null
   suffix_fail_count: number
+  suffix_no_tracking_streak: number
   suffix_cooldown_until: Date | null
 }
 
@@ -124,10 +126,13 @@ async function runWithConcurrency<T>(
  * 对单个广告系列补货。带进程内锁，重复调用返回同一进行中的 Promise。
  * @param opts.target 覆盖目标水位（默认 STOCK_CONFIG.TARGET_STOCK）
  * @param opts.force 忽略低水位判断强制补到目标
+ * @param opts.manual 人工发起（页面「补货」/「重验」/换链接后验证）。D-201：唯一能穿透
+ *   「no_tracking 卡死」长冷却的入口——人换了新链接必须能当场重试。自动路径（lease NO_STOCK）
+ *   不得带此标记，否则卡死系列会继续每次 lease 白开一次浏览器。
  */
 export async function replenishCampaign(
   campaignId: bigint,
-  opts: { target?: number; force?: boolean } = {},
+  opts: { target?: number; force?: boolean; manual?: boolean } = {},
 ): Promise<ReplenishResult> {
   const key = campaignId.toString()
   const existing = inflight.get(key)
@@ -142,7 +147,7 @@ export async function replenishCampaign(
 
 async function doReplenish(
   campaignId: bigint,
-  opts: { target?: number; force?: boolean },
+  opts: { target?: number; force?: boolean; manual?: boolean },
 ): Promise<ReplenishResult> {
   const cid = campaignId.toString()
 
@@ -163,6 +168,7 @@ async function doReplenish(
       google_status: true,
       google_campaign_id: true,
       suffix_fail_count: true,
+      suffix_no_tracking_streak: true,
       suffix_cooldown_until: true,
     },
   })) as CampaignForReplenish | null
@@ -173,8 +179,19 @@ async function doReplenish(
   // D-177 落库冷却闸门：冷却期内不补货（proxy_unavailable 10min / 活链 30min / 疑似死链 8h）。
   // 落库使冷却跨 pm2 重启生效（旧进程内 Map 一天被 33 次重启清零，死链系列死循环重烧代理流量）。
   // force（lease NO_STOCK 按需路径）不受限——真没货时仍可立即尝试，成功即自动清冷却。
-  if (!opts.force && campaign.suffix_cooldown_until && campaign.suffix_cooldown_until > new Date()) {
-    return { campaignId: cid, skipped: true, reason: 'fail_cooldown', before: 0, generated: 0, after: 0, failed: 0 }
+  //
+  // D-201 例外：已判定「no_tracking 卡死」的系列，force 也要被冷却挡住。
+  // 原因是这两条规则叠起来正好构成死循环——卡死系列库存恒为 0，于是**每次** lease 都 NO_STOCK
+  // → force 补货 → 绕过冷却 → 开浏览器 → 又落官网首页零参数。实测 jwpei 约 130 次/天，
+  // 远超 30min 冷却本该封顶的 48 次/天。只有人工入口（manual）能穿透，保证换了新链接能当场重试。
+  const gate = evaluateCooldownGate({
+    cooldownUntil: campaign.suffix_cooldown_until,
+    noTrackingStreak: campaign.suffix_no_tracking_streak,
+    force: !!opts.force,
+    manual: !!opts.manual,
+  })
+  if (gate.skip) {
+    return { campaignId: cid, skipped: true, reason: gate.reason, before: 0, generated: 0, after: 0, failed: 0 }
   }
   // 用户级闸门：jy 交垟队等「只同步数据、不参与换链接」的账号(link_exchange_disabled=1)一律不补货，
   // 避免其系列被 lease 触发或 cron 选中后空跑生成、白烧低配机预算并刷 no_tracking/invalid_link 告警。
@@ -340,9 +357,10 @@ async function doReplenish(
     const reason = await handleProbeFailure(campaign, merchant.merchant_name, merchant.merchant_url, effectiveUrl, probe)
     return { campaignId: cid, skipped: false, reason, before, generated: 0, after: before, failed, probeError: probe.error, probeFinalUrl: probe.finalUrl ?? null }
   }
-  // probe 成功 = 链接确认活着：清 D-177 疑似死链计数与冷却（仅有残留时写库）
-  if (campaign.suffix_fail_count > 0 || campaign.suffix_cooldown_until) {
-    await setFailCooldown(campaign, 0, null)
+  // probe 成功 = 链接确认活着且能拿到追踪参数：清 D-177 疑似死链计数与冷却，
+  // 并清 D-201 连续零参数计数（否则换了好链接的系列仍背着「卡死」标记、force 继续被挡）。
+  if (campaign.suffix_fail_count > 0 || campaign.suffix_cooldown_until || campaign.suffix_no_tracking_streak > 0) {
+    await setFailCooldown(campaign, 0, null, 0)
   }
   // 学习「必须浏览器」标记：probe 成功即知本系列纯 HTTP 能否跟到（usedBrowser）。
   // 双向回写——变为需要 → 置 1（下轮起低频补货）；恢复纯 HTTP 可跟 → 清 0（恢复正常水位）。仅变化时写库。
@@ -388,7 +406,7 @@ async function doReplenish(
     // 只要出现过重复即证明内容静态、库存无法超过不同内容数，本轮零星代理失败不改变结论。
     // 不是故障——现有库存即是全部可能内容，消费后 lease 会触发按需重生成。
     // 清掉此前误报的告警，并交由调用方长冷却，停止每轮空烧 20 次生成。
-    await resolveAlertsByType(campaign.user_id, campaignId, ['low_stock', 'replenish_failed', 'invalid_link', 'merchant_not_found', 'link_forbidden'])
+    await resolveAlertsByType(campaign.user_id, campaignId, ['low_stock', 'replenish_failed', 'invalid_link', 'merchant_not_found', 'link_forbidden', 'no_tracking_stuck'])
     // 学习「静态后缀」标记：写回 campaigns，前端库存列据此不再按低水位误标红（1⚠）。
     await setStaticFlag(campaign, 1)
     return { campaignId: cid, skipped: false, reason: 'static_suffix', before, generated: 0, after: before, failed: 0, needsBrowser: probe.usedBrowser }
@@ -412,7 +430,7 @@ async function doReplenish(
     })
   } else {
     // 有产出：解决该系列旧的库存类告警（含 link_forbidden——能产出即证明新链接已被联盟接受）
-    await resolveAlertsByType(campaign.user_id, campaignId, ['low_stock', 'replenish_failed', 'invalid_link', 'merchant_not_found', 'link_forbidden'])
+    await resolveAlertsByType(campaign.user_id, campaignId, ['low_stock', 'replenish_failed', 'invalid_link', 'merchant_not_found', 'link_forbidden', 'no_tracking_stuck'])
     // 双向学习「静态后缀」：批量产出全为新内容（零重复）说明落地参数随会话变化（商家换了带 token 的链接），清 0 恢复正常水位口径。
     // need=1 的单条按需生成无法判定静态性（静态商家消费后重生成同样是 1 条新内容），不作依据。
     if (duplicates === 0 && need > 1) await setStaticFlag(campaign, 0)
@@ -446,19 +464,28 @@ async function setStaticFlag(campaign: CampaignForReplenish, value: 0 | 1): Prom
   }
 }
 
-/** D-177 疑似死链计数/冷却回写（仅变化时写库，失败不阻断补货主流程） */
+/**
+ * D-177 疑似死链计数/冷却回写（仅变化时写库，失败不阻断补货主流程）。
+ * @param noTrackingStreak D-201 连续「落官网零参数」轮次；省略表示不改动该字段。
+ */
 async function setFailCooldown(
   campaign: CampaignForReplenish,
   failCount: number,
   cooldownUntil: Date | null,
+  noTrackingStreak?: number,
 ): Promise<void> {
   try {
     await prisma.campaigns.update({
       where: { id: campaign.id },
-      data: { suffix_fail_count: failCount, suffix_cooldown_until: cooldownUntil },
+      data: {
+        suffix_fail_count: failCount,
+        suffix_cooldown_until: cooldownUntil,
+        ...(noTrackingStreak === undefined ? {} : { suffix_no_tracking_streak: noTrackingStreak }),
+      },
     })
     campaign.suffix_fail_count = failCount
     campaign.suffix_cooldown_until = cooldownUntil
+    if (noTrackingStreak !== undefined) campaign.suffix_no_tracking_streak = noTrackingStreak
   } catch (e) {
     console.warn('[stock-producer] 更新失败冷却字段失败:', campaign.id.toString(), e instanceof Error ? e.message : e)
   }
@@ -512,12 +539,39 @@ async function handleProbeFailure(
     return 'tracker_forbidden'
   }
 
-  // 2) 域名匹配 = 活链（kyads matched 判定）：落到了商家官网、只是无追踪参数
+  // 2) 域名匹配 = 活链（kyads matched 判定）：落到了商家官网、只是无追踪参数。
+  //    D-201：此分支原样清零 suffix_fail_count 后短冷却重试，隐含假设「换个出口 IP 就能拿到参数」。
+  //    该假设对偶发抖动成立，对「链接活着但永久不记点击」不成立——后者会无限循环且**零告警**
+  //    （现有 6 类告警无一覆盖）。故改为用独立计数器累计连续轮次：未达阈值保持原行为（短冷却重试），
+  //    达阈值则判定卡死，升级长冷却 + 专属告警，并让 force 路径也被冷却挡住（见上方闸门）。
   if (fail.reason === 'no_tracking' && sameRootDomain(fail.finalUrl, merchantUrl)) {
-    await setFailCooldown(campaign, 0, new Date(Date.now() + STOCK_CONFIG.ALIVE_LINK_COOLDOWN_MS))
+    const { streak, stuck, cooldownMs } = classifyNoTrackingRound(campaign.suffix_no_tracking_streak)
+    // 仍清零 suffix_fail_count：那是「连域名都不匹配」的硬失败计数，本例域名是匹配的，
+    // 语义上必须保持清零，否则会污染 D-177 的三态分类。
+    await setFailCooldown(campaign, 0, new Date(Date.now() + cooldownMs), streak)
     // 链接确认活着：顺手清掉此前误报的 invalid_link
     await resolveAlertsByType(campaign.user_id, campaign.id, ['invalid_link'])
-    return 'alive_no_tracking'
+
+    if (stuck) {
+      await raiseAlert(campaign.user_id, {
+        type: 'no_tracking_stuck',
+        campaignId: campaign.id,
+        level: 'error',
+        message:
+          `广告系列「${campaign.campaign_name ?? cid}」连续 ${streak} 轮跟链都落到商家官网首页但拿不到任何追踪参数` +
+          `（落地：${fail.finalUrl ?? '未知'}）。链接可达但点击不会被联盟记录，等系统自愈无用，需人工到平台重取链接`,
+        context: {
+          campaignName: campaign.campaign_name,
+          merchantName,
+          country: campaign.target_country,
+          affiliateUrl: affiliateUrl.slice(0, 300),
+          reason: fail.reason,
+          finalUrl: fail.finalUrl ?? null,
+          noTrackingStreak: streak,
+        },
+      })
+    }
+    return stuck ? 'no_tracking_stuck' : 'alive_no_tracking'
   }
 
   // 3) 疑似死链：连续计数，达阈值才告警 + 长冷却
@@ -748,8 +802,9 @@ export async function purgeTerminalSuffixes(): Promise<{ poolDeleted: number; as
   return { poolDeleted, assignmentsDeleted }
 }
 
-/** 触发某系列的异步补货（fire-and-forget），lease NO_STOCK / 低库存时调用 */
-export function triggerReplenishAsync(campaignId: bigint, opts: { force?: boolean } = {}): void {
+/** 触发某系列的异步补货（fire-and-forget），lease NO_STOCK / 低库存时调用。
+ *  opts.manual 见 replenishCampaign：仅人工入口可传，自动路径不得传。 */
+export function triggerReplenishAsync(campaignId: bigint, opts: { force?: boolean; manual?: boolean } = {}): void {
   replenishCampaign(campaignId, opts).catch((err) => {
     console.error('[stock-producer] async replenish failed:', campaignId.toString(), err instanceof Error ? err.message : err)
   })

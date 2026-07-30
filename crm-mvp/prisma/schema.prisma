@@ -422,6 +422,9 @@ model campaigns {
   suffix_click_checkpoint_at DateTime? @db.DateTime(0) // 基线记录时间
   // D-177 疑似死链计数：连续「域名也不匹配」类硬失败次数（成功/活链判定清零）。达 DEAD_LINK_FAIL_THRESHOLD 才升级 invalid_link 告警
   suffix_fail_count          Int       @default(0) @db.UnsignedInt
+  // D-201 连续「落到官网但零追踪参数」轮次：独立于 suffix_fail_count（后者判活链时必须清零，不能兼职）。
+  // 达 ALIVE_NO_TRACKING_STREAK_THRESHOLD 升级长冷却 + no_tracking_stuck 告警，治「系列静默死、每天白开上百次浏览器」
+  suffix_no_tracking_streak  Int       @default(0) @db.UnsignedInt
   // D-177 补货失败冷却截止：此前该系列不参与补货（落库持久化，治「进程内冷却被 pm2 重启清零 → 死循环重烧」）
   suffix_cooldown_until      DateTime? @db.DateTime(0)
   is_deleted                 Int       @default(0) @db.TinyInt

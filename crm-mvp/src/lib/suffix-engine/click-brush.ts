@@ -399,7 +399,7 @@ async function executeItem(rt: TaskRuntime, itemId: bigint): Promise<{ ok: boole
     // 但 low_stock/replenish_failed/invalid_link 告警因只有 cron 补货成功才清而常驻」的问题。
     if (!rt.alertsResolved) {
       rt.alertsResolved = true
-      await resolveAlertsByType(rt.userId, rt.campaignId, ['low_stock', 'replenish_failed', 'invalid_link', 'brush_blocked', 'link_forbidden']).catch(() => {})
+      await resolveAlertsByType(rt.userId, rt.campaignId, ['low_stock', 'replenish_failed', 'invalid_link', 'brush_blocked', 'link_forbidden', 'no_tracking_stuck']).catch(() => {})
     }
     return { ok: true }
   }
@@ -477,7 +477,7 @@ async function finalizeTask(taskId: bigint): Promise<boolean> {
   })
 
   if (done > 0) {
-    await resolveAlertsByType(task.user_id, task.campaign_id, ['low_stock', 'replenish_failed', 'invalid_link', 'brush_blocked', 'link_forbidden'])
+    await resolveAlertsByType(task.user_id, task.campaign_id, ['low_stock', 'replenish_failed', 'invalid_link', 'brush_blocked', 'link_forbidden', 'no_tracking_stuck'])
   } else {
     const campaign = await prisma.campaigns.findUnique({ where: { id: task.campaign_id }, select: { campaign_name: true } })
     await raiseAlert(task.user_id, {
