@@ -48,11 +48,6 @@ export interface MerchantMergeResult {
   commissionTarget: Map<string, string>;
   /** 全部代表 primaryId 集合（用于展示过滤时保留携带佣金/花费的代表行） */
   representativeIds: Set<string>;
-  /**
-   * primaryId -> 所在 (商家,联盟账号) 组的系列条数（D-197）。
-   * >1 说明该行的佣金是同商家合计口径，前端要标注，别把它当这一条自己的战绩。
-   */
-  groupSizeById: Map<string, number>;
 }
 
 const STATUS_TIER: Record<string, number> = { ENABLED: 0, PAUSED: 1, REMOVED: 2 };
@@ -79,7 +74,6 @@ export function mergeMerchantCampaigns(
   const displayStats = new Map<string, StatEntry>();
   const commissionTarget = new Map<string, string>();
   const representativeIds = new Set<string>();
-  const groupSizeById = new Map<string, number>();
 
   // 商家 → 全部系列（商家级回退代表行用）；(商家,连接) → 组内系列
   const byMerchant = new Map<string, MergeableCampaign[]>();
@@ -117,7 +111,6 @@ export function mergeMerchantCampaigns(
     for (const c of group) {
       const pid = String(c.id);
       displayStats.set(pid, pid === repId ? agg : { cost: 0, clicks: 0, impressions: 0 });
-      groupSizeById.set(pid, group.length);
     }
     const [mid, connPart] = gkey.split("|");
     if (connPart !== "null") commissionTarget.set(`${mid}:${connPart}`, repId);
@@ -131,7 +124,7 @@ export function mergeMerchantCampaigns(
     representativeIds.add(String(rep.id));
   }
 
-  return { displayStats, commissionTarget, representativeIds, groupSizeById };
+  return { displayStats, commissionTarget, representativeIds };
 }
 
 /** 交易佣金组（按 商家+联盟账号 聚合后的一组） */

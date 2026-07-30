@@ -65,14 +65,6 @@ export interface CampaignBoardRow {
   mcc_currency: string;
   is_removed: boolean;
   cid_removed: boolean;
-  /**
-   * 佣金是不是「同商家合计」而非这一条自己挣的（D-197）。
-   * 佣金只能归到商家层，所以同商家多条系列时全额投在代表行上；花费是逐条真实的。
-   * 前端据此给佣金/ROI 加标注，避免把代表行的 ROI 当成这一条的战绩。
-   */
-  commission_is_merchant_level: boolean;
-  /** 同商家同联盟账号下的系列条数（>1 时佣金为合计口径） */
-  merchant_group_size: number;
 }
 
 export interface CampaignBoardSummary {
@@ -701,10 +693,8 @@ export async function queryCampaignBoard(
     const approvedComm = rowComm?.approved || 0;
     const orders = rowComm?.orders || 0;
 
-    // 佣金是商家合计、花费是这一条的，两者口径不同时 ROI 没有意义，置 0 并由前端标注
-    const groupSize = merge.groupSizeById.get(String(c.id)) || 1;
-    const commIsMerchantLevel = groupSize > 1 && commission > 0;
-    const roi = cost > 0 && !commIsMerchantLevel
+    // 佣金按商家层全额投在代表行上，07 拍板（2026-07-30）：就当这条广告自己的算，ROI 直接给数
+    const roi = cost > 0
       ? Number(((commission - rejectedComm - cost) / cost).toFixed(2))
       : 0;
 
@@ -732,8 +722,6 @@ export async function queryCampaignBoard(
       // D-040 v3 Q-G2=b：前端据此标红——REMOVED 状态 或 属于已移除/停用 CID
       is_removed: c.google_status === "REMOVED",
       cid_removed: c.customer_id ? removedCidSet.has(c.customer_id.replace(/-/g, "")) : false,
-      commission_is_merchant_level: commIsMerchantLevel,
-      merchant_group_size: groupSize,
     };
   });
 

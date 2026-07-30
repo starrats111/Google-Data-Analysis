@@ -64,9 +64,6 @@ interface CampaignRow {
   target_country: string; last_synced: string | null;
   mcc_currency?: string;
   is_removed?: boolean; cid_removed?: boolean;
-  /** D-197：佣金是同商家合计而非这一条自己挣的（联盟只回传到商家层） */
-  commission_is_merchant_level?: boolean;
-  merchant_group_size?: number;
 }
 
 interface CostByMcc {
@@ -720,15 +717,8 @@ export default function DataCenterPage() {
     {
       title: "佣金", dataIndex: "commission", width: 70, align: "right",
       sorter: (a, b) => a.commission - b.commission,
-      render: (v: number, r: IndexedRow) => (
-        <span>
-          <Text style={{ fontSize: 12, color: v > 0 ? "#389e0d" : undefined }}>${v?.toFixed(2)}</Text>
-          {r.commission_is_merchant_level && (
-            <Tooltip title={`联盟只把佣金回传到商家层，分不到具体广告系列。这 $${v?.toFixed(2)} 是该商家 ${r.merchant_group_size} 条系列的合计，不是这一条自己挣的；花费才是这一条的真实花费。`}>
-              <Tag color="blue" style={{ fontSize: 9, marginLeft: 2, padding: "0 3px", lineHeight: "14px" }}>商家合计</Tag>
-            </Tooltip>
-          )}
-        </span>
+      render: (v: number) => (
+        <Text style={{ fontSize: 12, color: v > 0 ? "#389e0d" : undefined }}>${v?.toFixed(2)}</Text>
       ),
     },
     {
@@ -740,14 +730,6 @@ export default function DataCenterPage() {
       sorter: (a, b) => calcNetProfit(a.commission, a.rejected_commission, a.cost) - calcNetProfit(b.commission, b.rejected_commission, b.cost),
       render: (_: unknown, r: IndexedRow) => {
         const value = calcNetProfit(r.commission, r.rejected_commission, r.cost);
-        if (r.commission_is_merchant_level) {
-          // 佣金是商家合计、花费是这一条的，相减没有意义
-          return (
-            <Tooltip title={`该商家有 ${r.merchant_group_size} 条系列共用一份佣金，单条算不出净利润。请按商家维度看，或用 MID 筛选后看合计。`}>
-              <Text type="secondary" style={{ fontSize: 12 }}>按商家看</Text>
-            </Tooltip>
-          );
-        }
         return <Text style={{ fontSize: 12, color: value >= 0 ? "#389e0d" : "#cf1322" }}>${value.toFixed(2)}</Text>;
       },
     },
