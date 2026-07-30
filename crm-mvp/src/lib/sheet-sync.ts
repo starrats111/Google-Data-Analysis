@@ -146,6 +146,12 @@ export interface SheetRow {
   clicks: number;
   impressions: number;
   cpc: number;            // 账户币种金额
+  /**
+   * D-202：Sheet 里明确的出价列（CpcBid/MaxCpc）才有值，0 表示该表没有出价列。
+   * 与 cpc 的区别：cpc 在缺列时会退化成 cost/clicks 的平均值，只能用于展示，
+   * 不能当 max_cpc_limit 写库。
+   */
+  cpc_bid: number;
   status: string;         // ENABLED / PAUSED / REMOVED
 }
 
@@ -262,9 +268,12 @@ function parseCrmDailyData(values: string[][], startDate: string, endDate: strin
       }
 
       let cpc = clicks > 0 ? cost / clicks : 0;
+      let cpcBid = 0;
       for (const cpcKey of ["cpcbid", "maxcpc", "cpc"]) {
         if (cpcKey in col && row[col[cpcKey]] && row[col[cpcKey]] !== "" && row[col[cpcKey]] !== "--") {
           cpc = safeFloat(row[col[cpcKey]]) / 1_000_000;
+          // "cpc" 列语义含糊（可能是平均 CPC），只有明确的出价列才算真实出价
+          if (cpcKey === "cpcbid" || cpcKey === "maxcpc") cpcBid = cpc;
           break;
         }
       }
@@ -284,6 +293,7 @@ function parseCrmDailyData(values: string[][], startDate: string, endDate: strin
         clicks,
         impressions,
         cpc,
+        cpc_bid: cpcBid,
         status: normalizeStatus(row[col["status"]]),
       });
     } catch {
@@ -343,6 +353,7 @@ function parseKyadsReport(values: string[][], startDate: string, endDate: string
           clicks,
           impressions,
           cpc: 0,
+          cpc_bid: 0, // kyads 表是广告级明细，无 campaign 出价列
           status,
         });
       }

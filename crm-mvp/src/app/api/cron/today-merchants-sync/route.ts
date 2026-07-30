@@ -273,7 +273,8 @@ export async function GET(req: NextRequest) {
       cost = await syncTodayCostFromSheets();
       log(
         `当日花费：${cost.mccWithData}/${cost.mccCount} 个 MCC 有今日行，` +
-        `写入 ${cost.upserted} 条，跳过未知系列 ${cost.skippedUnknown} 条`
+        `写入 ${cost.upserted} 条，跳过未知系列 ${cost.skippedUnknown} 条，` +
+        `预算/CPC 回写 ${cost.metaUpdated} 条`
       );
       if (cost.errors.length > 0) {
         log(`当日花费错误 (${cost.errors.length}): ${cost.errors.join("; ")}`);
@@ -310,6 +311,7 @@ export async function GET(req: NextRequest) {
         mcc_with_data: cost.mccWithData,
         upserted: cost.upserted,
         skipped_unknown: cost.skippedUnknown,
+        meta_updated: cost.metaUpdated,
         errors: cost.errors,
       },
       errors: result.errors,

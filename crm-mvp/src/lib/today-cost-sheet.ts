@@ -26,6 +26,8 @@ export interface TodayCostResult {
   upserted: number;
   /** Sheet 里有、但 CRM 找不到对应 campaign 而跳过的行数 */
   skippedUnknown: number;
+  /** D-202：回写了预算/CPC 的 campaigns 行数 */
+  metaUpdated: number;
   errors: string[];
 }
 
@@ -37,6 +39,7 @@ export async function syncTodayCostFromSheets(): Promise<TodayCostResult> {
     mccWithData: 0,
     upserted: 0,
     skippedUnknown: 0,
+    metaUpdated: 0,
     errors: [],
   };
 
@@ -60,15 +63,22 @@ export async function syncTodayCostFromSheets(): Promise<TodayCostResult> {
       out.mccWithData++;
 
       // 同一 gcid 在 Sheet 里可能有多行（广告级明细已在 syncFromSheet 聚合，这里再兜一次底）
-      const byGcid = new Map<string, { cost: number; clicks: number; impressions: number }>();
+      // D-202：顺带保留 Budget / 明确出价列，用于回写 campaigns（回填系列的预算此前
+      // 一直是表默认值 $2.00，要等次日 06:00 daily-sync 才对齐）
+      const byGcid = new Map<string, { cost: number; clicks: number; impressions: number; budget: number; cpcBid: number }>();
       for (const r of rows) {
         const prev = byGcid.get(r.campaign_id);
         if (prev) {
           prev.cost += r.cost;
           prev.clicks += r.clicks;
           prev.impressions += r.impressions;
+          if (r.budget > prev.budget) prev.budget = r.budget;
+          if (r.cpc_bid > 0) prev.cpcBid = r.cpc_bid;
         } else {
-          byGcid.set(r.campaign_id, { cost: r.cost, clicks: r.clicks, impressions: r.impressions });
+          byGcid.set(r.campaign_id, {
+            cost: r.cost, clicks: r.clicks, impressions: r.impressions,
+            budget: r.budget, cpcBid: r.cpc_bid,
+          });
         }
       }
 
@@ -81,9 +91,9 @@ export async function syncTodayCostFromSheets(): Promise<TodayCostResult> {
           is_deleted: 0,
           google_campaign_id: { in: [...byGcid.keys()] },
         },
-        select: { id: true, google_campaign_id: true },
+        select: { id: true, google_campaign_id: true, daily_budget: true, max_cpc_limit: true },
       });
-      const idByGcid = new Map(campaigns.map((c) => [c.google_campaign_id!, c.id]));
+      const campaignByGcid = new Map(campaigns.map((c) => [c.google_campaign_id!, c]));
 
       const rate = await getExchangeRate(mcc.currency, today);
       if (rate <= 0) {
@@ -93,11 +103,34 @@ export async function syncTodayCostFromSheets(): Promise<TodayCostResult> {
       const dateObj = new Date(today);
 
       for (const [gcid, agg] of byGcid) {
-        const campaignId = idByGcid.get(gcid);
-        if (!campaignId) {
+        const campaign = campaignByGcid.get(gcid);
+        if (!campaign) {
           out.skippedUnknown++;
           continue;
         }
+        const campaignId = campaign.id;
+
+        // D-202：预算/CPC 回写。预算取 Sheet Budget 列（账户币种，口径与 daily-sync 的
+        // HM-D50 回写一致，不做汇率换算）；CPC 只认明确的出价列，缺列的表保持 NULL，
+        // 不能拿平均 CPC 冒充最高出价。
+        const budgetChanged = agg.budget > 0 && Number(campaign.daily_budget ?? 0) !== agg.budget;
+        const cpcChanged = agg.cpcBid > 0 && Number(campaign.max_cpc_limit ?? 0) !== agg.cpcBid;
+        if (budgetChanged || cpcChanged) {
+          try {
+            await prisma.campaigns.update({
+              where: { id: campaignId },
+              data: {
+                ...(budgetChanged ? { daily_budget: agg.budget } : {}),
+                ...(cpcChanged ? { max_cpc_limit: agg.cpcBid } : {}),
+                last_google_sync_at: new Date(),
+              },
+            });
+            out.metaUpdated++;
+          } catch (e) {
+            out.errors.push(`MCC ${mcc.mcc_id} gcid ${gcid} 预算回写失败: ${e instanceof Error ? e.message.slice(0, 80) : String(e)}`);
+          }
+        }
+
         await prisma.ads_daily_stats.upsert({
           where: { campaign_id_date: { campaign_id: campaignId, date: dateObj } },
           // is_deleted 归零：campaign 已复活（上面只查 is_deleted=0 的系列）但花费行还停留在
