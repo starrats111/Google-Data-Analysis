@@ -114,6 +114,8 @@ export async function generateOneSuffix(
      *  为真时跳过注定失败的 HTTP 第一步、直接浏览器优先，每条省约 42KB。
      *  每系列每天仍自动放行一条走 HTTP 回探（见 httpRecheckDay），以便该标记能降回 0。 */
     needsBrowser?: boolean
+    /** D-203：按系列灰度 V2 跟跳引擎。undefined = 不表态，沿用全局 AFFILIATE_RESOLVER_V2 */
+    useV2Engine?: boolean | null
   } = {},
 ): Promise<GenResult> {
   if (!affiliateUrl || !/^https?:\/\//i.test(affiliateUrl)) {
@@ -173,6 +175,7 @@ export async function generateOneSuffix(
         referer: opts.referer,
         proxyUrl,
         targetDomain: opts.targetDomain,
+        useV2Engine: opts.useV2Engine,
       }),
       STOCK_CONFIG.GEN_TIMEOUT_MS,
     )

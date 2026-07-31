@@ -38,6 +38,16 @@ export const REFERERS: string[] = [
   '',
 ]
 
+/**
+ * 跟链（补货）专用来路池：与 REFERERS 同源，但**剔除空串**。
+ *
+ * D-203 实测：不带 Referer 时联盟会把点击降级——直接 302 到跳板 `?url=` 里的裸商家域名、
+ * 零追踪参数（6 条样本 6 条全中；补上 `Referer: https://www.google.com/` 后当场恢复记账）。
+ * 刷点击保留空串是刻意的（模拟直接访问那部分真实流量），但补货追链一旦空手出门，
+ * 拿回来的后缀就是废的——整条系列会被误判成「链接活着但不记点击」。
+ */
+export const RESOLVE_REFERERS: string[] = REFERERS.filter((r) => r !== '')
+
 export function randomPick<T>(arr: readonly T[]): T {
   return arr[Math.floor(Math.random() * arr.length)]
 }

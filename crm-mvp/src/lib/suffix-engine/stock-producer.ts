@@ -13,11 +13,12 @@
 
 import { prisma } from '@/lib/prisma'
 import { STOCK_CONFIG } from './config'
-import { generateOneSuffix, type GenFailure } from './suffix-generator'
+import { generateOneSuffix, type GenFailure, type GenResult } from './suffix-generator'
 import { raiseAlert, resolveAlertsByType } from './alerts'
-import { classifyNoTrackingRound, evaluateCooldownGate } from './replenish-gate'
+import { classifyNoTrackingRound, evaluateCooldownGate, parseV2Stage, shouldUseV2Engine } from './replenish-gate'
 import { recordExitIp } from './exit-ip'
 import { resolveMerchantReferer } from './referer-resolver'
+import { randomPick, RESOLVE_REFERERS } from './click-scheduler'
 import { loadConnectionAliasMap, pickCampaignAffiliateLink } from '@/lib/merchant-connection'
 import { sameRootDomain } from '@/lib/root-domain'
 
@@ -77,6 +78,8 @@ interface CampaignForReplenish {
   google_campaign_id: string | null
   suffix_fail_count: number
   suffix_no_tracking_streak: number
+  /** D-203：1 = 已学到「本系列必须走 V2 跟跳引擎」，跳过灰度阶段直接用 V2 */
+  suffix_needs_v2: number
   suffix_cooldown_until: Date | null
 }
 
@@ -169,6 +172,7 @@ async function doReplenish(
       google_campaign_id: true,
       suffix_fail_count: true,
       suffix_no_tracking_streak: true,
+      suffix_needs_v2: true,
       suffix_cooldown_until: true,
     },
   })) as CampaignForReplenish | null
@@ -333,9 +337,20 @@ async function doReplenish(
     return true
   }
 
-  // 来路（Referer）：手动来路 → 最新文章 → 联盟账号网站 → （空则不带 Referer）。
+  // 来路（Referer）：手动来路 → 最新文章 → 联盟账号网站 → 随机来路池。
   // 与刷点击同源，让补货追链也带上真实来路，提升联盟点击归因。整条补货解析一次复用。
-  const refererUrl = (await resolveMerchantReferer(merchant.id)).url
+  //
+  // D-203 补上最后一级兜底：原本三级都落空就传 null 裸请求，而实测裸请求会被联盟直接降级到
+  // 裸商家域名、零追踪参数（6 条样本 6 条全中），拿回来的后缀是废的、整条系列被误判成
+  // 「链接活着但不记点击」。全站在投系列里有 2545 条正处于这一级。刷点击路径（click-brush.ts）
+  // 早就有这层随机兜底，补货这条一直漏了。用 RESOLVE_REFERERS（剔了空串）而非 REFERERS。
+  const refererUrl = (await resolveMerchantReferer(merchant.id)).url || randomPick(RESOLVE_REFERERS)
+
+  // D-203 V2 引擎灰度：按阶段 + 本系列状态决定。undefined = 不表态，沿用全局 env。
+  // suffix_needs_v2 是「V1 判死、V2 复验跟通」学到的结论，一旦学到就一直走 V2，不受阶段限制。
+  const useV2Engine = campaign.suffix_needs_v2 === 1
+    ? true
+    : shouldUseV2Engine(parseV2Stage(process.env.AFFILIATE_RESOLVER_V2_STAGE), campaign.suffix_no_tracking_streak)
 
   // 本轮实际生效链接：默认账号挑中链接，probe 命中 no_tracking 且存在不同的 tracking_link 时切换。
   let effectiveUrl = affiliateUrl
@@ -343,10 +358,10 @@ async function doReplenish(
   // ── probe：先探一条 ──
   // D-197：needsBrowser 系列跳过必败的 HTTP 第一步。probe 一定跑在 batch 之前，所以每天的
   // 「HTTP 回探名额」总是落在 probe 上——正好是负责学习 suffix_needs_browser 的那一条。
-  let probe = await generateOneSuffix(effectiveUrl, country, platform, { userId: campaign.user_id, campaignId, teamId, merchantId: merchantIdStr, referer: refererUrl, targetDomain: merchant.merchant_url, needsBrowser })
+  let probe = await generateOneSuffix(effectiveUrl, country, platform, { userId: campaign.user_id, campaignId, teamId, merchantId: merchantIdStr, referer: refererUrl, targetDomain: merchant.merchant_url, needsBrowser, useV2Engine })
   if (!probe.ok && probe.reason === 'no_tracking' && trackingFallback && trackingFallback !== effectiveUrl) {
     // 挑中链接落地无追踪参数：改用商家动态 tracking_link 重试一次。
-    const retry = await generateOneSuffix(trackingFallback, country, platform, { userId: campaign.user_id, campaignId, teamId, merchantId: merchantIdStr, referer: refererUrl, targetDomain: merchant.merchant_url, needsBrowser })
+    const retry = await generateOneSuffix(trackingFallback, country, platform, { userId: campaign.user_id, campaignId, teamId, merchantId: merchantIdStr, referer: refererUrl, targetDomain: merchant.merchant_url, needsBrowser, useV2Engine })
     if (retry.ok) {
       effectiveUrl = trackingFallback
       probe = retry
@@ -354,7 +369,11 @@ async function doReplenish(
   }
   if (!probe.ok) {
     failed++
-    const reason = await handleProbeFailure(campaign, merchant.merchant_name, merchant.merchant_url, effectiveUrl, probe)
+    const reason = await handleProbeFailure(
+      campaign, merchant.merchant_name, merchant.merchant_url, effectiveUrl, probe,
+      // 复验固定走 V2，与本轮闸门无关——正是要看「换个引擎跟不跟得动」
+      () => generateOneSuffix(effectiveUrl, country, platform, { userId: campaign.user_id, campaignId, teamId, merchantId: merchantIdStr, referer: refererUrl, targetDomain: merchant.merchant_url, needsBrowser, useV2Engine: true }),
+    )
     return { campaignId: cid, skipped: false, reason, before, generated: 0, after: before, failed, probeError: probe.error, probeFinalUrl: probe.finalUrl ?? null }
   }
   // probe 成功 = 链接确认活着且能拿到追踪参数：清 D-177 疑似死链计数与冷却，
@@ -386,7 +405,7 @@ async function doReplenish(
     let circuitOpen = false
     await runWithConcurrency(remaining, STOCK_CONFIG.CONCURRENCY, async () => {
       if (circuitOpen) return
-      const r = await generateOneSuffix(effectiveUrl, country, platform, { userId: campaign.user_id, campaignId, teamId, merchantId: merchantIdStr, referer: refererUrl, targetDomain: merchant.merchant_url, needsBrowser })
+      const r = await generateOneSuffix(effectiveUrl, country, platform, { userId: campaign.user_id, campaignId, teamId, merchantId: merchantIdStr, referer: refererUrl, targetDomain: merchant.merchant_url, needsBrowser, useV2Engine })
       if (r.ok) {
         consecutiveFail = 0
         if (await persist(r.suffix, r.exitIp)) generated++
@@ -508,6 +527,9 @@ async function handleProbeFailure(
   merchantUrl: string | null,
   affiliateUrl: string,
   fail: GenFailure,
+  /** D-203：判定 no_tracking 卡死前用 V2 引擎复验一次。由 doReplenish 注入（那里才有完整的
+   *  国家/平台/去重键/来路上下文）。只在跨过阈值那一轮调用一次，成本是一次真实点击。 */
+  revalidateWithV2?: () => Promise<GenResult>,
 ): Promise<string> {
   const cid = campaign.id.toString()
 
@@ -546,6 +568,28 @@ async function handleProbeFailure(
   //    达阈值则判定卡死，升级长冷却 + 专属告警，并让 force 路径也被冷却挡住（见上方闸门）。
   if (fail.reason === 'no_tracking' && sameRootDomain(fail.finalUrl, merchantUrl)) {
     const { streak, stuck, cooldownMs } = classifyNoTrackingRound(campaign.suffix_no_tracking_streak)
+
+    // D-203：判死之前先用 V2 引擎复验一次。
+    // D-201 上线后暴露出的问题是它把两件事混成了一类——「链接真死」和「V1 跟不动」。
+    // 后者占多数：LB/CG 一族的跳板用 JS location.replace 跳转，V1 的 fetchChain 不执行 JS
+    // 就停在跳板上，而跳板 ?url= 里正是裸商家域名，于是被判成「到站无参数」。
+    // 复验跟通 = 链接是好的，不该报警、不该长冷却，并且要把结论记进 suffix_needs_v2，
+    // 否则清零 streak 后灰度闸门下轮又把它选回 V1，形成每 3 轮烧一次复验且永不出货的循环。
+    if (stuck && revalidateWithV2 && campaign.suffix_needs_v2 !== 1) {
+      const v2 = await revalidateWithV2()
+      if (v2.ok) {
+        await prisma.campaigns.update({
+          where: { id: campaign.id },
+          data: { suffix_fail_count: 0, suffix_cooldown_until: null, suffix_no_tracking_streak: 0, suffix_needs_v2: 1 },
+        }).catch((e) => {
+          console.warn('[stock-producer] D-203 标记 suffix_needs_v2 失败:', cid, e instanceof Error ? e.message : e)
+        })
+        await resolveAlertsByType(campaign.user_id, campaign.id, ['invalid_link', 'no_tracking_stuck'])
+        console.log(`[stock-producer] D-203 ${cid} V1 判卡死但 V2 复验跟通，转 V2 引擎、不报警（落地：${v2.finalUrl ?? '未知'}）`)
+        return 'no_tracking_recovered_v2'
+      }
+    }
+
     // 仍清零 suffix_fail_count：那是「连域名都不匹配」的硬失败计数，本例域名是匹配的，
     // 语义上必须保持清零，否则会污染 D-177 的三态分类。
     await setFailCooldown(campaign, 0, new Date(Date.now() + cooldownMs), streak)
@@ -559,7 +603,8 @@ async function handleProbeFailure(
         level: 'error',
         message:
           `广告系列「${campaign.campaign_name ?? cid}」连续 ${streak} 轮跟链都落到商家官网首页但拿不到任何追踪参数` +
-          `（落地：${fail.finalUrl ?? '未知'}）。链接可达但点击不会被联盟记录，等系统自愈无用，需人工到平台重取链接`,
+          `（落地：${fail.finalUrl ?? '未知'}），且已用 V2 跟跳引擎复验仍拿不到。` +
+          `链接可达但点击不会被联盟记录，等系统自愈无用，需人工到平台重取链接`,
         context: {
           campaignName: campaign.campaign_name,
           merchantName,

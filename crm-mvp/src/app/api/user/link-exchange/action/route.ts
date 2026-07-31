@@ -258,9 +258,11 @@ export async function POST(req: NextRequest) {
     // 让新链接马上参与验证/补货，不用干等最长 8h 的疑似死链冷却到期。
     // D-201：连续零参数计数同样作废——这里与「重验」相反，重验验的还是旧链接故保留证据，
     // 而本路径链接已被替换，旧链接拿不到参数的历史对新链接无意义。
+    // D-203：suffix_needs_v2（「必须走 V2 跟跳引擎」）同理——那是对旧链接跳板形态下的结论，
+    // 新链接可能换了平台/跳板，重新学一次。
     await prisma.campaigns.update({
       where: { id: campaign.id },
-      data: { suffix_fail_count: 0, suffix_cooldown_until: null, suffix_no_tracking_streak: 0 },
+      data: { suffix_fail_count: 0, suffix_cooldown_until: null, suffix_no_tracking_streak: 0, suffix_needs_v2: 0 },
     })
 
     // 即时巡航验证（最多 ~35s）：成功即返回状态；超时则后台继续，前端稍后刷新

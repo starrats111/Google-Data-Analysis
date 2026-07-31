@@ -19,6 +19,8 @@ import {
   classifyNoTrackingRound,
   evaluateCooldownGate,
   isNoTrackingStuck,
+  parseV2Stage,
+  shouldUseV2Engine,
 } from "../src/lib/suffix-engine/replenish-gate";
 import { STOCK_CONFIG } from "../src/lib/suffix-engine/config";
 
@@ -156,5 +158,40 @@ describe("回归复现：jwpei 死循环在修复后被切断", () => {
       if (!g.skip) browserRuns++;
     }
     assert.equal(browserRuns, 0, "修复前这里是 50 次浏览器白跑");
+  });
+});
+
+describe("D-203 V2 引擎灰度闸门", () => {
+  test("阶段名拼错/为空一律退回 off，绝不因误配意外全量放开", () => {
+    for (const bad of [undefined, null, "", "  ", "ALL ON", "stuk", "1", "true"]) {
+      assert.equal(parseV2Stage(bad), "off", `「${String(bad)}」不该被当成有效阶段`);
+    }
+  });
+
+  test("大小写与空白不敏感（env 里手打容易带空格）", () => {
+    assert.equal(parseV2Stage(" Stuck "), "stuck");
+    assert.equal(parseV2Stage("NO_TRACKING"), "no_tracking");
+  });
+
+  test("off 阶段对所有系列都不表态，交回全局 env —— 上线首刻行为与改动前一致", () => {
+    for (const streak of [0, 1, N, 99]) {
+      assert.equal(shouldUseV2Engine("off", streak), undefined);
+    }
+  });
+
+  test("阶段 1（stuck）只捞已判卡死的系列，健康系列一律不表态", () => {
+    assert.equal(shouldUseV2Engine("stuck", 0), undefined, "健康系列不能被卷进灰度");
+    assert.equal(shouldUseV2Engine("stuck", N - 1), undefined, "差一轮到阈值也还不算卡死");
+    assert.equal(shouldUseV2Engine("stuck", N), true);
+    assert.equal(shouldUseV2Engine("stuck", N + 5), true);
+  });
+
+  test("阶段 2（no_tracking）放宽到「出现过一轮零参数」，但仍不碰零 streak 的系列", () => {
+    assert.equal(shouldUseV2Engine("no_tracking", 0), undefined);
+    assert.equal(shouldUseV2Engine("no_tracking", 1), true, "第一轮就该换引擎试，别等攒到 3 轮");
+  });
+
+  test("阶段 3（all）全量", () => {
+    assert.equal(shouldUseV2Engine("all", 0), true);
   });
 });

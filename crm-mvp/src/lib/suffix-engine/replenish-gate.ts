@@ -71,3 +71,46 @@ export function evaluateCooldownGate(input: CooldownGateInput): {
   }
   return { skip: false }
 }
+
+/**
+ * D-203 V2 跟跳引擎的放量阶段。
+ *
+ * V2（移植自 kylink，见 `AFFILIATE_RESOLVER_V2`）会执行内联 JS 跳转、维护 Cookie Jar、
+ * 逐跳带上一跳 Referer——正是「跳板用 `location.replace` 跳转」那一族链路跟不通的原因。
+ * 但它同时收紧了升级浏览器的判据，会让 tracker_forbidden（实测 24h 231 次）额外开浏览器，
+ * 故不能直接全量翻，按系列灰度：
+ *
+ *   off         仅跟随全局 env，等于上线前行为
+ *   stuck       只有已判定 no_tracking 卡死的系列走 V2（阶段 1，爆炸半径最小）
+ *   no_tracking 只要出现过一轮「落官网零参数」就走 V2（阶段 2）
+ *   all         全量（阶段 3）
+ */
+export type V2RolloutStage = 'off' | 'stuck' | 'no_tracking' | 'all'
+
+const V2_STAGES: readonly V2RolloutStage[] = ['off', 'stuck', 'no_tracking', 'all']
+
+/** 解析环境变量里的阶段名；非法值一律退回 off，绝不因拼错而意外全量放开 */
+export function parseV2Stage(raw: string | undefined | null): V2RolloutStage {
+  const v = (raw ?? '').trim().toLowerCase()
+  return (V2_STAGES as readonly string[]).includes(v) ? (v as V2RolloutStage) : 'off'
+}
+
+/**
+ * 本条系列本轮是否该走 V2 引擎。
+ *
+ * 返回 `undefined` 表示「不表态」——交回 resolver 里的全局 env 决定，
+ * 这样 off 阶段的行为与改动前逐字节一致。
+ */
+export function shouldUseV2Engine(stage: V2RolloutStage, noTrackingStreak: number): boolean | undefined {
+  switch (stage) {
+    case 'all':
+      return true
+    case 'no_tracking':
+      return noTrackingStreak >= 1 ? true : undefined
+    case 'stuck':
+      return isNoTrackingStuck(noTrackingStreak) ? true : undefined
+    case 'off':
+    default:
+      return undefined
+  }
+}

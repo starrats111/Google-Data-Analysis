@@ -18,7 +18,7 @@ import { generateOneSuffix } from './suffix-generator'
 import { recordExitIp } from './exit-ip'
 import { raiseAlert, resolveAlertsByType } from './alerts'
 import { STOCK_CONFIG } from './config'
-import { generateClickSchedule, generateClickScheduleWithinWindow, randomPick, randomInt, USER_AGENTS, REFERERS } from './click-scheduler'
+import { generateClickSchedule, generateClickScheduleWithinWindow, randomPick, randomInt, USER_AGENTS, RESOLVE_REFERERS } from './click-scheduler'
 import { resolveMerchantReferer } from './referer-resolver'
 import { loadConnectionAliasMap, pickCampaignAffiliateLink } from '@/lib/merchant-connection'
 
@@ -355,8 +355,11 @@ async function executeItem(rt: TaskRuntime, itemId: bigint): Promise<{ ok: boole
     teamId: rt.teamId,
     merchantId: rt.merchantIdStr,
     userAgent: randomPick(USER_AGENTS),
-    // 优先用商家自定义来路，未配置才回退随机 REFERERS（更贴近真实站点引流）
-    referer: rt.refererUrl || randomPick(REFERERS) || null,
+    // 优先用商家自定义来路，未配置才回退随机来路池（更贴近真实站点引流）。
+    // D-203 改用剔了空串的 RESOLVE_REFERERS：原 REFERERS 里的空串本意是模拟「直接访问」那部分真实流量，
+    // 但实测裸请求会被联盟降级到裸商家域名、点击根本不记账——不记账的刷点击净化不了任何转化率，
+    // 只白烧一次代理流量。约 1/13 的点击落在这一项上。
+    referer: rt.refererUrl || randomPick(RESOLVE_REFERERS),
     // D-197：这类系列今天已回探过就直接浏览器优先。点击语义不变——纯 HTTP 本来也跟不通、
     // 最终仍是靠浏览器完成这次点击，只是不再先白跑一次注定失败的 HTTP。
     needsBrowser: rt.needsBrowser,

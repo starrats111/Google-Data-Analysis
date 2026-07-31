@@ -425,6 +425,9 @@ model campaigns {
   // D-201 连续「落到官网但零追踪参数」轮次：独立于 suffix_fail_count（后者判活链时必须清零，不能兼职）。
   // 达 ALIVE_NO_TRACKING_STREAK_THRESHOLD 升级长冷却 + no_tracking_stuck 告警，治「系列静默死、每天白开上百次浏览器」
   suffix_no_tracking_streak  Int       @default(0) @db.UnsignedInt
+  // D-203 1=该系列必须走 V2 跟跳引擎（跳板用 JS location.replace 跳转，V1 的 fetchChain 执行不了 JS）。
+  // 由「V1 判定卡死 → V2 复验跟通」自动学习；换链接时清 0。没有它，复验成功后 streak 归零会掉回 V1 再次失败，形成循环
+  suffix_needs_v2            Int       @default(0) @db.TinyInt
   // D-177 补货失败冷却截止：此前该系列不参与补货（落库持久化，治「进程内冷却被 pm2 重启清零 → 死循环重烧」）
   suffix_cooldown_until      DateTime? @db.DateTime(0)
   is_deleted                 Int       @default(0) @db.TinyInt

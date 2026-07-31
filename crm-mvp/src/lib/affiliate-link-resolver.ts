@@ -1047,6 +1047,9 @@ export async function resolveAffiliateLink(
     proxyUrl?: string | null
     /** D-193：商家官网域名（`user_merchants.merchant_url`）。传了就启用目标域早停，见 effectiveTargetDomain。 */
     targetDomain?: string | null
+    /** D-203：按调用方覆盖 V2 引擎开关，用于按系列灰度放量。
+     *  不传（undefined）= 不表态，沿用全局 `AFFILIATE_RESOLVER_V2`。 */
+    useV2Engine?: boolean | null
   } = {}
 ): Promise<ResolveResult> {
   const base: ResolveResult = {
@@ -1300,9 +1303,12 @@ export async function resolveAffiliateLink(
     }
   })();
 
+  // D-203：本次调用是否走 V2。调用方显式指定时以它为准（按系列灰度），否则沿用全局开关。
+  const useV2 = opts.useV2Engine != null ? opts.useV2Engine : RESOLVER_V2;
+
   // D-193：第一步跟跳引擎。开关关闭时保持原生 fetchChain，行为与上线前完全一致。
   const runHttpChain = (proxyUrl: string) =>
-    RESOLVER_V2
+    useV2
       ? fetchChainViaKy(
           affiliateUrl,
           proxyUrl,
@@ -1323,7 +1329,7 @@ export async function resolveAffiliateLink(
       // 重复点击顾虑（HTTP 根本没跑），复用只是为了让出口 IP 去重挑中的免重 IP 真正生效——
       // 否则浏览器另取一个会话，写进 suffix_pool.exit_ip 的就不是去重台账认可的那个出口。
       reuseProxyUrl: opts.proxyUrl ?? null,
-      targetHost: RESOLVER_V2 ? effectiveTargetDomain || null : null,
+      targetHost: useV2 ? effectiveTargetDomain || null : null,
     });
     if (br.finalUrl) {
       browserExitIp = br.exitIp ?? null;
@@ -1344,7 +1350,7 @@ export async function resolveAffiliateLink(
   // ── 第二步：无头浏览器 ──
   // 这类联盟（pepperjam/impact/EngageVantage/UltraInfluence 等）多半要真实浏览器执行 JS 才会跟到
   // 广告主落地页并附加 clickId/utm。用 puppeteer+stealth 重试一次（受信号量限并发）。
-  if (opts.browserFallback && !browserAttempted && !result.usedBrowser && shouldEscalateToBrowser(result, RESOLVER_V2)) {
+  if (opts.browserFallback && !browserAttempted && !result.usedBrowser && shouldEscalateToBrowser(result, useV2)) {
     // 第一步若已跟到广告主域名（典型 no_tracking：域名对了但参数被洗掉），把该域名作为落地早停提示
     // 传给浏览器，省掉整页 HTML 并抢在前端洗参之前取到 query。跟丢时没有提示，浏览器走常规全程跟随。
     let targetHost: string | null = null;
@@ -1368,7 +1374,7 @@ export async function resolveAffiliateLink(
       affiliateUrl,
       cc,
       opts.userId,
-      RESOLVER_V2 ? { reuseProxyUrl: httpProxyUsed, targetHost } : {},
+      useV2 ? { reuseProxyUrl: httpProxyUsed, targetHost } : {},
     ).catch(
       (e) =>
         ({
