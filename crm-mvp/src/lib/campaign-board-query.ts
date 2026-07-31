@@ -16,10 +16,10 @@
 import prisma from "@/lib/prisma";
 import { cachedQuery } from "@/lib/cache";
 import {
-  nowCST, isTodayCST, dateColumnStart, dateColumnEndExclusive,
-  dateColumnTodayEndExclusive, parseTxnDateStart, parseTxnDateEndExclusive, txnStartOfMonthUTC,
+  nowCST, isTodayCST, dateColumnStart, dateColumnEndExclusive, dateColumnTodayEndExclusive,
 } from "@/lib/date-utils";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
+import { sqlTxnRange, nextDayStr } from "@/lib/report-metrics";
 import { mergeMerchantCampaigns, routeCommissionToRows, type CommissionGroup } from "@/lib/merchant-campaign-merge";
 import { countEnabledCampaigns, healEnabledUnderSoftDeletedMcc } from "@/lib/active-running";
 
@@ -214,9 +214,12 @@ export async function queryCampaignBoard(
     ? (isTodayCST(dateEnd, cstNow) ? dateColumnTodayEndExclusive() : dateColumnEndExclusive(dateEnd))
     : dateColumnTodayEndExclusive();
 
-  // C-084：affiliate_transactions.transaction_time 按 CST 切日，与 ads_daily_stats 同口径
-  const txnStart = dateStart ? parseTxnDateStart(dateStart) : txnStartOfMonthUTC();
-  const txnEnd = dateEnd ? parseTxnDateEndExclusive(dateEnd) : new Date();
+  // 佣金切日统一走 report-metrics 的 sqlTxnRange（与佣金详情弹窗 / 收支报表 / 结算查询同源）。
+  // LH 的 transaction_time 入库时就是北京时间钟面，不能再按 UTC→CST 换算，否则窗口整体前移 8 小时，
+  // 会把上月最后 8 小时的 LH 单算进本月、并漏掉本月最后 8 小时的单。
+  const txnStartStr = dateStart || monthStartStr;
+  const txnEndExclusiveStr = nextDayStr(dateEnd || todayStr);
+  const txnRange = sqlTxnRange("affiliate_transactions", txnStartStr, txnEndExclusiveStr);
 
   // ─── campaign 范围条件（MCC 可见性，不含行级筛选） ───
   // D-196：拆成「范围」与「行级筛选」两层。范围决定这个账号在这个 MCC 视图下总共有哪些系列，
@@ -370,10 +373,10 @@ export async function queryCampaignBoard(
         COUNT(*) as order_count
       FROM affiliate_transactions
       WHERE user_id = ? AND is_deleted = 0
-        AND transaction_time >= ? AND transaction_time < ?
+        AND ${txnRange.cond}
         AND ${sqlAffiliateTxnValidPlatformConnection("affiliate_transactions")}
       GROUP BY user_merchant_id, platform_connection_id
-    `, userId, txnStart, txnEnd),
+    `, userId, ...txnRange.params),
   ]);
 
   if (rawStatsRows.length > 0) {
