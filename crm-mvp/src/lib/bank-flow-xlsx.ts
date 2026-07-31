@@ -2,9 +2,13 @@
  * R-07 银行流水 — xlsx 生成
  *
  * 每个收款方式一张「账户交易明细清单」sheet（正规银行流水单版式：
- * 户名/账号/期间抬头 + 序号/交易日期/时间/摘要/对方户名/收入/支出/余额 表体 +
+ * 户名/账号/期间抬头 + 序号/交易日期/时间/摘要/对方户名/收入/支出/余额/手续费 表体 +
  * 本期合计 + 制表/复核签章栏，期初余额起算逐笔滚动余额），
  * 末尾附一张「打款对账明细」sheet（应到=员工明细合计、实际到账、手续费、费率、逐人明细）。
+ *
+ * D-204：表体增加「手续费(¥)」列（= 员工明细合计 − 实际到账）。手续费在平台侧打款时
+ * 已扣除，银行只到账净额，因此该列不参与收入/支出/余额滚动，仅作对账展示；
+ * 本期合计行给出手续费支出合计。
  */
 
 import ExcelJS from "exceljs";
@@ -62,6 +66,13 @@ function cell(
   if (opts.numFmt) cl.numFmt = opts.numFmt;
 }
 
+/** 手续费列口径说明（银行只到账净额，故该列不进收入/支出/余额） */
+const FEE_NOTE =
+  "注：手续费 = 员工明细合计 − 实际到账，由平台/银行在打款时预先扣除，账户只收到净额，"
+  + "故「手续费」列不计入收入、支出与账户余额，仅用于核对本期手续费支出。";
+
+const money = (n: number) => n.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
 const fmtDate = (d: Date) => {
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
@@ -86,8 +97,8 @@ export function buildBankStatementSheet(
   sheetName: string,
 ) {
   const ws = wb.addWorksheet(sheetName);
-  const COLS = 9;
-  const widths = [6, 13, 9, 16, 22, 15, 15, 16, 24];
+  const COLS = 10;
+  const widths = [6, 13, 9, 16, 22, 15, 15, 16, 14, 24];
   widths.forEach((w, i) => (ws.getColumn(i + 1).width = w));
 
   const { start, end } = monthRange(month);
@@ -115,7 +126,7 @@ export function buildBankStatementSheet(
   for (let r = 2; r <= 3; r++) ws.getRow(r).height = 22;
 
   // 表头
-  const HEAD = ["序号", "交易日期", "交易时间", "交易摘要", "对方户名", "收入金额(贷)", "支出金额(借)", "账户余额", "备注"];
+  const HEAD = ["序号", "交易日期", "交易时间", "交易摘要", "对方户名", "收入金额(贷)", "支出金额(借)", "账户余额", "手续费(¥)", "备注"];
   HEAD.forEach((h, i) => cell(ws, 5, 1 + i, h, { bold: true, fill: GRAY }));
   ws.getRow(5).height = 24;
 
@@ -133,7 +144,8 @@ export function buildBankStatementSheet(
     cell(ws, r, 6, e.amount, { numFmt: MONEY, h: "right" });
     cell(ws, r, 7, "", {});
     cell(ws, r, 8, Math.round(balance * 100) / 100, { numFmt: MONEY, h: "right" });
-    cell(ws, r, 9, e.remark || `${e.platform} 平台佣金打款`, { wrap: true, h: "left", sz: 10 });
+    cell(ws, r, 9, e.fee, { numFmt: MONEY, h: "right", bold: e.fee !== 0 });
+    cell(ws, r, 10, e.remark || `${e.platform} 平台佣金打款`, { wrap: true, h: "left", sz: 10 });
     ws.getRow(r).height = 22;
     r++;
   });
@@ -145,13 +157,20 @@ export function buildBankStatementSheet(
 
   // 合计
   const totalIn = Math.round(sorted.reduce((s, e) => s + e.amount, 0) * 100) / 100;
+  const totalFee = Math.round(sorted.reduce((s, e) => s + e.fee, 0) * 100) / 100;
   ws.mergeCells(r, 1, r, 5);
-  cell(ws, r, 1, `本期合计：收入 ${sorted.length} 笔`, { bold: true, fill: GRAY, h: "left" });
+  cell(ws, r, 1, `本期合计：收入 ${sorted.length} 笔，手续费支出 ¥${money(totalFee)}`, { bold: true, fill: GRAY, h: "left" });
   cell(ws, r, 6, totalIn, { bold: true, fill: GRAY, numFmt: MONEY, h: "right" });
   cell(ws, r, 7, 0, { bold: true, fill: GRAY, numFmt: MONEY, h: "right" });
   cell(ws, r, 8, Math.round(balance * 100) / 100, { bold: true, fill: GRAY, numFmt: MONEY, h: "right" });
-  cell(ws, r, 9, "", { fill: GRAY });
+  cell(ws, r, 9, totalFee, { bold: true, fill: GRAY, numFmt: MONEY, h: "right" });
+  cell(ws, r, 10, "", { fill: GRAY });
   ws.getRow(r).height = 24;
+  r++;
+
+  ws.mergeCells(r, 1, r, COLS);
+  cell(ws, r, 1, FEE_NOTE, { h: "left", sz: 10, noBorder: true });
+  ws.getRow(r).height = 20;
   r += 2;
 
   // 签章栏
@@ -174,8 +193,8 @@ export function buildPayeeStatementSheet(
   sheetName: string,
 ) {
   const ws = wb.addWorksheet(sheetName);
-  const COLS = 10;
-  const widths = [6, 13, 9, 16, 20, 26, 15, 15, 16, 22];
+  const COLS = 11;
+  const widths = [6, 13, 9, 16, 20, 26, 15, 15, 16, 14, 22];
   widths.forEach((w, i) => (ws.getColumn(i + 1).width = w));
 
   const { start, end } = monthRange(month);
@@ -206,7 +225,7 @@ export function buildPayeeStatementSheet(
   for (let r = 2; r <= 3; r++) ws.getRow(r).height = 22;
 
   // 表头
-  const HEAD = ["序号", "交易日期", "交易时间", "交易摘要", "对方户名", "打款方式(卡号)", "收入金额(贷)", "支出金额(借)", "账户余额", "备注"];
+  const HEAD = ["序号", "交易日期", "交易时间", "交易摘要", "对方户名", "打款方式(卡号)", "收入金额(贷)", "支出金额(借)", "账户余额", "手续费(¥)", "备注"];
   HEAD.forEach((h, i) => cell(ws, 5, 1 + i, h, { bold: true, fill: GRAY }));
   ws.getRow(5).height = 24;
 
@@ -226,7 +245,8 @@ export function buildPayeeStatementSheet(
     cell(ws, r, 7, e.amount, { numFmt: MONEY, h: "right" });
     cell(ws, r, 8, "", {});
     cell(ws, r, 9, Math.round(balance * 100) / 100, { numFmt: MONEY, h: "right" });
-    cell(ws, r, 10, e.remark || `${e.platform} 平台佣金打款`, { wrap: true, h: "left", sz: 10 });
+    cell(ws, r, 10, e.fee, { numFmt: MONEY, h: "right", bold: e.fee !== 0 });
+    cell(ws, r, 11, e.remark || `${e.platform} 平台佣金打款`, { wrap: true, h: "left", sz: 10 });
     ws.getRow(r).height = 22;
     r++;
   });
@@ -238,13 +258,20 @@ export function buildPayeeStatementSheet(
 
   // 合计
   const totalIn = Math.round(sorted.reduce((s, e) => s + e.amount, 0) * 100) / 100;
+  const totalFee = Math.round(sorted.reduce((s, e) => s + e.fee, 0) * 100) / 100;
   ws.mergeCells(r, 1, r, 6);
-  cell(ws, r, 1, `本期合计：收入 ${sorted.length} 笔`, { bold: true, fill: GRAY, h: "left" });
+  cell(ws, r, 1, `本期合计：收入 ${sorted.length} 笔，手续费支出 ¥${money(totalFee)}`, { bold: true, fill: GRAY, h: "left" });
   cell(ws, r, 7, totalIn, { bold: true, fill: GRAY, numFmt: MONEY, h: "right" });
   cell(ws, r, 8, 0, { bold: true, fill: GRAY, numFmt: MONEY, h: "right" });
   cell(ws, r, 9, Math.round(balance * 100) / 100, { bold: true, fill: GRAY, numFmt: MONEY, h: "right" });
-  cell(ws, r, 10, "", { fill: GRAY });
+  cell(ws, r, 10, totalFee, { bold: true, fill: GRAY, numFmt: MONEY, h: "right" });
+  cell(ws, r, 11, "", { fill: GRAY });
   ws.getRow(r).height = 24;
+  r++;
+
+  ws.mergeCells(r, 1, r, COLS);
+  cell(ws, r, 1, FEE_NOTE, { h: "left", sz: 10, noBorder: true });
+  ws.getRow(r).height = 20;
   r += 2;
 
   // 签章栏
@@ -277,7 +304,6 @@ export function buildBankReconSheet(
   const byId = new Map(methods.map((m) => [m.id, m]));
   const sorted = [...entries].sort((a, b) => a.txnAt.getTime() - b.txnAt.getTime());
   let r = 3;
-  const money = (n: number) => n.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   for (const e of sorted) {
     const m = byId.get(e.paymentMethodId);
     const fees = apportionFee(e.breakdown.map((b) => b.amount || 0), e.fee);

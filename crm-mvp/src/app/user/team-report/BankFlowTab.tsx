@@ -8,7 +8,7 @@
  * 系统按到账日期精确匹配当天（当天没有则取最近一天）的组员打款记录预填员工明细（可修改），
  * 同一半月多笔到账（如 6-16、6-18 各一笔）各自预填各自批次，不混算。
  * 手续费 = 员工明细合计 − 实际到账，自动计算。
- * 支持导出正规「账户交易明细清单」（银行流水单版式）+「打款对账明细」。
+ * 支持按收款人导出正规「账户交易明细清单」（银行流水单版式，含手续费列与本期手续费合计）。
  *
  * C-180：BSH+CG 等多平台一起提现（银行只到账一笔总额）时，
  * 明细支持「手动添加」勾选任意平台的逐笔打款记录；保存时按平台拆成多条流水
@@ -589,6 +589,7 @@ export default function BankFlowTab() {
             {methods.map((m) => {
               const cardEntries = entries.filter((e) => e.paymentMethodId === m.id);
               const inSum = cardEntries.reduce((s, e) => s + e.amount, 0);
+              const feeSum = cardEntries.reduce((s, e) => s + e.fee, 0);
               return (
                 <Col key={m.id} xs={24} sm={12} md={8} lg={6}>
                   <Card
@@ -625,6 +626,9 @@ export default function BankFlowTab() {
                       <Text style={{ fontSize: 13 }}>
                         本月入账 <Text strong>{cardEntries.length}</Text> 笔，合计 <Text strong style={{ color: "#389e0d" }}>¥{fmt(inSum)}</Text>
                       </Text>
+                      <Text style={{ fontSize: 13 }}>
+                        手续费支出 <Text strong style={{ color: feeSum > 0 ? "#cf1322" : "#595959" }}>¥{fmt(feeSum)}</Text>
+                      </Text>
                     </Space>
                   </Card>
                 </Col>
@@ -653,7 +657,8 @@ export default function BankFlowTab() {
                 个人手续费 = 明细金额 × 费率（费率 = 手续费 ÷ 明细合计），尾差调整到金额最大者，净到手 = 明细金额 − 个人手续费。
                 多平台一起提现（如 BSH+CG 一笔总额到账）时用「手动添加」勾选其他平台的打款记录，保存后按平台拆成多条流水（带「合」标记），
                 每条到账 = 该平台明细合计 − 按比例分摊手续费，各自独立编辑/删除。
-                导出的「账户交易明细清单」按期初余额逐笔滚动余额（拆分条目自动合并回一笔，与真实银行一致），可直接作为对账材料。
+                导出的「账户交易明细清单」按期初余额逐笔滚动余额（拆分条目自动合并回一笔，与真实银行一致），
+                并带「手续费(¥)」列与本期手续费支出合计（手续费打款时已预扣、银行只到账净额，故不计入收支与余额），可直接作为对账材料。
               </Text>
             </div>
           </Card>
