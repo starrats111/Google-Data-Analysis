@@ -371,10 +371,26 @@ async function doReplenish(
     failed++
     const reason = await handleProbeFailure(
       campaign, merchant.merchant_name, merchant.merchant_url, effectiveUrl, probe,
-      // 复验固定走 V2，与本轮闸门无关——正是要看「换个引擎跟不跟得动」
-      () => generateOneSuffix(effectiveUrl, country, platform, { userId: campaign.user_id, campaignId, teamId, merchantId: merchantIdStr, referer: refererUrl, targetDomain: merchant.merchant_url, needsBrowser, useV2Engine: true }),
+      // 复验固定走 V2，正是要看「换个引擎跟不跟得动」。
+      // 但本轮闸门若已经把主探针切到 V2（灰度阶段命中 / 已学到 needs_v2），失败结论就是 V2 给的，
+      // 再跑一遍同引擎同参数只会得到同样的结果，纯白烧一次真实点击——此时不给复验回调。
+      useV2Engine === true
+        ? undefined
+        : () => generateOneSuffix(effectiveUrl, country, platform, { userId: campaign.user_id, campaignId, teamId, merchantId: merchantIdStr, referer: refererUrl, targetDomain: merchant.merchant_url, needsBrowser, useV2Engine: true }),
     )
     return { campaignId: cid, skipped: false, reason, before, generated: 0, after: before, failed, probeError: probe.error, probeFinalUrl: probe.finalUrl ?? null }
+  }
+  // D-203 学习「必须走 V2」：本轮走的是 V2 且此前正在连续零参数——说明 V1 跟不动、V2 跟得动。
+  // 必须赶在下面清零 streak 之前判定：清零后灰度闸门就不再选中这条系列，下轮掉回 V1 又会失败。
+  // 只在灰度阶段/全局开关把它切到 V2 时才学得到，健康系列（streak=0）永远不会被标上。
+  const learnedNeedsV2 = useV2Engine === true
+    && campaign.suffix_no_tracking_streak > 0
+    && campaign.suffix_needs_v2 !== 1
+  if (learnedNeedsV2) {
+    await prisma.campaigns.update({ where: { id: campaignId }, data: { suffix_needs_v2: 1 } })
+      .then(() => { campaign.suffix_needs_v2 = 1 })
+      .catch((e) => console.warn('[stock-producer] D-203 标记 suffix_needs_v2 失败:', cid, e instanceof Error ? e.message : e))
+    console.log(`[stock-producer] D-203 ${cid} V2 引擎跟通（V1 此前连续 ${campaign.suffix_no_tracking_streak} 轮零参数），转 V2 常驻`)
   }
   // probe 成功 = 链接确认活着且能拿到追踪参数：清 D-177 疑似死链计数与冷却，
   // 并清 D-201 连续零参数计数（否则换了好链接的系列仍背着「卡死」标记、force 继续被挡）。
