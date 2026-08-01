@@ -94,7 +94,8 @@ export async function GET(req: NextRequest) {
           sweep.clicksScheduled += ac.clicksScheduled
           sweep.deficitIdentified += ac.deficitIdentified
           if (ac.details.length > 0) {
-            console.log(`[cron/click-sync] sweep ${u.username}: ${ac.details.join(' | ')}`)
+            // pm2 下 stdout 不落盘，运维日志统一走 stderr（同 txn-quick-sync）
+            console.error(`[cron/click-sync] sweep ${u.username}: ${ac.details.join(' | ')}`)
           }
         } catch (e) {
           totals.errors++
@@ -103,7 +104,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    console.log(
+    console.error(
       `[cron/click-sync] users=${totals.usersScanned} conns=${totals.connectionsSynced} ` +
         `rows=${totals.rowsUpserted} clicks=${totals.clicksCounted} errors=${totals.errors} ` +
         `sweep=${sweep.ran ? `${sweep.scheduled}系列/${sweep.clicksScheduled}点击(缺口${sweep.deficitIdentified})` : 'skip'} ` +
