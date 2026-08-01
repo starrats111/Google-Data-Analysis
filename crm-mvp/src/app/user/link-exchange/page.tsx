@@ -71,6 +71,12 @@ interface OverviewData {
   scriptLoopIntervalSeconds: number | null;
   scriptLoopIntervalDefault: number;
   summary: { total: number; matched: number; totalAvailable: number; lowStockCount: number; alertOpen: number };
+  clickDebt: {
+    windowDays: number;
+    merchantsInDebt: number;
+    deficitClicks: number;
+    worst: { platform: string; merchantId: string; orders: number; clicks: number; deficit: number }[];
+  };
   alertSummary: Record<string, number>;
   stockConfig: { target: number; lowWatermark: number; adaptive: boolean; minTarget: number; browserTarget: number };
   proxyStatus: { kookeeyLow: boolean; kookeeyLeftGB: number | null; thresholdGB: number } | null;
@@ -484,6 +490,7 @@ export default function LinkExchangePage() {
 
   const rows = data?.rows ?? [];
   const summary = data?.summary;
+  const clickDebt = data?.clickDebt;
   const defaultClickCount = data?.defaultClickCount ?? 10;
   // 链接管理只展示已启用（Google Ads ENABLED / 默认）的广告系列
   const enabledRows = rows.filter((r) => (r.googleStatus ?? "ENABLED") === "ENABLED");
@@ -930,6 +937,44 @@ export default function LinkExchangePage() {
           </Card>
         </Col>
       </Row>
+
+      {/* 点击欠账（D-207）：订单已入库但点击还没补够的量，与补刷引擎同口径 */}
+      {clickDebt && (
+        <Card size="small" style={{ marginBottom: 16 }}>
+          <Row gutter={[16, 8]} align="middle">
+            <Col xs={12} sm={6}>
+              <Statistic
+                title={<Tooltip title={`按订单「入库时间」回看 ${clickDebt.windowDays} 天：联盟回传延迟可达数天，故以入库时间而非下单时间计账`}>欠点击商家</Tooltip>}
+                value={clickDebt.merchantsInDebt}
+                styles={{ content: { color: clickDebt.merchantsInDebt > 0 ? "#fa8c16" : "#52c41a" } }}
+              />
+            </Col>
+            <Col xs={12} sm={6}>
+              <Statistic
+                title={<Tooltip title="已扣除自然点击与在途补刷任务后仍缺的点击数；补刷引擎每轮优先消化零点击商家">待补点击</Tooltip>}
+                value={clickDebt.deficitClicks}
+                styles={{ content: { color: clickDebt.deficitClicks > 0 ? "#fa8c16" : "#52c41a" } }}
+              />
+            </Col>
+            <Col xs={24} sm={12}>
+              {clickDebt.worst.length > 0 ? (
+                <Space wrap size={4}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>欠得最多：</Text>
+                  {clickDebt.worst.map((w) => (
+                    <Tooltip key={`${w.platform}:${w.merchantId}`} title={`${w.orders} 单 / ${w.clicks} 点击，还缺 ${w.deficit} 次`}>
+                      <Tag color={w.clicks === 0 ? "red" : "orange"} style={{ margin: 0 }}>
+                        {w.platform}/{w.merchantId} 缺{w.deficit}
+                      </Tag>
+                    </Tooltip>
+                  ))}
+                </Space>
+              ) : (
+                <Text type="secondary" style={{ fontSize: 12 }}>所有已入库订单的点击都已补齐或由自然点击覆盖</Text>
+              )}
+            </Col>
+          </Row>
+        </Card>
+      )}
 
       {/* API Key + 取链接 工具卡片 */}
       <Row gutter={16} style={{ marginBottom: 16 }}>

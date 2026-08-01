@@ -13,11 +13,35 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { syncUserClicks } from '@/lib/affiliate-click-sync'
+import { runAutoClickForUser } from '@/lib/auto-click'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 
 let isRunning = false
+
+/**
+ * D-207 兜底全量扫描：ontxn 钩子只评估「本轮有新订单」的商家，而单轮补刷有 80 次上限，
+ * 被截掉的余量若该商家之后不再出单就没人续补。故每小时在点击同步后做一次全量欠账扫描。
+ * 频率靠 system_configs 游标控制（PM2 重启也不会漏/连跑）。
+ */
+const SWEEP_KEY = 'auto_click_sweep_at'
+const SWEEP_INTERVAL_MS = 55 * 60 * 1000
+
+async function shouldSweep(): Promise<boolean> {
+  const row = await prisma.system_configs.findUnique({ where: { config_key: SWEEP_KEY } })
+  const last = row?.config_value ? new Date(row.config_value).getTime() : 0
+  if (Number.isFinite(last) && Date.now() - last < SWEEP_INTERVAL_MS) return false
+  const now = new Date().toISOString()
+  await prisma.system_configs
+    .upsert({
+      where: { config_key: SWEEP_KEY },
+      create: { config_key: SWEEP_KEY, config_value: now, description: 'D-207 补刷欠账全量扫描的上次执行时刻', is_deleted: 0 },
+      update: { config_value: now, is_deleted: 0 },
+    })
+    .catch(() => {})
+  return true
+}
 
 function verifyCron(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET
@@ -59,11 +83,33 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // D-207 兜底扫描：每小时一次，逐用户串行（低配机保护），补上被单轮上限截掉的欠账
+    const sweep = { ran: false, scheduled: 0, clicksScheduled: 0, deficitIdentified: 0 }
+    if (await shouldSweep()) {
+      sweep.ran = true
+      for (const u of users) {
+        try {
+          const ac = await runAutoClickForUser(u.id)
+          sweep.scheduled += ac.scheduled
+          sweep.clicksScheduled += ac.clicksScheduled
+          sweep.deficitIdentified += ac.deficitIdentified
+          if (ac.details.length > 0) {
+            console.log(`[cron/click-sync] sweep ${u.username}: ${ac.details.join(' | ')}`)
+          }
+        } catch (e) {
+          totals.errors++
+          console.error('[cron/click-sync] sweep error:', u.username, e instanceof Error ? e.message : e)
+        }
+      }
+    }
+
     console.log(
       `[cron/click-sync] users=${totals.usersScanned} conns=${totals.connectionsSynced} ` +
-        `rows=${totals.rowsUpserted} clicks=${totals.clicksCounted} errors=${totals.errors} cost=${Date.now() - startedAt}ms`,
+        `rows=${totals.rowsUpserted} clicks=${totals.clicksCounted} errors=${totals.errors} ` +
+        `sweep=${sweep.ran ? `${sweep.scheduled}系列/${sweep.clicksScheduled}点击(缺口${sweep.deficitIdentified})` : 'skip'} ` +
+        `cost=${Date.now() - startedAt}ms`,
     )
-    return NextResponse.json({ code: 0, data: totals })
+    return NextResponse.json({ code: 0, data: { ...totals, sweep } })
   } catch (error) {
     console.error('[cron/click-sync] error:', error)
     return NextResponse.json({ code: -1, message: error instanceof Error ? error.message : '点击同步失败' }, { status: 500 })

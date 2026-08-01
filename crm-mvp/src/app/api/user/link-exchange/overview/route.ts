@@ -8,6 +8,7 @@ import { parseCampaignNameFull } from '@/lib/campaign-merchant-link'
 import { loadConnectionAliasMap, pickCampaignAffiliateLink } from '@/lib/merchant-connection'
 import { normalizePlatformCode } from '@/lib/constants'
 import { todayCST, parseCSTDateStart, parseCSTDateEndExclusive, dateColumnStart, dateColumnTodayEndExclusive } from '@/lib/date-utils'
+import { computeClickDebtSummary } from '@/lib/auto-click'
 
 export async function GET(req: NextRequest) {
   const user = await getUserFromRequest(req)
@@ -375,6 +376,10 @@ export async function GET(req: NextRequest) {
 
   const { summary: alertSummary, totalOpen } = await getAlertSummary(userId)
 
+  // D-207 点击欠账指标：与补刷引擎同口径（订单按入库时间滚动窗口、自然点击与在途任务照抵扣）。
+  // 补刷因产能或链接问题没跟上时在看板上可见，取代旧版静默的 skippedNoOrders。
+  const clickDebt = await computeClickDebtSummary(userId)
+
   // 换链接住宅代理 kookeey 剩余流量：≤ 阈值时前端顶部横幅提醒重置（带缓存，不每次外呼）
   const kk = await getKookeeyTrafficCached()
   const kkActive = kk.ok ? kk.subAccounts.filter((s) => s.status === 1) : []
@@ -413,6 +418,7 @@ export async function GET(req: NextRequest) {
         lowStockCount,
         alertOpen: totalOpen,
       },
+      clickDebt,
       alertSummary,
       stockConfig: {
         target: STOCK_CONFIG.TARGET_STOCK,
