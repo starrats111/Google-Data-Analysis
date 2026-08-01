@@ -921,6 +921,9 @@ function buildA1IndexHtml(cacheVersion: string, domain = ""): string {
     .header-inner{display:flex;align-items:center;justify-content:space-between;gap:24px;height:78px;max-width:1180px;margin:0 auto;padding:0 28px}
     .site-logo{font-family:var(--ff-serif);font-size:1.7rem;font-weight:700;color:var(--headInk);letter-spacing:.02em;white-space:nowrap}
     .site-logo span{color:var(--accent2)}
+    .header-nav{display:flex;flex-wrap:wrap;gap:6px 16px;justify-content:flex-end;flex:1}
+    .header-nav a{font-size:.74rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:rgba(255,255,255,.72);transition:color .2s}
+    .header-nav a:hover,.header-nav a.active{color:var(--accent2)}
     .search-toggle{background:none;border:none;color:var(--headInk);cursor:pointer;padding:6px;display:flex;opacity:.85}.search-toggle:hover{color:var(--accent2)}.search-toggle svg{width:20px;height:20px}
     .search-bar{max-height:0;overflow:hidden;background:var(--headDark);transition:max-height .3s ease}
     .search-bar.open{max-height:90px}
@@ -988,14 +991,21 @@ function buildA1IndexHtml(cacheVersion: string, domain = ""): string {
     .soc-row a{width:38px;height:38px;border:1px solid var(--border);display:flex;align-items:center;justify-content:center;color:var(--headBg);transition:all .2s}
     .soc-row a:hover{background:var(--headBg);color:var(--headInk);border-color:var(--headBg)}.soc-row svg{width:16px;height:16px;fill:currentColor}
     .site-footer{background:var(--headDark);color:rgba(255,255,255,.55);border-top:4px solid var(--accent2)}
-    .footer-grid{display:grid;grid-template-columns:1.6fr 1fr;gap:48px;padding:56px 28px 36px;max-width:1180px;margin:0 auto}
-    @media(max-width:680px){.footer-grid{grid-template-columns:1fr;gap:28px}}
+    .footer-grid{display:grid;grid-template-columns:1.6fr 1fr 1.2fr;gap:48px;padding:56px 28px 36px;max-width:1180px;margin:0 auto}
+    @media(max-width:860px){.footer-grid{grid-template-columns:1fr 1fr;gap:28px}}
+    @media(max-width:560px){.footer-grid{grid-template-columns:1fr}}
     .footer-logo{font-family:var(--ff-serif);font-size:1.5rem;color:#fff;margin-bottom:12px}.footer-logo span{color:var(--accent2)}
     .footer-brand p{font-size:.9rem;line-height:1.7;max-width:360px;margin-bottom:16px}
     .footer-brand .soc-row a{border-color:rgba(255,255,255,.2);color:rgba(255,255,255,.6)}.footer-brand .soc-row a:hover{background:var(--accent2);color:var(--headDark)}
     .footer-col h4{font-size:.72rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--accent2);margin-bottom:14px}
     .footer-col ul{list-style:none}.footer-col li{padding:5px 0}.footer-col a{font-size:.9rem;color:rgba(255,255,255,.6)}.footer-col a:hover{color:#fff}
+    .sb-cats{list-style:none}
+    .sb-cats li{border-bottom:1px solid var(--border)}
+    .sb-cats a{display:flex;justify-content:space-between;align-items:center;padding:11px 0;font-size:.92rem;color:var(--headBg);transition:color .2s}
+    .sb-cats a:hover{color:var(--accent)}
+    .sb-cats .count{font-size:.72rem;color:var(--muted);background:var(--bg);padding:2px 8px;border-radius:999px}
     .footer-bottom{max-width:1180px;margin:0 auto;padding:20px 28px;border-top:1px solid rgba(255,255,255,.12);font-size:.78rem;font-style:italic}
+    @media(max-width:860px){.header-nav{display:none}}
     @media(max-width:560px){.header-inner{height:auto;flex-wrap:wrap;padding:14px 20px;gap:10px}.lead{padding:30px 0 0}.main-cols{padding:32px 20px 60px}}
   </style>
 </head>
@@ -1004,6 +1014,14 @@ function buildA1IndexHtml(cacheVersion: string, domain = ""): string {
   <header class="site-header">
     <div class="header-inner">
       <a href="/" class="site-logo" id="brand">${name}</a>
+      <nav class="header-nav" id="headerNav" aria-label="Categories">
+        <a href="/?cat=fashion" data-c="fashion">Fashion</a>
+        <a href="/?cat=health" data-c="health">Health</a>
+        <a href="/?cat=home" data-c="home">Home</a>
+        <a href="/?cat=travel" data-c="travel">Travel</a>
+        <a href="/?cat=finance" data-c="finance">Finance</a>
+        <a href="/?cat=food" data-c="food">Food</a>
+      </nav>
       <button class="search-toggle" id="searchToggle" aria-label="Search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35" stroke-linecap="round"/></svg></button>
     </div>
     <div class="search-bar" id="searchBar"><div class="inner"><input type="text" id="searchInput" placeholder="Search the journal…" autocomplete="off"></div></div>
@@ -1020,6 +1038,7 @@ function buildA1IndexHtml(cacheVersion: string, domain = ""): string {
       <div class="pagination" id="pagination"></div>
     </main>
     <aside class="sidebar">
+      <div class="sb-block"><h4 class="sb-hd">Categories</h4><ul class="sb-cats" id="catSide"></ul></div>
       <div class="sb-block"><h4 class="sb-hd">Most Read</h4><ol class="sb-list" id="mostRead"></ol></div>
       <div class="sb-block sb-nl"><h4 class="sb-hd">The Weekly Note</h4><p>Our quietest, best writing — once a week, no noise.</p><form class="sb-form" onsubmit="return false"><input type="email" placeholder="your@email.com"><button>Subscribe</button></form></div>
       <div class="sb-block"><h4 class="sb-hd">Follow</h4><div class="soc-row" id="socSide"></div></div>
@@ -1030,6 +1049,14 @@ function buildA1IndexHtml(cacheVersion: string, domain = ""): string {
     <div class="footer-grid">
       <div class="footer-brand"><div class="footer-logo">${name}</div><p>A lifestyle journal — written slowly, for readers who linger.</p><div class="soc-row" id="socFoot"></div></div>
       <div class="footer-col"><h4>The Journal</h4><ul><li><a href="/">All Stories</a></li><li><a href="#" id="footTop">Back to top</a></li></ul></div>
+      <div class="footer-col"><h4>Categories</h4><ul>
+        <li><a href="/?cat=fashion">Fashion &amp; Accessories</a></li>
+        <li><a href="/?cat=health">Health &amp; Beauty</a></li>
+        <li><a href="/?cat=home">Home &amp; Garden</a></li>
+        <li><a href="/?cat=travel">Travel &amp; Accommodation</a></li>
+        <li><a href="/?cat=finance">Finance &amp; Insurance</a></li>
+        <li><a href="/?cat=food">Food &amp; Beverage</a></li>
+      </ul></div>
     </div>
     <div class="footer-bottom"><span>&copy; ${new Date().getFullYear()} ${name}. All rights reserved.</span></div>
   </footer>
@@ -1043,6 +1070,17 @@ function buildA1MainJs(postsJson: string): string {
   return `const posts = ${postsJson};
 
 (function () {
+  var FIXED_CATS = [
+    {k:'fashion', l:'Fashion & Accessories'},
+    {k:'health', l:'Health & Beauty'},
+    {k:'home', l:'Home & Garden'},
+    {k:'travel', l:'Travel & Accommodation'},
+    {k:'finance', l:'Finance & Insurance'},
+    {k:'food', l:'Food & Beverage'}
+  ];
+  var CAT_LABEL = {};
+  FIXED_CATS.forEach(function(c){ CAT_LABEL[c.k]=c.l; });
+
   var SOC = '<a href="#" aria-label="X"><svg viewBox="0 0 24 24"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.746l7.73-8.835L1.254 2.25H8.08l4.253 5.622zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg></a>'
     + '<a href="#" aria-label="Instagram"><svg viewBox="0 0 24 24"><path d="M12 2.16c3.2 0 3.58.01 4.85.07 3.25.15 4.77 1.69 4.92 4.92.06 1.27.07 1.65.07 4.85s-.01 3.58-.07 4.85c-.15 3.23-1.66 4.77-4.92 4.92-1.27.06-1.64.07-4.85.07s-3.58-.01-4.85-.07c-3.26-.15-4.77-1.7-4.92-4.92C2.17 15.58 2.16 15.2 2.16 12s.01-3.58.07-4.85c.15-3.23 1.66-4.77 4.92-4.92C8.42 2.17 8.8 2.16 12 2.16zm0 1.62c-3.15 0-3.52.01-4.76.07-2.4.11-3.52 1.25-3.63 3.63-.06 1.24-.07 1.61-.07 4.52s.01 3.28.07 4.52c.11 2.38 1.23 3.52 3.63 3.63 1.24.06 1.61.07 4.76.07s3.52-.01 4.76-.07c2.4-.11 3.52-1.25 3.63-3.63.06-1.24.07-1.61.07-4.52s-.01-3.28-.07-4.52c-.11-2.38-1.23-3.52-3.63-3.63-1.24-.06-1.61-.07-4.76-.07zm0 2.76a5.3 5.3 0 110 10.6 5.3 5.3 0 010-10.6zm0 1.62a3.68 3.68 0 100 7.36 3.68 3.68 0 000-7.36zm5.5-2.9a1.24 1.24 0 110 2.48 1.24 1.24 0 010-2.48z"/></svg></a>'
     + '<a href="#" aria-label="Pinterest"><svg viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.08 3.16 9.42 7.63 11.17-.11-.95-.2-2.4.04-3.44.22-.94 1.4-5.96 1.4-5.96s-.36-.72-.36-1.78c0-1.67.97-2.91 2.17-2.91 1.02 0 1.52.77 1.52 1.69 0 1.03-.66 2.57-1 4-.28 1.19.6 2.17 1.77 2.17 2.13 0 3.77-2.25 3.77-5.49 0-2.87-2.06-4.88-5.01-4.88-3.41 0-5.42 2.56-5.42 5.21 0 1.03.4 2.14.89 2.74.1.12.11.22.08.34l-.33 1.36c-.05.22-.17.27-.4.16-1.5-.7-2.44-2.89-2.44-4.65 0-3.79 2.75-7.26 7.93-7.26 4.16 0 7.4 2.97 7.4 6.93 0 4.14-2.61 7.47-6.23 7.47-1.22 0-2.36-.63-2.75-1.38l-.75 2.85c-.27 1.04-1 2.35-1.49 3.15C9.57 23.81 10.76 24 12 24c6.63 0 12-5.37 12-12S18.63 0 12 0z"/></svg></a>'
@@ -1063,7 +1101,18 @@ function buildA1MainJs(postsJson: string): string {
   function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
   function href(p){var path=(p.detailUrl||('post-'+(p.slug||''))).replace(/^\\/+/, '');return path.indexOf('?')>=0?('/'+path):('/'+path.replace(/\\/$/, '')+'/');}
   function img(p){return p.heroImage||p.image||'';}
-  function catLabel(c){return String(c||'').replace(/[-_]/g,' ').replace(/\\b\\w/g,function(m){return m.toUpperCase();});}
+  function catKeyOf(c){
+    var raw=String(c||'').toLowerCase().trim();
+    if(CAT_LABEL[raw]) return raw;
+    for(var i=0;i<FIXED_CATS.length;i++){
+      if(FIXED_CATS[i].l.toLowerCase()===raw) return FIXED_CATS[i].k;
+    }
+    return raw.replace(/\\s*&\\s*/g,' ').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');
+  }
+  function catLabel(c){
+    var k=catKeyOf(c);
+    return CAT_LABEL[k] || String(c||'').replace(/[-_]/g,' ').replace(/\\b\\w/g,function(m){return m.toUpperCase();});
+  }
   function metaText(p){var d=p.dateLabel||p.date||'';return d+(p.readTime?(' · '+p.readTime):'');}
 
   // sort newest first when date available
@@ -1072,44 +1121,74 @@ function buildA1MainJs(postsJson: string): string {
 
   var cat='', q='', page=1, PER=6;
   var params=new URLSearchParams(location.search);
-  cat=(params.get('cat')||'').toLowerCase();
+  cat=catKeyOf(params.get('cat')||'');
 
   function filtered(){return all.filter(function(p){
-    var pc=String(p.category||'').toLowerCase();
+    var pc=catKeyOf(p.category||'');
     var hay=((p.title||'')+' '+(p.excerpt||'')).toLowerCase();
     return (!cat||pc===cat)&&(!q||hay.indexOf(q)>=0);
   });}
 
-  function cardImg(p,cls){var s=img(p);return s?('<span class="'+cls+'"><img loading="lazy" src="'+esc(s)+'" alt="'+esc(p.title)+'"></span>'):('<span class="'+cls+'"><span class="'+(cls==='lead-img'?'lead-ph':'card-ph')+'"></span></span>');}
-
-  function renderLead(){
-    var lead=document.getElementById('lead');if(!lead)return;
-    var list=filtered();
-    if(!list.length||q||cat){document.getElementById('leadWrap').style.display=q||cat?'none':'';if(!list.length){lead.innerHTML='';return;}}
-    var p=list[0];
-    var imgHtml=img(p)?'<a class="lead-img" href="'+href(p)+'"><img loading="lazy" src="'+esc(img(p))+'" alt="'+esc(p.title)+'"></a>':'<a class="lead-img" href="'+href(p)+'"><span class="lead-ph"></span></a>';
-    lead.innerHTML=imgHtml+'<div class="lead-body">'
-      +(p.category?('<a href="?cat='+encodeURIComponent(String(p.category).toLowerCase())+'" class="lead-kicker">'+esc(catLabel(p.category))+'</a>'):'<span class="lead-kicker">Featured</span>')
-      +'<h1 class="lead-title"><a href="'+href(p)+'">'+esc(p.title)+'</a></h1>'
-      +(p.excerpt?('<p class="lead-dek">'+esc(p.excerpt)+'</p>'):'')
-      +'<div class="lead-meta">'+esc(metaText(p))+'</div>'
-      +'<a class="lead-read" href="'+href(p)+'">Read the story →</a></div>';
+  function setCat(next){
+    cat=next||'';
+    q='';
+    if(si)si.value='';
+    page=1;
+    var url=new URL(location.href);
+    if(cat) url.searchParams.set('cat', cat); else url.searchParams.delete('cat');
+    history.replaceState(null, '', url.pathname + url.search);
+    sync();
   }
 
   function renderChips(){
     var bar=document.getElementById('catbar');if(!bar)return;
-    var seen={},order=[];
-    all.forEach(function(p){var c=String(p.category||'').toLowerCase();if(c&&!seen[c]){seen[c]=1;order.push(c);}});
-    if(!order.length){bar.style.display='none';return;}
+    bar.style.display='';
     var html='<button class="chip'+(!cat?' active':'')+'" data-c="">All</button>';
-    order.forEach(function(c){html+='<button class="chip'+(cat===c?' active':'')+'" data-c="'+esc(c)+'">'+esc(catLabel(c))+'</button>';});
+    FIXED_CATS.forEach(function(c){html+='<button class="chip'+(cat===c.k?' active':'')+'" data-c="'+esc(c.k)+'">'+esc(c.l)+'</button>';});
     bar.innerHTML=html;
-    bar.querySelectorAll('.chip').forEach(function(b){b.addEventListener('click',function(){cat=b.getAttribute('data-c');q='';if(si)si.value='';page=1;sync();});});
+    bar.querySelectorAll('.chip').forEach(function(b){b.addEventListener('click',function(){setCat(b.getAttribute('data-c')||'');});});
+    var nav=document.getElementById('headerNav');
+    if(nav){
+      nav.querySelectorAll('a[data-c]').forEach(function(a){
+        var k=a.getAttribute('data-c')||'';
+        a.classList.toggle('active', !!cat && cat===k);
+        a.addEventListener('click',function(ev){ev.preventDefault();setCat(k);});
+      });
+    }
+  }
+
+  function renderCatSidebar(){
+    var side=document.getElementById('catSide');if(!side)return;
+    var counts={};
+    FIXED_CATS.forEach(function(c){counts[c.k]=0;});
+    all.forEach(function(p){var k=catKeyOf(p.category||'');if(counts[k]!=null)counts[k]++;});
+    side.innerHTML=FIXED_CATS.map(function(c){
+      return '<li><a href="/?cat='+esc(c.k)+'" data-c="'+esc(c.k)+'">'+esc(c.l)+' <span class="count">'+counts[c.k]+'</span></a></li>';
+    }).join('');
+    side.querySelectorAll('a[data-c]').forEach(function(a){
+      a.addEventListener('click',function(ev){ev.preventDefault();setCat(a.getAttribute('data-c')||'');});
+    });
   }
 
   function renderMostRead(){
     var mr=document.getElementById('mostRead');if(!mr)return;
     mr.innerHTML=all.slice(0,4).map(function(p){return '<li><div>'+(p.category?'<span class="sb-cat">'+esc(catLabel(p.category))+'</span>':'')+'<a href="'+href(p)+'">'+esc(p.title)+'</a></div></li>';}).join('');
+  }
+
+  function renderLead(){
+    var lead=document.getElementById('lead');if(!lead)return;
+    var wrap=document.getElementById('leadWrap');
+    var list=filtered();
+    if(!list.length||q||cat){if(wrap)wrap.style.display='none';lead.innerHTML='';return;}
+    if(wrap)wrap.style.display='';
+    var p=list[0];
+    var imgHtml=img(p)?'<a class="lead-img" href="'+href(p)+'"><img loading="lazy" src="'+esc(img(p))+'" alt="'+esc(p.title)+'"></a>':'<a class="lead-img" href="'+href(p)+'"><span class="lead-ph"></span></a>';
+    lead.innerHTML=imgHtml+'<div class="lead-body">'
+      +(p.category?('<a href="?cat='+encodeURIComponent(catKeyOf(p.category))+'" class="lead-kicker">'+esc(catLabel(p.category))+'</a>'):'<span class="lead-kicker">Featured</span>')
+      +'<h1 class="lead-title"><a href="'+href(p)+'">'+esc(p.title)+'</a></h1>'
+      +(p.excerpt?('<p class="lead-dek">'+esc(p.excerpt)+'</p>'):'')
+      +'<div class="lead-meta">'+esc(metaText(p))+'</div>'
+      +'<a class="lead-read" href="'+href(p)+'">Read the story →</a></div>';
   }
 
   function renderGrid(){
@@ -1142,14 +1221,16 @@ function buildA1MainJs(postsJson: string): string {
     }
   }
 
-  function sync(){renderChips();renderLead();renderGrid();}
+  function sync(){renderChips();renderCatSidebar();renderLead();renderGrid();}
 
   if(si)si.addEventListener('input',function(){q=si.value.trim().toLowerCase();cat='';page=1;sync();});
 
   if(!all.length){
     grid.innerHTML='';
     var em=document.getElementById('empty');if(em){em.hidden=false;}
-    document.getElementById('leadWrap').style.display='none';
+    var lw=document.getElementById('leadWrap');if(lw)lw.style.display='none';
+    renderChips();
+    renderCatSidebar();
     return;
   }
   renderMostRead();
