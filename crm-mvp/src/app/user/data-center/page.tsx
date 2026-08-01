@@ -29,10 +29,10 @@ const TZ = "Asia/Shanghai";
 
 /** 各列 width 之和，scroll.x 须 ≥ 此值否则固定列（CID / 操作）会与表体错位
  *  顺序：CID 110 | 广告系列 280 | 状态 100 | 预算 70 | 最高出价 90
- *       | 展示 95 | 点击 85 | 平均CPC 80 | 花费 85 | 佣金 70 | 拒付佣金 80 | 净利润 85 | 操作 140
+ *       | 展示 95 | 点击 85 | 平均CPC 80 | 花费 85 | 佣金 70 | 拒付佣金 95 | 净利润 85 | 操作 140
  */
 const DATA_CENTER_TABLE_SCROLL_X =
-  110 + 280 + 100 + 70 + 90 + 95 + 85 + 80 + 85 + 70 + 80 + 85 + 140;
+  110 + 280 + 100 + 70 + 90 + 95 + 85 + 80 + 85 + 70 + 95 + 85 + 140;
 
 /** D-050 政策类别下拉选项（按 4 大类 + 子项中文名展示，value=policyName code） */
 const POLICY_OPTIONS = Object.entries(POLICY_CATEGORY_MAP).map(([code, e]) => ({
@@ -722,7 +722,8 @@ export default function DataCenterPage() {
       ),
     },
     {
-      title: "拒付佣金", dataIndex: "rejected_commission", width: 80, align: "right",
+      title: "拒付佣金", dataIndex: "rejected_commission", width: 95, align: "right",
+      sorter: (a, b) => (a.rejected_commission || 0) - (b.rejected_commission || 0),
       render: (v: number) => <Text type={v > 0 ? "danger" : "secondary"} style={{ fontSize: 12 }}>${(v || 0).toFixed(2)}</Text>,
     },
     {
