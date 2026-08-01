@@ -57,10 +57,72 @@ const ARRIVAL_WINDOW_DAYS = 3
 const MAX_DEFICIT_PER_ROUND = 80
 /** 欠账起算游标：首轮写入「当时」，只对之后入库的订单计账（不追补历史，07 拍板） */
 const DEBT_CUTOFF_KEY = 'auto_click_debt_cutoff'
+/**
+ * D-208 失败熔断的回看窗口与阈值。
+ * 某商家的补刷点击若在窗口内「只失败、零成功」，属于追踪链接被联盟拒绝（403）或落地页结构性
+ * 剥掉追踪参数这类只能人工修的故障。欠账制会因失败子项掉出抵扣计数而反复重排，把执行器产能
+ * 烧在死链上——2026-08-01 实测 3 个坏商家占全站 97% 的失败（Etsy 110 次全败、零成功），
+ * 而单个坏商家的欠账需求（iHerb 约 2,548 次）就超过全站一天的实际执行量（1,523 次）。
+ */
+const CIRCUIT_LOOKBACK_HOURS = 6
+const CIRCUIT_MIN_FAILS = 5
+/**
+ * 成功率低于此值即视为结构性故障。不能只判「零成功」——yz01 的 Pendulum 是 36 败 1 成（2.7%），
+ * 零成功条件会把它漏掉，而它照样在空烧产能。对照健康商家的实测成功率都在 90% 以上（Planner 5D 91%、
+ * AEO 98%、wj04 的 iHerb 92%），10% 这条线不会误伤正常抖动。
+ */
+const CIRCUIT_MAX_SUCCESS_RATE = 0.1
+/** 熔断后每轮只放这么多「探针」点击：人工换好链接后能自动恢复，又不会再次整批空刷 */
+const CIRCUIT_PROBE_CLICKS = 3
+/** 距上次尝试不足这个时间就完全不排，避免探针本身变成每轮空刷 */
+const CIRCUIT_PROBE_COOLDOWN_MIN = 60
 
 /** UTC+8 日期串 → affiliate_click_daily.click_date 对应的 DATE */
 function clickDateToDate(dateStr: string): Date {
   return new Date(`${dateStr}T00:00:00Z`)
+}
+
+interface ClickHealth {
+  fails: number
+  successes: number
+  lastAttemptAt: Date | null
+}
+
+/**
+ * D-208：按 (platform, merchant_id) 汇总该用户近 CIRCUIT_LOOKBACK_HOURS 小时的补刷点击成败。
+ * 粒度必须含用户——同一个 iHerb 在 wj04 下 92% 成功、在 yz04 下只有 39%，故障出在各自的追踪链接。
+ */
+async function loadClickHealth(userId: bigint): Promise<Map<string, ClickHealth>> {
+  const since = new Date(Date.now() - CIRCUIT_LOOKBACK_HOURS * 3_600_000)
+  const rows = await prisma.$queryRaw<
+    { platform: string | null; merchant_id: string | null; fails: bigint | null; successes: bigint | null; last_attempt: Date | null }[]
+  >`
+    SELECT m.platform AS platform,
+           m.merchant_id AS merchant_id,
+           CAST(SUM(CASE WHEN i.status = 'failed' THEN 1 ELSE 0 END) AS SIGNED) AS fails,
+           CAST(SUM(CASE WHEN i.status = 'success' THEN 1 ELSE 0 END) AS SIGNED) AS successes,
+           MAX(i.executed_at) AS last_attempt
+    FROM kyads_click_task_items i
+    JOIN kyads_click_tasks t ON t.id = i.task_id
+    JOIN campaigns c ON c.id = t.campaign_id
+    JOIN user_merchants m ON m.id = c.user_merchant_id
+    WHERE t.user_id = ${userId}
+      AND i.executed_at >= ${since}
+      AND i.is_deleted = 0
+    GROUP BY m.platform, m.merchant_id
+  `
+  const map = new Map<string, ClickHealth>()
+  for (const r of rows) {
+    const platform = normalizePlatformCode(r.platform || '')
+    const mid = r.merchant_id || ''
+    if (!platform || !mid) continue
+    map.set(`${platform}:${mid}`, {
+      fails: Number(r.fails ?? 0),
+      successes: Number(r.successes ?? 0),
+      lastAttemptAt: r.last_attempt ?? null,
+    })
+  }
+  return map
 }
 
 /**
@@ -116,6 +178,8 @@ export interface AutoClickResult {
   skippedNoOrders: number // 欠账窗口内无新入库订单跳过
   /** D-207 看板指标：本轮识别出的缺口总量（含被单轮上限截掉的部分） */
   deficitIdentified: number
+  /** D-208：因「只失败零成功」被熔断跳过的商家数（欠账仍计，需人工换链接） */
+  circuitOpen: number
   /** D-207 看板指标：其中「几乎零点击」的紧急商家数（优先排程） */
   urgentScheduled: number
   details: string[]
@@ -137,6 +201,7 @@ export async function runAutoClickForUser(
     skippedNoBaseline: 0,
     skippedNoOrders: 0,
     deficitIdentified: 0,
+    circuitOpen: 0,
     urgentScheduled: 0,
     details: [],
   }
@@ -208,6 +273,9 @@ export async function runAutoClickForUser(
   // D-207 欠账窗口：订单按入库时间回看 ARRIVAL_WINDOW_DAYS 天，点击侧天粒度对齐。
   // 天粒度会把「窗口起点当天、窗口开始前」的点击也算成抵扣，方向偏保守（少补），可接受。
   const { windowStart, windowClickDates } = await resolveDebtWindow()
+
+  // D-208：一次性取全用户的补刷成败画像，循环内只做内存查表（避免每商家一次 DB 往返）
+  const healthByKey = await loadClickHealth(userId)
 
   for (const c of campaigns) {
     const merchant = c.user_merchant_id ? merchantById.get(c.user_merchant_id.toString()) : undefined
@@ -311,8 +379,28 @@ export async function runAutoClickForUser(
       continue
     }
     res.deficitIdentified += fullDeficit
+
+    // D-208 失败熔断：这个商家近 6h 的补刷点击成功率极低 → 是死链/落地页无追踪参数这类
+    // 人工才能修的故障。继续按欠账整批排只会空刷并挤掉健康商家，故冷却期内完全不排，
+    // 冷却过后只放 CIRCUIT_PROBE_CLICKS 次探针试水；探针成功后成功率回升，下轮自动恢复正常。
+    // 注意：欠账（deficitIdentified）仍照记，看板要能看见「它确实欠着但刷不进去」。
+    const health = healthByKey.get(`${platform}:${mid}`)
+    let probeOnly = false
+    const attempts = health ? health.fails + health.successes : 0
+    if (health && health.fails >= CIRCUIT_MIN_FAILS && attempts > 0 && health.successes / attempts < CIRCUIT_MAX_SUCCESS_RATE) {
+      const sinceLastMs = health.lastAttemptAt ? now.getTime() - health.lastAttemptAt.getTime() : Number.POSITIVE_INFINITY
+      if (sinceLastMs < CIRCUIT_PROBE_COOLDOWN_MIN * 60_000) {
+        res.circuitOpen++
+        res.details.push(
+          `${platform}:${mid} 近${CIRCUIT_LOOKBACK_HOURS}h ${health.fails}败${health.successes}成→熔断跳过(欠${fullDeficit})`,
+        )
+        continue
+      }
+      probeOnly = true
+    }
+
     // 单轮封顶：余量在下一轮（每 30min 的订单同步）续补。effectiveC 已含我方 pending，不会重复下单。
-    const deficit = Math.min(fullDeficit, MAX_DEFICIT_PER_ROUND)
+    const deficit = Math.min(fullDeficit, probeOnly ? CIRCUIT_PROBE_CLICKS : MAX_DEFICIT_PER_ROUND)
 
     // 优先级（D-207）：click-execute 按 scheduled_at 先到先执行，故「窗口越短 = 优先级越高」。
     // 几乎零点击的商家（联盟侧看到的转化率是目标上限的 3 倍以上）最扎眼，压到 30 分钟内洗完；
@@ -327,7 +415,7 @@ export async function runAutoClickForUser(
       res.scheduled++
       res.clicksScheduled += r.target
       res.details.push(
-        `${platform}:${mid} O=${O}(入库${ARRIVAL_WINDOW_DAYS}天) C=${effectiveC} T=${T} 缺${fullDeficit} 铺${r.target}点击/${windowMinutes}min${urgent ? ' [紧急]' : ''}`,
+        `${platform}:${mid} O=${O}(入库${ARRIVAL_WINDOW_DAYS}天) C=${effectiveC} T=${T} 缺${fullDeficit} 铺${r.target}点击/${windowMinutes}min${urgent ? ' [紧急]' : ''}${probeOnly ? ' [熔断探针]' : ''}`,
       )
       // 补刷任务已成功创建 → 清掉该系列的「补刷受阻」挂人工告警（若有）。
       await resolveAlertsByType(userId, c.id, ['brush_blocked']).catch(() => {})

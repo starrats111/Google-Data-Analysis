@@ -84,7 +84,7 @@ export async function GET(req: NextRequest) {
     }
 
     // D-207 兜底扫描：每小时一次，逐用户串行（低配机保护），补上被单轮上限截掉的欠账
-    const sweep = { ran: false, scheduled: 0, clicksScheduled: 0, deficitIdentified: 0 }
+    const sweep = { ran: false, scheduled: 0, clicksScheduled: 0, deficitIdentified: 0, circuitOpen: 0 }
     if (await shouldSweep()) {
       sweep.ran = true
       for (const u of users) {
@@ -93,6 +93,7 @@ export async function GET(req: NextRequest) {
           sweep.scheduled += ac.scheduled
           sweep.clicksScheduled += ac.clicksScheduled
           sweep.deficitIdentified += ac.deficitIdentified
+          sweep.circuitOpen += ac.circuitOpen
           if (ac.details.length > 0) {
             // pm2 下 stdout 不落盘，运维日志统一走 stderr（同 txn-quick-sync）
             console.error(`[cron/click-sync] sweep ${u.username}: ${ac.details.join(' | ')}`)
@@ -107,7 +108,7 @@ export async function GET(req: NextRequest) {
     console.error(
       `[cron/click-sync] users=${totals.usersScanned} conns=${totals.connectionsSynced} ` +
         `rows=${totals.rowsUpserted} clicks=${totals.clicksCounted} errors=${totals.errors} ` +
-        `sweep=${sweep.ran ? `${sweep.scheduled}系列/${sweep.clicksScheduled}点击(缺口${sweep.deficitIdentified})` : 'skip'} ` +
+        `sweep=${sweep.ran ? `${sweep.scheduled}系列/${sweep.clicksScheduled}点击(缺口${sweep.deficitIdentified}，熔断${sweep.circuitOpen})` : 'skip'} ` +
         `cost=${Date.now() - startedAt}ms`,
     )
     return NextResponse.json({ code: 0, data: { ...totals, sweep } })
