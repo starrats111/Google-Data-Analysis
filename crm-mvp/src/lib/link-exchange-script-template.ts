@@ -1,8 +1,10 @@
 /**
  * 生成统一 Google Ads 脚本（数据中心采集 + 换链接，一个脚本同时完成）
  *
- * 阶段0：采集近 90 天广告数据 / 子账号 CID / 广告系列信息，写入数据中心三张表
+ * 阶段0：采集近 30 天广告数据 / 子账号 CID / 广告系列信息，写入数据中心三张表
  *        （DailyData / CID_List / CampaignInfo），供 CRM 数据中心 sheet-sync 实时读取
+ *        同时按月归档到 DailyData_YYYY-MM；首次运行会把 MCC 创建至今的历史一并补齐，
+ *        进度记在 _BackfillMeta，单次跑不完下次自动接着补
  * 阶段1-5：扫描广告系列 → 查联盟链接 → 写监控表 → 点击监控 → lease/换链
  * 含 click-baseline 跨实例状态同步（启动时读取、退出前写入）
  *
@@ -27,7 +29,8 @@ export function generateUnifiedAdsScript(
 // 生成时间: ${ts}
 //
 // 一个脚本同时完成：
-//   A. 数据中心：写 DailyData / CID_List / CampaignInfo 三张表（供 CRM 实时读取分析）
+//   A. 数据中心：写 DailyData(近30天) / CID_List / CampaignInfo（供 CRM 实时读取分析）
+//      并按月归档到 DailyData_YYYY-MM；首次运行自动补齐 MCC 创建至今的全部历史
 //   B. 换链接：扫描广告系列 → 查联盟链接 → 点击监控 → 自动换 finalUrlSuffix
 
 // ===== 配置区域 =====
@@ -54,7 +57,21 @@ var CONFIG = {
 
   // 数据中心采集（阶段0）
   ENABLE_DATA_CENTER_EXPORT: true,
-  DATA_CENTER_DAYS: 90,
+  // 日常增量窗口：每次运行重新采集近 30 天并覆盖，确保 Google 事后回调修正
+  // （转化、花费通常 T+2 内还会变）能被准确刷新
+  DATA_CENTER_DAYS: 30,
+
+  // 历史归档：首次运行把 MCC 创建至今的数据按月补齐到 DailyData_YYYY-MM，
+  // 之后只维护近 30 天。进度存在表格 _BackfillMeta 里，跑不完下次自动接着补。
+  ENABLE_HISTORY_BACKFILL: true,
+  // 首次运行（还没有任何归档记录）时留给回补的时间，尽量一次补完
+  BACKFILL_BUDGET_SECONDS_FIRST_RUN: 20 * 60,
+  // 后续运行补剩余月份的时间，优先保证换链循环
+  BACKFILL_BUDGET_SECONDS: 6 * 60,
+  // 早于此月份一律不补，防止极端脏数据把回补拖成死循环
+  BACKFILL_FLOOR_MONTH: '2024-01',
+  // 连续多少个月完全没有数据就认为已到达账户起点
+  BACKFILL_EMPTY_MONTH_TOLERANCE: 3,
 
   // 功能开关
   ENABLE_AFFILIATE_LOOKUP: true,
@@ -613,28 +630,216 @@ function writeToSheet(campaigns) {
 }
 
 // =====================================================================
-// 阶段0: 数据中心采集（DailyData / CID_List / CampaignInfo）
-// 先采集全部数据再清空写入，避免清空后写入失败导致表格丢数据
+// 阶段0: 数据中心采集
+//
+// 表结构：
+//   DailyData            近 30 天滚动窗口，每次整表重写（现有 CRM 读取入口，格式不变）
+//   DailyData_YYYY-MM    按月归档，长期保留 MCC 创建至今的全部历史
+//   CID_List             子账号列表
+//   CampaignInfo         广告系列信息
+//   _BackfillMeta        归档进度（哪些月份已补齐），用于断点续跑
+//
+// 运行策略：
+//   首次运行  —— 采集近 30 天 + 把 MCC 创建至今的历史按月补齐
+//   之后每次  —— 只采集近 30 天，并把这 30 天精确合并回对应月份的归档表
+//
+// 精确度保证：
+//   1. 近 30 天每次全部重新拉取并覆盖，Google 事后修正的转化/花费能被准确刷新
+//   2. 归档表按「日期」逐行合并，只替换窗口内的日期，窗口外的历史原样保留，
+//      跨月时不会把月初数据冲掉
+//   3. 同一 (日期, 子账号, 广告系列) 只保留一行，重复写入自动去重
+//   4. 日期一律用各子账号自己的时区换算，避免边界日错位
 // =====================================================================
+var DATA_HEADERS = ['Date', 'Account', 'AccountName', 'CampaignId', 'CampaignName', 'Status', 'Budget', 'Impressions', 'Clicks', 'Cost', 'Conversions', 'ConversionValue', 'Currency'];
+var BACKFILL_META_SHEET = '_BackfillMeta';
+var BACKFILL_META_HEADERS = ['Month', 'Status', 'Rows', 'UpdatedAt', 'Source'];
+var EARLIEST_META_KEY = '__EARLIEST__';
+
+// ===== 月份工具：全部按 yyyy-MM 字符串处理，绕开时区与月末天数的坑 =====
+function monthKeyOfDate(dateStr) {
+  return (dateStr || '').toString().slice(0, 7);
+}
+
+function monthAdd(monthKey, delta) {
+  var y = parseInt(monthKey.slice(0, 4), 10);
+  var m = parseInt(monthKey.slice(5, 7), 10) - 1 + delta;
+  y += Math.floor(m / 12);
+  m = ((m % 12) + 12) % 12;
+  return y + '-' + ('0' + (m + 1)).slice(-2);
+}
+
+function monthLastDay(monthKey) {
+  var y = parseInt(monthKey.slice(0, 4), 10);
+  var m = parseInt(monthKey.slice(5, 7), 10);
+  return monthKey + '-' + ('0' + new Date(y, m, 0).getDate()).slice(-2);
+}
+
+function currentMonthKey() {
+  return Utilities.formatDate(new Date(), 'Asia/Shanghai', 'yyyy-MM');
+}
+
+/** 行去重键：同一天同一子账号同一系列只能有一行 */
+function rowKeyOf(row) {
+  return row[0] + '|' + row[1] + '|' + row[3];
+}
+
+// ===== 归档进度表 =====
+function getBackfillMetaSheet(spreadsheet) {
+  var sheet = spreadsheet.getSheetByName(BACKFILL_META_SHEET);
+  if (!sheet) {
+    sheet = spreadsheet.insertSheet(BACKFILL_META_SHEET);
+    sheet.getRange(1, 1, 1, BACKFILL_META_HEADERS.length).setValues([BACKFILL_META_HEADERS]);
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
+function readBackfillMeta(spreadsheet) {
+  var meta = {};
+  var sheet = spreadsheet.getSheetByName(BACKFILL_META_SHEET);
+  if (!sheet) return meta;
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return meta;
+  var values = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
+  for (var i = 0; i < values.length; i++) {
+    var key = (values[i][0] || '').toString().trim();
+    if (key) meta[key] = (values[i][1] || '').toString().trim();
+  }
+  return meta;
+}
+
+function upsertBackfillMeta(spreadsheet, monthKey, status, rowCount, source) {
+  var sheet = getBackfillMetaSheet(spreadsheet);
+  var stamp = Utilities.formatDate(new Date(), 'Asia/Shanghai', 'yyyy-MM-dd HH:mm:ss');
+  var newRow = [monthKey, status, rowCount, stamp, source];
+  var lastRow = sheet.getLastRow();
+  if (lastRow >= 2) {
+    var keys = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+    for (var i = 0; i < keys.length; i++) {
+      if ((keys[i][0] || '').toString().trim() === monthKey) {
+        sheet.getRange(i + 2, 1, 1, newRow.length).setValues([newRow]);
+        return;
+      }
+    }
+  }
+  sheet.getRange(lastRow + 1, 1, 1, newRow.length).setValues([newRow]);
+}
+
+// ===== 归档表读写 =====
+function readMonthArchive(spreadsheet, monthKey) {
+  var sheet = spreadsheet.getSheetByName('DailyData_' + monthKey);
+  if (!sheet) return [];
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return [];
+  return sheet.getRange(2, 1, lastRow - 1, DATA_HEADERS.length).getValues();
+}
+
+function writeMonthArchive(spreadsheet, monthKey, rows) {
+  var name = 'DailyData_' + monthKey;
+  var sheet = spreadsheet.getSheetByName(name) || spreadsheet.insertSheet(name);
+  sheet.clearContents();
+  sheet.getRange(1, 1, 1, DATA_HEADERS.length).setValues([DATA_HEADERS]);
+  if (rows.length > 0) sheet.getRange(2, 1, rows.length, DATA_HEADERS.length).setValues(rows);
+  sheet.setFrozenRows(1);
+}
+
+/**
+ * 把新采集到的行精确合并进某个月的归档表。
+ * 只有落在 [windowStart, windowEnd] 内的旧行会被替换，窗口外的历史原样保留，
+ * 因此跨月运行（例如 9/2 采集 8/3~9/2）不会把 8/1-8/2 冲掉。
+ * windowStart 传空表示整月替换（历史回补场景）。
+ */
+function mergeMonthArchive(spreadsheet, monthKey, freshRows, windowStart, windowEnd) {
+  var merged = [];
+  var seen = {};
+
+  for (var i = 0; i < freshRows.length; i++) {
+    var key = rowKeyOf(freshRows[i]);
+    if (seen[key]) continue;
+    seen[key] = true;
+    merged.push(freshRows[i]);
+  }
+
+  if (windowStart) {
+    var existing = readMonthArchive(spreadsheet, monthKey);
+    for (var j = 0; j < existing.length; j++) {
+      var date = (existing[j][0] || '').toString().slice(0, 10);
+      if (!date) continue;
+      // 窗口内的旧数据已被本次采集覆盖，丢弃；窗口外的保留
+      if (date >= windowStart && date <= windowEnd) continue;
+      var k = rowKeyOf(existing[j]);
+      if (seen[k]) continue;
+      seen[k] = true;
+      merged.push(existing[j]);
+    }
+  }
+
+  merged.sort(function (a, b) {
+    var da = (a[0] || '').toString();
+    var db = (b[0] || '').toString();
+    return da < db ? -1 : da > db ? 1 : 0;
+  });
+
+  writeMonthArchive(spreadsheet, monthKey, merged);
+  return merged.length;
+}
+
+// ===== 报表采集 =====
+/** 拉取指定日期区间内所有子账号的广告系列日报 */
+function fetchRangeForAccounts(accounts, startDate, endDate, phaseLabel) {
+  var rows = [];
+  for (var i = 0; i < accounts.length; i++) {
+    if (shouldStop(phaseLabel)) break;
+    AdsManagerApp.select(accounts[i]);
+    try {
+      var report = AdsApp.report(
+        "SELECT segments.date, customer.id, customer.descriptive_name, campaign.id, campaign.name, campaign.status, campaign_budget.amount_micros, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions, metrics.conversions_value, customer.currency_code FROM campaign WHERE segments.date BETWEEN '" + startDate + "' AND '" + endDate + "'"
+      );
+      var it = report.rows();
+      while (it.hasNext()) {
+        var r = it.next();
+        rows.push([r['segments.date'], r['customer.id'], r['customer.descriptive_name'], r['campaign.id'], r['campaign.name'], r['campaign.status'], r['campaign_budget.amount_micros'], r['metrics.impressions'], r['metrics.clicks'], r['metrics.cost_micros'], r['metrics.conversions'], r['metrics.conversions_value'], r['customer.currency_code']]);
+      }
+    } catch (e) {
+      console.log('   数据采集错误 ' + accounts[i].getName() + ': ' + e.message);
+    }
+  }
+  return rows;
+}
+
 function collectDataCenterSheets() {
   var spreadsheet = SpreadsheetApp.openByUrl(CONFIG.SPREADSHEET_URL);
-  var headers = ['Date', 'Account', 'AccountName', 'CampaignId', 'CampaignName', 'Status', 'Budget', 'Impressions', 'Clicks', 'Cost', 'Conversions', 'ConversionValue', 'Currency'];
+
+  var accounts = [];
+  var accountIterator = AdsManagerApp.accounts().get();
+  while (accountIterator.hasNext()) accounts.push(accountIterator.next());
+  if (accounts.length === 0) {
+    console.log('   MCC 下没有子账号，跳过采集');
+    return;
+  }
+
   var allRows = [];
   var cidRows = [];
   var campaignInfoRows = [];
+  var windowStart = '';
+  var windowEnd = '';
 
-  var accountIterator = AdsManagerApp.accounts().get();
-  while (accountIterator.hasNext()) {
+  for (var i = 0; i < accounts.length; i++) {
     if (shouldStop('数据中心采集')) break;
-    var account = accountIterator.next();
+    var account = accounts[i];
     cidRows.push([account.getCustomerId(), account.getName() || '']);
     AdsManagerApp.select(account);
+
+    // 按子账号自己的时区算窗口，避免跨时区账号的边界日被算错
     var tz = AdsApp.currentAccount().getTimeZone();
-    var today = new Date();
     var startD = new Date();
-    startD.setDate(startD.getDate() - (CONFIG.DATA_CENTER_DAYS || 90));
-    var endDate = Utilities.formatDate(today, tz, 'yyyy-MM-dd');
+    startD.setDate(startD.getDate() - (CONFIG.DATA_CENTER_DAYS || 30));
+    var endDate = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
     var startDate = Utilities.formatDate(startD, tz, 'yyyy-MM-dd');
+    // 各账号时区不同，取并集才能覆盖全部被本次刷新的日期
+    if (!windowStart || startDate < windowStart) windowStart = startDate;
+    if (!windowEnd || endDate > windowEnd) windowEnd = endDate;
+
     try {
       var report = AdsApp.report(
         "SELECT segments.date, customer.id, customer.descriptive_name, campaign.id, campaign.name, campaign.status, campaign_budget.amount_micros, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions, metrics.conversions_value, customer.currency_code FROM campaign WHERE segments.date BETWEEN '" + startDate + "' AND '" + endDate + "'"
@@ -670,10 +875,12 @@ function collectDataCenterSheets() {
 
   var sheet = spreadsheet.getSheetByName('DailyData') || spreadsheet.insertSheet('DailyData');
   sheet.clearContents();
-  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
-  if (allRows.length > 0) sheet.getRange(2, 1, allRows.length, headers.length).setValues(allRows);
+  sheet.getRange(1, 1, 1, DATA_HEADERS.length).setValues([DATA_HEADERS]);
+  if (allRows.length > 0) sheet.getRange(2, 1, allRows.length, DATA_HEADERS.length).setValues(allRows);
   sheet.setFrozenRows(1);
-  console.log('   DailyData: ' + allRows.length + ' 行');
+  console.log('   DailyData: ' + allRows.length + ' 行 (' + windowStart + ' ~ ' + windowEnd + ')');
+
+  archiveRecentWindow(spreadsheet, allRows, windowStart, windowEnd);
 
   var cidSheet = spreadsheet.getSheetByName('CID_List') || spreadsheet.insertSheet('CID_List');
   cidSheet.clearContents();
@@ -690,6 +897,170 @@ function collectDataCenterSheets() {
   if (campaignInfoRows.length > 0) infoSheet.getRange(2, 1, campaignInfoRows.length, infoHeaders.length).setValues(campaignInfoRows);
   infoSheet.setFrozenRows(1);
   console.log('   CampaignInfo: ' + campaignInfoRows.length + ' 广告系列');
+
+  if (CONFIG.ENABLE_HISTORY_BACKFILL) {
+    try {
+      runHistoryBackfill(spreadsheet, accounts, campaignInfoRows);
+    } catch (e) {
+      console.log('   历史回补失败: ' + e.message);
+    }
+  }
+}
+
+/** 把近 30 天窗口的数据精确合并进对应月份的归档表 */
+function archiveRecentWindow(spreadsheet, allRows, windowStart, windowEnd) {
+  if (allRows.length === 0 || !windowStart) return;
+  // 采集被时间上限打断时，allRows 只有部分子账号的数据。此时合并会把窗口内
+  // 「本次没轮到的账号」的历史行删掉，宁可这轮不归档，下次跑完整的再写。
+  if (STATE.forceStopped) {
+    console.log('   月度归档: 本轮采集被中断，跳过归档以免删掉未采集账号的历史');
+    return;
+  }
+
+  var byMonth = {};
+  for (var i = 0; i < allRows.length; i++) {
+    var key = monthKeyOfDate(allRows[i][0]);
+    if (!key) continue;
+    if (!byMonth[key]) byMonth[key] = [];
+    byMonth[key].push(allRows[i]);
+  }
+
+  var thisMonth = currentMonthKey();
+  var written = [];
+  for (var monthKey in byMonth) {
+    if (!byMonth.hasOwnProperty(monthKey)) continue;
+    try {
+      var count = mergeMonthArchive(spreadsheet, monthKey, byMonth[monthKey], windowStart, windowEnd);
+      written.push(monthKey + '(' + count + ')');
+
+      // 进度标记要谨慎：30 天窗口的最前面那个月是残缺的（8/3 运行时窗口从 7/4 开始，
+      // 7/1-7/3 没采到），不能标 complete，否则历史回补会跳过它，留下永久缺口。
+      // 已被回补补全过的月份也不在这里降级，避免每天重复补同一个月。
+      var status = '';
+      if (monthKey === thisMonth) status = 'current';
+      else if ((monthKey + '-01') >= windowStart) status = 'complete';
+      if (status) upsertBackfillMeta(spreadsheet, monthKey, status, count, 'daily');
+    } catch (e) {
+      console.log('   月度归档失败 ' + monthKey + ': ' + e.message);
+    }
+  }
+  console.log('   月度归档: ' + (written.length ? written.join(' ') : '无'));
+}
+
+// =====================================================================
+// 历史回补：把 MCC 创建至今、30 天窗口够不到的月份按月补齐
+// 进度写在 _BackfillMeta，单次跑不完下次运行自动接着补
+// =====================================================================
+
+/** 用各子账号最早的广告系列开始时间推出 MCC 真实起点，结果缓存进 _BackfillMeta */
+function detectEarliestMonth(spreadsheet, accounts, campaignInfoRows) {
+  var meta = readBackfillMeta(spreadsheet);
+  var cached = meta[EARLIEST_META_KEY];
+  if (cached && cached.length === 7 && cached.charAt(4) === '-') return cached;
+
+  var earliest = '';
+  // 阶段0 已经采过 CampaignInfo（含创建日），优先复用，省掉一轮全账号查询
+  for (var i = 0; i < campaignInfoRows.length; i++) {
+    var d = (campaignInfoRows[i][3] || '').toString().slice(0, 10);
+    if (d.length === 10 && (!earliest || d < earliest)) earliest = d;
+  }
+
+  // CampaignInfo 排除了 REMOVED，早期已删的系列可能让起点被高估，再查一次全量兜底
+  for (var j = 0; j < accounts.length; j++) {
+    if (shouldStop('起点探测')) break;
+    AdsManagerApp.select(accounts[j]);
+    try {
+      var report = AdsApp.report('SELECT campaign.id, campaign.start_date_time FROM campaign');
+      var it = report.rows();
+      while (it.hasNext()) {
+        var raw = (it.next()['campaign.start_date_time'] || '').toString().slice(0, 10);
+        if (raw.length === 10 && (!earliest || raw < earliest)) earliest = raw;
+      }
+    } catch (e) {
+      console.log('   起点探测失败 ' + accounts[j].getName() + ': ' + e.message);
+    }
+  }
+
+  var result = earliest ? earliest.slice(0, 7) : CONFIG.BACKFILL_FLOOR_MONTH;
+  if (result < CONFIG.BACKFILL_FLOOR_MONTH) result = CONFIG.BACKFILL_FLOOR_MONTH;
+  // 探测被打断时只扫了部分账号，起点可能偏晚。这轮先用着，但不写缓存，
+  // 否则一个偏晚的起点会被永久固化，更早的历史再也补不回来。
+  if (!STATE.forceStopped) {
+    upsertBackfillMeta(spreadsheet, EARLIEST_META_KEY, result, 0, 'detect');
+  }
+  console.log('   历史起点: ' + result + '（最早广告系列 ' + (earliest || '未知') + '）');
+  return result;
+}
+
+function runHistoryBackfill(spreadsheet, accounts, campaignInfoRows) {
+  var meta = readBackfillMeta(spreadsheet);
+  var isFirstRun = !meta[EARLIEST_META_KEY];
+  var budget = isFirstRun ? CONFIG.BACKFILL_BUDGET_SECONDS_FIRST_RUN : CONFIG.BACKFILL_BUDGET_SECONDS;
+
+  // 换链循环是主职责，回补只能用富余时间
+  var usable = Math.min(budget, getRemainingSeconds() - 120);
+  if (usable < 60) {
+    console.log('   历史回补: 剩余时间不足，留到下次运行');
+    return;
+  }
+
+  var earliestMonth = detectEarliestMonth(spreadsheet, accounts, campaignInfoRows);
+  meta = readBackfillMeta(spreadsheet);
+
+  // 从上个月往前推；当月由每次的 30 天窗口维护，不归回补管
+  var pending = [];
+  var cursor = monthAdd(currentMonthKey(), -1);
+  while (cursor >= earliestMonth) {
+    if (meta[cursor] !== 'complete') pending.push(cursor);
+    cursor = monthAdd(cursor, -1);
+  }
+
+  if (pending.length === 0) {
+    console.log('   历史回补: 已全部补齐（' + earliestMonth + ' 至今）');
+    return;
+  }
+  console.log('   历史回补: 待补 ' + pending.length + ' 个月，本次预算 ' + Math.floor(usable) + ' 秒');
+
+  var deadline = new Date().getTime() + usable * 1000;
+  var done = 0;
+  var consecutiveEmpty = 0;
+
+  for (var i = 0; i < pending.length; i++) {
+    if (new Date().getTime() >= deadline || shouldStop('历史回补')) {
+      console.log('   历史回补: 本次补了 ' + done + ' 个月，剩 ' + (pending.length - i) + ' 个月下次继续');
+      return;
+    }
+
+    var monthKey = pending[i];
+    var rows = fetchRangeForAccounts(accounts, monthKey + '-01', monthLastDay(monthKey), '历史回补 ' + monthKey);
+
+    // 该月只采到一部分子账号就撞上运行时上限。绝不能标记为已完成，
+    // 否则这个残缺月永远不会被重补，留下永久缺口。
+    if (STATE.forceStopped) {
+      console.log('   ' + monthKey + ' 采集中断，不写入也不标记完成，下次重来');
+      return;
+    }
+
+    // 整月替换（不传窗口），空月不建表，避免账号存在期之前留下一堆空表
+    var count = rows.length > 0 ? mergeMonthArchive(spreadsheet, monthKey, rows, '', '') : 0;
+    upsertBackfillMeta(spreadsheet, monthKey, 'complete', count, 'backfill');
+    done++;
+    console.log('   ' + monthKey + ': ' + count + ' 行');
+
+    if (count === 0) {
+      consecutiveEmpty++;
+      if (consecutiveEmpty >= CONFIG.BACKFILL_EMPTY_MONTH_TOLERANCE) {
+        // 抬高起点并落盘，否则以后每次运行都会重扫这些不存在的月份
+        upsertBackfillMeta(spreadsheet, EARLIEST_META_KEY, monthKey, 0, 'detect');
+        console.log('   历史回补: 连续 ' + consecutiveEmpty + ' 个月无数据，已到账号起点，收敛到 ' + monthKey);
+        return;
+      }
+    } else {
+      consecutiveEmpty = 0;
+    }
+  }
+
+  console.log('   历史回补: 本次补了 ' + done + ' 个月，历史已全部补齐');
 }
 
 // =====================================================================
