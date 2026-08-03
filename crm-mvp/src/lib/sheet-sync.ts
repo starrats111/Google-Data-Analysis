@@ -14,6 +14,21 @@ const CRM_TAB = "DailyData";
 const KYADS_TAB = "raw_daily_report";
 const SHEET_MAX_RETRIES = 3;
 
+/**
+ * 月度归档表前缀（DailyData_2026-05）。
+ * DailyData 只是近 30 天滚动窗口（脚本每次整表重写），更早的历史由脚本按月归档到这些表。
+ * 只有当请求区间超出该窗口时才会去读，短区间同步不会多发任何请求。
+ */
+const CRM_MONTHLY_TAB_PREFIX = "DailyData_";
+/**
+ * DailyData 的可信覆盖天数。取 25 天而非脚本的 30 天，留出边界余量：
+ * 各子账号时区不同、脚本可能因超时提前退出，窗口最前面几天不保证齐全。
+ * 旧版脚本（90 天窗口）尚未更新的 MCC 也安全——归档表不存在时读取直接跳过。
+ */
+const DAILY_TAB_COVERAGE_DAYS = 25;
+/** 单次同步最多读取的月份表数量，防止误传超长区间打爆请求数 */
+const MAX_MONTHLY_TABS = 36;
+
 export type SheetFormat = "crm" | "kyads" | "unknown";
 
 /** 从 Google Sheet URL 提取 spreadsheetId */
@@ -372,7 +387,75 @@ function parseKyadsReport(values: string[][], startDate: string, endDate: string
 }
 
 /**
+ * 算出需要额外读取的月度归档表。
+ *
+ * DailyData 只覆盖最近 ~90 天，比这更早的部分只能从 DailyData_YYYY-MM 取。
+ * 返回空数组表示请求区间完全落在 DailyData 覆盖范围内，无需多发请求。
+ */
+function monthsToFetch(startDate: string, endDate: string): string[] {
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - DAILY_TAB_COVERAGE_DAYS);
+  const cutoff = cutoffDate.toISOString().slice(0, 10);
+
+  const upper = endDate < cutoff ? endDate : cutoff;
+  if (startDate > upper) return [];
+
+  const months: string[] = [];
+  let year = parseInt(startDate.slice(0, 4), 10);
+  let month = parseInt(startDate.slice(5, 7), 10);
+  const upperYear = parseInt(upper.slice(0, 4), 10);
+  const upperMonth = parseInt(upper.slice(5, 7), 10);
+
+  while ((year < upperYear || (year === upperYear && month <= upperMonth)) && months.length < MAX_MONTHLY_TABS) {
+    months.push(`${year}-${String(month).padStart(2, "0")}`);
+    month += 1;
+    if (month > 12) {
+      month = 1;
+      year += 1;
+    }
+  }
+  return months;
+}
+
+/** 逐月读取归档表；Tab 不存在时 readSheetCsv 返回空数组，无需额外判断 */
+async function readMonthlyArchives(
+  spreadsheetId: string,
+  startDate: string,
+  endDate: string
+): Promise<SheetRow[]> {
+  const months = monthsToFetch(startDate, endDate);
+  if (months.length === 0) return [];
+
+  const collected: SheetRow[] = [];
+  for (const month of months) {
+    try {
+      const values = await readSheetCsv(spreadsheetId, `${CRM_MONTHLY_TAB_PREFIX}${month}`);
+      if (values.length < 2) continue;
+      if (!hasAll(buildColIndex(values[0]), CRM_REQUIRED)) continue;
+      collected.push(...parseCrmDailyData(values, startDate, endDate));
+    } catch {
+      // 单个月份读取失败不应让整次同步失败，跳过继续
+      continue;
+    }
+  }
+  return collected;
+}
+
+/** 合并归档与 DailyData；同一 (日期, 系列) 以 DailyData 为准，因为它每天重写、数据更新 */
+function mergeRows(archived: SheetRow[], daily: SheetRow[]): SheetRow[] {
+  if (archived.length === 0) return daily;
+  const merged = new Map<string, SheetRow>();
+  for (const row of archived) merged.set(`${row.date}|${row.campaign_id}`, row);
+  for (const row of daily) merged.set(`${row.date}|${row.campaign_id}`, row);
+  return [...merged.values()];
+}
+
+/**
  * 从 Sheet 同步广告数据（自动识别 CRM / kyads 格式）
+ *
+ * CRM 格式下，若请求区间早于 DailyData 的 90 天窗口，会自动补读 DailyData_YYYY-MM
+ * 月度归档表，使全量同步能拿到 MCC 创建至今的完整历史。
+ *
  * @param sheetUrl Google Sheet URL
  * @param startDate 开始日期 YYYY-MM-DD
  * @param endDate 结束日期 YYYY-MM-DD
@@ -393,8 +476,11 @@ export async function syncFromSheet(
     return { success: false, rows: [], message: String(err) };
   }
   if (crmVals.length >= 1 && hasAll(buildColIndex(crmVals[0]), CRM_REQUIRED)) {
-    if (crmVals.length < 2) return { success: true, rows: [], format: "crm", message: "Sheet 无数据" };
-    return { success: true, rows: parseCrmDailyData(crmVals, startDate, endDate), format: "crm" };
+    const dailyRows = crmVals.length < 2 ? [] : parseCrmDailyData(crmVals, startDate, endDate);
+    const archivedRows = await readMonthlyArchives(sid, startDate, endDate);
+    const rows = mergeRows(archivedRows, dailyRows);
+    if (rows.length === 0) return { success: true, rows: [], format: "crm", message: "Sheet 无数据" };
+    return { success: true, rows, format: "crm" };
   }
 
   // 再尝试 kyads 格式
@@ -407,6 +493,13 @@ export async function syncFromSheet(
   if (kyVals.length >= 1 && hasAll(buildColIndex(kyVals[0]), KYADS_REQUIRED)) {
     if (kyVals.length < 2) return { success: true, rows: [], format: "kyads", message: "Sheet 无数据" };
     return { success: true, rows: parseKyadsReport(kyVals, startDate, endDate), format: "kyads" };
+  }
+
+  // DailyData 可能因脚本中断只剩表头（clearContents 后写入失败），
+  // 此时月度归档表仍是完好的，兜底从归档表取数，避免整次同步白跑
+  const archivedOnly = await readMonthlyArchives(sid, startDate, endDate);
+  if (archivedOnly.length > 0) {
+    return { success: true, rows: archivedOnly, format: "crm", message: "DailyData 不可用，已从月度归档表读取" };
   }
 
   return {
