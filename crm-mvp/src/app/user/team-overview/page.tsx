@@ -81,7 +81,8 @@ export default function TeamOverviewPage() {
     const total_commission = memberRanking.reduce((s, m) => s + m.commission, 0);
     const rejected_commission = memberRanking.reduce((s, m) => s + m.rejected_commission, 0);
     const net_commission = memberRanking.reduce((s, m) => s + m.net_commission, 0);
-    const avg_roi = total_cost > 0 ? (net_commission / total_cost) * 100 : 0;
+    // 毛口径倍数（07 拍板 2026-08-04）：(总佣金 - 总花费) / 总花费，与排行榜每行的 ROI 同源
+    const avg_roi = total_cost > 0 ? (total_commission - total_cost) / total_cost : 0;
     return {
       member_count: memberCount,
       active_campaigns: teamActiveCampaigns,
@@ -90,7 +91,7 @@ export default function TeamOverviewPage() {
       total_commission: Math.round(total_commission * 100) / 100,
       rejected_commission: Math.round(rejected_commission * 100) / 100,
       net_commission: Math.round(net_commission * 100) / 100,
-      avg_roi: Math.round(avg_roi * 10) / 10,
+      avg_roi: Math.round(avg_roi * 100) / 100,
     };
   }, [memberRanking, memberCount, teamActiveCampaigns, teamTodayAds]);
 
@@ -283,8 +284,8 @@ export default function TeamOverviewPage() {
       sorter: (a: MemberRanking, b: MemberRanking) => a.roi - b.roi,
       defaultSortOrder: "descend" as const,
       render: (v: number) => (
-        <Tag color={v >= 20 ? "success" : v >= 0 ? "processing" : "error"} style={{ fontSize: 14 }}>
-          {v >= 0 ? "+" : ""}{v.toFixed(1)}%
+        <Tag color={v >= 0.2 ? "success" : v >= 0 ? "processing" : "error"} style={{ fontSize: 14 }}>
+          {v.toFixed(2)}
         </Tag>
       ),
     },
@@ -408,9 +409,9 @@ export default function TeamOverviewPage() {
                 {
                   key: "roi",
                   title: "平均 ROI",
-                  value: `${teamStats.avg_roi >= 0 ? "+" : ""}${teamStats.avg_roi}%`,
+                  value: teamStats.avg_roi.toFixed(2),
                   color: teamStats.avg_roi >= 0 ? "#52c41a" : "#ff4d4f",
-                  tooltip: "净佣金 / 总费用",
+                  tooltip: "（总佣金 - 总费用）/ 总费用，倍数口径，不扣拒付佣金",
                 },
               ].map((item, idx) => {
                 const cell = (

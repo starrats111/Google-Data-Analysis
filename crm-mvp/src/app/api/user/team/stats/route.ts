@@ -224,8 +224,8 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     const commission = userComm?.commission || 0;
     const rejected = userComm?.rejected || 0;
     const net = commission - rejected - cost;
-    // 毛口径 ROI（07 拍板 2026-08-04）：不扣拒付佣金，与数据中心保持一致
-    const roi = cost > 0 ? ((commission - cost) / cost) * 100 : 0;
+    // 毛口径 ROI（07 拍板 2026-08-04）：不扣拒付佣金，倍数口径（0.52 而非 52%），与数据中心一致
+    const roi = cost > 0 ? (commission - cost) / cost : 0;
 
     return {
       user_id: uid,
@@ -240,7 +240,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       commission: Math.round(commission * 100) / 100,
       rejected_commission: Math.round(rejected * 100) / 100,
       net_commission: Math.round(net * 100) / 100,
-      roi: Math.round(roi * 10) / 10,
+      roi: Math.round(roi * 100) / 100,
       clicks,
       impressions,
     };

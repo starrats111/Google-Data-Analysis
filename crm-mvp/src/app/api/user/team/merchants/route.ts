@@ -291,8 +291,8 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     for (const umId of entry.umIds) {
       totalCost += costByUm.get(umId.toString()) || 0;
     }
-    // 毛口径 ROI（07 拍板 2026-08-04）：不扣拒付佣金，与数据中心保持一致
-    const roi = totalCost > 0 ? ((entry.monthly_commission - totalCost) / totalCost) * 100 : 0;
+    // 毛口径 ROI（07 拍板 2026-08-04）：不扣拒付佣金，倍数口径（0.52 而非 52%），与数据中心一致
+    const roi = totalCost > 0 ? (entry.monthly_commission - totalCost) / totalCost : 0;
     return {
       key: `${entry.merchant_id}:${entry.platform}`,
       merchant_id: entry.merchant_id,
@@ -302,7 +302,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       category: entry.category,
       active_advertisers: entry.active_advertisers,
       monthly_commission: entry.monthly_commission,
-      roi: Math.round(roi * 10) / 10,
+      roi: Math.round(roi * 100) / 100,
       total_cost: Math.round(totalCost * 100) / 100,
     };
   });

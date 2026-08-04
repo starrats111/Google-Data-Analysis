@@ -197,10 +197,9 @@ export default function MemberDataModal({ open, userId, username, displayName, o
       // 无花费时 ROI 无意义（后端给 0），标成「—」避免误读成打平
       render: (v: number, r: CampaignRow) => {
         if (!r.cost) return <Text type="secondary" style={{ fontSize: 12 }}>—</Text>;
-        const pct = v * 100;
         return (
-          <Tag color={pct >= 20 ? "success" : pct >= 0 ? "processing" : "error"} style={{ fontSize: 12 }}>
-            {pct >= 0 ? "+" : ""}{pct.toFixed(1)}%
+          <Tag color={v >= 0.2 ? "success" : v >= 0 ? "processing" : "error"} style={{ fontSize: 12 }}>
+            {v.toFixed(2)}
           </Tag>
         );
       },
@@ -209,7 +208,6 @@ export default function MemberDataModal({ open, userId, username, displayName, o
 
   const title = displayName ? `${displayName} (${username})` : username || "组员";
   const netProfit = calcNetProfit(summary.totalCommission, summary.totalRejectedCommission, summary.totalCost);
-  const roiPct = summary.roi * 100;
 
   return (
     <Modal
@@ -275,10 +273,10 @@ export default function MemberDataModal({ open, userId, username, displayName, o
               styles={{ content: { fontSize: 16 } }} />
           </Col>
           <Col span={5}>
-            <Statistic title="ROI" value={roiPct} suffix="%"
-              prefix={roiPct >= 0 ? <RiseOutlined /> : <FallOutlined />}
-              precision={1}
-              styles={{ content: { fontSize: 16, color: roiPct >= 0 ? "#389e0d" : "#cf1322" } }} />
+            <Statistic title="ROI" value={summary.roi}
+              prefix={summary.roi >= 0 ? <RiseOutlined /> : <FallOutlined />}
+              precision={2}
+              styles={{ content: { fontSize: 16, color: summary.roi >= 0 ? "#389e0d" : "#cf1322" } }} />
           </Col>
         </Row>
 

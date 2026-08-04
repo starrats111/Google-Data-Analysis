@@ -168,7 +168,7 @@ export async function GET(req: NextRequest) {
 
   const lines = (items: Item[]) => {
     const shown = items.slice(0, maxRows).map((i) => {
-      const roiText = i.roi != null ? `ROI ${(i.roi * 100).toFixed(0)}%` : "ROI —";
+      const roiText = i.roi != null ? `ROI ${i.roi.toFixed(2)}` : "ROI —";
       const orderText = i.orders > 0
         ? `${i.orders} 单，末单 ${i.lastOrder || "—"}`
         : "零出单";

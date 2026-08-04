@@ -251,7 +251,7 @@ export default function TeamMerchantsPage() {
       align: "right" as const,
       render: (v: number) => {
         const color = v > 0 ? "#52c41a" : v < 0 ? "#ff4d4f" : "#999";
-        return <span style={{ color, fontWeight: 600 }}>{v.toFixed(1)}%</span>;
+        return <span style={{ color, fontWeight: 600 }}>{v.toFixed(2)}</span>;
       },
     },
   ], [showActiveAdv, sortField, sortOrder]);
