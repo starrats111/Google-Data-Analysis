@@ -4,7 +4,7 @@ import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import {
   extractSheetId, fetchViolations, fetchRecommendations,
-  parseCsv, parseViolationRows, parseRecommendationRows,
+  parseCsv, parseViolationRows, parseRecommendationRowsAuto,
   stripCountrySuffix,
   type ViolationRecord, type RecommendationRecord,
 } from "@/lib/merchant-sheet-sync";
@@ -181,7 +181,7 @@ async function doSyncInBackground(cfgId: bigint, sheetUrl: string, csvData?: str
     if (csvData) {
       const rows = parseCsv(csvData);
       violations = parseViolationRows(rows);
-      recommendations = parseRecommendationRows(rows);
+      recommendations = parseRecommendationRowsAuto(rows);
     } else {
       violations = await fetchViolations(sheetUrl);
       recommendations = await fetchRecommendations(sheetUrl);

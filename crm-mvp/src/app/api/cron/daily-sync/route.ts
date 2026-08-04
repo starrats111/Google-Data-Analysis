@@ -200,41 +200,58 @@ async function syncMerchantSheet(): Promise<unknown> {
     }
 
     // 推荐
-    let recNew = 0, recSkipped = 0, recMarked = 0;
-    const recommendations = await fetchRecommendations(cfg.sheet_url);
-    log(`  Fetched ${recommendations.length} recommendations from sheet`);
+    // 单独兜错：推荐表读取失败不应连累已经写入的黑名单结果，但必须在日志和返回值里显性暴露
+    let recNew = 0, recSkipped = 0, recMarked = 0, recTotal = 0;
+    let recError: string | null = null;
+    try {
+      const recommendations = await fetchRecommendations(cfg.sheet_url);
+      recTotal = recommendations.length;
+      log(`  Fetched ${recTotal} recommendations from sheet`);
 
-    const existingRecs = await prisma.merchant_recommendations.findMany({
-      where: { is_deleted: 0 },
-      select: { merchant_name: true },
-    });
-    const existingRecNames = new Set(existingRecs.map((r) => r.merchant_name));
-
-    for (const r of recommendations) {
-      if (existingRecNames.has(r.name)) { recSkipped++; continue; }
-      await prisma.merchant_recommendations.create({
-        data: { merchant_name: r.name, roi_reference: r.roi || null, commission_info: r.commission || null, settlement_info: r.settlement || null, remark: r.remark || null, share_time: r.time || null, upload_batch: `CRON-REC-${batchTs}` },
+      const existingRecs = await prisma.merchant_recommendations.findMany({
+        where: { is_deleted: 0 },
+        select: { merchant_name: true },
       });
-      existingRecNames.add(r.name);
-      recNew++;
+      const existingRecNames = new Set(existingRecs.map((r) => r.merchant_name));
 
-      const matched = await prisma.user_merchants.findMany({
-        where: { is_deleted: 0, merchant_name: r.name, recommendation_status: { not: "recommended" } },
-        select: { id: true },
-      });
-      if (matched.length > 0) {
-        await prisma.user_merchants.updateMany({
-          where: { id: { in: matched.map((m) => m.id) } },
-          data: { recommendation_status: "recommended", recommendation_time: new Date() },
+      for (const r of recommendations) {
+        if (existingRecNames.has(r.name)) { recSkipped++; continue; }
+        await prisma.merchant_recommendations.create({
+          data: { merchant_name: r.name, roi_reference: r.roi || null, commission_info: r.commission || null, settlement_info: r.settlement || null, remark: r.remark || null, share_time: r.time || null, upload_batch: `CRON-REC-${batchTs}` },
         });
-        recMarked += matched.length;
+        existingRecNames.add(r.name);
+        recNew++;
+
+        const matched = await prisma.user_merchants.findMany({
+          where: { is_deleted: 0, merchant_name: r.name, recommendation_status: { not: "recommended" } },
+          select: { id: true },
+        });
+        if (matched.length > 0) {
+          await prisma.user_merchants.updateMany({
+            where: { id: { in: matched.map((m) => m.id) } },
+            data: { recommendation_status: "recommended", recommendation_time: new Date() },
+          });
+          recMarked += matched.length;
+        }
       }
+    } catch (err) {
+      recError = err instanceof Error ? err.message : String(err);
+      log(`  Recommendation sync FAILED: ${recError}`);
     }
 
     await prisma.sheet_configs.update({ where: { id: cfg.id }, data: { last_synced_at: new Date() } });
     log(`  Violations: ${violations.length} total, ${vioNew} new, ${vioUpdated} updated, ${vioMarked} marked`);
-    log(`  Recommendations: ${recommendations.length} total, ${recNew} new, ${recSkipped} skipped, ${recMarked} marked`);
-    return { violation: { total: violations.length, new: vioNew, updated: vioUpdated, marked: vioMarked }, recommendation: { total: recommendations.length, new: recNew, skipped: recSkipped, marked: recMarked } };
+    if (recError) {
+      log(`  Recommendations: SYNC FAILED — ${recError}`);
+    } else {
+      log(`  Recommendations: ${recTotal} total, ${recNew} new, ${recSkipped} skipped, ${recMarked} marked`);
+    }
+    return {
+      violation: { total: violations.length, new: vioNew, updated: vioUpdated, marked: vioMarked },
+      recommendation: recError
+        ? { error: recError, new: recNew, marked: recMarked }
+        : { total: recTotal, new: recNew, skipped: recSkipped, marked: recMarked },
+    };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log(`  Merchant sheet sync error: ${msg}`);
