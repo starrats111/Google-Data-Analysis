@@ -62,6 +62,7 @@ interface Summary {
   totalPendingCommission: number;
   totalClicks: number;
   totalImpressions: number;
+  totalOrders: number;
   avgCpc: number;
   roi: number;
   campaignCount: number;
@@ -252,6 +253,7 @@ export default function DataCenterPage() {
     totalPendingCommission: 0,
     totalClicks: 0,
     totalImpressions: 0,
+    totalOrders: 0,
     avgCpc: 0,
     roi: 0,
     campaignCount: 0,
@@ -801,12 +803,13 @@ export default function DataCenterPage() {
                   <Table.Summary.Cell index={4} />
                   <Table.Summary.Cell index={5} align="right"><Text strong>{formatInt(summary.totalImpressions)}</Text></Table.Summary.Cell>
                   <Table.Summary.Cell index={6} align="right"><Text strong>{formatInt(summary.totalClicks)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={7} align="right"><Text strong>${summary.avgCpc.toFixed(4)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={8} align="right"><Text strong style={{ color: "#cf1322" }}>${summary.totalCost.toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={9} align="right"><Text strong style={{ color: "#389e0d" }}>${summary.totalCommission.toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={10} align="right"><Text strong type="danger">${summary.totalRejectedCommission.toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={11} align="right"><Text strong style={{ color: calcNetProfit(summary.totalCommission, summary.totalRejectedCommission, summary.totalCost) >= 0 ? "#389e0d" : "#cf1322" }}>${calcNetProfit(summary.totalCommission, summary.totalRejectedCommission, summary.totalCost).toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={12} />
+                  <Table.Summary.Cell index={7} align="right"><Text strong>{formatInt(summary.totalOrders)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={8} align="right"><Text strong>${summary.avgCpc.toFixed(4)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={9} align="right"><Text strong style={{ color: "#cf1322" }}>${summary.totalCost.toFixed(2)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={10} align="right"><Text strong style={{ color: "#389e0d" }}>${summary.totalCommission.toFixed(2)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={11} align="right"><Text strong type="danger">${summary.totalRejectedCommission.toFixed(2)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={12} align="right"><Text strong style={{ color: calcNetProfit(summary.totalCommission, summary.totalRejectedCommission, summary.totalCost) >= 0 ? "#389e0d" : "#cf1322" }}>${calcNetProfit(summary.totalCommission, summary.totalRejectedCommission, summary.totalCost).toFixed(2)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={13} align="right"><Text strong style={{ color: summary.roi >= 0 ? "#389e0d" : "#cf1322" }}>{summary.roi.toFixed(2)}</Text></Table.Summary.Cell>
                 </Table.Summary.Row>
               </Table.Summary>
             );
