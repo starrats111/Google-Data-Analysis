@@ -1,5 +1,9 @@
-import prisma from "@/lib/prisma";
+﻿import prisma from "@/lib/prisma";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
+import {
+  buildAttributionIndex, resolveAttributionTarget, toDateKey,
+  type AttributionSpendDay,
+} from "@/lib/commission-attribution";
 
 /**
  * 将 affiliate_transactions 中的佣金回写到 ads_daily_stats。
@@ -12,11 +16,14 @@ import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transact
  *      先全部清零（避免历史残留）。
  *   2. 按 user_merchant_id + platform_connection_id + 日期聚合 affiliate_transactions（D-167：
  *      交易的 platform_connection_id 记录了「哪个联盟账号赚到这笔佣金」，是账号归属的权威来源）。
- *   3. 写回目标系列的选择（D-167 两级匹配）：
- *      a. 优先：同商家下 platform_connection_id 与交易一致的 campaign（同商家多账号投放时
+ *   3. 写回目标系列的选择（D-211，与数据中心同一套归因，见 commission-attribution.ts）：
+ *      a. 候选集：同商家下 platform_connection_id 与交易一致的 campaign（同商家多账号投放时
  *         佣金精确流向对应账号的系列，如 wenjun3 的 C01 与 novanest 的 K01 各归各）；
- *      b. 回退：无连接匹配（交易或系列的 connection 为空/不一致）时，按商家级「最优」campaign
- *         行（优先 ENABLED，次 PAUSED，最后 REMOVED；同状态取 updated_at 最新），维持旧行为。
+ *         该连接在商家下没有系列时回退该商家全部系列。
+ *      b. 在候选集里找「交易日当天或之前、最近一次真正花过钱」的系列——不限回溯窗口，
+ *         广告停投后才到账的延迟转化仍算那条广告的。同日多条花钱取当日花费最高的。
+ *      c. 交易日早于该商家全部花费记录时，才退回旧的「商家级最优行」（优先 ENABLED，
+ *         次 PAUSED，最后 REMOVED；同状态取 updated_at 最新）。
  *   4. 多个聚合组落到同一 campaign+日期时累加（不互相覆盖）。
  *   5. 该商家在该日期完全没有 ads_daily_stats 行时，自动 upsert 一行（cost=0）。
  *
@@ -107,6 +114,37 @@ export async function applyAffiliateCommissionToDailyStats(
 
   const allCampaignIds = allCampaigns.map((c) => c.id);
 
+  // D-211：全历史花费日历 + 归因索引。回溯必须跨出本次重算区间——广告 7 月停投、
+  // 8 月才到账的佣金，仍要落回 7 月那条真正花了钱的系列上。
+  const spendCalendarRows = allCampaignIds.length > 0
+    ? await prisma.ads_daily_stats.findMany({
+        where: { campaign_id: { in: allCampaignIds }, is_deleted: 0, cost: { gt: 0 } } as never,
+        select: { campaign_id: true, date: true, cost: true },
+      })
+    : [];
+  const spendCalendar: AttributionSpendDay[] = spendCalendarRows.map((s) => ({
+    campaignId: String(s.campaign_id),
+    date: toDateKey(s.date),
+    cost: Number(s.cost || 0),
+  }));
+  const attributionIndex = buildAttributionIndex(
+    allCampaigns.map((c) => ({
+      id: String(c.id),
+      userMerchantId: c.user_merchant_id ? String(c.user_merchant_id) : null,
+      platformConnectionId: c.platform_connection_id ? String(c.platform_connection_id) : null,
+    })),
+    spendCalendar,
+  );
+  // 回溯不到时的兜底：沿用旧的「商家级 / (商家,连接) 级最优行」（allCampaigns 已按状态+updated_at 排好序）
+  const fallbackTarget = new Map<string, string>();
+  for (const [key, ids] of campaignsByMerchantConn) {
+    const [mid, conn] = key.split("_");
+    fallbackTarget.set(`${mid}:${conn}`, String(ids[0]));
+  }
+  for (const [mid, ids] of campaignsByMerchant) {
+    fallbackTarget.set(mid, String(ids[0]));
+  }
+
   type StatsRow = { id: bigint; campaign_id: bigint; date_str: string };
   const allStatsRaw: StatsRow[] = allCampaignIds.length > 0
     ? await prisma.$queryRawUnsafe<StatsRow[]>(
@@ -134,16 +172,12 @@ export async function applyAffiliateCommissionToDailyStats(
     const umid = BigInt(String(agg.user_merchant_id ?? 0));
     if (umid === BigInt(0)) continue;
 
-    // 优先：同商家下连接一致的系列；回退：商家级最优系列（旧行为）
-    const connId = agg.platform_connection_id ? BigInt(String(agg.platform_connection_id)) : null;
-    let campaignIds = connId ? campaignsByMerchantConn.get(`${umid}_${connId}`) : undefined;
-    if (!campaignIds?.length) campaignIds = campaignsByMerchant.get(String(umid));
-    if (!campaignIds?.length) continue;
-
+    const connId = agg.platform_connection_id ? String(agg.platform_connection_id) : null;
     const txnDateStr = String(agg.txn_date);
-    // 目标行：候选中已有当日 stats 行（有花费）的优先，否则取排序首位
-    const targetId =
-      campaignIds.find((cid) => statsMap.has(`${cid}_${txnDateStr}`)) ?? campaignIds[0];
+    // D-211：按花费时间轴定位到具体系列，回溯不到才退回代表行
+    const target = resolveAttributionTarget(attributionIndex, fallbackTarget, String(umid), connId, txnDateStr);
+    if (!target) continue;
+    const targetId = BigInt(target);
 
     const accKey = `${targetId}_${txnDateStr}`;
     const entry = acc.get(accKey) ?? {

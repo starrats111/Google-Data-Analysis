@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 广告系列看板查询（组员数据中心 / 组长组员弹窗 共用）
  *
  * 背景（D-194）：`/api/user/data-center/campaigns` 与 `/api/user/team/member-data`
@@ -19,8 +19,12 @@ import {
   nowCST, isTodayCST, dateColumnStart, dateColumnEndExclusive, dateColumnTodayEndExclusive,
 } from "@/lib/date-utils";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
-import { sqlTxnRange, nextDayStr } from "@/lib/report-metrics";
-import { mergeMerchantCampaigns, routeCommissionToRows, type CommissionGroup } from "@/lib/merchant-campaign-merge";
+import { sqlTxnRange, sqlTxnDay, nextDayStr } from "@/lib/report-metrics";
+import { mergeMerchantCampaigns } from "@/lib/merchant-campaign-merge";
+import {
+  buildAttributionIndex, attributeCommissionToCampaigns, toDateKey,
+  type AttributionCampaign, type AttributionSpendDay, type AttributionTxnGroup,
+} from "@/lib/commission-attribution";
 import { countEnabledCampaigns, healEnabledUnderSoftDeletedMcc } from "@/lib/active-running";
 
 /** 调用方可直接把 status 映射成 HTTP 状态码返回 */
@@ -78,7 +82,7 @@ export interface CampaignBoardSummary {
   totalImpressions: number;
   totalOrders: number;
   avgCpc: number;
-  /** 小数口径（0.52 = 52%），前端统一 ×100 展示 */
+  /** 毛口径倍数（(佣金-花费)/花费），前端直接按倍数展示，不换算百分比 */
   roi: number;
   campaignCount: number;
   enabledCount: number;
@@ -335,7 +339,7 @@ export async function queryCampaignBoard(
   // ─── 全量 stats 聚合 + 佣金聚合（并行查询） ───
   const allStatsMap = new Map<string, { cost: number; clicks: number; impressions: number }>();
 
-  const [rawStatsRows, commissionAgg] = await Promise.all([
+  const [rawStatsRows, commissionAgg, spendCalendarRows] = await Promise.all([
     allCampaignIdsIncludingDupes.length > 0
       ? prisma.ads_daily_stats.groupBy({
           by: ["campaign_id", "date"],
@@ -348,11 +352,12 @@ export async function queryCampaignBoard(
         })
       : [],
     // D-168：加 platform_connection_id 维度——同商家被多个联盟账号投放时，佣金按交易归属的账号精确投行
+    // D-211：再加「平台后台自然日」维度——佣金要按交易发生那天在跑的系列归因，日粒度不可少
     prisma.$queryRawUnsafe<
       {
         user_merchant_id: bigint;
         platform_connection_id: bigint | null;
-        merchant_name: string;
+        txn_day: string;
         total_commission: number;
         rejected_commission: number;
         approved_commission: number;
@@ -364,7 +369,7 @@ export async function queryCampaignBoard(
       SELECT
         user_merchant_id,
         platform_connection_id,
-        MAX(merchant_name) as merchant_name,
+        ${sqlTxnDay("affiliate_transactions")} as txn_day,
         SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission,
         SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as rejected_commission,
         SUM(CASE WHEN status = 'approved' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as approved_commission,
@@ -375,8 +380,15 @@ export async function queryCampaignBoard(
       WHERE user_id = ? AND is_deleted = 0
         AND ${txnRange.cond}
         AND ${sqlAffiliateTxnValidPlatformConnection("affiliate_transactions")}
-      GROUP BY user_merchant_id, platform_connection_id
+      GROUP BY user_merchant_id, platform_connection_id, txn_day
     `, userId, ...txnRange.params),
+    // D-211：全历史花费日历（只取真正花过钱的日子）。归因要回溯「交易日当天或之前最近一次
+    // 花钱的系列」，广告可能上月就停了、这个月才到账，所以不能只取当前查询区间。
+    // 实测单用户上限约 5 千行，一次全拉即可。
+    prisma.ads_daily_stats.findMany({
+      where: { user_id: userId, is_deleted: 0, cost: { gt: 0 } } as never,
+      select: { campaign_id: true, date: true, cost: true },
+    }),
   ]);
 
   if (rawStatsRows.length > 0) {
@@ -407,8 +419,8 @@ export async function queryCampaignBoard(
     }
   }
 
-  // D-168：佣金按 (商家, 联盟账号) 分组，投放到对应账号组的代表行
-  const commissionGroups: CommissionGroup[] = [];
+  // D-211：佣金按 (商家, 联盟账号, 交易日) 分组，交给归因引擎按花费时间轴定位到具体系列
+  const commissionGroups: AttributionTxnGroup[] = [];
   let totalCommissionFromTxn = 0;
   let totalRejectedFromTxn = 0;
   let totalApprovedFromTxn = 0;
@@ -420,6 +432,7 @@ export async function queryCampaignBoard(
     commissionGroups.push({
       merchantId: String(r.user_merchant_id),
       connId: r.platform_connection_id ? String(r.platform_connection_id) : null,
+      date: String(r.txn_day),
       commission: Number(r.total_commission || 0),
       rejected: Number(r.rejected_commission || 0),
       approved: Number(r.approved_commission || 0),
@@ -435,10 +448,8 @@ export async function queryCampaignBoard(
     totalOrdersFromTxn += Number(r.order_count || 0);
   }
 
-  // 同商家+同联盟账号汇总（D-168）：把同一 (商家,账号) 组的花费/点击/展示/佣金归集到组代表行
-  //（已启用优先 → 多条已启用取 created_at 最近 → 无已启用回退到最高优先级状态里最近的一条）。
-  // 交易连接在该商家下无系列组时回退商家级代表行。
-  // 仅影响逐行展示；总览合计与按 MCC 花费分布继续基于原始 per-campaign 统计（allStatsMap）。
+  // 代表行选举（D-168：已启用优先 → created_at 最近 → id 大）。
+  // D-211 起代表行只作为归因兜底：交易日早于该商家全部花费记录时才投到这里。
   const merge = mergeMerchantCampaigns(dedupedCampaigns, allStatsMap);
 
   // D-176 v2：单 MCC 模式下，佣金归属必须基于【全量 campaign（跨 MCC）】全局计算一次——
@@ -451,6 +462,17 @@ export async function queryCampaignBoard(
   const isSingleMccView = Boolean(mccAccountId);
   let commissionRoutingTarget = merge.commissionTarget;
   let globalPrimaryMcc: Map<string, string | null> | null = null;
+  // D-211：归因候选集与 primaryId 映射，与代表行选举同源（必须是未经视图筛选的全量集合）
+  let attributionCampaigns: AttributionCampaign[] = dedupedCampaigns.map((c) => ({
+    id: String(c.id),
+    userMerchantId: c.user_merchant_id ? String(c.user_merchant_id) : null,
+    platformConnectionId: c.platform_connection_id ? String(c.platform_connection_id) : null,
+  }));
+  let attributionPrimaryIdOf = new Map<string, string>();
+  for (const c of allCampaigns) {
+    const gcid = c.google_campaign_id || String(c.id);
+    attributionPrimaryIdOf.set(String(c.id), gcidToPrimaryCampaignId.get(gcid) || String(c.id));
+  }
   if (isSingleMccView || hasRowFilter) {
     const globalCampaigns = await prisma.campaigns.findMany({
       where: (isSingleMccView
@@ -492,8 +514,31 @@ export async function queryCampaignBoard(
     const globalMerge = mergeMerchantCampaigns(globalDeduped, new Map());
     commissionRoutingTarget = globalMerge.commissionTarget;
     globalPrimaryMcc = new Map(globalDeduped.map((c) => [String(c.id), c.mcc_id !== null ? String(c.mcc_id) : null]));
+
+    const globalPrimaryOfGcid = new Map<string, string>();
+    for (const c of globalDeduped) globalPrimaryOfGcid.set(c.google_campaign_id || String(c.id), String(c.id));
+    attributionPrimaryIdOf = new Map(
+      globalCampaigns.map((c) => {
+        const gcid = c.google_campaign_id || String(c.id);
+        return [String(c.id), globalPrimaryOfGcid.get(gcid) || String(c.id)];
+      }),
+    );
+    attributionCampaigns = globalDeduped.map((c) => ({
+      id: String(c.id),
+      userMerchantId: c.user_merchant_id ? String(c.user_merchant_id) : null,
+      platformConnectionId: c.platform_connection_id ? String(c.platform_connection_id) : null,
+    }));
   }
-  const commissionByRow = routeCommissionToRows(commissionGroups, commissionRoutingTarget);
+
+  // D-211：佣金归因——按「交易日当天或之前最近一次花钱的系列」定位，回溯不到才退回代表行
+  const spendCalendar: AttributionSpendDay[] = [];
+  for (const s of spendCalendarRows) {
+    const primaryId = attributionPrimaryIdOf.get(String(s.campaign_id));
+    if (!primaryId) continue;
+    spendCalendar.push({ campaignId: primaryId, date: toDateKey(s.date), cost: Number(s.cost || 0) });
+  }
+  const attributionIndex = buildAttributionIndex(attributionCampaigns, spendCalendar);
+  const commissionByRow = attributeCommissionToCampaigns(commissionGroups, attributionIndex, commissionRoutingTarget);
 
   // D-176：单 MCC 模式下，总佣金口径 =「全局归属到当前 MCC 广告系列的佣金之和」；
   // 花费此时已按 MCC 过滤，两者口径一致后 ROI/净利润才有意义。
@@ -650,7 +695,7 @@ export async function queryCampaignBoard(
     totalImpressions,
     totalOrders: summaryOrders,
     avgCpc: totalClicks > 0 ? Number((totalCost / totalClicks).toFixed(4)) : 0,
-    roi: totalCost > 0 ? Number(((summaryCommission - summaryRejected - totalCost) / totalCost).toFixed(2)) : 0,
+    roi: totalCost > 0 ? Number(((summaryCommission - totalCost) / totalCost).toFixed(2)) : 0,
     campaignCount: dedupedCampaigns.length,
     // D-195：在跑广告数 = ENABLED 系列条数，与下面的 pausedCount 同量纲
     enabledCount: countEnabledCampaigns(dedupedCampaigns),
@@ -674,9 +719,10 @@ export async function queryCampaignBoard(
   const filteredForDisplay = dedupedCampaigns.filter((c) => {
     if (c.google_status !== "REMOVED") return true;
     if (showRemoved) return true;
-    // 按这一条自己的花费判断；代表行（携带商家级佣金）始终保留
+    // 按这一条自己的花费判断；D-211：被归因到佣金的行也必须留下，
+    // 否则「上月投、这月才到账」的已移除系列会被藏起来，逐行佣金之和对不上总览。
     const s = allStatsMap.get(String(c.id));
-    return (s?.cost || 0) > 0 || merge.representativeIds.has(String(c.id));
+    return (s?.cost || 0) > 0 || commissionByRow.has(String(c.id));
   });
 
   const rows: CampaignBoardRow[] = filteredForDisplay.map((c) => {
@@ -689,16 +735,16 @@ export async function queryCampaignBoard(
     const impressions = s?.impressions || 0;
     const avgCpc = clicks > 0 ? Number((cost / clicks).toFixed(4)) : 0;
 
-    // D-168：佣金只能归到商家层，仍按 (商家,联盟账号) 投在代表行上
+    // D-211：佣金按「交易日在跑的系列」归因到具体行（详见 commission-attribution.ts）
     const rowComm = commissionByRow.get(String(c.id));
     const commission = rowComm?.commission || 0;
     const rejectedComm = rowComm?.rejected || 0;
     const approvedComm = rowComm?.approved || 0;
     const orders = rowComm?.orders || 0;
 
-    // 佣金按商家层全额投在代表行上，07 拍板（2026-07-30）：就当这条广告自己的算，ROI 直接给数
+    // 毛口径（07 拍板 2026-08-04）：不扣拒付佣金，与「净利润」列刻意区分
     const roi = cost > 0
-      ? Number(((commission - rejectedComm - cost) / cost).toFixed(2))
+      ? Number(((commission - cost) / cost).toFixed(2))
       : 0;
 
     const mccInfo = mccInfoMap.get(String(c.mcc_id));

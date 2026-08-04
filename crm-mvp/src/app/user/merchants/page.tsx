@@ -1,8 +1,9 @@
 "use client";
 import { useState, useCallback, useMemo, useEffect } from "react";
 import { Card, Row, Col, Table, Input, Select, Button, Space, Tag, Modal, Form, Typography, Popconfirm, Popover, Switch, InputNumber, Tabs, App, Tooltip, Radio, DatePicker, Slider, Progress, Alert, AutoComplete } from "antd";
-import { ShopOutlined, SearchOutlined, CheckOutlined, DollarOutlined, CalendarOutlined, SaveOutlined, SyncOutlined, WarningOutlined, StarOutlined, ReloadOutlined, RobotOutlined, DeleteOutlined, CloseCircleOutlined, ThunderboltOutlined, EditOutlined } from "@ant-design/icons";
+import { ShopOutlined, SearchOutlined, CheckOutlined, DollarOutlined, CalendarOutlined, SaveOutlined, SyncOutlined, WarningOutlined, StarOutlined, ReloadOutlined, RobotOutlined, DeleteOutlined, CloseCircleOutlined, ThunderboltOutlined, EditOutlined, RedoOutlined } from "@ant-design/icons";
 import { PLATFORMS, BIDDING_STRATEGIES, ALL_COUNTRIES } from "@/lib/constants";
+import { POLICY_CATEGORY_MAP, POLICY_CATEGORY_LABELS } from "@/lib/policy-hub/policy-categories";
 import { compareConnections, connectionLabel, type ConnectionLabelInput } from "@/lib/connection-label";
 // D-004：使用共享 MerchantNameCell（支持多账号 Popover 修复 BUG-1）
 import MerchantNameCell from "@/components/MerchantNameCell";
@@ -49,6 +50,26 @@ const CATEGORY_CN: Record<string, string> = {
   "Cosmetics": "化妆品", "Fragrance": "香水", "Hair Care": "护发",
 };
 const catCn = (v: string | null) => { if (!v) return "-"; return CATEGORY_CN[v] || v; };
+/** D-050 政策类别下拉选项（按 4 大类 + 子项中文名展示，value=policyName code） */
+const POLICY_OPTIONS = Object.entries(POLICY_CATEGORY_MAP).map(([code, e]) => ({
+  value: code,
+  label: `${POLICY_CATEGORY_LABELS[e.category]} / ${e.labelZh}`,
+}));
+/** 商家行展开子表的一条广告系列 */
+interface MerchantCampaign {
+  id: string;
+  campaign_name: string | null;
+  customer_id: string | null;
+  google_campaign_id: string | null;
+  status: string;
+  target_country: string | null;
+  rejection_count: number;
+}
+// CID 格式化: 1234567890 → 123-456-7890
+const formatCid = (cid: string | null) => {
+  const s = String(cid || "").replace(/\D/g, "");
+  return s.length === 10 ? `${s.slice(0, 3)}-${s.slice(3, 6)}-${s.slice(6)}` : (s || "-");
+};
 // 领取广告时可选的广告语言（与 ad-preview GOOGLE_ADS_LANGUAGES 对齐）。
 // 不选 = 自动按爬取到的页面语言（detectedLanguageCode），爬取失败再兜底投放国家市场语言。
 const AD_LANGUAGES = [
@@ -568,7 +589,7 @@ export default function MerchantsPage() {
   const [cc, setCc] = useState(""); const [qc, setQc] = useState("");
   const { data: holidays, isLoading: hl } = useApiWithParams<Holiday[]>(qc ? "/api/user/holidays" : null, { country: qc });
   const [claimModal, setClaimModal] = useState(false); const [claimM, setClaimM] = useState<Merchant | null>(null); const [claimForm] = Form.useForm();
-  // 再投一次（同一商家多广告，非破坏性）：复用领取弹窗，提交时带 relaunch=true
+  // 新增广告（同一商家多广告，非破坏性）：复用领取弹窗，提交时带 relaunch=true
   const [relaunchMode, setRelaunchMode] = useState(false);
   const [platformConns, setPlatformConns] = useState<({ id: string } & ConnectionLabelInput)[]>([]);
   const [mccAccounts, setMccAccounts] = useState<{ id: string; mcc_id: string; mcc_name: string }[]>([]);
@@ -730,19 +751,20 @@ export default function MerchantsPage() {
     setClaimSubmitting(true);
     try {
       const r = await mutateApi("/api/user/merchants", { method: "POST", body: { merchant_id: claimM?.id, ...v, ...(relaunchMode ? { relaunch: true } : {}) } }, [/\/api\/user\/merchants/]);
-      if (r.code === 0) { message.success(relaunchMode ? "再投成功！正在跳转到广告预览..." : "领取成功！正在跳转到广告预览..."); setClaimModal(false); const cid = (r.data as any)?.campaign_id; if (cid) { setTimeout(() => router.push(`/user/ad-preview/${cid}`), 800); } else { setTab("claimed"); } } else message.error(r.message);
+      if (r.code === 0) { message.success(relaunchMode ? "已新增广告！正在跳转到广告预览..." : "领取成功！正在跳转到广告预览..."); setClaimModal(false); const cid = (r.data as any)?.campaign_id; if (cid) { setTimeout(() => router.push(`/user/ad-preview/${cid}`), 800); } else { setTab("claimed"); } } else message.error(r.message);
     } catch { message.error("网络异常，请重试"); }
     finally { setClaimSubmitting(false); }
   }, [claimForm, claimM, relaunchMode, message, router]);
   const doRelease = useCallback(async (id: string) => { const r = await mutateApi("/api/user/merchants", { method: "PUT", body: { action: "release", ids: [id] } }, [/\/api\/user\/merchants/]); if (r.code === 0) message.success("已取消领取"); else message.error(r.message); }, [message]);
-  // 再投一次：二次确认后打开领取弹窗（relaunch 模式），每次都让用户重新选 MCC/连接/国家
+  // 新增广告：二次确认后打开领取弹窗（relaunch 模式），每次都让用户重新选 MCC/连接/国家
   const doRelaunch = useCallback((m: Merchant) => {
     Modal.confirm({
-      title: "再投一次",
+      title: "新增广告",
       content: (
         <div>
           <div>商家：<b>{m.merchant_name}</b>（{m.platform} / {m.merchant_id}）</div>
-          <div style={{ marginTop: 8, color: "#666" }}>将为该商家<b>新增一条独立广告</b>，不影响已有广告。请在下一步重新选择 MCC / 平台账号 / 目标国家。</div>
+          <div style={{ marginTop: 8, color: "#666" }}>将为该商家<b>新增一条独立广告</b>，已有广告全部保留、不会被移除。请在下一步重新选择 MCC / 平台账号 / 目标国家。</div>
+          <div style={{ marginTop: 4, color: "#999", fontSize: 12 }}>如果想把某条旧广告推倒重来，请展开该商家行，用子表里的「重发此条」。</div>
         </div>
       ),
       okText: "继续",
@@ -750,6 +772,140 @@ export default function MerchantsPage() {
       onOk: () => { void openClaimModal(m, true); },
     });
   }, [openClaimModal]);
+
+  // ─── 商家行展开子表：该商家名下的广告系列（全量不分页，展开时懒加载）───
+  const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
+  const [campaignsByMerchant, setCampaignsByMerchant] = useState<Record<string, MerchantCampaign[]>>({});
+  const [campaignsLoading, setCampaignsLoading] = useState<Record<string, boolean>>({});
+
+  const loadMerchantCampaigns = useCallback(async (merchantId: string) => {
+    setCampaignsLoading(p => ({ ...p, [merchantId]: true }));
+    try {
+      const r = await fetch(`/api/user/merchants/${merchantId}/campaigns`).then(x => x.json());
+      if (r.code === 0) {
+        setCampaignsByMerchant(p => ({ ...p, [merchantId]: r.data?.campaigns || [] }));
+      } else {
+        message.error(r.message || "加载广告系列失败");
+      }
+    } catch { message.error("网络异常，加载广告系列失败"); }
+    finally { setCampaignsLoading(p => ({ ...p, [merchantId]: false })); }
+  }, [message]);
+
+  const handleExpand = useCallback((expanded: boolean, rec: Merchant) => {
+    setExpandedKeys(prev => expanded ? [...prev, rec.id] : prev.filter(k => k !== rec.id));
+    if (expanded && !campaignsByMerchant[rec.id]) void loadMerchantCampaigns(rec.id);
+  }, [campaignsByMerchant, loadMerchantCampaigns]);
+
+  // 重发此条：移除该条旧广告后跳回预览页重新提交
+  const [republishingId, setRepublishingId] = useState<string | null>(null);
+  const doRepublish = useCallback((merchantId: string, c: MerchantCampaign) => {
+    if (!c.google_campaign_id) { message.warning("该广告系列尚未提交到 Google Ads"); return; }
+    Modal.confirm({
+      title: "重发此条广告",
+      content: (
+        <div>
+          <div>广告系列：<b>{c.campaign_name}</b></div>
+          <div style={{ marginTop: 8, color: "#666" }}>将把这条旧广告<b>从 Google Ads 移除</b>，然后跳转到广告预览页重新提交。该商家的其他广告不受影响。</div>
+        </div>
+      ),
+      okText: "确定重发",
+      cancelText: "取消",
+      onOk: async () => {
+        setRepublishingId(c.id);
+        try {
+          const r = await fetch("/api/user/ad-creation/republish", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ campaign_id: c.id }),
+          }).then(x => x.json());
+          if (r.code === 0) {
+            message.success("旧广告已移除，正在跳转到广告预览页重新提交...");
+            void loadMerchantCampaigns(merchantId);
+            refreshApi(/\/api\/user\/merchants/);
+            window.open(`/user/ad-preview/${c.id}`, "_blank");
+          } else message.error(r.message);
+        } catch { message.error("网络异常，请重试"); }
+        finally { setRepublishingId(null); }
+      },
+    });
+  }, [message, loadMerchantCampaigns]);
+
+  // D-050 记录拒登原因
+  const [rejectModal, setRejectModal] = useState<{ open: boolean; merchantId: string | null; campaign: MerchantCampaign | null }>({ open: false, merchantId: null, campaign: null });
+  const [rejectForm] = Form.useForm<{ policy_category: string; reason_text: string }>();
+  const [rejectSubmitting, setRejectSubmitting] = useState(false);
+
+  const openReject = useCallback((merchantId: string, c: MerchantCampaign) => {
+    rejectForm.resetFields();
+    setRejectModal({ open: true, merchantId, campaign: c });
+  }, [rejectForm]);
+
+  const submitReject = useCallback(async () => {
+    let values: { policy_category: string; reason_text: string };
+    try { values = await rejectForm.validateFields(); } catch { return; }
+    const { merchantId, campaign } = rejectModal;
+    if (!campaign) return;
+    setRejectSubmitting(true);
+    try {
+      const r = await fetch("/api/user/ad-rejection-feedback", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ campaign_id: campaign.id, policy_category: values.policy_category, reason_text: values.reason_text }),
+      }).then(x => x.json());
+      if (r.code === 0) {
+        message.success("拒登原因已记录，将作为该商家/同行业广告生成的避坑约束");
+        setRejectModal({ open: false, merchantId: null, campaign: null });
+        if (merchantId) void loadMerchantCampaigns(merchantId);
+      } else message.error(r.message || "保存失败");
+    } catch { message.error("保存失败，请重试"); }
+    finally { setRejectSubmitting(false); }
+  }, [rejectForm, rejectModal, message, loadMerchantCampaigns]);
+
+  const campaignSubCols = useMemo(() => [
+    {
+      title: "广告系列", dataIndex: "campaign_name",
+      render: (v: string | null, c: MerchantCampaign) => (
+        <Space size={4}>
+          <span style={{ wordBreak: "break-all" }}>{v || "-"}</span>
+          {c.rejection_count > 0 && (
+            <Tag color="red" style={{ margin: 0, fontSize: 10, padding: "0 4px", lineHeight: "16px" }}>
+              拒登{c.rejection_count > 1 ? `×${c.rejection_count}` : ""}
+            </Tag>
+          )}
+        </Space>
+      ),
+    },
+    { title: "CID", dataIndex: "customer_id", width: 130, render: (v: string | null) => <Text copyable={v ? { text: v } : false} style={{ fontSize: 12 }}>{formatCid(v)}</Text> },
+    { title: "状态", dataIndex: "status", width: 100, align: "center" as const, render: (v: string) => v === "ENABLED" ? <Tag color="green">已启用</Tag> : v === "PAUSED" ? <Tag color="orange">已暂停</Tag> : v === "REMOVED" ? <Tag color="red">已移除</Tag> : <Tag>{v || "未知"}</Tag> },
+    {
+      title: "操作", width: 180, align: "center" as const,
+      render: (_: unknown, c: MerchantCampaign & { __merchantId: string }) => (
+        <Space size={0}>
+          {c.google_campaign_id && (
+            <Tooltip title="移除这条旧广告并重新发布（不影响该商家的其他广告）">
+              <Button type="link" size="small" icon={<RedoOutlined />} loading={republishingId === c.id} onClick={() => doRepublish(c.__merchantId, c)}>重发此条</Button>
+            </Tooltip>
+          )}
+          <Tooltip title="记录该广告被 Google 拒登的原因（自动抓被拒文案，作为同商家/同行业生成避坑约束）">
+            <Button type="link" size="small" danger icon={<WarningOutlined />} onClick={() => openReject(c.__merchantId, c)}>拒登</Button>
+          </Tooltip>
+        </Space>
+      ),
+    },
+  ], [republishingId, doRepublish, openReject]);
+
+  const renderCampaignSubTable = useCallback((rec: Merchant) => {
+    const list = campaignsByMerchant[rec.id] || [];
+    return (
+      <Table
+        rowKey="id"
+        size="small"
+        loading={!!campaignsLoading[rec.id]}
+        pagination={false}
+        columns={campaignSubCols}
+        dataSource={list.map(c => ({ ...c, __merchantId: rec.id }))}
+        locale={{ emptyText: "该商家名下暂无广告系列" }}
+      />
+    );
+  }, [campaignsByMerchant, campaignsLoading, campaignSubCols]);
   // D-166：主营业务人工修正（保存后全系统同域名/同MID同步更正，平台同步不再覆盖）
   const [catModal, setCatModal] = useState<{ open: boolean; rec: Merchant | null; value: string; saving: boolean }>({ open: false, rec: null, value: "", saving: false });
   const openCatEdit = useCallback((rec: Merchant) => setCatModal({ open: true, rec, value: rec.category || "", saving: false }), []);
@@ -953,7 +1109,9 @@ export default function MerchantsPage() {
     { title: "标签", width: 92, render: (_: unknown, rec: any) => { const labels = rec.labels || []; if (labels.length === 0) return <span style={{ color: "#ccc" }}>-</span>; return <Space size={4} wrap>{labels.map((l: any, i: number) => <Tooltip key={i} title={l.detail}><Tag color={l.color} style={{ cursor: "pointer", marginInlineEnd: 0 }}>{l.text}</Tag></Tooltip>)}</Space>; } },
     { title: "操作", width: 150, render: (_: unknown, rec: Merchant) => (
       <Space size={4}>
-        <Button size="small" type="link" style={{ padding: 0 }} onClick={() => doRelaunch(rec)}>再投一次</Button>
+        <Tooltip title="为该商家新增一条独立广告，已有广告全部保留">
+          <Button size="small" type="link" style={{ padding: 0 }} onClick={() => doRelaunch(rec)}>新增广告</Button>
+        </Tooltip>
         <Popconfirm title="确认取消领取？" onConfirm={() => doRelease(rec.id)}><Button size="small" danger>取消领取</Button></Popconfirm>
       </Space>
     ) },
@@ -1243,6 +1401,11 @@ export default function MerchantsPage() {
         />
       )}
       {tab === "claimed" && <Table columns={claimedCols} dataSource={merchants} rowKey="id" loading={ml} onChange={handleTableChange}
+        expandable={{
+          expandedRowKeys: expandedKeys,
+          onExpand: handleExpand,
+          expandedRowRender: renderCampaignSubTable,
+        }}
         rowSelection={{
           selectedRowKeys: batchSelectedKeys,
           preserveSelectedRowKeys: true,
@@ -1367,7 +1530,41 @@ export default function MerchantsPage() {
         ⚠️ 同步为后台异步执行，完成后系统将推送通知，请勿重复点击
       </div>
     </Modal>
-    <Modal title={`${relaunchMode ? "再投一次" : "领取商家"}: ${claimM?.merchant_name}`} open={claimModal} confirmLoading={claimSubmitting} onOk={submitClaim} onCancel={() => setClaimModal(false)} okText={relaunchMode ? "再投" : "确定"}>
+    <Modal
+      title="记录广告拒登原因"
+      open={rejectModal.open}
+      onOk={submitReject}
+      confirmLoading={rejectSubmitting}
+      onCancel={() => setRejectModal({ open: false, merchantId: null, campaign: null })}
+      okText="保存"
+      cancelText="取消"
+      destroyOnHidden
+    >
+      <Alert
+        type="info" showIcon style={{ marginBottom: 12 }}
+        message="保存后系统会自动抓取该广告当前的标题/描述作为被拒文案快照"
+        description="同商家下次生成广告会强约束避开这些写法，同行业会作为软提示参考。本操作不消耗任何 API，也不会修改真实广告系列名。"
+      />
+      {rejectModal.campaign && (
+        <div style={{ marginBottom: 12, fontSize: 12, color: "#888", wordBreak: "break-all" }}>
+          广告系列：{rejectModal.campaign.campaign_name}
+        </div>
+      )}
+      <Form form={rejectForm} layout="vertical">
+        <Form.Item name="policy_category" label="拒登政策类别" rules={[{ required: true, message: "请选择政策类别" }]}>
+          <Select showSearch placeholder="选择 Google Ads 政策类别" optionFilterProp="label" options={POLICY_OPTIONS} />
+        </Form.Item>
+        <Form.Item name="reason_text" label="具体拒登原因" rules={[{ required: true, message: "请填写具体拒登原因" }]}>
+          <TextArea
+            rows={4}
+            maxLength={1000}
+            showCount
+            placeholder="填写 Google Ads 给出的具体拒登说明，越具体越能帮助后续广告避坑（例如：标题含未授权品牌名 XXX / 落地页缺少价格披露 / 文案含绝对化宣称 Best）"
+          />
+        </Form.Item>
+      </Form>
+    </Modal>
+    <Modal title={`${relaunchMode ? "新增广告" : "领取商家"}: ${claimM?.merchant_name}`} open={claimModal} confirmLoading={claimSubmitting} onOk={submitClaim} onCancel={() => setClaimModal(false)} okText={relaunchMode ? "确定新增" : "确定"}>
       {claimM?.policy_status === "restricted" && (<div style={{ marginBottom: 16, padding: "8px 12px", background: "#fff7e6", border: "1px solid #ffd591", borderRadius: 6 }}><WarningOutlined style={{ color: "#fa8c16", marginRight: 6 }} /><Text type="warning" style={{ fontSize: 13 }}>该商家属于受限类别{claimM.policy_category_code ? `（${PN[claimM.policy_category_code] || claimM.policy_category_code}）` : ""}，投放将受限。</Text></div>)}
       <Form form={claimForm} layout="vertical">
         {mccAccounts.length > 1 && (
