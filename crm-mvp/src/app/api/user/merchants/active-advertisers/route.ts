@@ -239,19 +239,13 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
     }
 
     let totalCommission = 0;
-    let totalRejected = 0;
     for (const umId of umIds) {
       const userId = userIdMap.get(umId);
       if (userId && userId === entry.userId) {
         const c = commissionByUserMerchant.get(`${userId}_${umId}`);
-        if (c) {
-          totalCommission += c.total;
-          totalRejected += c.rejected;
-        }
+        if (c) totalCommission += c.total;
       }
     }
-    const netCommission = totalCommission - totalRejected;
-
     // §78.4 Q-d：当日预算（最新建启用广告系列最近一天 budget）
     const dailyBudget = entry.latestEnabledCampaignId != null
       ? (budgetByCampaign.get(entry.latestEnabledCampaignId.toString()) ?? 0)
@@ -265,8 +259,9 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
       // 投放日期对所有角色可见（不含财务数据）
       campaign_created_at: entry.earliestCreatedAt ?? null,
       // §78.4 Q-c=all：ROI + 当日预算对所有角色可见
-      // ROI 沿用组长口径 (净佣金 - cost) / cost（本月）；组员只拿聚合后的 ROI，不暴露原始 cost/佣金
-      roi: totalCost > 0 ? ((netCommission - totalCost) / totalCost).toFixed(2) : "0.00",
+      // 毛口径倍数（07 拍板 2026-08-04）：(佣金 - 花费) / 花费，不扣拒付，与全站一致；
+      // 组员只拿聚合后的 ROI，不暴露原始 cost/佣金
+      roi: totalCost > 0 ? ((totalCommission - totalCost) / totalCost).toFixed(2) : "0.00",
       daily_budget: dailyBudget.toFixed(2),
     };
     // 原始财务数据（花费/点击/佣金）仍仅组长可见
