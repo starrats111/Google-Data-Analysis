@@ -16,7 +16,6 @@ import AppPageHeader from "@/components/AppPageHeader";
 import type { ColumnsType } from "antd/es/table";
 import { PLATFORMS } from "@/lib/constants";
 import { TXN_TZ_NOTE } from "@/lib/report-metrics";
-import { POLICY_CATEGORY_MAP, POLICY_CATEGORY_LABELS } from "@/lib/policy-hub/policy-categories";
 import dayjs, { Dayjs } from "dayjs";
 import utc from "dayjs/plugin/utc";
 import timezone from "dayjs/plugin/timezone";
@@ -27,29 +26,12 @@ dayjs.extend(utc);
 dayjs.extend(timezone);
 const TZ = "Asia/Shanghai";
 
-/** 各列 width 之和，scroll.x 须 ≥ 此值否则固定列（CID / 操作）会与表体错位
+/** 各列 width 之和，scroll.x 须 ≥ 此值否则固定列（CID）会与表体错位
  *  顺序：CID 110 | 广告系列 280 | 状态 100 | 预算 70 | 最高出价 90
- *       | 展示 95 | 点击 85 | 平均CPC 80 | 花费 85 | 佣金 70 | 拒付佣金 95 | 净利润 85 | 操作 140
+ *       | 展示 95 | 点击 85 | 订单 75 | 平均CPC 80 | 花费 85 | 佣金 70 | 拒付佣金 95 | 净利润 85 | ROI 75
  */
 const DATA_CENTER_TABLE_SCROLL_X =
-  110 + 280 + 100 + 70 + 90 + 95 + 85 + 80 + 85 + 70 + 95 + 85 + 140;
-
-/** D-050 政策类别下拉选项（按 4 大类 + 子项中文名展示，value=policyName code） */
-const POLICY_OPTIONS = Object.entries(POLICY_CATEGORY_MAP).map(([code, e]) => ({
-  value: code,
-  label: `${POLICY_CATEGORY_LABELS[e.category]} / ${e.labelZh}`,
-}));
-
-interface RejectionFeedbackItem {
-  id: string;
-  campaign_id: string | null;
-  google_campaign_id: string | null;
-  campaign_name: string | null;
-  policy_category: string;
-  policy_label: string;
-  reason_text: string;
-  created_at: string | null;
-}
+  110 + 280 + 100 + 70 + 90 + 95 + 85 + 75 + 80 + 85 + 70 + 95 + 85 + 75;
 
 const { Text } = Typography;
 const { RangePicker } = DatePicker;
@@ -154,19 +136,6 @@ export default function DataCenterPage() {
 
   // MCC 列表
   const { data: mccAccounts = [] } = useStaleApi<MccAccount[]>("/api/user/settings/mcc");
-
-  // D-050 拒登反馈记录（用于广告系列名后的备注标记 + 录入表单复用）
-  const { data: rejectionFeedback = [] } = useStaleApi<RejectionFeedbackItem[]>("/api/user/ad-rejection-feedback");
-  const rejectionByCampaign = useMemo(() => {
-    const m = new Map<string, RejectionFeedbackItem[]>();
-    for (const f of rejectionFeedback) {
-      if (!f.campaign_id) continue;
-      const key = String(f.campaign_id);
-      if (!m.has(key)) m.set(key, []);
-      m.get(key)!.push(f);
-    }
-    return m;
-  }, [rejectionFeedback]);
 
   // 构建查询参数 — 默认不传 mcc_account_id 则查所有
   const queryParams = useMemo(() => {
@@ -482,32 +451,6 @@ export default function DataCenterPage() {
     refreshApi(/\/api\/user\/data-center/);
   }, []);
 
-  // 重新发布广告
-  const [republishingId, setRepublishingId] = useState<string | null>(null);
-  const handleRepublish = useCallback(async (row: CampaignRow) => {
-    if (!row.google_campaign_id) { message.warning("该广告系列尚未提交到 Google Ads"); return; }
-    Modal.confirm({
-      title: "重新发布广告",
-      content: `确定要移除旧广告「${row.campaign_name}」并重新发布吗？旧广告将从 Google Ads 中移除。`,
-      okText: "确定重新发布",
-      cancelText: "取消",
-      onOk: async () => {
-        setRepublishingId(row.id);
-        try {
-          const res = await fetch("/api/user/ad-creation/republish", {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ campaign_id: row.id }),
-          }).then((r) => r.json());
-          if (res.code === 0) {
-            message.success("旧广告已移除，正在跳转到广告预览页重新提交...");
-            refreshApi(/\/api\/user\/data-center/);
-            window.open(`/user/ad-preview/${row.id}`, "_blank");
-          } else message.error(res.message);
-        } finally { setRepublishingId(null); }
-      },
-    });
-  }, [message]);
-
   // 切换广告状态
   const [togglingId, setTogglingId] = useState<string | null>(null);
 
@@ -530,49 +473,6 @@ export default function DataCenterPage() {
       } else message.error(res.message);
     } finally { setTogglingId(null); }
   }, [message]);
-
-  // D-050 记录拒登原因
-  const [rejectModal, setRejectModal] = useState<{ open: boolean; campaign: CampaignRow | null }>({ open: false, campaign: null });
-  const [rejectForm] = Form.useForm<{ policy_category: string; reason_text: string }>();
-  const [rejectSubmitting, setRejectSubmitting] = useState(false);
-
-  const handleOpenReject = useCallback((row: CampaignRow) => {
-    rejectForm.resetFields();
-    setRejectModal({ open: true, campaign: row });
-  }, [rejectForm]);
-
-  const handleSubmitReject = useCallback(async () => {
-    let values: { policy_category: string; reason_text: string };
-    try {
-      values = await rejectForm.validateFields();
-    } catch {
-      return;
-    }
-    const campaign = rejectModal.campaign;
-    if (!campaign) return;
-    setRejectSubmitting(true);
-    try {
-      const res = await fetch("/api/user/ad-rejection-feedback", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          campaign_id: campaign.id,
-          policy_category: values.policy_category,
-          reason_text: values.reason_text,
-        }),
-      }).then((r) => r.json());
-      if (res.code === 0) {
-        message.success("拒登原因已记录，将作为该商家/同行业广告生成的避坑约束");
-        setRejectModal({ open: false, campaign: null });
-        refreshApi(/\/api\/user\/ad-rejection-feedback/);
-      } else {
-        message.error(res.message || "保存失败");
-      }
-    } catch {
-      message.error("保存失败，请重试");
-    } finally {
-      setRejectSubmitting(false);
-    }
-  }, [rejectForm, rejectModal, message]);
 
   const statusColors: Record<string, string> = { ENABLED: "green", PAUSED: "orange", REMOVED: "red" };
   const statusLabels: Record<string, string> = { ENABLED: "已启用", PAUSED: "已暂停", REMOVED: "已移除" };
@@ -607,36 +507,11 @@ export default function DataCenterPage() {
         const seqB = parseInt(b.campaign_name?.split("-")[0] || "0", 10) || 0;
         return seqA - seqB;
       },
-      render: (v: string, r: IndexedRow) => {
-        const fbs = rejectionByCampaign.get(String(r.id));
-        return (
-          <Text style={{ fontSize: 12, wordBreak: "break-all", whiteSpace: "normal", lineHeight: "1.4" }}>
-            {v}
-            {fbs && fbs.length > 0 && (
-              <Tooltip
-                title={
-                  <div style={{ maxWidth: 280 }}>
-                    {fbs.slice(0, 3).map((f) => (
-                      <div key={f.id} style={{ marginBottom: 4 }}>
-                        <b>[{f.policy_label}]</b> {f.reason_text}
-                      </div>
-                    ))}
-                    <div style={{ opacity: 0.7, marginTop: 2 }}>点击编辑/补充拒登记录</div>
-                  </div>
-                }
-              >
-                <Tag
-                  color="red"
-                  style={{ fontSize: 10, marginLeft: 4, cursor: "pointer", padding: "0 4px", lineHeight: "16px" }}
-                  onClick={(e) => { e.stopPropagation(); handleOpenReject(r); }}
-                >
-                  拒登{fbs.length > 1 ? `×${fbs.length}` : ""}
-                </Tag>
-              </Tooltip>
-            )}
-          </Text>
-        );
-      },
+      render: (v: string) => (
+        <Text style={{ fontSize: 12, wordBreak: "break-all", whiteSpace: "normal", lineHeight: "1.4" }}>
+          {v}
+        </Text>
+      ),
     },
     {
       title: "状态", dataIndex: "status", width: 100, align: "center",
@@ -701,6 +576,16 @@ export default function DataCenterPage() {
       render: (v: number | null | undefined) => <Text style={{ fontSize: 12 }}>{formatInt(v)}</Text>,
     },
     {
+      title: (
+        <Tooltip title="来自联盟平台交易，与「佣金」同源，按商家归到代表行">
+          <span>订单</span>
+        </Tooltip>
+      ),
+      dataIndex: "orders", width: 75, align: "right",
+      sorter: (a, b) => (a.orders ?? 0) - (b.orders ?? 0),
+      render: (v: number | null | undefined) => <Text style={{ fontSize: 12 }}>{formatInt(v)}</Text>,
+    },
+    {
       title: "平均CPC", dataIndex: "cpc", width: 80, align: "right",
       render: (v: number) => <Text style={{ fontSize: 12 }}>${v?.toFixed(4)}</Text>,
     },
@@ -735,34 +620,17 @@ export default function DataCenterPage() {
       },
     },
     {
-      title: "操作", width: 140, align: "center", fixed: "right",
-      render: (_: unknown, r: IndexedRow) => (
-        <Space size={0}>
-          {r.google_campaign_id ? (
-            <Tooltip title="移除旧广告并重新发布">
-              <Button
-                type="link" size="small"
-                loading={republishingId === r.id}
-                icon={<RedoOutlined />}
-                onClick={() => handleRepublish(r)}
-                style={{ fontSize: 12, paddingInline: 4 }}
-              >
-                重发
-              </Button>
-            </Tooltip>
-          ) : null}
-          <Tooltip title="记录该广告被 Google 拒登的原因（自动抓被拒文案，作为同商家/同行业生成避坑约束）">
-            <Button
-              type="link" size="small" danger
-              icon={<WarningOutlined />}
-              onClick={() => handleOpenReject(r)}
-              style={{ fontSize: 12, paddingInline: 4 }}
-            >
-              拒登
-            </Button>
-          </Tooltip>
-        </Space>
+      title: (
+        <Tooltip title="（佣金 - 花费）/ 花费，倍数口径，不扣拒付佣金">
+          <span>ROI</span>
+        </Tooltip>
       ),
+      dataIndex: "roi", width: 75, align: "right",
+      sorter: (a, b) => (a.roi ?? 0) - (b.roi ?? 0),
+      render: (v: number | null | undefined) => {
+        const value = v ?? 0;
+        return <Text style={{ fontSize: 12, color: value >= 0 ? "#389e0d" : "#cf1322" }}>{value.toFixed(2)}</Text>;
+      },
     },
   ];
 
@@ -1200,54 +1068,6 @@ export default function DataCenterPage() {
         onCancel={() => setEditModal({ open: false, campaign: null, field: "budget" })}
       />
 
-      {/* D-050 记录拒登原因 */}
-      <Modal
-        title="记录广告拒登原因"
-        open={rejectModal.open}
-        onOk={handleSubmitReject}
-        confirmLoading={rejectSubmitting}
-        onCancel={() => setRejectModal({ open: false, campaign: null })}
-        okText="保存"
-        cancelText="取消"
-        destroyOnHidden
-      >
-        <Alert
-          type="info" showIcon style={{ marginBottom: 12 }}
-          message="保存后系统会自动抓取该广告当前的标题/描述作为被拒文案快照"
-          description="同商家下次生成广告会强约束避开这些写法，同行业会作为软提示参考。本操作不消耗任何 API，也不会修改真实广告系列名。"
-        />
-        {rejectModal.campaign && (
-          <div style={{ marginBottom: 12, fontSize: 12, color: "#888", wordBreak: "break-all" }}>
-            广告系列：{rejectModal.campaign.campaign_name}
-          </div>
-        )}
-        <Form form={rejectForm} layout="vertical">
-          <Form.Item
-            name="policy_category"
-            label="拒登政策类别"
-            rules={[{ required: true, message: "请选择政策类别" }]}
-          >
-            <Select
-              showSearch
-              placeholder="选择 Google Ads 政策类别"
-              optionFilterProp="label"
-              options={POLICY_OPTIONS}
-            />
-          </Form.Item>
-          <Form.Item
-            name="reason_text"
-            label="具体拒登原因"
-            rules={[{ required: true, message: "请填写具体拒登原因" }]}
-          >
-            <Input.TextArea
-              rows={4}
-              maxLength={1000}
-              showCount
-              placeholder="填写 Google Ads 给出的具体拒登说明，越具体越能帮助后续广告避坑（例如：标题含未授权品牌名 XXX / 落地页缺少价格披露 / 文案含绝对化宣称 Best）"
-            />
-          </Form.Item>
-        </Form>
-      </Modal>
     </div>
   );
 }

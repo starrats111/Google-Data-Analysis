@@ -291,7 +291,8 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     for (const umId of entry.umIds) {
       totalCost += costByUm.get(umId.toString()) || 0;
     }
-    const roi = totalCost > 0 ? ((entry.net_commission - totalCost) / totalCost) * 100 : 0;
+    // 毛口径 ROI（07 拍板 2026-08-04）：不扣拒付佣金，与数据中心保持一致
+    const roi = totalCost > 0 ? ((entry.monthly_commission - totalCost) / totalCost) * 100 : 0;
     return {
       key: `${entry.merchant_id}:${entry.platform}`,
       merchant_id: entry.merchant_id,

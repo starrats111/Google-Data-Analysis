@@ -772,10 +772,10 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
     }
   }
 
-  // relaunch（再投一次）：只允许对「已领取/已暂停」商家再建一条独立广告。
+  // relaunch（新增广告）：只允许对「已领取/已暂停」商家再建一条独立广告。
   const isRelaunch = relaunch === true;
   if (isRelaunch && merchant.status !== "claimed" && merchant.status !== "paused") {
-    return apiError("该商家尚未领取，请先领取再使用「再投一次」");
+    return apiError("该商家尚未领取，请先领取再使用「新增广告」");
   }
 
   if (isRelaunch) {

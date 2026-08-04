@@ -1,10 +1,10 @@
-import { NextRequest } from "next/server";
+﻿import { NextRequest } from "next/server";
 import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError, normalizePlatformCode } from "@/lib/constants";
 import prisma from "@/lib/prisma";
-import { nowCST, dateColumnStart, parseTxnDateStart } from "@/lib/date-utils";
+import { nowCST, parseTxnDateStart, parseTxnDateEndExclusive } from "@/lib/date-utils";
 import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
-import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
+import { applyAffiliateCommissionToDailyStats } from "@/lib/daily-stats-commission";
 import { aggregateRawTransactions } from "@/lib/affiliate-txn-aggregate";
 import { markConnectionSuccess, markConnectionAttempted, markConnectionFailure } from "@/lib/connection-health";
 
@@ -28,8 +28,9 @@ export async function POST(req: NextRequest) {
     ? now.subtract(body.days, "day").format("YYYY-MM-DD")
     : DEFAULT_START;
   const startDate = parseTxnDateStart(startStr);
-  const statsStartDate = dateColumnStart(startStr);
   const endStr = now.format("YYYY-MM-DD");
+  // 佣金回写区间的独占上界：今日 CST 结束（含今天已到账的单）
+  const commissionEndExclusive = parseTxnDateEndExclusive(endStr);
 
   try {
     // 1. 获取用户的所有平台连接
@@ -294,17 +295,13 @@ export async function POST(req: NextRequest) {
     // 4.5 按规则将特定商家的交易转移给实际投放人
     const reassigned = await reassignTransactionsByRules(userId);
 
-    // 5. 先清零旧佣金，再按日期重新写入正确值
-    await prisma.ads_daily_stats.updateMany({
-      where: { user_id: userId, date: { gte: statsStartDate } },
-      data: { commission: 0, rejected_commission: 0, orders: 0 },
-    });
-    const commissionUpdated = await updateDailyStatsCommission(userId, statsStartDate, startDate);
+    // 5. 佣金回写（内部会先清零区间再写入正确值）
+    const commissionUpdated = await updateDailyStatsCommission(userId, startDate, commissionEndExclusive);
 
     // 5.5 如果有交易被转移，也更新目标用户的佣金
     if (reassigned.length > 0) {
       for (const r of reassigned) {
-        await updateDailyStatsCommission(BigInt(r.targetUserId), statsStartDate, startDate);
+        await updateDailyStatsCommission(BigInt(r.targetUserId), startDate, commissionEndExclusive);
       }
     }
 
@@ -465,138 +462,12 @@ async function claimLinkedMerchants(userId: bigint) {
 
 // ─── updateDailyStatsCommission ───
 
-async function updateDailyStatsCommission(userId: bigint, statsStartDate: Date, txnStartDate: Date): Promise<number> {
-  // 使用 DATE_FORMAT 返回字符串（避免 Date 对象在 UTC+8 服务器上 String() 产生本地格式导致解析错误）
-  const txnAgg = await prisma.$queryRawUnsafe<
-    { user_merchant_id: bigint; txn_date: string; total_commission: number; rejected_commission: number; order_count: number }[]
-  >(`
-    SELECT 
-      user_merchant_id,
-      DATE_FORMAT(CONVERT_TZ(transaction_time, '+00:00', '+08:00'), '%Y-%m-%d') as txn_date,
-      SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission,
-      SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as rejected_commission,
-      COUNT(*) as order_count
-    FROM affiliate_transactions
-    WHERE user_id = ? AND is_deleted = 0 AND transaction_time >= ?
-      AND ${sqlAffiliateTxnValidPlatformConnection("affiliate_transactions")}
-    GROUP BY user_merchant_id, DATE_FORMAT(CONVERT_TZ(transaction_time, '+00:00', '+08:00'), '%Y-%m-%d')
-  `, userId, txnStartDate);
-
-  if (!txnAgg || txnAgg.length === 0) return 0;
-
-  // 强制转换为 BigInt，避免 MariaDB 驱动对小数值返回 number 类型导致 Prisma 类型校验失败
-  const merchantIds = [...new Set(txnAgg.map(t => BigInt(String(t.user_merchant_id ?? 0))))]
-    .filter(id => id !== BigInt(0));
-  if (merchantIds.length === 0) return 0;
-
-  // C-095 RC-3：排除挂在已删 MCC 下的 campaigns，避免幽灵 stats 双重写入
-  const deletedMccs = await prisma.google_mcc_accounts.findMany({
-    where: { user_id: userId, is_deleted: 1 },
-    select: { id: true },
-  });
-  const deletedMccIds = deletedMccs.map((m) => m.id);
-
-  const allCampaigns = await prisma.campaigns.findMany({
-    where: {
-      user_id: userId,
-      user_merchant_id: { in: merchantIds },
-      is_deleted: 0,
-      ...(deletedMccIds.length > 0
-        ? { OR: [{ mcc_id: null }, { mcc_id: { notIn: deletedMccIds } }] }
-        : {}),
-    },
-    select: { id: true, user_merchant_id: true, google_status: true, updated_at: true },
-  });
-
-  const STATUS_PRIORITY: Record<string, number> = { ENABLED: 0, PAUSED: 1, REMOVED: 2 };
-  allCampaigns.sort((a, b) => {
-    const pa = STATUS_PRIORITY[a.google_status || ""] ?? 2;
-    const pb = STATUS_PRIORITY[b.google_status || ""] ?? 2;
-    if (pa !== pb) return pa - pb;
-    return b.updated_at.getTime() - a.updated_at.getTime();
-  });
-
-  const campaignsByMerchant = new Map<string, bigint[]>();
-  for (const c of allCampaigns) {
-    const key = String(c.user_merchant_id);
-    if (!campaignsByMerchant.has(key)) campaignsByMerchant.set(key, []);
-    campaignsByMerchant.get(key)!.push(c.id);
-  }
-
-  // 使用原始 SQL + DATE_FORMAT 读取日期字符串，避免 Date 对象时区转换导致的日期偏差
-  const allCampaignIds = allCampaigns.map(c => c.id);
-  type StatsRow = { id: bigint; campaign_id: bigint; date_str: string };
-  const allStatsRaw: StatsRow[] = allCampaignIds.length > 0
-    ? await prisma.$queryRawUnsafe<StatsRow[]>(
-        `SELECT id, campaign_id, DATE_FORMAT(date, '%Y-%m-%d') as date_str
-         FROM ads_daily_stats
-         WHERE campaign_id IN (${allCampaignIds.map(() => "?").join(",")})
-           AND date >= ?`,
-        ...allCampaignIds, statsStartDate
-      )
-    : [];
-
-  const statsMap = new Map<string, bigint>();
-  for (const s of allStatsRaw) {
-    statsMap.set(
-      `${BigInt(String(s.campaign_id ?? 0))}_${s.date_str}`,
-      BigInt(String(s.id ?? 0))
-    );
-  }
-
-  // 收集所有操作，批量执行
-  const ops: (() => Promise<unknown>)[] = [];
-  let updated = 0;
-
-  for (const agg of txnAgg) {
-    const umid = BigInt(String(agg.user_merchant_id ?? 0));
-    if (umid === BigInt(0)) continue;
-
-    const campaignIds = campaignsByMerchant.get(String(umid));
-    if (!campaignIds?.length) continue;
-
-    // txn_date 现在始终是 "YYYY-MM-DD" 字符串（来自 DATE_FORMAT）
-    const txnDateStr = String(agg.txn_date);
-    const commData = {
-      commission: Number(agg.total_commission),
-      rejected_commission: Number(agg.rejected_commission),
-      orders: Number(agg.order_count),
-    };
-
-    let wrote = false;
-    for (const cid of campaignIds) {
-      const statsId = statsMap.get(`${cid}_${txnDateStr}`);
-      if (statsId) {
-        if (!wrote) {
-          ops.push(() => prisma.ads_daily_stats.update({ where: { id: statsId }, data: commData }));
-          wrote = true;
-          updated++;
-        } else {
-          ops.push(() => prisma.ads_daily_stats.update({ where: { id: statsId }, data: { commission: 0, rejected_commission: 0, orders: 0 } }));
-        }
-      }
-    }
-
-    if (!wrote) {
-      const txnDate = new Date(`${txnDateStr}T00:00:00.000Z`);
-      ops.push(() => prisma.ads_daily_stats.upsert({
-        where: { campaign_id_date: { campaign_id: campaignIds[0], date: txnDate } },
-        update: commData,
-        create: {
-          user_id: userId, user_merchant_id: umid, campaign_id: campaignIds[0],
-          date: txnDate, cost: 0, clicks: 0, impressions: 0, ...commData,
-        },
-      }).catch(() => {}));
-      updated++;
-    }
-  }
-
-  // 批量执行（每 50 条并发）
-  for (let i = 0; i < ops.length; i += 50) {
-    await Promise.all(ops.slice(i, i + 50).map(fn => fn()));
-  }
-
-  return updated;
+/**
+ * D-211：原先这里内联着一份没有 platform_connection_id 维度的老实现，
+ * 与数据中心侧口径已漂移两轮。现统一走 daily-stats-commission.ts，归因规则只有一份。
+ */
+async function updateDailyStatsCommission(userId: bigint, startDate: Date, endExclusive: Date): Promise<number> {
+  return applyAffiliateCommissionToDailyStats(userId, startDate, endExclusive);
 }
 
 // ─── reassignTransactionsByRules ───

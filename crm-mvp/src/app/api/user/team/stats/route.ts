@@ -224,7 +224,8 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     const commission = userComm?.commission || 0;
     const rejected = userComm?.rejected || 0;
     const net = commission - rejected - cost;
-    const roi = cost > 0 ? (net / cost) * 100 : 0;
+    // 毛口径 ROI（07 拍板 2026-08-04）：不扣拒付佣金，与数据中心保持一致
+    const roi = cost > 0 ? ((commission - cost) / cost) * 100 : 0;
 
     return {
       user_id: uid,

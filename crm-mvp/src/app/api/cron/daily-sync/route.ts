@@ -1,12 +1,12 @@
-import { NextRequest, NextResponse } from "next/server";
+﻿import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { normalizePlatformCode } from "@/lib/constants";
 import { parseCampaignNameFull } from "@/lib/campaign-merchant-link";
 import { getExchangeRate, preloadRates } from "@/lib/exchange-rate";
-import { nowCST, dateColumnStart, parseTxnDateStart } from "@/lib/date-utils";
+import { nowCST, parseTxnDateStart, parseTxnDateEndExclusive } from "@/lib/date-utils";
+import { applyAffiliateCommissionToDailyStats } from "@/lib/daily-stats-commission";
 import { autoRepairPublishedArticles } from "@/lib/article-auto-repair";
 import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
-import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
 import { aggregateRawTransactions } from "@/lib/affiliate-txn-aggregate";
 import { markConnectionSuccess, markConnectionAttempted, markConnectionFailure } from "@/lib/connection-health";
 import { resolveMainConnectionMap } from "@/lib/payment-main-connection";
@@ -779,8 +779,9 @@ async function syncAllUsersTransactions(): Promise<unknown> {
         startStr = cstNow.subtract(365, "day").format("YYYY-MM-DD");
       }
       const syncStart = parseTxnDateStart(startStr);
-      const statsSyncStart = dateColumnStart(startStr);
       const endStr = cstNow.format("YYYY-MM-DD");
+      // 佣金回写区间的独占上界：今日 CST 结束（含今天已到账的单）
+      const commissionEndExclusive = parseTxnDateEndExclusive(endStr);
 
       log(`    range: ${startStr} → ${endStr} (${unsettledMonths.length} unsettled month(s))`);
 
@@ -988,10 +989,10 @@ async function syncAllUsersTransactions(): Promise<unknown> {
         }
 
         try {
-          const commUpdated = await updateDailyStatsCommission(userId, statsSyncStart, syncStart);
+          const commUpdated = await updateDailyStatsCommission(userId, syncStart, commissionEndExclusive);
           log(`    ${user.username}: updated ${commUpdated} commission records in ads_daily_stats`);
           for (const r of reassigned) {
-            const targetCommUpdated = await updateDailyStatsCommission(BigInt(r.targetUserId), statsSyncStart, syncStart);
+            const targetCommUpdated = await updateDailyStatsCommission(BigInt(r.targetUserId), syncStart, commissionEndExclusive);
             log(`    → reassigned ${r.count} txns to user ${r.targetUserId}, updated ${targetCommUpdated} commission records`);
           }
         } catch (e) {
@@ -1278,113 +1279,13 @@ async function claimLinkedMerchants(userId: bigint) {
 
 /**
  * 将 affiliate_transactions 佣金回写到 ads_daily_stats（向后兼容，非前端主要读取源）
+ *
+ * D-211：原先这里内联着一份更老的实现——没有 platform_connection_id 维度、目标行按
+ * 「商家级最优系列」选，同商家多账号投放时两个账号的佣金会堆到同一条上；而数据中心侧
+ * 早已升级过两轮。现统一走 daily-stats-commission.ts，归因规则只有一份。
  */
-async function updateDailyStatsCommission(userId: bigint, statsStartDate: Date, txnStartDate: Date): Promise<number> {
-  await prisma.ads_daily_stats.updateMany({
-    where: { user_id: userId, date: { gte: statsStartDate } },
-    data: { commission: 0, rejected_commission: 0, orders: 0 },
-  });
-
-  const txnAgg = await prisma.$queryRawUnsafe<
-    { user_merchant_id: bigint; txn_date: string; total_commission: number; rejected_commission: number; order_count: number }[]
-  >(`
-    SELECT
-      user_merchant_id,
-      DATE_FORMAT(CONVERT_TZ(transaction_time, '+00:00', '+08:00'), '%Y-%m-%d') as txn_date,
-      SUM(CAST(commission_amount AS DECIMAL(12,2))) as total_commission,
-      SUM(CASE WHEN status = 'rejected' THEN CAST(commission_amount AS DECIMAL(12,2)) ELSE 0 END) as rejected_commission,
-      COUNT(*) as order_count
-    FROM affiliate_transactions
-    WHERE user_id = ? AND is_deleted = 0 AND transaction_time >= ?
-      AND ${sqlAffiliateTxnValidPlatformConnection("affiliate_transactions")}
-    GROUP BY user_merchant_id, DATE_FORMAT(CONVERT_TZ(transaction_time, '+00:00', '+08:00'), '%Y-%m-%d')
-  `, userId, txnStartDate);
-
-  if (!txnAgg || txnAgg.length === 0) return 0;
-
-  const merchantIds = [...new Set(txnAgg.map(t => t.user_merchant_id))].filter(id => id && id !== BigInt(0));
-  if (merchantIds.length === 0) return 0;
-
-  // C-095 RC-3：排除挂在已删 MCC 下的 campaigns，避免幽灵 stats 双重写入
-  const deletedMccs = await prisma.google_mcc_accounts.findMany({
-    where: { user_id: userId, is_deleted: 1 },
-    select: { id: true },
-  });
-  const deletedMccIds = deletedMccs.map((m) => m.id);
-
-  const allCampaigns = await prisma.campaigns.findMany({
-    where: {
-      user_id: userId,
-      user_merchant_id: { in: merchantIds },
-      is_deleted: 0,
-      ...(deletedMccIds.length > 0
-        ? { OR: [{ mcc_id: null }, { mcc_id: { notIn: deletedMccIds } }] }
-        : {}),
-    },
-    select: { id: true, user_merchant_id: true, google_status: true, updated_at: true },
-  });
-
-  const STATUS_PRIORITY: Record<string, number> = { ENABLED: 0, PAUSED: 1, REMOVED: 2 };
-  allCampaigns.sort((a, b) => {
-    const pa = STATUS_PRIORITY[a.google_status || ""] ?? 2;
-    const pb = STATUS_PRIORITY[b.google_status || ""] ?? 2;
-    if (pa !== pb) return pa - pb;
-    return b.updated_at.getTime() - a.updated_at.getTime();
-  });
-
-  const campaignsByMerchant = new Map<string, bigint[]>();
-  for (const c of allCampaigns) {
-    const key = String(c.user_merchant_id);
-    if (!campaignsByMerchant.has(key)) campaignsByMerchant.set(key, []);
-    campaignsByMerchant.get(key)!.push(c.id);
-  }
-
-  let updated = 0;
-  for (const agg of txnAgg) {
-    if (!agg.user_merchant_id || agg.user_merchant_id === BigInt(0)) continue;
-    const campaignIds = campaignsByMerchant.get(String(agg.user_merchant_id));
-    if (!campaignIds?.length) continue;
-
-    const txnDateStr = String(agg.txn_date).split("T")[0];
-    const dateObj = new Date(txnDateStr);
-    const commData = {
-      commission: Number(agg.total_commission),
-      rejected_commission: Number(agg.rejected_commission),
-      orders: Number(agg.order_count),
-    };
-
-    let wrote = false;
-    for (const cid of campaignIds) {
-      const existing = await prisma.ads_daily_stats.findFirst({
-        where: { campaign_id: cid, date: dateObj },
-        select: { id: true },
-      });
-      if (existing) {
-        await prisma.ads_daily_stats.update({ where: { id: existing.id }, data: commData });
-        wrote = true;
-        updated++;
-        break;
-      }
-    }
-
-    if (!wrote) {
-      await prisma.ads_daily_stats.upsert({
-        where: { campaign_id_date: { campaign_id: campaignIds[0], date: dateObj } },
-        update: commData,
-        create: {
-          user_id: userId,
-          user_merchant_id: BigInt(String(agg.user_merchant_id)),
-          campaign_id: campaignIds[0],
-          date: dateObj,
-          cost: 0, clicks: 0, impressions: 0,
-          ...commData,
-        },
-      });
-      updated++;
-    }
-  }
-
-  return updated;
+async function updateDailyStatsCommission(userId: bigint, startDate: Date, endExclusive: Date): Promise<number> {
+  return applyAffiliateCommissionToDailyStats(userId, startDate, endExclusive);
 }
 
 // ─── 交易转移规则 ───
