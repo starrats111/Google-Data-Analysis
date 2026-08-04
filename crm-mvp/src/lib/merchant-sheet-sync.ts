@@ -177,24 +177,48 @@ export function parseCsv(text: string): string[][] {
   return rows;
 }
 
-// ── 检测推荐商家表 gid ──
+// ── 按工作表名定位推荐商家表 ──
+// 不用 gid：gid 是随机值，无法预测；也不用 gviz 的 sheet= 参数，它在表名不存在时
+// 会静默返回第一个工作表（即黑名单），且会因列类型推断丢掉部分表头。
+// 整本 xlsx 导出是唯一既能按名字精确定位、又能拿到完整表头的公开通道。
 
-async function detectRecommendationGid(sheetUrl: string): Promise<string> {
-  const sheetId = extractSheetId(sheetUrl);
-  if (!sheetId) return "1";
-  try {
-    const htmlUrl = `https://docs.google.com/spreadsheets/d/${sheetId}/edit`;
-    const resp = await fetch(htmlUrl, { redirect: "follow" });
-    const html = await resp.text();
-    const gidMatches = [...html.matchAll(/"gid"\s*:\s*(\d+)/g)].map((m) => m[1]);
-    const nameMatches = [...html.matchAll(/"name"\s*:\s*"([^"]*)"/g)].map((m) => m[1]);
-    for (let i = 0; i < nameMatches.length; i++) {
-      const name = nameMatches[i].toLowerCase();
-      if (name.includes("推荐") || name.includes("recommend")) return gidMatches[i] || "1";
-    }
-    if (gidMatches.length >= 2) return gidMatches[1];
-  } catch { /* fallback */ }
-  return "1";
+const RECOMMENDATION_SHEET_PATTERNS: RegExp[] = [
+  /^\s*白名单\s*$/,
+  /^\s*推荐商家表?\s*$/,
+  /白名单|whitelist/i,
+  /推荐商家|recommend/i,
+];
+
+async function fetchWorkbookSheet(
+  sheetId: string,
+  patterns: RegExp[],
+): Promise<{ title: string; rows: string[][] } | null> {
+  const url = `https://docs.google.com/spreadsheets/d/${sheetId}/export?format=xlsx`;
+  const resp = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(60000) });
+  if (!resp.ok) {
+    throw new Error(`Google Sheets 工作簿导出失败: HTTP ${resp.status}`);
+  }
+  const buf = Buffer.from(await resp.arrayBuffer());
+  const XLSX = await import("xlsx");
+  const wb = XLSX.read(buf, { type: "buffer" });
+
+  let title: string | undefined;
+  for (const p of patterns) {
+    title = wb.SheetNames.find((n) => p.test(n));
+    if (title) break;
+  }
+  if (!title) {
+    console.warn(`[MerchantSheetSync] 工作簿中未找到推荐商家表，现有工作表: ${wb.SheetNames.join(" / ")}`);
+    return null;
+  }
+
+  const raw = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[title], {
+    header: 1,
+    raw: false,
+    defval: "",
+  });
+  const rows = raw.map((r) => (r || []).map((c) => (c == null ? "" : String(c))));
+  return { title, rows };
 }
 
 // ── 解析黑名单 ──
@@ -253,8 +277,12 @@ export function parseViolationRows(rows: string[][]): ViolationRecord[] {
 }
 
 // ── 解析推荐商家表 ──
-// 推荐商家在 gid=0 同一个 sheet 的 G-M 列（第7-13列）
-// G=商家名称, H=ROI参考, I=佣金率, J=结算率, K=标记, L=分享时间, M=备注
+// 支持两种版式，由 offset 决定读哪几列：
+//   offset=0 → 独立的「白名单」工作表，A-G 列
+//   offset=6 → 旧版式，与黑名单同处 gid=0，推荐商家占 G-M 列
+// 列序均为：商家名称, ROI参考, 佣金率, 结算率, 标记, 分享时间, 备注
+
+const REC_BLOCK_WIDTH = 7;
 
 export interface RecommendationRecord {
   name: string;
@@ -265,21 +293,24 @@ export interface RecommendationRecord {
   time: string;
 }
 
-export function parseRecommendationRows(rows: string[][]): RecommendationRecord[] {
+export function parseRecommendationRows(rows: string[][], offset = 6): RecommendationRecord[] {
   if (rows.length < 2) throw new Error(`推荐商家 Sheet 数据不足: 仅 ${rows.length} 行（至少需要表头+数据行）`);
+  const end = offset + REC_BLOCK_WIDTH;
+  const colLabel = `${String.fromCharCode(65 + offset)}-${String.fromCharCode(64 + end)}`;
+
   let headerIdx = -1;
   for (let i = 0; i < Math.min(5, rows.length); i++) {
-    const text = (rows[i].slice(6) || []).join(" ").toLowerCase();
+    const text = (rows[i].slice(offset, end) || []).join(" ").toLowerCase();
     if (text.includes("商家名称") || text.includes("roi")) { headerIdx = i; break; }
   }
   if (headerIdx === -1) {
-    const sample = rows.slice(0, 3).map(r => (r.slice(6, 13) || []).join(", ")).join(" | ");
-    throw new Error(`无法找到推荐商家表头行（前3行G-M列: ${sample}）`);
+    const sample = rows.slice(0, 3).map(r => (r.slice(offset, end) || []).join(", ")).join(" | ");
+    throw new Error(`无法找到推荐商家表头行（前3行${colLabel}列: ${sample}）`);
   }
-  const recHeaders = rows[headerIdx].slice(6, 13).map((h) => (h || "").trim().toLowerCase());
+  const recHeaders = rows[headerIdx].slice(offset, end).map((h) => (h || "").trim().toLowerCase());
   const col: Record<string, number> = {};
   recHeaders.forEach((h, i) => {
-    const absIdx = i + 6;
+    const absIdx = i + offset;
     if (["商家名称", "merchant_name", "商家名"].includes(h)) col.name = absIdx;
     else if (h.includes("roi")) col.roi = absIdx;
     else if (["佣金率", "commission_rate", "佣金"].includes(h)) col.commission = absIdx;
@@ -289,21 +320,42 @@ export function parseRecommendationRows(rows: string[][]): RecommendationRecord[
     else if (["备注", "note", "notes"].includes(h) && col.remark === undefined) col.remark = absIdx;
   });
   if (col.name === undefined) {
-    throw new Error(`推荐商家表头中未找到"商家名称"列（G-M列表头: ${recHeaders.join(", ")}）`);
+    throw new Error(`推荐商家表头中未找到"商家名称"列（${colLabel}列表头: ${recHeaders.join(", ")}）`);
+  }
+  // 黑名单表头同样以「商家名称」开头，只靠这一列无法区分。要求至少命中一个推荐表专属列，
+  // 否则说明定位到了错误的工作表，宁可报错也不要把黑名单当成推荐商家写进库。
+  if (col.roi === undefined && col.time === undefined && col.settlement === undefined) {
+    throw new Error(
+      `推荐商家表头缺少 ROI参考/分享时间/结算率 列，疑似读到了非推荐商家的工作表（${colLabel}列表头: ${recHeaders.join(", ")}）`,
+    );
   }
 
   const records: RecommendationRecord[] = [];
   for (let r = headerIdx + 1; r < rows.length; r++) {
     const row = rows[r];
-    if (!row || row.length <= 6) continue;
-    // 检查 G-M 列是否全空
-    if (row.slice(6, 13).every((c) => !c.trim())) continue;
+    if (!row || row.length <= offset) continue;
+    if (row.slice(offset, end).every((c) => !c.trim())) continue;
     const g = (k: string) => (col[k] !== undefined && col[k] < row.length ? row[col[k]].trim() : "");
     const name = g("name");
     if (!name) continue;
     records.push({ name, roi: g("roi"), commission: g("commission"), settlement: g("settlement"), remark: g("remark"), time: g("time") });
   }
   return records;
+}
+
+/** 版式未知时（如管理员手工粘贴的 CSV）依次尝试独立表和旧版式 */
+export function parseRecommendationRowsAuto(rows: string[][]): RecommendationRecord[] {
+  const tried: string[] = [];
+  for (const offset of [0, 6]) {
+    try {
+      const records = parseRecommendationRows(rows, offset);
+      if (records.length > 0) return records;
+      tried.push(`offset=${offset} 解析出 0 条`);
+    } catch (e: unknown) {
+      tried.push(`offset=${offset} — ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  throw new Error(`推荐商家解析失败（已尝试两种版式）：${tried.join("；")}`);
 }
 
 // ── 公开同步函数 ──
@@ -314,7 +366,39 @@ export async function fetchViolations(sheetUrl: string): Promise<ViolationRecord
 }
 
 export async function fetchRecommendations(sheetUrl: string): Promise<RecommendationRecord[]> {
-  // 推荐商家在 gid=0 同一个 sheet 的 G-M 列
-  const rows = await fetchSheetCsv(sheetUrl, "0");
-  return parseRecommendationRows(rows);
+  const sheetId = extractSheetId(sheetUrl);
+  if (!sheetId) throw new Error("无法从链接中提取 Google Sheets ID");
+
+  // 首选：独立的「白名单」工作表（A-G 列）
+  let records: RecommendationRecord[] | null = null;
+  let via = "";
+  try {
+    const sheet = await fetchWorkbookSheet(sheetId, RECOMMENDATION_SHEET_PATTERNS);
+    if (sheet) {
+      records = parseRecommendationRows(sheet.rows, 0);
+      via = `工作表「${sheet.title}」`;
+    }
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.warn(`[MerchantSheetSync] 读取独立推荐商家工作表失败，回退旧版式: ${msg}`);
+  }
+
+  // 回退：旧版式，与黑名单同处 gid=0 的 G-M 列
+  if (!records || records.length === 0) {
+    const rows = await fetchSheetCsv(sheetUrl, "0");
+    records = parseRecommendationRowsAuto(rows);
+    via = "gid=0";
+  }
+
+  // 解析成功但一条都没有，几乎只可能是表结构变了而读取逻辑没跟上。
+  // 这种情况必须报错：静默返回空数组会让每日同步一直显示成功，问题可以埋几个月不被发现。
+  if (records.length === 0) {
+    throw new Error(
+      "推荐商家读取结果为 0 条。请确认表格中「白名单」工作表是否存在、表头是否为" +
+        "「商家名称 / ROI参考 / 佣金率 / 结算率 / 标记 / 分享时间 / 备注」",
+    );
+  }
+
+  console.log(`[MerchantSheetSync] 推荐商家读取成功: ${records.length} 条，来源 ${via}`);
+  return records;
 }
