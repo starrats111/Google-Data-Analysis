@@ -5948,6 +5948,8 @@ export const User_serpapi_keysScalarFieldEnum = {
   api_key: 'api_key',
   is_active: 'is_active',
   is_deleted: 'is_deleted',
+  exhausted_at: 'exhausted_at',
+  exhausted_msg: 'exhausted_msg',
   created_at: 'created_at',
   updated_at: 'updated_at'
 } as const
@@ -6826,7 +6828,8 @@ export type ad_image_ocr_cacheOrderByRelevanceFieldEnum = (typeof ad_image_ocr_c
 
 export const user_serpapi_keysOrderByRelevanceFieldEnum = {
   key_name: 'key_name',
-  api_key: 'api_key'
+  api_key: 'api_key',
+  exhausted_msg: 'exhausted_msg'
 } as const
 
 export type user_serpapi_keysOrderByRelevanceFieldEnum = (typeof user_serpapi_keysOrderByRelevanceFieldEnum)[keyof typeof user_serpapi_keysOrderByRelevanceFieldEnum]

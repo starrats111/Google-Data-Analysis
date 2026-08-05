@@ -13,8 +13,8 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { withUser } from "@/lib/api-handler";
-import prisma from "@/lib/prisma";
 import { getOrFetchAdvertiserDomainSnapshot, type AdvertiserDomainSnapshot } from "@/lib/atc-service";
+import { getPoolKeys } from "@/lib/serpapi-key-pool";
 
 const CONCURRENCY = 2; // C-094.7：从 5 降到 2，缓解 SerpApi 同 key 并发限流
 const MAX_BATCH = 50; // 单次请求最多 50 个广告主，避免 SerpApi 配额爆炸
@@ -36,8 +36,7 @@ function isTransientError(message: string): boolean {
   );
 }
 
-export const POST = withUser(async (req: NextRequest, { user }) => {
-  const userId = BigInt(user.userId);
+export const POST = withUser(async (req: NextRequest) => {
   const body = await req.json() as {
     advertiser_ids?: string[];
     region?: string;
@@ -58,14 +57,11 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
   const region = (body.region ?? "US").toUpperCase();
   const forceRefresh = body.force_refresh === true;
 
-  const keyRows = await prisma.user_serpapi_keys.findMany({
-    where: { user_id: userId, is_active: 1, is_deleted: 0 },
-    select: { api_key: true },
-  });
-  const serpApiKeys = keyRows.map((r) => r.api_key);
+  // D-215：取全局共享 key 池，不再只看自己配的 key
+  const serpApiKeys = await getPoolKeys();
   if (serpApiKeys.length === 0) {
     return NextResponse.json(
-      { code: -1, message: "请先在「个人设置 → 广告情报」中配置 SerpApi Key" },
+      { code: -1, message: "系统内暂无可用 SerpApi Key，请在「个人设置 → 广告情报」中配置" },
       { status: 400 }
     );
   }

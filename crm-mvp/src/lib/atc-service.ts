@@ -4,6 +4,14 @@
  */
 
 import prisma from "./prisma";
+import {
+  MAX_KEY_ATTEMPTS,
+  getPoolKeys,
+  isQuotaError,
+  markKeyExhausted,
+  markKeyHealthy,
+  pickUntriedKey,
+} from "./serpapi-key-pool";
 
 // ─── 类型定义 ───
 
@@ -213,7 +221,17 @@ export function pickApiKey(keys: string[]): string {
   return active[Math.floor(Math.random() * active.length)];
 }
 
-async function callSerpApi(params: Record<string, string>, apiKey: string): Promise<SerpApiResponse> {
+/**
+ * D-215：取一个 key 用于本次任务。优先全局共享池，池空时才退回传入的 key。
+ * 传入的 key 仍然保留是为了兼容「用户手填 key 测试」这类场景。
+ */
+export async function pickPooledApiKey(fallback: string[] = []): Promise<string> {
+  const pool = await getPoolKeys();
+  if (pool.length > 0) return pool[0];
+  return pickApiKey(fallback);
+}
+
+async function rawSerpApiCall(params: Record<string, string>, apiKey: string): Promise<SerpApiResponse> {
   const qs = new URLSearchParams({ ...params, api_key: apiKey }).toString();
   const res = await fetch(`https://serpapi.com/search?${qs}`, {
     headers: { "Accept": "application/json" },
@@ -221,9 +239,42 @@ async function callSerpApi(params: Record<string, string>, apiKey: string): Prom
   });
   if (!res.ok) {
     const text = await res.text();
+    // 429 是额度/限流，交给上层换 key；其余 HTTP 错误换 key 也没用，直接抛
+    if (res.status === 429) return { error: `SerpApi HTTP 429: ${text.slice(0, 200)}` };
     throw new Error(`SerpApi HTTP ${res.status}: ${text.slice(0, 200)}`);
   }
   return res.json() as Promise<SerpApiResponse>;
+}
+
+/**
+ * D-215：撞到额度耗尽时自动换池里的下一个 key 重试。
+ * 放在这一层而不是各调用点，是因为全项目有 8 处 callSerpApi，逐个改容易漏。
+ */
+async function callSerpApi(params: Record<string, string>, apiKey: string): Promise<SerpApiResponse> {
+  const tried = new Set<string>([apiKey]);
+  let key = apiKey;
+  let lastQuotaError: SerpApiResponse | null = null;
+
+  for (let attempt = 0; attempt < MAX_KEY_ATTEMPTS; attempt++) {
+    const data = await rawSerpApiCall(params, key);
+
+    if (!isQuotaError(data.error)) {
+      if (attempt > 0) console.log(`[SerpApiPool] 换到第 ${attempt + 1} 个 key 后调用成功`);
+      await markKeyHealthy(key);
+      return data;
+    }
+
+    lastQuotaError = data;
+    await markKeyExhausted(key, data.error);
+
+    const next = await pickUntriedKey(tried);
+    if (!next) break;
+    tried.add(next);
+    key = next;
+  }
+
+  console.warn(`[SerpApiPool] 已试 ${tried.size} 个 key 均额度耗尽：${lastQuotaError?.error ?? ""}`);
+  return lastQuotaError ?? { error: "SerpApi 额度已耗尽" };
 }
 
 /**

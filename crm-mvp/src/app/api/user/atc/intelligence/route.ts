@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withUser } from "@/lib/api-handler";
-import prisma from "@/lib/prisma";
 import { searchIntelligence } from "@/lib/atc-service";
+import { getPoolKeys } from "@/lib/serpapi-key-pool";
 
-export const GET = withUser(async (req: NextRequest, { user }) => {
-  const userId = BigInt(user.userId);
+export const GET = withUser(async (req: NextRequest) => {
   const { searchParams } = req.nextUrl;
   const text          = (searchParams.get("text") ?? "").trim();
   const advertiser_id = (searchParams.get("advertiser_id") ?? "").trim();
@@ -14,14 +13,10 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
     return NextResponse.json({ code: -1, message: "请输入广告主名称或 ID" }, { status: 400 });
   }
 
-  // 读取用户 SerpApi Key 池
-  const keyRows = await prisma.user_serpapi_keys.findMany({
-    where: { user_id: userId, is_active: 1, is_deleted: 0 },
-    select: { api_key: true },
-  });
-  const serpApiKeys = keyRows.map((r) => r.api_key);
+  // D-215：取全局共享 key 池，不再只看自己配的 key
+  const serpApiKeys = await getPoolKeys();
   if (serpApiKeys.length === 0) {
-    return NextResponse.json({ code: -1, message: "请先在「个人设置 → 广告情报」中配置 SerpApi Key" }, { status: 400 });
+    return NextResponse.json({ code: -1, message: "系统内暂无可用 SerpApi Key，请在「个人设置 → 广告情报」中配置" }, { status: 400 });
   }
 
   const result = await searchIntelligence({

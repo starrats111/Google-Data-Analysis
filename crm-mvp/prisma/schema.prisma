@@ -50,7 +50,7 @@ model users {
   click_control_ratio_max_pct Int    @default(10) @db.TinyInt // 需求2：转化率(订单/点击)控制区间上限(%)，默认10
   script_loop_interval_seconds Int?  @db.UnsignedSmallInt // 换链脚本轮询间隔(秒)，用户自助调节；NULL=用默认15。脚本启动经 /api/v1/suffix/script-config 读取，改后下轮自动生效无需重发脚本
   serpapi_key               String?  @db.VarChar(128) // 个人 SerpApi API Key（广告情报功能）
-  atc_default_min_days      Int      @default(30) @db.UnsignedInt // 我的广告主-全局阈值，新增关注 / 统一设置时使用
+  atc_default_min_days      Int      @default(15) @db.UnsignedInt // 我的广告主-全局阈值，新增关注 / 统一设置时使用。D-215 从 30 降到 15，与推荐列表收录口径对齐
   is_deleted                Int      @default(0) @db.TinyInt
   created_at                DateTime @default(now()) @db.DateTime(0)
   updated_at                DateTime @default(now()) @updatedAt @db.DateTime(0)
@@ -1260,10 +1260,14 @@ model user_serpapi_keys {
   api_key    String   @db.VarChar(128)
   is_active  Int      @default(1) @db.TinyInt
   is_deleted Int      @default(0) @db.TinyInt
+  // D-215 共享 key 池：被 SerpApi 判额度耗尽的时刻，冷却窗口内不再取用；下次调用成功即清空
+  exhausted_at  DateTime? @db.DateTime(0)
+  exhausted_msg String?   @db.VarChar(255)
   created_at DateTime @default(now()) @db.DateTime(0)
   updated_at DateTime @default(now()) @updatedAt @db.DateTime(0)
 
   @@index([user_id, is_active], map: "idx_user_active")
+  @@index([is_active, is_deleted, exhausted_at], map: "idx_pool_pick")
 }
 
 // -----------------------------------------------------------
@@ -1316,7 +1320,7 @@ model user_atc_watchlist {
   advertiser_id   String   @db.VarChar(64)
   advertiser_name String?  @db.VarChar(255)
   region          String   @default("US") @db.VarChar(8)
-  min_days        Int      @default(30)
+  min_days        Int      @default(15) // D-215 从 30 降到 15，与推荐列表收录口径对齐
   /**
    * C-094.6：是否分享给同事（出现在「推荐广告主」列表）
    */

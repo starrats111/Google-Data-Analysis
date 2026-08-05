@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { withUser } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import { queryMerchantAtc, extractDomain } from "@/lib/atc-service";
+import { getPoolKeys } from "@/lib/serpapi-key-pool";
 
 export const POST = withUser(async (req: NextRequest, { user }) => {
   const userId = BigInt(user.userId);
@@ -15,14 +16,10 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
   const forceRefresh = body.force_refresh === true;
   const region = (body.region ?? "US").toUpperCase();
 
-  // 1. 读取用户 SerpApi Key 池（取所有启用的 Key）
-  const keyRows = await prisma.user_serpapi_keys.findMany({
-    where: { user_id: userId, is_active: 1, is_deleted: 0 },
-    select: { api_key: true },
-  });
-  const serpApiKeys = keyRows.map((r) => r.api_key);
+  // 1. D-215：取全局共享 key 池，不再只看自己配的 key
+  const serpApiKeys = await getPoolKeys();
   if (serpApiKeys.length === 0) {
-    return NextResponse.json({ code: -1, message: "请先在「个人设置 → 广告情报」中配置 SerpApi Key" }, { status: 400 });
+    return NextResponse.json({ code: -1, message: "系统内暂无可用 SerpApi Key，请在「个人设置 → 广告情报」中配置" }, { status: 400 });
   }
 
   // 2. 读取商家信息

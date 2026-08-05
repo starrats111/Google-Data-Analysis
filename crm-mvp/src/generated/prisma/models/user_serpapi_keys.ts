@@ -47,6 +47,8 @@ export type User_serpapi_keysMinAggregateOutputType = {
   api_key: string | null
   is_active: number | null
   is_deleted: number | null
+  exhausted_at: Date | null
+  exhausted_msg: string | null
   created_at: Date | null
   updated_at: Date | null
 }
@@ -58,6 +60,8 @@ export type User_serpapi_keysMaxAggregateOutputType = {
   api_key: string | null
   is_active: number | null
   is_deleted: number | null
+  exhausted_at: Date | null
+  exhausted_msg: string | null
   created_at: Date | null
   updated_at: Date | null
 }
@@ -69,6 +73,8 @@ export type User_serpapi_keysCountAggregateOutputType = {
   api_key: number
   is_active: number
   is_deleted: number
+  exhausted_at: number
+  exhausted_msg: number
   created_at: number
   updated_at: number
   _all: number
@@ -96,6 +102,8 @@ export type User_serpapi_keysMinAggregateInputType = {
   api_key?: true
   is_active?: true
   is_deleted?: true
+  exhausted_at?: true
+  exhausted_msg?: true
   created_at?: true
   updated_at?: true
 }
@@ -107,6 +115,8 @@ export type User_serpapi_keysMaxAggregateInputType = {
   api_key?: true
   is_active?: true
   is_deleted?: true
+  exhausted_at?: true
+  exhausted_msg?: true
   created_at?: true
   updated_at?: true
 }
@@ -118,6 +128,8 @@ export type User_serpapi_keysCountAggregateInputType = {
   api_key?: true
   is_active?: true
   is_deleted?: true
+  exhausted_at?: true
+  exhausted_msg?: true
   created_at?: true
   updated_at?: true
   _all?: true
@@ -216,6 +228,8 @@ export type User_serpapi_keysGroupByOutputType = {
   api_key: string
   is_active: number
   is_deleted: number
+  exhausted_at: Date | null
+  exhausted_msg: string | null
   created_at: Date
   updated_at: Date
   _count: User_serpapi_keysCountAggregateOutputType | null
@@ -250,6 +264,8 @@ export type user_serpapi_keysWhereInput = {
   api_key?: Prisma.StringFilter<"user_serpapi_keys"> | string
   is_active?: Prisma.IntFilter<"user_serpapi_keys"> | number
   is_deleted?: Prisma.IntFilter<"user_serpapi_keys"> | number
+  exhausted_at?: Prisma.DateTimeNullableFilter<"user_serpapi_keys"> | Date | string | null
+  exhausted_msg?: Prisma.StringNullableFilter<"user_serpapi_keys"> | string | null
   created_at?: Prisma.DateTimeFilter<"user_serpapi_keys"> | Date | string
   updated_at?: Prisma.DateTimeFilter<"user_serpapi_keys"> | Date | string
 }
@@ -261,6 +277,8 @@ export type user_serpapi_keysOrderByWithRelationInput = {
   api_key?: Prisma.SortOrder
   is_active?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
+  exhausted_at?: Prisma.SortOrderInput | Prisma.SortOrder
+  exhausted_msg?: Prisma.SortOrderInput | Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
   _relevance?: Prisma.user_serpapi_keysOrderByRelevanceInput
@@ -276,6 +294,8 @@ export type user_serpapi_keysWhereUniqueInput = Prisma.AtLeast<{
   api_key?: Prisma.StringFilter<"user_serpapi_keys"> | string
   is_active?: Prisma.IntFilter<"user_serpapi_keys"> | number
   is_deleted?: Prisma.IntFilter<"user_serpapi_keys"> | number
+  exhausted_at?: Prisma.DateTimeNullableFilter<"user_serpapi_keys"> | Date | string | null
+  exhausted_msg?: Prisma.StringNullableFilter<"user_serpapi_keys"> | string | null
   created_at?: Prisma.DateTimeFilter<"user_serpapi_keys"> | Date | string
   updated_at?: Prisma.DateTimeFilter<"user_serpapi_keys"> | Date | string
 }, "id">
@@ -287,6 +307,8 @@ export type user_serpapi_keysOrderByWithAggregationInput = {
   api_key?: Prisma.SortOrder
   is_active?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
+  exhausted_at?: Prisma.SortOrderInput | Prisma.SortOrder
+  exhausted_msg?: Prisma.SortOrderInput | Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
   _count?: Prisma.user_serpapi_keysCountOrderByAggregateInput
@@ -306,6 +328,8 @@ export type user_serpapi_keysScalarWhereWithAggregatesInput = {
   api_key?: Prisma.StringWithAggregatesFilter<"user_serpapi_keys"> | string
   is_active?: Prisma.IntWithAggregatesFilter<"user_serpapi_keys"> | number
   is_deleted?: Prisma.IntWithAggregatesFilter<"user_serpapi_keys"> | number
+  exhausted_at?: Prisma.DateTimeNullableWithAggregatesFilter<"user_serpapi_keys"> | Date | string | null
+  exhausted_msg?: Prisma.StringNullableWithAggregatesFilter<"user_serpapi_keys"> | string | null
   created_at?: Prisma.DateTimeWithAggregatesFilter<"user_serpapi_keys"> | Date | string
   updated_at?: Prisma.DateTimeWithAggregatesFilter<"user_serpapi_keys"> | Date | string
 }
@@ -317,6 +341,8 @@ export type user_serpapi_keysCreateInput = {
   api_key: string
   is_active?: number
   is_deleted?: number
+  exhausted_at?: Date | string | null
+  exhausted_msg?: string | null
   created_at?: Date | string
   updated_at?: Date | string
 }
@@ -328,6 +354,8 @@ export type user_serpapi_keysUncheckedCreateInput = {
   api_key: string
   is_active?: number
   is_deleted?: number
+  exhausted_at?: Date | string | null
+  exhausted_msg?: string | null
   created_at?: Date | string
   updated_at?: Date | string
 }
@@ -339,6 +367,8 @@ export type user_serpapi_keysUpdateInput = {
   api_key?: Prisma.StringFieldUpdateOperationsInput | string
   is_active?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
+  exhausted_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  exhausted_msg?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -350,6 +380,8 @@ export type user_serpapi_keysUncheckedUpdateInput = {
   api_key?: Prisma.StringFieldUpdateOperationsInput | string
   is_active?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
+  exhausted_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  exhausted_msg?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -361,6 +393,8 @@ export type user_serpapi_keysCreateManyInput = {
   api_key: string
   is_active?: number
   is_deleted?: number
+  exhausted_at?: Date | string | null
+  exhausted_msg?: string | null
   created_at?: Date | string
   updated_at?: Date | string
 }
@@ -372,6 +406,8 @@ export type user_serpapi_keysUpdateManyMutationInput = {
   api_key?: Prisma.StringFieldUpdateOperationsInput | string
   is_active?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
+  exhausted_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  exhausted_msg?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -383,6 +419,8 @@ export type user_serpapi_keysUncheckedUpdateManyInput = {
   api_key?: Prisma.StringFieldUpdateOperationsInput | string
   is_active?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
+  exhausted_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  exhausted_msg?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -400,6 +438,8 @@ export type user_serpapi_keysCountOrderByAggregateInput = {
   api_key?: Prisma.SortOrder
   is_active?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
+  exhausted_at?: Prisma.SortOrder
+  exhausted_msg?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
 }
@@ -418,6 +458,8 @@ export type user_serpapi_keysMaxOrderByAggregateInput = {
   api_key?: Prisma.SortOrder
   is_active?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
+  exhausted_at?: Prisma.SortOrder
+  exhausted_msg?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
 }
@@ -429,6 +471,8 @@ export type user_serpapi_keysMinOrderByAggregateInput = {
   api_key?: Prisma.SortOrder
   is_active?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
+  exhausted_at?: Prisma.SortOrder
+  exhausted_msg?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
 }
@@ -449,6 +493,8 @@ export type user_serpapi_keysSelect<ExtArgs extends runtime.Types.Extensions.Int
   api_key?: boolean
   is_active?: boolean
   is_deleted?: boolean
+  exhausted_at?: boolean
+  exhausted_msg?: boolean
   created_at?: boolean
   updated_at?: boolean
 }, ExtArgs["result"]["user_serpapi_keys"]>
@@ -462,11 +508,13 @@ export type user_serpapi_keysSelectScalar = {
   api_key?: boolean
   is_active?: boolean
   is_deleted?: boolean
+  exhausted_at?: boolean
+  exhausted_msg?: boolean
   created_at?: boolean
   updated_at?: boolean
 }
 
-export type user_serpapi_keysOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "key_name" | "api_key" | "is_active" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["user_serpapi_keys"]>
+export type user_serpapi_keysOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "key_name" | "api_key" | "is_active" | "is_deleted" | "exhausted_at" | "exhausted_msg" | "created_at" | "updated_at", ExtArgs["result"]["user_serpapi_keys"]>
 
 export type $user_serpapi_keysPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "user_serpapi_keys"
@@ -478,6 +526,8 @@ export type $user_serpapi_keysPayload<ExtArgs extends runtime.Types.Extensions.I
     api_key: string
     is_active: number
     is_deleted: number
+    exhausted_at: Date | null
+    exhausted_msg: string | null
     created_at: Date
     updated_at: Date
   }, ExtArgs["result"]["user_serpapi_keys"]>
@@ -855,6 +905,8 @@ export interface user_serpapi_keysFieldRefs {
   readonly api_key: Prisma.FieldRef<"user_serpapi_keys", 'String'>
   readonly is_active: Prisma.FieldRef<"user_serpapi_keys", 'Int'>
   readonly is_deleted: Prisma.FieldRef<"user_serpapi_keys", 'Int'>
+  readonly exhausted_at: Prisma.FieldRef<"user_serpapi_keys", 'DateTime'>
+  readonly exhausted_msg: Prisma.FieldRef<"user_serpapi_keys", 'String'>
   readonly created_at: Prisma.FieldRef<"user_serpapi_keys", 'DateTime'>
   readonly updated_at: Prisma.FieldRef<"user_serpapi_keys", 'DateTime'>
 }

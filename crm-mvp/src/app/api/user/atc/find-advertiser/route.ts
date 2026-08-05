@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withUser } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
-import { findArIdByName, pickApiKey } from "@/lib/atc-service";
+import { findArIdByName } from "@/lib/atc-service";
+import { getPoolKeys } from "@/lib/serpapi-key-pool";
 
 /**
  * 在已知快照域名中实时搜索广告主名称，找到对应 AR ID。
@@ -48,7 +49,7 @@ async function discoverArIdByDomainSearch(
  * 1. 先在本地快照 DB 中按名称模糊搜索
  * 2. 若本地无结果，用 Google Search 搜索 ATC 主页，提取 AR ID
  */
-export const GET = withUser(async (req: NextRequest, { user }: { user: { id: bigint } }) => {
+export const GET = withUser(async (req: NextRequest) => {
   const { searchParams } = req.nextUrl;
   const name = (searchParams.get("name") ?? "").trim();
   if (!name) return NextResponse.json({ code: 0, data: [] });
@@ -80,14 +81,11 @@ export const GET = withUser(async (req: NextRequest, { user }: { user: { id: big
   }
 
   // ② 本地无结果 → 获取 SerpApi Key
+  // D-215：取全局共享 key 池，不再只看自己配的 key
   let serpApiKey: string | null = null;
   try {
-    const keyRows = await prisma.user_serpapi_keys.findMany({
-      where: { user_id: user.id, is_active: true },
-      select: { api_key: true },
-    });
-    const keys = keyRows.map((r) => r.api_key);
-    if (keys.length > 0) serpApiKey = pickApiKey(keys);
+    const keys = await getPoolKeys();
+    if (keys.length > 0) serpApiKey = keys[0];
   } catch { /* ignore */ }
 
   if (serpApiKey) {

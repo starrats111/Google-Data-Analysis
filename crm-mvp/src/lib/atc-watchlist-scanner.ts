@@ -13,6 +13,7 @@
 import prisma from "@/lib/prisma";
 import { searchIntelligence } from "@/lib/atc-service";
 import type { AtcAd, AtcIntelligenceResult } from "@/lib/atc-service";
+import { getPoolKeys } from "@/lib/serpapi-key-pool";
 
 export interface WatchlistScanResult {
   scannedUsers: number;
@@ -257,19 +258,16 @@ export async function scanAllWatchlists(): Promise<WatchlistScanResult> {
   }
   res.scannedUsers = byUser.size;
 
-  for (const [userIdStr, userWatches] of byUser) {
-    const userId = BigInt(userIdStr);
+  // D-215：key 改成全局共享池。以前按 user_id 取，某人额度打满他关注的广告主当天就全废，
+  // 别人富余的额度也调不动；现在谁的 key 都能用，撞额度时 callSerpApi 内部自动换下一个。
+  const serpApiKeys = await getPoolKeys();
+  if (serpApiKeys.length === 0) {
+    res.skippedNoKey += watchlists.length;
+    res.elapsedMs = Date.now() - startedAt;
+    return res;
+  }
 
-    const keyRows = await prisma.user_serpapi_keys.findMany({
-      where: { user_id: userId, is_active: 1, is_deleted: 0 },
-      select: { api_key: true },
-    });
-    const serpApiKeys = keyRows.map((r) => r.api_key).filter((k) => k && k.trim());
-    if (serpApiKeys.length === 0) {
-      res.skippedNoKey += userWatches.length;
-      continue;
-    }
-
+  for (const [, userWatches] of byUser) {
     for (const w of userWatches) {
       const item = await processOneWatchlist(w, serpApiKeys, yesterdayCst, todayCst, intelCache);
       res.alertsCreated += item.alertsCreated;
