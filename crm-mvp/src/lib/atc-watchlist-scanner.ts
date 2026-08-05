@@ -171,6 +171,7 @@ async function processOneWatchlist(
               advertiser_id: watchlist.advertiser_id,
               creative_id: ad.creative_id!,
               days,
+              domain: finalDomain,
               alerted_date: todayDate,
             },
           });

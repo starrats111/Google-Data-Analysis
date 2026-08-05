@@ -31,10 +31,23 @@ export async function GET(req: NextRequest) {
   } else {
     const where: Record<string, unknown> = { is_deleted: 0 };
     if (search) where.merchant_name = { contains: search };
+
+    // D-213 推荐列表现在有两档来源，各自的排序依据不同：
+    //   官方（sheets/excel）看 EPC 与佣金率，仍按最新收录排；
+    //   系统发现（atc）没有 EPC，只有同行投放天数，按天数从高到低排。
+    const recSource = searchParams.get("rec_source") || "all";
+    if (recSource === "official") where.source = { not: "atc" };
+    else if (recSource === "atc") where.source = "atc";
+
+    const orderBy =
+      recSource === "atc"
+        ? [{ atc_days: "desc" as const }, { created_at: "desc" as const }]
+        : [{ created_at: "desc" as const }];
+
     const [total, items] = await Promise.all([
       prisma.merchant_recommendations.count({ where: where as never }),
       prisma.merchant_recommendations.findMany({
-        where: where as never, orderBy: { created_at: "desc" },
+        where: where as never, orderBy,
         skip: (page - 1) * pageSize, take: pageSize,
       }),
     ]);

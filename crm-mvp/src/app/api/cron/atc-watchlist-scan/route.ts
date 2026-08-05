@@ -10,6 +10,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { scanAllWatchlists } from "@/lib/atc-watchlist-scanner";
+import { syncAtcRecommendations, backfillAlertDomains } from "@/lib/atc-recommendation-sync";
 
 function verifyCron(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
@@ -21,10 +22,38 @@ export async function GET(req: NextRequest) {
   if (!verifyCron(req)) {
     return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
+  const { searchParams } = new URL(req.url);
+  const dryRun = searchParams.get("dry") === "1";
+  // 只刷推荐、跳过扫描：回补和排障时用，免得白白烧掉 SerpApi 额度
+  const syncOnly = searchParams.get("sync_only") === "1";
+  const doBackfill = searchParams.get("backfill") === "1";
+
   try {
-    const result = await scanAllWatchlists();
-    console.log(`[CRON atc-watchlist-scan ${new Date().toISOString()}] ${JSON.stringify(result)}`);
-    return NextResponse.json({ ok: true, ...result });
+    let backfill: unknown = null;
+    if (doBackfill) {
+      backfill = await backfillAlertDomains();
+      console.log(`[CRON atc-backfill ${new Date().toISOString()}] ${JSON.stringify(backfill)}`);
+    }
+
+    const result = syncOnly ? { skipped: "scan" as const } : await scanAllWatchlists();
+    if (!syncOnly) {
+      console.log(`[CRON atc-watchlist-scan ${new Date().toISOString()}] ${JSON.stringify(result)}`);
+    }
+
+    // D-213 扫完紧接着刷推荐商家，用的就是刚写进 alert_log 的数据。
+    // 单独兜错：同步失败不能连累已经跑完的扫描结果，但要在返回里说清楚，不许静默。
+    let recommendation: unknown = null;
+    try {
+      const rec = await syncAtcRecommendations({ dryRun });
+      recommendation = rec;
+      console.log(`[CRON atc-rec-sync ${new Date().toISOString()}] ${JSON.stringify(rec)}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      recommendation = { error: msg };
+      console.error(`[CRON atc-rec-sync ERROR] ${msg}`);
+    }
+
+    return NextResponse.json({ ok: true, ...result, backfill, recommendation });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[CRON atc-watchlist-scan ERROR] ${msg}`);

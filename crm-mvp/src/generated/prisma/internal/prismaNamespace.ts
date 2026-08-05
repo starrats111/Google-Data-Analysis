@@ -5179,6 +5179,9 @@ export const Merchant_recommendationsScalarFieldEnum = {
   commission_cap: 'commission_cap',
   avg_commission_rate: 'avg_commission_rate',
   avg_order_commission: 'avg_order_commission',
+  atc_domain: 'atc_domain',
+  atc_days: 'atc_days',
+  atc_last_seen: 'atc_last_seen',
   is_deleted: 'is_deleted',
   created_at: 'created_at'
 } as const
@@ -6009,6 +6012,7 @@ export const User_atc_alert_logScalarFieldEnum = {
   advertiser_id: 'advertiser_id',
   creative_id: 'creative_id',
   days: 'days',
+  domain: 'domain',
   alerted_date: 'alerted_date',
   alerted_at: 'alerted_at'
 } as const
@@ -6428,7 +6432,8 @@ export const merchant_recommendationsOrderByRelevanceFieldEnum = {
   affiliate: 'affiliate',
   website: 'website',
   merchant_base: 'merchant_base',
-  commission_cap: 'commission_cap'
+  commission_cap: 'commission_cap',
+  atc_domain: 'atc_domain'
 } as const
 
 export type merchant_recommendationsOrderByRelevanceFieldEnum = (typeof merchant_recommendationsOrderByRelevanceFieldEnum)[keyof typeof merchant_recommendationsOrderByRelevanceFieldEnum]
@@ -6858,7 +6863,8 @@ export type user_atc_watchlistOrderByRelevanceFieldEnum = (typeof user_atc_watch
 
 export const user_atc_alert_logOrderByRelevanceFieldEnum = {
   advertiser_id: 'advertiser_id',
-  creative_id: 'creative_id'
+  creative_id: 'creative_id',
+  domain: 'domain'
 } as const
 
 export type user_atc_alert_logOrderByRelevanceFieldEnum = (typeof user_atc_alert_logOrderByRelevanceFieldEnum)[keyof typeof user_atc_alert_logOrderByRelevanceFieldEnum]

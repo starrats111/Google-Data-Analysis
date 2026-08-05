@@ -47,6 +47,7 @@ export type User_atc_alert_logMinAggregateOutputType = {
   advertiser_id: string | null
   creative_id: string | null
   days: number | null
+  domain: string | null
   alerted_date: Date | null
   alerted_at: Date | null
 }
@@ -58,6 +59,7 @@ export type User_atc_alert_logMaxAggregateOutputType = {
   advertiser_id: string | null
   creative_id: string | null
   days: number | null
+  domain: string | null
   alerted_date: Date | null
   alerted_at: Date | null
 }
@@ -69,6 +71,7 @@ export type User_atc_alert_logCountAggregateOutputType = {
   advertiser_id: number
   creative_id: number
   days: number
+  domain: number
   alerted_date: number
   alerted_at: number
   _all: number
@@ -96,6 +99,7 @@ export type User_atc_alert_logMinAggregateInputType = {
   advertiser_id?: true
   creative_id?: true
   days?: true
+  domain?: true
   alerted_date?: true
   alerted_at?: true
 }
@@ -107,6 +111,7 @@ export type User_atc_alert_logMaxAggregateInputType = {
   advertiser_id?: true
   creative_id?: true
   days?: true
+  domain?: true
   alerted_date?: true
   alerted_at?: true
 }
@@ -118,6 +123,7 @@ export type User_atc_alert_logCountAggregateInputType = {
   advertiser_id?: true
   creative_id?: true
   days?: true
+  domain?: true
   alerted_date?: true
   alerted_at?: true
   _all?: true
@@ -216,6 +222,7 @@ export type User_atc_alert_logGroupByOutputType = {
   advertiser_id: string
   creative_id: string
   days: number
+  domain: string | null
   alerted_date: Date
   alerted_at: Date
   _count: User_atc_alert_logCountAggregateOutputType | null
@@ -250,6 +257,7 @@ export type user_atc_alert_logWhereInput = {
   advertiser_id?: Prisma.StringFilter<"user_atc_alert_log"> | string
   creative_id?: Prisma.StringFilter<"user_atc_alert_log"> | string
   days?: Prisma.IntFilter<"user_atc_alert_log"> | number
+  domain?: Prisma.StringNullableFilter<"user_atc_alert_log"> | string | null
   alerted_date?: Prisma.DateTimeFilter<"user_atc_alert_log"> | Date | string
   alerted_at?: Prisma.DateTimeFilter<"user_atc_alert_log"> | Date | string
 }
@@ -261,6 +269,7 @@ export type user_atc_alert_logOrderByWithRelationInput = {
   advertiser_id?: Prisma.SortOrder
   creative_id?: Prisma.SortOrder
   days?: Prisma.SortOrder
+  domain?: Prisma.SortOrderInput | Prisma.SortOrder
   alerted_date?: Prisma.SortOrder
   alerted_at?: Prisma.SortOrder
   _relevance?: Prisma.user_atc_alert_logOrderByRelevanceInput
@@ -277,6 +286,7 @@ export type user_atc_alert_logWhereUniqueInput = Prisma.AtLeast<{
   advertiser_id?: Prisma.StringFilter<"user_atc_alert_log"> | string
   creative_id?: Prisma.StringFilter<"user_atc_alert_log"> | string
   days?: Prisma.IntFilter<"user_atc_alert_log"> | number
+  domain?: Prisma.StringNullableFilter<"user_atc_alert_log"> | string | null
   alerted_date?: Prisma.DateTimeFilter<"user_atc_alert_log"> | Date | string
   alerted_at?: Prisma.DateTimeFilter<"user_atc_alert_log"> | Date | string
 }, "id" | "user_id_creative_id_alerted_date">
@@ -288,6 +298,7 @@ export type user_atc_alert_logOrderByWithAggregationInput = {
   advertiser_id?: Prisma.SortOrder
   creative_id?: Prisma.SortOrder
   days?: Prisma.SortOrder
+  domain?: Prisma.SortOrderInput | Prisma.SortOrder
   alerted_date?: Prisma.SortOrder
   alerted_at?: Prisma.SortOrder
   _count?: Prisma.user_atc_alert_logCountOrderByAggregateInput
@@ -307,6 +318,7 @@ export type user_atc_alert_logScalarWhereWithAggregatesInput = {
   advertiser_id?: Prisma.StringWithAggregatesFilter<"user_atc_alert_log"> | string
   creative_id?: Prisma.StringWithAggregatesFilter<"user_atc_alert_log"> | string
   days?: Prisma.IntWithAggregatesFilter<"user_atc_alert_log"> | number
+  domain?: Prisma.StringNullableWithAggregatesFilter<"user_atc_alert_log"> | string | null
   alerted_date?: Prisma.DateTimeWithAggregatesFilter<"user_atc_alert_log"> | Date | string
   alerted_at?: Prisma.DateTimeWithAggregatesFilter<"user_atc_alert_log"> | Date | string
 }
@@ -318,6 +330,7 @@ export type user_atc_alert_logCreateInput = {
   advertiser_id: string
   creative_id: string
   days: number
+  domain?: string | null
   alerted_date: Date | string
   alerted_at?: Date | string
 }
@@ -329,6 +342,7 @@ export type user_atc_alert_logUncheckedCreateInput = {
   advertiser_id: string
   creative_id: string
   days: number
+  domain?: string | null
   alerted_date: Date | string
   alerted_at?: Date | string
 }
@@ -340,6 +354,7 @@ export type user_atc_alert_logUpdateInput = {
   advertiser_id?: Prisma.StringFieldUpdateOperationsInput | string
   creative_id?: Prisma.StringFieldUpdateOperationsInput | string
   days?: Prisma.IntFieldUpdateOperationsInput | number
+  domain?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   alerted_date?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   alerted_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -351,6 +366,7 @@ export type user_atc_alert_logUncheckedUpdateInput = {
   advertiser_id?: Prisma.StringFieldUpdateOperationsInput | string
   creative_id?: Prisma.StringFieldUpdateOperationsInput | string
   days?: Prisma.IntFieldUpdateOperationsInput | number
+  domain?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   alerted_date?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   alerted_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -362,6 +378,7 @@ export type user_atc_alert_logCreateManyInput = {
   advertiser_id: string
   creative_id: string
   days: number
+  domain?: string | null
   alerted_date: Date | string
   alerted_at?: Date | string
 }
@@ -373,6 +390,7 @@ export type user_atc_alert_logUpdateManyMutationInput = {
   advertiser_id?: Prisma.StringFieldUpdateOperationsInput | string
   creative_id?: Prisma.StringFieldUpdateOperationsInput | string
   days?: Prisma.IntFieldUpdateOperationsInput | number
+  domain?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   alerted_date?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   alerted_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -384,6 +402,7 @@ export type user_atc_alert_logUncheckedUpdateManyInput = {
   advertiser_id?: Prisma.StringFieldUpdateOperationsInput | string
   creative_id?: Prisma.StringFieldUpdateOperationsInput | string
   days?: Prisma.IntFieldUpdateOperationsInput | number
+  domain?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   alerted_date?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   alerted_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -407,6 +426,7 @@ export type user_atc_alert_logCountOrderByAggregateInput = {
   advertiser_id?: Prisma.SortOrder
   creative_id?: Prisma.SortOrder
   days?: Prisma.SortOrder
+  domain?: Prisma.SortOrder
   alerted_date?: Prisma.SortOrder
   alerted_at?: Prisma.SortOrder
 }
@@ -425,6 +445,7 @@ export type user_atc_alert_logMaxOrderByAggregateInput = {
   advertiser_id?: Prisma.SortOrder
   creative_id?: Prisma.SortOrder
   days?: Prisma.SortOrder
+  domain?: Prisma.SortOrder
   alerted_date?: Prisma.SortOrder
   alerted_at?: Prisma.SortOrder
 }
@@ -436,6 +457,7 @@ export type user_atc_alert_logMinOrderByAggregateInput = {
   advertiser_id?: Prisma.SortOrder
   creative_id?: Prisma.SortOrder
   days?: Prisma.SortOrder
+  domain?: Prisma.SortOrder
   alerted_date?: Prisma.SortOrder
   alerted_at?: Prisma.SortOrder
 }
@@ -456,6 +478,7 @@ export type user_atc_alert_logSelect<ExtArgs extends runtime.Types.Extensions.In
   advertiser_id?: boolean
   creative_id?: boolean
   days?: boolean
+  domain?: boolean
   alerted_date?: boolean
   alerted_at?: boolean
 }, ExtArgs["result"]["user_atc_alert_log"]>
@@ -469,11 +492,12 @@ export type user_atc_alert_logSelectScalar = {
   advertiser_id?: boolean
   creative_id?: boolean
   days?: boolean
+  domain?: boolean
   alerted_date?: boolean
   alerted_at?: boolean
 }
 
-export type user_atc_alert_logOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "watchlist_id" | "advertiser_id" | "creative_id" | "days" | "alerted_date" | "alerted_at", ExtArgs["result"]["user_atc_alert_log"]>
+export type user_atc_alert_logOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "watchlist_id" | "advertiser_id" | "creative_id" | "days" | "domain" | "alerted_date" | "alerted_at", ExtArgs["result"]["user_atc_alert_log"]>
 
 export type $user_atc_alert_logPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "user_atc_alert_log"
@@ -485,6 +509,7 @@ export type $user_atc_alert_logPayload<ExtArgs extends runtime.Types.Extensions.
     advertiser_id: string
     creative_id: string
     days: number
+    domain: string | null
     alerted_date: Date
     alerted_at: Date
   }, ExtArgs["result"]["user_atc_alert_log"]>
@@ -862,6 +887,7 @@ export interface user_atc_alert_logFieldRefs {
   readonly advertiser_id: Prisma.FieldRef<"user_atc_alert_log", 'String'>
   readonly creative_id: Prisma.FieldRef<"user_atc_alert_log", 'String'>
   readonly days: Prisma.FieldRef<"user_atc_alert_log", 'Int'>
+  readonly domain: Prisma.FieldRef<"user_atc_alert_log", 'String'>
   readonly alerted_date: Prisma.FieldRef<"user_atc_alert_log", 'DateTime'>
   readonly alerted_at: Prisma.FieldRef<"user_atc_alert_log", 'DateTime'>
 }

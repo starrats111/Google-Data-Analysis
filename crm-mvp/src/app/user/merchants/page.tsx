@@ -190,8 +190,10 @@ export default function MerchantsPage() {
   }, [adData, adForm]);
   const [vioSearch, setVioSearch] = useState(""); const [vioPage, setVioPage] = useState(1); const [vioPageSize, setVioPageSize] = useState(50);
   const [recSearch, setRecSearch] = useState(""); const [recPage, setRecPage] = useState(1); const [recPageSize, setRecPageSize] = useState(50);
+  // D-213 推荐列表两档来源：官方分享的名单，与系统每天从 ATC 追踪同行发现的
+  const [recSource, setRecSource] = useState("all");
   const { data: vioData, isLoading: vl, error: vioError, mutate: vioMutate } = useApiWithParams<{ items: any[]; total: number }>(tab === "violations" ? "/api/user/merchants/sheet-sync" : null, { type: "violation", page: vioPage, pageSize: vioPageSize, ...(vioSearch ? { search: vioSearch } : {}) });
-  const { data: recData, isLoading: rl, error: recError, mutate: recMutate } = useApiWithParams<{ items: any[]; total: number }>(tab === "recommendations" ? "/api/user/merchants/sheet-sync" : null, { type: "recommendation", page: recPage, pageSize: recPageSize, ...(recSearch ? { search: recSearch } : {}) });
+  const { data: recData, isLoading: rl, error: recError, mutate: recMutate } = useApiWithParams<{ items: any[]; total: number }>(tab === "recommendations" ? "/api/user/merchants/sheet-sync" : null, { type: "recommendation", page: recPage, pageSize: recPageSize, rec_source: recSource, ...(recSearch ? { search: recSearch } : {}) });
   // C-019 拒付商家 Tab 状态（见 §19.6）
   const [cbDateRange, setCbDateRange] = useState<[Dayjs, Dayjs]>(() => [dayjs("2025-11-01"), dayjs()]);
   const [cbThreshold, setCbThreshold] = useState(50);
@@ -1185,27 +1187,34 @@ export default function MerchantsPage() {
     { title: "名单来源", dataIndex: "source", width: 100, render: (v: string) => v || "-" },
   ], []);
   const recCols = useMemo(() => [
-    { title: "商家名称", dataIndex: "merchant_name", width: 180, ellipsis: true,
+    { title: "商家名称", dataIndex: "merchant_name", width: 200, ellipsis: true,
       render: (v: string, rec: any) => (
         <Space size={4}>
           {rec.website ? (
             <a href={rec.website.startsWith("http") ? rec.website : `https://${rec.website}`} target="_blank" rel="noreferrer" style={{ fontWeight: 600 }}>{v}</a>
           ) : <span style={{ fontWeight: 600 }}>{v}</span>}
+          {rec.source === "atc" && <Tag color="purple" style={{ marginInlineEnd: 0 }}>系统发现</Tag>}
         </Space>
       ),
     },
     { title: "联盟平台", dataIndex: "affiliate", width: 100,
-      render: (v: string, rec: any) => rec.source === "excel" ? (v ? <Tag color="blue">{v}</Tag> : "-") : (rec.roi_reference || "-"),
+      render: (v: string, rec: any) => rec.source === "sheets" ? (rec.roi_reference || "-") : (v ? <Tag color="blue">{v}</Tag> : "-"),
+    },
+    { title: "同行投放", dataIndex: "atc_days", width: 90, align: "right" as const,
+      render: (v: number | null, rec: any) => {
+        if (rec.source !== "atc" || v == null) return "-";
+        return <Tag color={v >= 60 ? "green" : v >= 30 ? "blue" : "default"}>{v} 天</Tag>;
+      },
     },
     { title: "商家地区", dataIndex: "merchant_base", width: 80,
-      render: (v: string, rec: any) => rec.source === "excel" ? (v ? <Tag>{v}</Tag> : "-") : (rec.settlement_info || "-"),
+      render: (v: string, rec: any) => rec.source === "sheets" ? (rec.settlement_info || "-") : (v ? <Tag>{v}</Tag> : "-"),
     },
     { title: "EPC", dataIndex: "epc", width: 80, align: "right" as const,
-      render: (v: number | null, rec: any) => rec.source === "excel" ? (v != null ? `$${Number(v).toFixed(2)}` : "-") : (rec.commission_info || "-"),
+      render: (v: number | null, rec: any) => rec.source === "sheets" ? (rec.commission_info || "-") : (v != null ? `$${Number(v).toFixed(2)}` : "-"),
     },
     { title: "平均佣金率", dataIndex: "avg_commission_rate", width: 100, align: "right" as const,
       render: (v: number | null, rec: any) => {
-        if (rec.source !== "excel") return rec.share_time || "-";
+        if (rec.source === "sheets") return rec.share_time || "-";
         if (v == null) return "-";
         const n = Number(v);
         // 如果大于 1 说明是固定金额而非百分比
@@ -1451,8 +1460,9 @@ export default function MerchantsPage() {
           <span><WarningOutlined style={{ color: "#ff4d4f", marginRight: 6 }} />加载推荐商家失败：{recError.message || "请求异常"}</span>
           <Button size="small" icon={<ReloadOutlined />} onClick={() => recMutate()}>重试</Button>
         </div>}
-        <div className="filter-bar"><Input allowClear placeholder="搜索商家名" style={{ width: 240 }} prefix={<SearchOutlined />} size="small" value={recSearch} onChange={(e) => setRecSearch(e.target.value)} onPressEnter={() => setRecPage(1)} /><Button type="primary" size="small" icon={<SearchOutlined />} onClick={() => setRecPage(1)}>查询</Button><Button size="small" icon={<ReloadOutlined />} onClick={() => recMutate()}>刷新</Button></div>
-        <Table rowKey="id" loading={rl} dataSource={recData?.items || []} size="small" scroll={{ x: 1000 }} pagination={{ current: recPage, pageSize: recPageSize, total: recData?.total || 0, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"], showTotal: (t: number) => `共 ${t} 条`, onChange: (p, ps) => { if (ps !== recPageSize) { setRecPageSize(ps); setRecPage(1); } else setRecPage(p); } }} columns={recCols} /></div>)}
+        <div className="filter-bar"><Input allowClear placeholder="搜索商家名" style={{ width: 240 }} prefix={<SearchOutlined />} size="small" value={recSearch} onChange={(e) => setRecSearch(e.target.value)} onPressEnter={() => setRecPage(1)} /><Select size="small" style={{ width: 140 }} value={recSource} onChange={(v) => { setRecSource(v); setRecPage(1); }} options={[{ value: "all", label: "全部来源" }, { value: "official", label: "官方名单" }, { value: "atc", label: "系统发现" }]} /><Button type="primary" size="small" icon={<SearchOutlined />} onClick={() => setRecPage(1)}>查询</Button><Button size="small" icon={<ReloadOutlined />} onClick={() => recMutate()}>刷新</Button></div>
+        {recSource === "atc" && <div style={{ marginBottom: 12, padding: "8px 12px", background: "#f9f0ff", border: "1px solid #efdbff", borderRadius: 6, fontSize: 12, color: "#666" }}>系统每天从广告透明中心追踪同行，把已连续投放 15 天以上、且近期仍在投的商家收进来，按同行投放天数从高到低排。停投的会自动下架。</div>}
+        <Table rowKey="id" loading={rl} dataSource={recData?.items || []} size="small" scroll={{ x: 1100 }} pagination={{ current: recPage, pageSize: recPageSize, total: recData?.total || 0, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"], showTotal: (t: number) => `共 ${t} 条`, onChange: (p, ps) => { if (ps !== recPageSize) { setRecPageSize(ps); setRecPage(1); } else setRecPage(p); } }} columns={recCols} /></div>)}
       {tab === "chargebacks" && (<div>
         <div style={{ marginBottom: 12, padding: "8px 12px", background: "#fffbe6", border: "1px solid #ffe58f", borderRadius: 6, fontSize: 12, color: "#666" }}>
           <WarningOutlined style={{ color: "#faad14", marginRight: 6 }} />
