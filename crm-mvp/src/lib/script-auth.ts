@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/prisma'
 import { NextRequest } from 'next/server'
 import crypto from 'crypto'
+import { noteScriptAuthSuccess } from '@/lib/script-auth-alert'
 
 export interface ScriptUser {
   userId: bigint
@@ -34,6 +35,9 @@ export async function verifyScriptApiKey(key: string): Promise<ScriptUser | null
   })
 
   if (!user) return null
+
+  // D-212：鉴权恢复正常时自动解除 script_auth_failed 告警
+  noteScriptAuthSuccess(user.id)
 
   return {
     userId: user.id,

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getScriptUserFromRequest } from '@/lib/script-auth'
+import { noteScriptAuthFailure } from '@/lib/script-auth-alert'
 
 interface LookupCampaign {
   campaignId: string
@@ -12,6 +13,7 @@ interface LookupCampaign {
 export async function POST(req: NextRequest) {
   const scriptUser = await getScriptUserFromRequest(req)
   if (!scriptUser) {
+    await noteScriptAuthFailure(req, 'affiliate-links/lookup')
     return NextResponse.json({ success: false, error: { code: 'UNAUTHORIZED', message: '无效的 API Key' } }, { status: 401 })
   }
 

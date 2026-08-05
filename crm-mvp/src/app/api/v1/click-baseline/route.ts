@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getScriptUserFromRequest } from '@/lib/script-auth'
+import { noteScriptAuthFailure } from '@/lib/script-auth-alert'
 
 // ---------------------------------------------------------------
 // GET /api/v1/click-baseline?campaignIds=xxx,yyy,zzz
@@ -9,6 +10,7 @@ import { getScriptUserFromRequest } from '@/lib/script-auth'
 export async function GET(req: NextRequest) {
   const scriptUser = await getScriptUserFromRequest(req)
   if (!scriptUser) {
+    await noteScriptAuthFailure(req, 'click-baseline(GET)')
     return NextResponse.json(
       { success: false, error: { code: 'UNAUTHORIZED', message: '无效的 API Key' } },
       { status: 401 }
@@ -74,6 +76,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const scriptUser = await getScriptUserFromRequest(req)
   if (!scriptUser) {
+    await noteScriptAuthFailure(req, 'click-baseline(POST)')
     return NextResponse.json(
       { success: false, error: { code: 'UNAUTHORIZED', message: '无效的 API Key' } },
       { status: 401 }

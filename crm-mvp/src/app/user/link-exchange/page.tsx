@@ -110,6 +110,7 @@ const ALERT_TYPE_LABEL: Record<string, string> = {
   brush_blocked: "补刷受阻·挂人工",
   link_forbidden: "链接被联盟拒绝·换链接",
   no_tracking_stuck: "链接不记点击·换链接",
+  script_auth_failed: "脚本被拒·重发脚本",
 };
 
 function LinkStatusTag({ status, reason }: { status: string; reason?: string | null }) {
@@ -734,7 +735,7 @@ export default function LinkExchangePage() {
 
   // ───────── 告警中心列（D-178：每类告警配处理动作，不止报警） ─────────
   const alertColumns: ColumnsType<AlertRow> = [
-    { title: "类型", dataIndex: "type", width: 130, render: (t: string) => <Tag color={t === "merchant_not_found" || t === "invalid_link" || t === "brush_blocked" || t === "link_forbidden" || t === "no_tracking_stuck" ? "red" : t === "replenish_failed" ? "volcano" : "orange"}>{ALERT_TYPE_LABEL[t] ?? t}</Tag> },
+    { title: "类型", dataIndex: "type", width: 130, render: (t: string) => <Tag color={t === "merchant_not_found" || t === "invalid_link" || t === "brush_blocked" || t === "link_forbidden" || t === "no_tracking_stuck" || t === "script_auth_failed" ? "red" : t === "replenish_failed" ? "volcano" : "orange"}>{ALERT_TYPE_LABEL[t] ?? t}</Tag> },
     { title: "级别", dataIndex: "level", width: 80, render: (l: string) => <Tag color={l === "error" ? "error" : l === "warning" ? "warning" : "default"}>{l}</Tag> },
     { title: "告警内容", dataIndex: "message", ellipsis: true, render: (m: string) => <Tooltip title={m}><Text style={{ fontSize: 13 }}>{m}</Text></Tooltip> },
     { title: "次数", dataIndex: "occurCount", width: 70, align: "center", render: (c: number) => <Badge count={c} overflowCount={999} style={{ backgroundColor: "#faad14" }} /> },
@@ -824,6 +825,12 @@ export default function LinkExchangePage() {
       "④ 到联盟平台后台重新生成该商家的追踪链接，点「换链接」粘贴保存，系统立即验证 + 补货，通过后本告警自动解除。",
       "⑤ 想再确认一次：点「重验」会立刻重跟一遍（不受长冷却限制），当场返回结论。",
       "⑥ 若该商家已下架/停止合作：暂停该系列广告，关掉换链开关，然后点「已处理」。",
+    ],
+    script_auth_failed: [
+      "① 含义：你的 Google Ads 脚本在调用 CRM 接口时被拒绝（HTTP 401：无效的 API Key），换链接已整体停摆——不是某一条链接坏了，是脚本根本进不来。",
+      "② 后果：脚本每轮都查不到联盟追踪链接，所有在投系列会长期沿用同一个跟踪码，联盟侧极可能判为异常。花费和点击数据仍在正常更新（那部分不需要 API Key），所以只看数据发现不了。",
+      "③ 修复：到「设置 → Google MCC」重新生成统一脚本，整段覆盖 Google Ads 里的旧脚本（推荐，key 和表格地址会一起写对）；或只把脚本 CONFIG 里的 API_KEY 一行换成设置页显示的当前 key。",
+      "④ 多个 MCC 各有一份脚本，每个都要换。改完等一轮（约 30 分钟），脚本鉴权成功后本告警自动解除。",
     ],
   };
   const renderAlertGuide = (row: AlertRow) => {

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getScriptUserFromRequest } from '@/lib/script-auth'
+import { noteScriptAuthFailure } from '@/lib/script-auth-alert'
 import { v4 as uuidv4 } from 'uuid'
 import { triggerReplenishAsync } from '@/lib/suffix-engine/stock-producer'
 import { STOCK_CONFIG } from '@/lib/suffix-engine/config'
@@ -156,6 +157,7 @@ async function leaseOne(
 export async function POST(req: NextRequest) {
   const scriptUser = await getScriptUserFromRequest(req)
   if (!scriptUser) {
+    await noteScriptAuthFailure(req, 'suffix/lease/batch')
     return NextResponse.json({ success: false, error: { code: 'UNAUTHORIZED', message: '无效的 API Key' } }, { status: 401 })
   }
 

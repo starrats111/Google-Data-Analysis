@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getScriptUserFromRequest } from '@/lib/script-auth'
+import { noteScriptAuthFailure } from '@/lib/script-auth-alert'
 
 // 默认值（脚本侧也有同样的写死兜底，拉不到此接口时使用脚本内默认）
 const DEFAULT_LOOP_INTERVAL_SECONDS = 15
@@ -44,6 +45,8 @@ async function readIntConfig(key: string, fallback: number, min: number, max: nu
 export async function GET(req: NextRequest) {
   const scriptUser = await getScriptUserFromRequest(req)
   if (!scriptUser) {
+    // 该端点不带任何系列 ID，认领不到归属人，只会留一条服务端日志
+    await noteScriptAuthFailure(req, 'suffix/script-config')
     return NextResponse.json(
       { success: false, error: { code: 'UNAUTHORIZED', message: '无效的 API Key' } },
       { status: 401 }
