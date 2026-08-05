@@ -72,10 +72,23 @@ type MetaRow = {
   merchant_name: string | null;
 };
 
-// 订单/点击比超过这个值就认为佣金里混进了非广告流量，breakeven_cpc 不可全信。
-// 取 0.3 的依据：实测「订单 ≤ 30% 点击」那 266 家的 breakeven 是 $0.565，
+// 订单/点击比超过这个值就认为佣金里混进了非广告流量，breakeven_cpc 偏高。
+// 取 0.3 的依据：实测「订单 ≤ 30% 点击」那批的 breakeven 是 $0.565，
 // 而超过这条线的 345 家高达 $2.12–$9.08，两者不是同一种东西。
 const ORDERS_PER_CLICK_TRUST_MAX = 0.3;
+
+// 点击太少时 breakeven_cpc 没有统计意义，乘任何安全系数都是假精确。
+// 实测：点击 <10 的那 17 家平均 breakeven $4.51、最高 $54.46（LH/86428 是 1 单 5 点击 $272
+// 佣金），而点击 ≥200 的 124 家平均只有 $0.873。加上这条门槛后可信档的上界从 $54.46
+// 回落到 $8.77。取 30 与 12.5f ⑥ 效果验证、12.5e「首单 81.4% 落在 30 点击内」同口径。
+const MIN_CLICKS_FOR_BREAKEVEN = 30;
+
+/** breakeven_cpc 的可用程度。调用方据此决定乘哪个安全系数、还是干脆别用。 */
+type BreakevenQuality =
+  | "trusted" // 样本够且订单/点击比正常 → 可直接乘安全系数
+  | "inflated" // 样本够但佣金含非广告流量 → 偏高，应压低系数
+  | "thin_sample" // 点击不足 30，数值无统计意义 → 别用，走探测下限
+  | "no_ad_data"; // CRM 里没有这个商家的广告数据 → 只有 team_verified 布尔信号可用
 
 export async function GET(req: NextRequest) {
   const authErr = verifyHermesToken(req);
@@ -179,8 +192,11 @@ export async function GET(req: NextRequest) {
       // 本想改用「只算能归因到系列的佣金」来修，实测 affiliate_transactions.campaign_id
       // 全库 468,856 笔里只填了 1 笔（0.0%），这条路走不通，只能如实标注可信度。
       const ordersPerClick = clicks > 0 ? ordersOk / clicks : null;
-      const breakevenTrusted =
-        ordersPerClick != null && ordersPerClick <= ORDERS_PER_CLICK_TRUST_MAX;
+      let quality: BreakevenQuality;
+      if (clicks <= 0) quality = "no_ad_data";
+      else if (clicks < MIN_CLICKS_FOR_BREAKEVEN) quality = "thin_sample";
+      else if (ordersPerClick! > ORDERS_PER_CLICK_TRUST_MAX) quality = "inflated";
+      else quality = "trusted";
 
       merchants.push({
         merchant_id: t.merchant_id,
@@ -205,9 +221,14 @@ export async function GET(req: NextRequest) {
         // breakeven_cpc = 有效佣金 ÷ 点击：每个点击能赚回多少。出价上限 = 它 × 安全系数。
         // 没有广告数据（别人不是靠 CRM 投的，或还没投）时给 null，调用方须走探测下限而不是当 0。
         breakeven_cpc: clicks > 0 ? r(commissionOk / clicks, 4) : null,
-        // 「这个 breakeven_cpc 能不能直接乘安全系数当出价上限」——false 时分子含非广告流量，
-        // 调用方应改用更严的系数或退回探测下限。实测有点击的 611 家里 345 家为 false。
-        breakeven_trusted: clicks > 0 ? breakevenTrusted : null,
+        // 这个 breakeven_cpc 能怎么用，看 quality：
+        //   trusted     → 可直接乘安全系数
+        //   inflated    → 偏高（佣金含非广告流量），应压低系数
+        //   thin_sample → 点击 <30，数值无意义，别用
+        //   no_ad_data  → CRM 无广告数据，只有 team_verified 可用
+        breakeven_quality: quality,
+        // 保留布尔字段向后兼容：仅 trusted 为真（thin_sample 也算不可信）
+        breakeven_trusted: clicks > 0 ? quality === "trusted" : null,
         orders_per_click: ordersPerClick != null ? r(ordersPerClick, 3) : null,
         weighted_cpc: clicks > 0 ? r(cost / clicks, 4) : null,
         total_clicks: clicks,
@@ -221,10 +242,26 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // 让调用方一眼能挑出「最值得抢」的：盈亏平衡 CPC 高的在前，没有广告数据的垫底
-    merchants.sort((a, b) => (b.breakeven_cpc ?? -1) - (a.breakeven_cpc ?? -1));
+    // 排序让「可直接用的高价值商家」浮到头部。
+    // 必须先按 quality 分组再按 breakeven 排——否则头部全是小样本假象（未加门槛前实测前 5 名
+    // 是 $1009 / $849 / $592 这种由十几个点击算出来的数），看的人会被带偏。
+    const qualityRank: Record<BreakevenQuality, number> = {
+      trusted: 0,
+      inflated: 1,
+      thin_sample: 2,
+      no_ad_data: 3,
+    };
+    merchants.sort(
+      (a, b) =>
+        qualityRank[a.breakeven_quality] - qualityRank[b.breakeven_quality] ||
+        (b.breakeven_cpc ?? -1) - (a.breakeven_cpc ?? -1),
+    );
 
     const withBreakeven = merchants.filter((m) => m.breakeven_cpc != null);
+    const byQuality = merchants.reduce<Record<string, number>>((acc, m) => {
+      acc[m.breakeven_quality] = (acc[m.breakeven_quality] || 0) + 1;
+      return acc;
+    }, {});
     return apiSuccess({
       generated_at: new Date().toISOString(),
       since: since || null,
@@ -236,10 +273,15 @@ export async function GET(req: NextRequest) {
         aggregate_key: "platform + merchant_id（同一 MID 在不同联盟是不同商家）",
         caveat_window:
           "佣金按 transaction_time、点击按 date；转化有延迟，since 收得越窄 breakeven_cpc 越偏低",
+        breakeven_quality: {
+          trusted: `点击 ≥${MIN_CLICKS_FOR_BREAKEVEN} 且订单/点击 ≤${ORDERS_PER_CLICK_TRUST_MAX}，可直接乘安全系数`,
+          inflated: `点击够但订单/点击 >${ORDERS_PER_CLICK_TRUST_MAX}，佣金含非广告流量、该值偏高，应压低系数`,
+          thin_sample: `点击 <${MIN_CLICKS_FOR_BREAKEVEN}，数值无统计意义（实测点击<10 那批平均 $4.51、最高 $54.46），不要乘系数使用`,
+          no_ad_data: "CRM 无该商家广告数据，只有 team_verified 布尔信号可用",
+        },
         caveat_attribution:
-          `breakeven_trusted=false 表示订单/点击比 > ${ORDERS_PER_CLICK_TRUST_MAX}，` +
-          "佣金分子含非广告流量而分母只有广告点击，该值偏高。" +
-          "根因是 affiliate_transactions.campaign_id 全库填充率 0.0%，无法做系列级归因",
+          "inflated 档的根因是 affiliate_transactions.campaign_id 全库填充率 0.0%，" +
+          "做不了系列级归因，故无法把非广告流量的佣金剔出去",
         caveat_coverage:
           "有订单的商家里仅约 20% 在 CRM 有广告数据，其余 breakeven_cpc 为 null，" +
           "只能用 team_verified 这个布尔信号",
@@ -248,7 +290,7 @@ export async function GET(req: NextRequest) {
         merchants: merchants.length,
         verified: merchants.filter((m) => m.team_verified).length,
         with_breakeven: withBreakeven.length,
-        breakeven_trusted: withBreakeven.filter((m) => m.breakeven_trusted).length,
+        by_breakeven_quality: byQuality,
         breakeven_ge_1usd: withBreakeven.filter((m) => (m.breakeven_cpc ?? 0) >= 1).length,
         with_domain: merchants.filter((m) => m.domain).length,
       },
