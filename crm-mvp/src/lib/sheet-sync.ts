@@ -160,11 +160,11 @@ export interface SheetRow {
   budget: number;         // 账户币种金额
   clicks: number;
   impressions: number;
-  cpc: number;            // 账户币种金额
+  /** 平均 CPC，账户币种金额。口径固定为 cost / clicks（D-217），不取 Sheet 的同名列 */
+  cpc: number;
   /**
    * D-202：Sheet 里明确的出价列（CpcBid/MaxCpc）才有值，0 表示该表没有出价列。
-   * 与 cpc 的区别：cpc 在缺列时会退化成 cost/clicks 的平均值，只能用于展示，
-   * 不能当 max_cpc_limit 写库。
+   * 与 cpc 的区别：这是「出价」，cpc 是「实际每次点击花了多少」，两者不可互相顶替。
    */
   cpc_bid: number;
   status: string;         // ENABLED / PAUSED / REMOVED
@@ -282,13 +282,17 @@ function parseCrmDailyData(values: string[][], startDate: string, endDate: strin
         budget = safeFloat(row[col["budget"]]) / 1_000_000;
       }
 
-      let cpc = clicks > 0 ? cost / clicks : 0;
+      // D-217：CPC 一律 = cost / clicks。此处原先会被 Sheet 的 cpcbid / maxcpc / cpc 列覆盖，
+      // 把「出价」或那个语义含糊的 cpc 列当成平均 CPC 写进 ads_daily_stats.cpc，
+      // 实测线上 57,668 条有点击的记录里有 300 条因此偏离真实 cost/clicks。
+      const cpc = clicks > 0 ? cost / clicks : 0;
+
+      // 出价只认明确的出价列；缺列保持 0，调用方据此不回写 max_cpc_limit（D-202）
       let cpcBid = 0;
-      for (const cpcKey of ["cpcbid", "maxcpc", "cpc"]) {
-        if (cpcKey in col && row[col[cpcKey]] && row[col[cpcKey]] !== "" && row[col[cpcKey]] !== "--") {
-          cpc = safeFloat(row[col[cpcKey]]) / 1_000_000;
-          // "cpc" 列语义含糊（可能是平均 CPC），只有明确的出价列才算真实出价
-          if (cpcKey === "cpcbid" || cpcKey === "maxcpc") cpcBid = cpc;
+      for (const bidKey of ["cpcbid", "maxcpc"]) {
+        const raw = bidKey in col ? row[col[bidKey]] : undefined;
+        if (raw && raw !== "" && raw !== "--") {
+          cpcBid = safeFloat(raw) / 1_000_000;
           break;
         }
       }

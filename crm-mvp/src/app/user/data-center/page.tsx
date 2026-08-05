@@ -28,7 +28,7 @@ const TZ = "Asia/Shanghai";
 
 /** 各列 width 之和，scroll.x 须 ≥ 此值否则固定列（CID）会与表体错位
  *  顺序：CID 110 | 广告系列 280 | 状态 100 | 预算 70 | 最高出价 90
- *       | 展示 95 | 点击 85 | 订单 75 | 平均CPC 80 | 花费 85 | 佣金 70 | EPC 80 | 拒付佣金 95 | 净利润 85 | ROI 75
+ *       | 展示 95 | 点击 85 | 订单 75 | 平均CPC 80 | EPC 80 | 花费 85 | 佣金 70 | 拒付佣金 95 | 净利润 85 | ROI 75
  */
 const DATA_CENTER_TABLE_SCROLL_X =
   110 + 280 + 100 + 70 + 90 + 95 + 85 + 75 + 80 + 85 + 70 + 80 + 95 + 85 + 75;
@@ -594,8 +594,28 @@ export default function DataCenterPage() {
       render: (v: number | null | undefined) => <Text style={{ fontSize: 12 }}>{formatInt(v)}</Text>,
     },
     {
-      title: "平均CPC", dataIndex: "cpc", width: 80, align: "right",
+      title: (
+        <Tooltip title="平均CPC = 花费 / 点击，即每个点击花了多少">
+          <span>平均CPC</span>
+        </Tooltip>
+      ),
+      dataIndex: "cpc", width: 80, align: "right",
+      sorter: (a, b) => (a.cpc ?? 0) - (b.cpc ?? 0),
       render: (v: number) => <Text style={{ fontSize: 12 }}>${v?.toFixed(4)}</Text>,
+    },
+    {
+      title: (
+        <Tooltip title="EPC = 佣金 / 点击，即每个点击赚回多少。与左侧「平均CPC」同量纲，EPC > 平均CPC 即为赚。无点击显示「—」">
+          <span>EPC</span>
+        </Tooltip>
+      ),
+      key: "epc", width: 80, align: "right",
+      sorter: (a, b) => (calcEpc(a.commission, a.clicks) ?? -1) - (calcEpc(b.commission, b.clicks) ?? -1),
+      render: (_: unknown, r: IndexedRow) => {
+        const value = calcEpc(r.commission, r.clicks);
+        if (value === null) return <Text type="secondary" style={{ fontSize: 12 }}>—</Text>;
+        return <Text style={{ fontSize: 12, color: value > 0 ? "#389e0d" : undefined }}>${value.toFixed(4)}</Text>;
+      },
     },
     {
       title: "花费", dataIndex: "cost", width: 85, align: "right",
@@ -613,20 +633,6 @@ export default function DataCenterPage() {
       render: (v: number) => (
         <Text style={{ fontSize: 12, color: v > 0 ? "#389e0d" : undefined }}>${v?.toFixed(2)}</Text>
       ),
-    },
-    {
-      title: (
-        <Tooltip title="佣金 / 点击，即每次点击带来的佣金。与「平均CPC」同量纲，EPC > 平均CPC 即为赚。无点击显示「—」">
-          <span>EPC</span>
-        </Tooltip>
-      ),
-      key: "epc", width: 80, align: "right",
-      sorter: (a, b) => (calcEpc(a.commission, a.clicks) ?? -1) - (calcEpc(b.commission, b.clicks) ?? -1),
-      render: (_: unknown, r: IndexedRow) => {
-        const value = calcEpc(r.commission, r.clicks);
-        if (value === null) return <Text type="secondary" style={{ fontSize: 12 }}>—</Text>;
-        return <Text style={{ fontSize: 12, color: value > 0 ? "#389e0d" : undefined }}>${value.toFixed(4)}</Text>;
-      },
     },
     {
       title: "拒付佣金", dataIndex: "rejected_commission", width: 95, align: "right",
@@ -825,13 +831,13 @@ export default function DataCenterPage() {
                   <Table.Summary.Cell index={6} align="right"><Text strong>{formatInt(summary.totalClicks)}</Text></Table.Summary.Cell>
                   <Table.Summary.Cell index={7} align="right"><Text strong>{formatInt(summary.totalOrders)}</Text></Table.Summary.Cell>
                   <Table.Summary.Cell index={8} align="right"><Text strong>${summary.avgCpc.toFixed(4)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={9} align="right"><Text strong style={{ color: "#cf1322" }}>${summary.totalCost.toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={10} align="right"><Text strong style={{ color: "#389e0d" }}>${summary.totalCommission.toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={11} align="right">
+                  <Table.Summary.Cell index={9} align="right">
                     {calcEpc(summary.totalCommission, summary.totalClicks) === null
                       ? <Text strong type="secondary">—</Text>
                       : <Text strong style={{ color: "#389e0d" }}>${calcEpc(summary.totalCommission, summary.totalClicks)!.toFixed(4)}</Text>}
                   </Table.Summary.Cell>
+                  <Table.Summary.Cell index={10} align="right"><Text strong style={{ color: "#cf1322" }}>${summary.totalCost.toFixed(2)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={11} align="right"><Text strong style={{ color: "#389e0d" }}>${summary.totalCommission.toFixed(2)}</Text></Table.Summary.Cell>
                   <Table.Summary.Cell index={12} align="right"><Text strong type="danger">${summary.totalRejectedCommission.toFixed(2)}</Text></Table.Summary.Cell>
                   <Table.Summary.Cell index={13} align="right"><Text strong style={{ color: calcNetProfit(summary.totalCommission, summary.totalRejectedCommission, summary.totalCost) >= 0 ? "#389e0d" : "#cf1322" }}>${calcNetProfit(summary.totalCommission, summary.totalRejectedCommission, summary.totalCost).toFixed(2)}</Text></Table.Summary.Cell>
                   <Table.Summary.Cell index={14} align="right"><Text strong style={{ color: summary.roi >= 0 ? "#389e0d" : "#cf1322" }}>{summary.roi.toFixed(2)}</Text></Table.Summary.Cell>
