@@ -8,7 +8,11 @@
  *   1. 从 user_atc_alert_log 聚合出「同行投够天数、近期还在投」的域名
  *   2. 拿域名反查 user_merchants.merchant_url，取回真实商家名与联盟平台
  *      —— 反查不到的直接丢弃，绝不拿域名硬凑商家名（见 data-integrity 规范）
- *   3. 全量重算 source='atc' 那批：还在投的更新天数，不再出现的软删下架
+ *   3. 全量重算 source='atc' 那批：还在投的更新天数，已确认停投的软删下架
+ *
+ * 「停投」的判定要留神：SerpApi 额度不够，关注的广告主每天只有小部分能扫到，
+ * 不能拿「最近没出现」直接当停投，否则扫不到的广告主名下商家会被集体误杀。
+ * 详见 CONFIRM_DAYS 的注释。
  *
  * 只动 source='atc' 的记录，官方的 sheets / excel 两批完全不碰。
  * 商家名若已在官方名单里则跳过，避免推荐列表同一个商家出现两行。
@@ -18,12 +22,20 @@ import prisma from "@/lib/prisma";
 /** 同行至少投够多少天才收录。07 于 2026-08-05 复核后取 15（徐克原话「2 周以上」= ≥14） */
 const MIN_DAYS = Number(process.env.ATC_REC_MIN_DAYS ?? 15);
 
+/** 往前捞多少天的日志作为收录候选。太老的数据参考价值低，默认看一个季度 */
+const LOOKBACK_DAYS = Number(process.env.ATC_REC_LOOKBACK_DAYS ?? 90);
+
 /**
- * 多少天内被扫到过就算「还在投」。
- * 不能取 1 天：SerpApi 额度绑在各用户身上，关注的 36 个广告主每天只有 8 个左右能扫出数据，
- * 窗口太窄会把「今天没轮到扫」误判成「同行停投了」，导致商家天天上下架。
+ * 判定「这个广告主的数据是新鲜的」的天数窗口。
+ *
+ * 这里是本功能最容易做错的地方：SerpApi 额度绑在各用户身上，关注的 36 个广告主
+ * 每天只有 8 个左右能扫出数据。若简单按「近 N 天没出现就算停投」下架，
+ * 那 28 个扫不到的广告主名下的商家会被集体误杀——「没扫到」和「停投了」是两回事。
+ *
+ * 所以下架只在能确认的前提下做：该广告主近期确实被扫到了（说明它在投别的），
+ * 但这个域名不在结果里，才判定同行停投了它。广告主本身都没扫到的，一律保持在架。
  */
-const ACTIVE_WINDOW_DAYS = Number(process.env.ATC_REC_ACTIVE_DAYS ?? 14);
+const CONFIRM_DAYS = Number(process.env.ATC_REC_CONFIRM_DAYS ?? 7);
 
 export interface AtcRecSyncOptions {
   /** 只算不写。首次上线和排障时先用它核对数字，确认无误再真跑 */
@@ -32,7 +44,9 @@ export interface AtcRecSyncOptions {
 
 export interface AtcRecSyncResult {
   dry_run: boolean;
-  /** alert_log 里投够天数且窗口内还在投的唯一域名数 */
+  /** 投够天数、且已确认同行停投而被剔除的域名数 */
+  stopped_running: number;
+  /** 剔除停投后，仍算「同行在投」的唯一域名数 */
   scanned_domains: number;
   /** 其中反查到真实商家名的 */
   matched: number;
@@ -150,6 +164,7 @@ export async function syncAtcRecommendations(
   const batch = `ATC-${new Date().toISOString().replace(/[-:T.]/g, "").slice(0, 14)}`;
   const result: AtcRecSyncResult = {
     dry_run: dryRun,
+    stopped_running: 0,
     scanned_domains: 0,
     matched: 0,
     unmatched: 0,
@@ -160,32 +175,58 @@ export async function syncAtcRecommendations(
     batch,
   };
 
-  // 1. 聚合窗口内的活跃域名：同一域名可能被多个广告主/多条创意命中，天数取最大、最后在投日取最新
-  const cutoff = new Date();
-  cutoff.setUTCHours(0, 0, 0, 0);
-  cutoff.setUTCDate(cutoff.getUTCDate() - ACTIVE_WINDOW_DAYS);
+  // 1. 聚合候选域名：同一域名可能被多个广告主、多条创意命中，天数取最大、最后确认在投日取最新
+  const lookback = new Date();
+  lookback.setUTCHours(0, 0, 0, 0);
+  lookback.setUTCDate(lookback.getUTCDate() - LOOKBACK_DAYS);
+
+  const confirmCutoff = new Date();
+  confirmCutoff.setUTCHours(0, 0, 0, 0);
+  confirmCutoff.setUTCDate(confirmCutoff.getUTCDate() - CONFIRM_DAYS);
 
   const logs = await prisma.user_atc_alert_log.findMany({
-    where: { domain: { not: null }, alerted_date: { gte: cutoff } },
-    select: { domain: true, days: true, alerted_date: true },
+    where: { domain: { not: null }, alerted_date: { gte: lookback } },
+    select: { domain: true, days: true, alerted_date: true, advertiser_id: true },
   });
 
-  const active = new Map<string, { days: number; lastSeen: Date }>();
+  const active = new Map<
+    string,
+    { days: number; lastSeen: Date; advertisers: Set<string> }
+  >();
+  /** 近期确实扫出过数据的广告主，只有它们名下的域名才有资格被判停投 */
+  const freshAdvertisers = new Set<string>();
+
   for (const row of logs) {
+    if (row.alerted_date >= confirmCutoff) freshAdvertisers.add(row.advertiser_id);
     const dom = normalizeDomain(row.domain);
     if (!dom) continue;
     const cur = active.get(dom);
     if (!cur) {
-      active.set(dom, { days: row.days, lastSeen: row.alerted_date });
+      active.set(dom, {
+        days: row.days,
+        lastSeen: row.alerted_date,
+        advertisers: new Set([row.advertiser_id]),
+      });
       continue;
     }
     if (row.days > cur.days) cur.days = row.days;
     if (row.alerted_date > cur.lastSeen) cur.lastSeen = row.alerted_date;
+    cur.advertisers.add(row.advertiser_id);
   }
 
   // 天数门槛在聚合后判，避免同一域名的短命创意把长期投放的记录挤掉
   for (const [dom, v] of active) {
     if (v.days < MIN_DAYS) active.delete(dom);
+  }
+
+  // 停投判定：域名最近没再出现，且投它的广告主近期确实被扫到过（在投别的），才算真停投
+  for (const [dom, v] of active) {
+    if (v.lastSeen >= confirmCutoff) continue;
+    const advertiserWasScanned = [...v.advertisers].some((a) => freshAdvertisers.has(a));
+    if (advertiserWasScanned) {
+      active.delete(dom);
+      result.stopped_running++;
+    }
   }
   result.scanned_domains = active.size;
 
