@@ -259,7 +259,9 @@ async function callSerpApi(params: Record<string, string>, apiKey: string): Prom
     const data = await rawSerpApiCall(params, key);
 
     if (!isQuotaError(data.error)) {
-      if (attempt > 0) console.log(`[SerpApiPool] 换到第 ${attempt + 1} 个 key 后调用成功`);
+      // 用 warn 而非 log：生产构建配了 removeConsole（只留 error/warn），
+      // 而换 key 是需要在线上留痕的异常路径，被剥掉就没法确认池子有没有真在轮转
+      if (attempt > 0) console.warn(`[SerpApiPool] 换到第 ${attempt + 1} 个 key 后调用成功`);
       await markKeyHealthy(key);
       return data;
     }
