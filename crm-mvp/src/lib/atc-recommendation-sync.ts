@@ -136,7 +136,19 @@ export async function backfillAlertDomains(): Promise<{
     for (const r of rows) {
       if (!r.metadata) continue;
       try {
-        const m = JSON.parse(r.metadata) as { creative_id?: string; domain?: string | null };
+        const m = JSON.parse(r.metadata) as {
+          creative_id?: string;
+          domain?: string | null;
+          // D-218：合并通知把各条创意放进 creatives[]，顶层只留最长的那条
+          creatives?: Array<{ creative_id?: string; domain?: string | null }>;
+        };
+        if (Array.isArray(m.creatives) && m.creatives.length > 0) {
+          for (const c of m.creatives) {
+            const dom = normalizeDomain(c?.domain);
+            if (c?.creative_id && dom) domainByCreative.set(c.creative_id, dom);
+          }
+          continue;
+        }
         const dom = normalizeDomain(m.domain);
         if (m.creative_id && dom) domainByCreative.set(m.creative_id, dom);
       } catch {

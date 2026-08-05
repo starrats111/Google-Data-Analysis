@@ -20,20 +20,42 @@ export interface WatchlistScanResult {
   scannedWatchlists: number;
   skippedNoKey: number;
   skippedSearchError: number;
+  /** 新记入 alert_log 的创意条数 */
   alertsCreated: number;
+  /** D-218：实际发出的通知条数。合并后一个广告主一轮最多 1 条，通常远小于 alertsCreated */
+  notificationsCreated: number;
   elapsedMs: number;
   errors: string[];
 }
 
 /** 单条 watchlist 处理结果 */
 interface PerItemResult {
+  /** 新记入 alert_log 的创意条数 */
   alertsCreated: number;
+  /** D-218：实际发出的通知条数（一条 watchlist 最多 1 条） */
+  notificationsCreated: number;
   error?: string;
   /** BUG-05 B：本条是否真打了 SerpApi（false=命中本轮共享缓存，调用方据此跳过限流 sleep） */
   calledSerpApi: boolean;
 }
 
+/** D-218：一条命中的创意 */
+interface CreativeHit {
+  creative_id: string;
+  days: number;
+  domain: string | null;
+  domain_source: "meta" | "snapshot" | null;
+  /** 首末投放日期，CST */
+  first: string;
+  last: string;
+}
+
 const SLEEP_BETWEEN_CALLS_MS = 1500;
+
+/** 正文里最多逐条列出几条创意，超出折叠成一行 */
+const CONTENT_LIST_LIMIT = 10;
+/** metadata.creatives 最多存几条，防止 TEXT 列被撑爆 */
+const META_CREATIVE_LIMIT = 60;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -65,6 +87,59 @@ function todayCstStr(): string {
 /** "YYYY-MM-DD" 字符串转 Date（按 UTC 0:00 锚定，给 prisma 写 DATE 列用） */
 function parseDateStr(ymd: string): Date {
   return new Date(`${ymd}T00:00:00.000Z`);
+}
+
+function creativeUrl(advertiserId: string, creativeId: string, region: string): string {
+  return `https://adstransparency.google.com/advertiser/${advertiserId}/creative/${creativeId}?region=${region}`;
+}
+
+/** D-218：单条命中时维持原标题，多条时汇总，避免同一广告主刷屏 */
+function buildTitle(advName: string, hits: CreativeHit[]): string {
+  if (hits.length === 1) {
+    return `【广告情报】${advName} ${hits[0].days} 天持续广告（昨日还活跃）`;
+  }
+  return `【广告情报】${advName} ${hits.length} 条持续广告（昨日还活跃，最长 ${hits[0].days} 天）`;
+}
+
+function buildContent(hits: CreativeHit[]): string {
+  if (hits.length === 1) {
+    const h = hits[0];
+    return `首次投放 ${h.first}，最近投放 ${h.last}${h.domain ? `；域名 ${h.domain}` : ""}`;
+  }
+  const lines = hits
+    .slice(0, CONTENT_LIST_LIMIT)
+    .map((h) => `· ${h.days} 天（${h.first} 起${h.domain ? `，域名 ${h.domain}` : ""}）`);
+  if (hits.length > CONTENT_LIST_LIMIT) {
+    lines.push(`另有 ${hits.length - CONTENT_LIST_LIMIT} 条未列出。`);
+  }
+  return [`该广告主昨日仍在投放的长期广告 ${hits.length} 条，按投放时长排序：`, ...lines].join("\n");
+}
+
+/**
+ * D-218：metadata 同时给两代消费者用。
+ * 顶层字段沿用「一条通知 = 一条创意」的老结构，填最长的那条，
+ * 这样即便有没排查到的旧消费者，读到的也是合法值而不是 undefined；
+ * 新增的 creatives[] 才是本条通知真正覆盖的全部创意，today-ads 按它展开还原计数。
+ */
+function buildMetadata(advertiserId: string, region: string, hits: CreativeHit[]): string {
+  const top = hits[0];
+  return JSON.stringify({
+    source: "atc_watchlist",
+    advertiser_id: advertiserId,
+    region,
+    creative_id: top.creative_id,
+    days: top.days,
+    domain: top.domain,
+    domain_source: top.domain_source,
+    atc_url: creativeUrl(advertiserId, top.creative_id, region),
+    creative_count: hits.length,
+    creatives: hits.slice(0, META_CREATIVE_LIMIT).map((h) => ({
+      creative_id: h.creative_id,
+      days: h.days,
+      domain: h.domain,
+      domain_source: h.domain_source,
+    })),
+  });
 }
 
 /**
@@ -102,7 +177,7 @@ async function processOneWatchlist(
 
     const adv = result.advertisers.find((a) => a.id === watchlist.advertiser_id);
     if (!adv || !Array.isArray(adv.ads) || adv.ads.length === 0) {
-      return { alertsCreated: 0, calledSerpApi };
+      return { alertsCreated: 0, notificationsCreated: 0, calledSerpApi };
     }
 
     // D-008 F-17=C：scanner 写库前从 atc_advertiser_domain_snapshot 拿 fallback domain 列表
@@ -137,7 +212,11 @@ async function processOneWatchlist(
     });
     const alertedTodaySet = new Set(alreadyAlertedToday.map((r) => r.creative_id));
 
-    let alertsCreated = 0;
+    // D-218：先把本轮命中的创意攒起来，最后合并成一条通知。
+    // 原先一条创意发一条通知，PATRONUM 这类长期投放的广告主一天能给同一个人刷 12 条，
+    // 标题之间只有天数不同（8/5 全天 234 条 ATC 通知里它一家占 153 条）。
+    // 审计仍按创意粒度写 user_atc_alert_log，防重规则一并保持不变，只合并通知本身。
+    const hits: CreativeHit[] = [];
 
     for (const ad of adv.ads as AtcAd[]) {
       if (!ad.creative_id) continue;
@@ -153,63 +232,64 @@ async function processOneWatchlist(
       // 规则 3：今天已推过该 creative → 跳过（同日防重）
       if (alertedTodaySet.has(ad.creative_id)) continue;
 
-      const atcUrl = `https://adstransparency.google.com/advertiser/${watchlist.advertiser_id}/creative/${ad.creative_id}?region=${watchlist.region}`;
-      const advName = adv.name || watchlist.advertiser_name || watchlist.advertiser_id;
-      // D-008 F-17=C：metadata.domain 优先 ad.domain，其次 snapshot fallback；标 source 让下游知道来源
+      // D-008 F-17=C：domain 优先 ad.domain，其次 snapshot fallback；标 source 让下游知道来源
       const finalDomain = ad.domain ?? snapshotFallbackDomain ?? null;
-      const domainSource: "meta" | "snapshot" | null =
-        ad.domain ? "meta" : (snapshotFallbackDomain ? "snapshot" : null);
-      const domainPart = finalDomain ? `；域名 ${finalDomain}` : "";
-      const firstStr = ymdCst(ad.first_shown);
-      const lastStr = ymdCst(ad.last_shown);
-
-      try {
-        await prisma.$transaction(async (tx) => {
-          await tx.user_atc_alert_log.create({
-            data: {
-              user_id: watchlist.user_id,
-              watchlist_id: watchlist.id,
-              advertiser_id: watchlist.advertiser_id,
-              creative_id: ad.creative_id!,
-              days,
-              domain: finalDomain,
-              alerted_date: todayDate,
-            },
-          });
-          await tx.notifications.create({
-            data: {
-              user_id: watchlist.user_id,
-              type: "ad",
-              title: `【广告情报】${advName} ${days} 天持续广告（昨日还活跃）`,
-              content: `首次投放 ${firstStr}，最近投放 ${lastStr}${domainPart}`,
-              metadata: JSON.stringify({
-                source: "atc_watchlist",
-                advertiser_id: watchlist.advertiser_id,
-                creative_id: ad.creative_id,
-                region: watchlist.region,
-                days,
-                domain: finalDomain,
-                domain_source: domainSource,
-                atc_url: atcUrl,
-              }),
-            },
-          });
-        });
-        alertsCreated++;
-        alertedTodaySet.add(ad.creative_id);
-      } catch (err) {
-        // uk_user_creative_date 冲突（同一天多次跑 scan）属正常，吞掉
-        const msg = err instanceof Error ? err.message : String(err);
-        if (!msg.includes("uk_user_creative_date") && !msg.includes("Duplicate entry")) {
-          throw err;
-        }
-      }
+      hits.push({
+        creative_id: ad.creative_id,
+        days,
+        domain: finalDomain,
+        domain_source: ad.domain ? "meta" : snapshotFallbackDomain ? "snapshot" : null,
+        first: ymdCst(ad.first_shown),
+        last: ymdCst(ad.last_shown),
+      });
+      alertedTodaySet.add(ad.creative_id);
     }
 
-    return { alertsCreated, calledSerpApi };
+    if (hits.length === 0) return { alertsCreated: 0, notificationsCreated: 0, calledSerpApi };
+
+    // 标题/正文/metadata 都按「最长的那条创意」打头，先排好序
+    hits.sort((a, b) => b.days - a.days);
+    const advName = adv.name || watchlist.advertiser_name || watchlist.advertiser_id;
+
+    let logged = 0;
+    await prisma.$transaction(async (tx) => {
+      // skipDuplicates 兜的是并发：上面 alertedTodaySet 已过滤掉今天推过的，
+      // 只有同一轮 cron 被重复触发才可能撞 uk_user_creative_date。
+      const res = await tx.user_atc_alert_log.createMany({
+        data: hits.map((h) => ({
+          user_id: watchlist.user_id,
+          watchlist_id: watchlist.id,
+          advertiser_id: watchlist.advertiser_id,
+          creative_id: h.creative_id,
+          days: h.days,
+          domain: h.domain,
+          alerted_date: todayDate,
+        })),
+        skipDuplicates: true,
+      });
+      // 整批都撞重 = 这些创意已经推送过，不再打扰
+      if (res.count === 0) return;
+      await tx.notifications.create({
+        data: {
+          user_id: watchlist.user_id,
+          type: "ad",
+          title: buildTitle(advName, hits),
+          content: buildContent(hits),
+          metadata: buildMetadata(watchlist.advertiser_id, watchlist.region, hits),
+        },
+      });
+      logged = res.count;
+    });
+
+    return {
+      alertsCreated: logged,
+      notificationsCreated: logged > 0 ? 1 : 0,
+      calledSerpApi,
+    };
   } catch (err) {
     return {
       alertsCreated: 0,
+      notificationsCreated: 0,
       error: err instanceof Error ? err.message : String(err),
       calledSerpApi,
     };
@@ -227,6 +307,7 @@ export async function scanAllWatchlists(): Promise<WatchlistScanResult> {
     skippedNoKey: 0,
     skippedSearchError: 0,
     alertsCreated: 0,
+    notificationsCreated: 0,
     elapsedMs: 0,
     errors: [],
   };
@@ -271,6 +352,7 @@ export async function scanAllWatchlists(): Promise<WatchlistScanResult> {
     for (const w of userWatches) {
       const item = await processOneWatchlist(w, serpApiKeys, yesterdayCst, todayCst, intelCache);
       res.alertsCreated += item.alertsCreated;
+      res.notificationsCreated += item.notificationsCreated;
       if (item.error) {
         res.skippedSearchError++;
         res.errors.push(`watchlist#${w.id}(${w.advertiser_id}): ${item.error.slice(0, 200)}`);

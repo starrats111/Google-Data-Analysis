@@ -93,7 +93,22 @@ type NotifMeta = {
   creative_id?: unknown;
   days?: unknown;
   atc_url?: unknown;
+  /** D-218：一条通知合并了多条创意时，逐条列在这里 */
+  creatives?: unknown;
 };
+
+/** D-218：metadata.creatives[] 里的一条 */
+type MetaCreative = {
+  creative_id?: unknown;
+  days?: unknown;
+  domain?: unknown;
+};
+
+function toDays(v: unknown): number {
+  if (typeof v === "number") return v;
+  if (typeof v === "string") return Number.parseInt(v, 10) || 0;
+  return 0;
+}
 
 export const GET = withUser(async (_req: NextRequest, { user }) => {
   const userId = BigInt(user.userId);
@@ -139,23 +154,51 @@ export const GET = withUser(async (_req: NextRequest, { user }) => {
     const advId = meta.advertiser_id ? String(meta.advertiser_id) : "";
     if (!advId) continue;
     const region = meta.region ? String(meta.region) : "US";
-    const rawDomain = meta.domain ? String(meta.domain) : "";
-    if (!rawDomain) continue;
-    const root = extractRootDomain(rawDomain);
-    if (!root) continue;
-    const days = typeof meta.days === "number"
-      ? meta.days
-      : (typeof meta.days === "string" ? Number.parseInt(meta.days, 10) || 0 : 0);
-    const atcUrl = meta.atc_url ? String(meta.atc_url)
-      : `https://adstransparency.google.com/advertiser/${advId}${region ? `?region=${region}` : ""}`;
-    parsed.push({
-      notif_id: n.id,
-      advertiser_id: advId,
-      region,
-      root,
-      days,
-      atc_url: atcUrl,
-    });
+
+    // D-218：scanner 现在把同一广告主的多条创意合并成一条通知，创意明细放在 creatives[]。
+    // 这里展开还原成每创意一条，下面按 (广告主, 域名) 聚合的 creative_count 语义才不会变。
+    // 8/5 之前的历史通知没有这个数组，走 else 分支按单条解析。
+    const list = Array.isArray(meta.creatives) ? (meta.creatives as MetaCreative[]) : null;
+    const rows: Array<{ domain: string; days: number; creativeId: string }> = [];
+    if (list && list.length > 0) {
+      for (const c of list) {
+        const dom = c?.domain ? String(c.domain) : "";
+        if (!dom) continue;
+        rows.push({
+          domain: dom,
+          days: toDays(c?.days),
+          creativeId: c?.creative_id ? String(c.creative_id) : "",
+        });
+      }
+    } else {
+      const rawDomain = meta.domain ? String(meta.domain) : "";
+      if (rawDomain) {
+        rows.push({
+          domain: rawDomain,
+          days: toDays(meta.days),
+          creativeId: meta.creative_id ? String(meta.creative_id) : "",
+        });
+      }
+    }
+
+    for (const r of rows) {
+      const root = extractRootDomain(r.domain);
+      if (!root) continue;
+      // 顶层 atc_url 只对应最长的那条创意，展开后按各自的 creative_id 重新拼
+      const atcUrl = r.creativeId
+        ? `https://adstransparency.google.com/advertiser/${advId}/creative/${r.creativeId}?region=${region}`
+        : meta.atc_url
+          ? String(meta.atc_url)
+          : `https://adstransparency.google.com/advertiser/${advId}${region ? `?region=${region}` : ""}`;
+      parsed.push({
+        notif_id: n.id,
+        advertiser_id: advId,
+        region,
+        root,
+        days: r.days,
+        atc_url: atcUrl,
+      });
+    }
   }
 
   if (parsed.length === 0) {

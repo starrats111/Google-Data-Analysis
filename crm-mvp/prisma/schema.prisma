@@ -207,6 +207,9 @@ model user_merchants {
   // WHERE merchant_id + platform 查询无前缀 user_id，旧索引全部失效导致全表扫描 644K 行 / 6.6s。
   // 加 (merchant_id, platform) 复合索引后单次查询 < 5ms。
   @@index([merchant_id, platform], map: "idx_merchant_platform")
+  // D-218：admin/merchant-sheet 同步推荐商家时按 merchant_name 跨用户找匹配行，
+  // 上面几个索引全以 user_id / merchant_id 打头，这个查询只能全表扫 163 万行、单次 29s。
+  @@index([merchant_name], map: "idx_merchant_name")
 }
 
 // -----------------------------------------------------------
@@ -1054,6 +1057,9 @@ model suffix_pool {
 
   @@index([campaign_id, status], map: "idx_campaign_status")
   @@index([user_id, status], map: "idx_user_status")
+  // D-218：suffix-replenish 每 5 分钟一轮的过期回收 UPDATE ... WHERE status + expires_at<now，
+  // 只有 status 前缀可用，每轮扫 27 万行 / 3.68s。
+  @@index([expires_at], map: "idx_expires_at")
 }
 
 // -----------------------------------------------------------
