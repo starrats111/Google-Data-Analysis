@@ -1,6 +1,6 @@
 import { existsSync } from "fs";
 import { getProxyUrlForCountry, getHttpProxyUrlForCountry, fetchViaProxy } from "@/lib/crawl-proxy";
-import { acquirePuppeteerSlot, acquireMainCrawlSlot, puppeteerSemaphoreStats } from "@/lib/puppeteer-semaphore";
+import { acquirePuppeteerSlot, acquireMainCrawlSlot, puppeteerSemaphoreStats, noopSlotRelease, type SlotRelease } from "@/lib/puppeteer-semaphore";
 import { normalizeImageUrl } from "@/lib/image-url-normalize";
 import { getHostKey, isHostChallenged, markHostChallenged } from "@/lib/crawl-host-cache";
 import { matchParkedTextSignal } from "@/lib/country-url-resolver";
@@ -1225,12 +1225,12 @@ export async function batchFetchMetaViaPuppeteer(
   }
 
   // C-027 FIX-A：全进程 Puppeteer browser 并发锁在 browser.launch 前
-  let releasePuppeteerSlot: () => void = () => {};
+  let releasePuppeteerSlot: SlotRelease = noopSlotRelease();
   try {
     releasePuppeteerSlot = await acquirePuppeteerSlot(45000);
   } catch (e) {
     const stats = puppeteerSemaphoreStats();
-    console.warn(`[Crawler] batchFetchMetaViaPuppeteer 等待 Puppeteer slot 超时 (${stats.active}/${stats.max}, normalQ=${stats.queuedNormal} mainQ=${stats.queuedMain})，降级返回空结果: ${e instanceof Error ? e.message : e}`);
+    console.warn(`[Crawler] batchFetchMetaViaPuppeteer 拿不到 Puppeteer slot (${stats.active}/${stats.max}, normalQ=${stats.queuedNormal} mainQ=${stats.queuedMain}, avail=${stats.availableMb}MB)，降级返回空结果: ${e instanceof Error ? e.message : e}`);
     return result;
   }
 
@@ -1252,7 +1252,8 @@ export async function batchFetchMetaViaPuppeteer(
         args: launchArgs,
       });
     }
-    registerBrowser(browser, "batchFetchMeta");
+    releasePuppeteerSlot.bindBrowser(browser);
+    registerBrowser(browser, "batchFetchMeta", releasePuppeteerSlot.heartbeat);
 
     const SOFT_404_SIGNALS = [
       "page not found", "page introuvable", "seite nicht gefunden",
@@ -1473,12 +1474,12 @@ export async function fetchImagesViaPuppeteerBatch(
     }
   }
 
-  let releasePuppeteerSlot: () => void = () => {};
+  let releasePuppeteerSlot: SlotRelease = noopSlotRelease();
   try {
     releasePuppeteerSlot = await acquirePuppeteerSlot(30000);
   } catch (e) {
     const stats = puppeteerSemaphoreStats();
-    console.warn(`[Crawler] fetchImagesViaPuppeteerBatch 等待 Puppeteer slot 超时 (${stats.active}/${stats.max}, normalQ=${stats.queuedNormal} mainQ=${stats.queuedMain}): ${e instanceof Error ? e.message : e}`);
+    console.warn(`[Crawler] fetchImagesViaPuppeteerBatch 拿不到 Puppeteer slot (${stats.active}/${stats.max}, normalQ=${stats.queuedNormal} mainQ=${stats.queuedMain}, avail=${stats.availableMb}MB): ${e instanceof Error ? e.message : e}`);
     return result;
   }
 
@@ -1500,7 +1501,8 @@ export async function fetchImagesViaPuppeteerBatch(
         args: launchArgs,
       });
     }
-    registerBrowser(browser, "fetchImagesBatch");
+    releasePuppeteerSlot.bindBrowser(browser);
+    registerBrowser(browser, "fetchImagesBatch", releasePuppeteerSlot.heartbeat);
 
     const page = await browser.newPage();
     try {
@@ -1684,11 +1686,11 @@ export async function harvestImagesFromPagesWithPuppeteer(
     }
   }
 
-  let releasePuppeteerSlot: () => void = () => {};
+  let releasePuppeteerSlot: SlotRelease = noopSlotRelease();
   try {
     releasePuppeteerSlot = await acquirePuppeteerSlot(45000);
   } catch (e) {
-    console.warn(`[Crawler] harvestImagesFromPagesWithPuppeteer 等待 slot 超时，跳过: ${e instanceof Error ? e.message : e}`);
+    console.warn(`[Crawler] harvestImagesFromPagesWithPuppeteer 拿不到 slot，跳过: ${e instanceof Error ? e.message : e}`);
     return result;
   }
 
@@ -1710,7 +1712,8 @@ export async function harvestImagesFromPagesWithPuppeteer(
         args: launchArgs,
       });
     }
-    registerBrowser(browser, "harvestImages");
+    releasePuppeteerSlot.bindBrowser(browser);
+    registerBrowser(browser, "harvestImages", releasePuppeteerSlot.heartbeat);
 
     // 2026-07-13（第六轮）：批量 harvest 补总时限。6 页 × 40s goto + 滚动 ≈ 300s，
     // 远超收割器 180s / 槽位看门狗 150s——第 4 页前后浏览器被强杀、槽位被抢释放，
@@ -1897,14 +1900,14 @@ export async function crawlWithPuppeteerFull(
   // C-027 FIX-A：全进程 Puppeteer browser 并发锁在 browser.launch 前
   // D-027：主爬路径用预留 slot（acquireMainCrawlSlot, 60s），普通路径用 acquirePuppeteerSlot（45s）
   //        避免 image proxy / sitelinks 兜底把 slot 全吃光导致主页主爬饥饿
-  let releasePuppeteerSlot: () => void = () => {};
+  let releasePuppeteerSlot: SlotRelease = noopSlotRelease();
   try {
     releasePuppeteerSlot = options.useMainCrawlSlot
       ? await acquireMainCrawlSlot(60000)
       : await acquirePuppeteerSlot(45000);
   } catch (e) {
     const stats = puppeteerSemaphoreStats();
-    console.warn(`[Crawler] crawlWithPuppeteerFull 等待 Puppeteer slot 超时 (${stats.active}/${stats.max}, normalQ=${stats.queuedNormal} mainQ=${stats.queuedMain}, useMainCrawlSlot=${!!options.useMainCrawlSlot})，降级返回 null: ${e instanceof Error ? e.message : e}`);
+    console.warn(`[Crawler] crawlWithPuppeteerFull 拿不到 Puppeteer slot (${stats.active}/${stats.max}, normalQ=${stats.queuedNormal} mainQ=${stats.queuedMain}, avail=${stats.availableMb}MB, useMainCrawlSlot=${!!options.useMainCrawlSlot})，降级返回 null: ${e instanceof Error ? e.message : e}`);
     return null;
   }
 
@@ -1932,7 +1935,8 @@ export async function crawlWithPuppeteerFull(
         args: launchArgs,
       });
     }
-    registerBrowser(browser, "crawlWithPuppeteer");
+    releasePuppeteerSlot.bindBrowser(browser);
+    registerBrowser(browser, "crawlWithPuppeteer", releasePuppeteerSlot.heartbeat);
 
     const page = await browser.newPage();
     // 设置代理认证（必须在 goto 之前）
@@ -2271,7 +2275,7 @@ export async function crawlWithPuppeteerFull(
       await closeBrowserSafely(browser);
       browser = null;
       const releaseOnce = releasePuppeteerSlot;
-      releasePuppeteerSlot = () => {};
+      releasePuppeteerSlot = noopSlotRelease();
       releaseOnce();
       return crawlWithPuppeteerFull(url, timeoutMs, undefined, options); // 不传 proxyUrl = 直连，保留 useMainCrawlSlot
     }

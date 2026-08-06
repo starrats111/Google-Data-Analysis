@@ -14,6 +14,20 @@
  *   - 中间状态（1-2 次失败）：status 保持不变，UI 显示"验证中 N/3"
  *   - 用户手动测试通过：consecutive_failures 清零 → 覆盖一切自检失败记录
  *     理由：用户测试代表 API 绝对可用，自检失败属于瞬态/自检 BUG
+ *
+ * D-220 区分「密钥真失效」与「本机拉不通」（2026-08-06 wj11 误报事故）：
+ *   - 现象：wj11 五个连接全红「该连接 API Key 已失效」，07 重新配置无效。实测五个密钥
+ *     全部有效（curl 直连各联盟接口均返回真实商家数据），全站另有 9 个连接同样被误标。
+ *   - 真因：puppeteer 的 Chrome 堆积到 32 个吃掉 3.1GB，3.6G 机器被打穿，next-server
+ *     1.67GB 进 swap，事件循环长时间冻结 → undici 的 10s 建连计时器被误触发，进程内
+ *     所有 fetch 报 UND_ERR_CONNECT_TIMEOUT（同一时刻 curl 直连只要 40-220ms）。
+ *     D-033 只数次数不看原因，3 次就把连接判死。
+ *   - 对策：按错误性质分流——
+ *       auth 类（invalid token / 401 / 403）：平台明确拒绝，维持 3 次切 error；
+ *       transient 类（fetch failed / 超时 / 连接重置 / 5xx）：本机或对端瞬时问题，
+ *         阈值放宽到 10 次，且一旦判定为**系统性故障**（5 分钟内 ≥3 个不同连接同时
+ *         transient 失败 = 必然是本机问题，不可能多家联盟同时改密钥）连计数都不加，
+ *         只记 last_error，让 UI 显示真实原因而不是甩锅给密钥。
  */
 import prisma from "@/lib/prisma";
 
@@ -44,28 +58,91 @@ export async function markConnectionAttempted(connId: bigint): Promise<void> {
   });
 }
 
+// ── D-220 失败分类 ──
+
+/** 平台明确拒绝凭据——这类才是真的「API Key 失效」 */
+const AUTH_ERROR_RE =
+  /invalid[ _-]?token|token[ _-]?(invalid|expired|error)|unauthor|forbidden|\b40[13]\b|api[ _-]?key.*(invalid|error|失效|无效)|签名错误|sign[ _-]?error|鉴权|认证失败/i;
+
+/** 本机或对端的瞬时问题——不能据此判定密钥失效 */
+const TRANSIENT_ERROR_RE =
+  /fetch failed|UND_ERR|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|EPROTO|socket hang up|network|timeout|超时|aborted|The operation was aborted|\b50[234]\b|bad gateway|gateway time/i;
+
+export type ConnFailureKind = "auth" | "transient" | "unknown";
+
+export function classifyConnFailure(errorMsg: string): ConnFailureKind {
+  const m = errorMsg || "";
+  // 先判 auth：平台常把 401 包在一段普通文案里，先匹配更具体的凭据信号
+  if (AUTH_ERROR_RE.test(m)) return "auth";
+  if (TRANSIENT_ERROR_RE.test(m)) return "transient";
+  return "unknown";
+}
+
+/** 5 分钟内 ≥3 个不同连接同时 transient 失败 = 本机问题，不是各家联盟同时改了密钥 */
+const SYSTEMIC_WINDOW_MS = 5 * 60_000;
+const SYSTEMIC_MIN_CONNS = 3;
+const SYSTEMIC_MAX_RECORDS = 2000;
+
+const _recentTransient: Array<{ connId: string; at: number }> = [];
+
+/** 记录本次 transient 失败并判断当前是否处于系统性故障中 */
+function recordTransientAndDetectSystemic(connId: bigint): boolean {
+  const now = Date.now();
+  _recentTransient.push({ connId: connId.toString(), at: now });
+  while (_recentTransient.length > 0 && now - _recentTransient[0].at > SYSTEMIC_WINDOW_MS) {
+    _recentTransient.shift();
+  }
+  // 高频失败时数组可能涨得很快，留个硬上限防内存堆积（判定只看去重数，截断不影响结论）
+  if (_recentTransient.length > SYSTEMIC_MAX_RECORDS) {
+    _recentTransient.splice(0, _recentTransient.length - SYSTEMIC_MAX_RECORDS);
+  }
+  return new Set(_recentTransient.map((r) => r.connId)).size >= SYSTEMIC_MIN_CONNS;
+}
+
 /**
  * 同步失败：累计 consecutive_failures + 写 last_error + 达阈值切 status='error'
  *
  * D-033 策略：三次检测均失败才切 error（允许瞬态失败 + 自检误报）
  *   - 1-2 次失败：status 保持不变，UI 显示"验证中 N/3"黄色
  *   - 3 次失败：status → 'error'，连接-健康 cron 发通知
+ *
+ * D-220 按失败性质分流，见文件头注释。
  */
 export async function markConnectionFailure(connId: bigint, errorMsg: string): Promise<void> {
-  const trimmed = (errorMsg || "未知错误").slice(0, 500);
+  const raw = errorMsg || "未知错误";
+  const kind = classifyConnFailure(raw);
+  const systemic = kind === "transient" ? recordTransientAndDetectSystemic(connId) : false;
+
   const current = await prisma.platform_connections.findUnique({
     where: { id: connId },
     select: { consecutive_failures: true, status: true },
   });
-  const newFailures = (current?.consecutive_failures ?? 0) + 1;
-  const FAILURE_THRESHOLD = 3; // D-033: 3 次连续失败才切 error
-  const newStatus = newFailures >= FAILURE_THRESHOLD ? "error" : current?.status ?? "connected";
+  const prevFailures = current?.consecutive_failures ?? 0;
+
+  // 系统性故障：本机拉不通，跟这条连接的密钥没关系——不累加、不改 status，
+  // 只把真实原因写进 last_error，避免 UI 继续甩锅给「API Key 已失效」。
+  if (systemic) {
+    const note = `[系统性故障] ${raw}`.slice(0, 500);
+    console.warn(
+      `[D-220] connId=${connId} 判定为系统性故障（5分钟内多个连接同时网络失败），不计入失效次数：${raw.slice(0, 120)}`,
+    );
+    await prisma.platform_connections.update({
+      where: { id: connId },
+      data: { last_sync_attempt_at: new Date(), last_error: note },
+    });
+    return;
+  }
+
+  const newFailures = prevFailures + 1;
+  // auth = 平台明确拒绝，3 次即判死；transient/unknown 放宽到 10 次，避免瞬时抖动误杀
+  const threshold = kind === "auth" ? 3 : 10;
+  const newStatus = newFailures >= threshold ? "error" : current?.status ?? "connected";
 
   await prisma.platform_connections.update({
     where: { id: connId },
     data: {
       last_sync_attempt_at: new Date(),
-      last_error: trimmed,
+      last_error: raw.slice(0, 500),
       consecutive_failures: newFailures,
       status: newStatus,
     },
@@ -105,8 +182,9 @@ export function computeHealthLevel(conn: {
   last_error: string | null;
   consecutive_failures: number;
 }): ConnHealthLevel {
-  // D-033: >= 3 次连续失败 或 status='error' → 红色
-  if (conn.status === "error" || (conn.consecutive_failures ?? 0) >= 3) return "error";
+  // D-220：红灯只认 status（由 markConnectionFailure 按失败性质分流后判定）。
+  // 原先「次数 >= 3 即红」会绕过分流——网络类失败第 3 次就变红，与放宽到 10 次的策略打架。
+  if (conn.status === "error") return "error";
   // 1-2 次失败（正在重试）或 unverified 或 从未同步 → 黄色
   if (
     conn.status === "unverified" ||

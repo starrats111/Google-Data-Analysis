@@ -17,7 +17,7 @@ import { execSync } from "child_process";
 import fs from "fs";
 import path from "path";
 
-type Entry = { browser: any; startedAt: number; label: string };
+type Entry = { browser: any; startedAt: number; label: string; heartbeat?: () => void };
 
 const registry = new Set<Entry>();
 
@@ -68,9 +68,12 @@ function sweep(): void {
 /**
  * 登记一个刚 launch 的 browser，返回注销函数（在安全关闭后调用）。
  * 注销幂等；忘记注销也没关系——收割器会在超龄时兜底杀掉。
+ *
+ * D-220：传入槽位释放器的 heartbeat，refreshBrowserAge 会一并续期槽位看门狗。
+ * 不传也能工作（老行为），但长批量任务会重现「槽位已还、Chrome 还在跑」的脱节。
  */
-export function registerBrowser(browser: any, label: string): () => void {
-  const entry: Entry = { browser, startedAt: Date.now(), label };
+export function registerBrowser(browser: any, label: string, heartbeat?: () => void): () => void {
+  const entry: Entry = { browser, startedAt: Date.now(), label, heartbeat };
   registry.add(entry);
   if (!sweeper) {
     sweeper = setInterval(sweep, SWEEP_INTERVAL_MS);
@@ -87,7 +90,12 @@ export function registerBrowser(browser: any, label: string): () => void {
  */
 export function refreshBrowserAge(browser: any): void {
   for (const entry of registry) {
-    if (entry.browser === browser) entry.startedAt = Date.now();
+    if (entry.browser === browser) {
+      entry.startedAt = Date.now();
+      // D-220：槽位看门狗一起续，否则 browser 续到 300s+、槽位 150s 就被强制释放，
+      // 新任务顶着还在跑的 Chrome 再 launch 一个，真实并发无声突破上限。
+      entry.heartbeat?.();
+    }
   }
 }
 

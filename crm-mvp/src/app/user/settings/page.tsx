@@ -271,9 +271,13 @@ function PlatformConnectionsTab() {
                         : health === "error"
                           ? `${accName} (异常)`
                           : consecutiveFailures >= 1
-                            ? `${accName} (验证中 ${consecutiveFailures}/3)`
+                            ? `${accName} (验证中 ${consecutiveFailures})`
                             : `${accName} (待验证)`;
                       const lastError = (conn.last_error as string) || "";
+                      // D-220：网络类失败不等于密钥失效，文案要说真话——否则组员会像 wj11 那样
+                      // 反复重配一个本来就没问题的 Key。判据与后端 classifyConnFailure 同源。
+                      const isNetworkIssue = /系统性故障|fetch failed|UND_ERR|timeout|超时|ECONNRESET|ETIMEDOUT|socket hang up|网络/i.test(lastError)
+                        && !/invalid[ _-]?token|unauthor|forbidden|40[13]/i.test(lastError);
                       const lastSync = conn.last_synced_at ? new Date(String(conn.last_synced_at)).toLocaleString("zh-CN") : "从未";
                       const lastAttempt = conn.last_sync_attempt_at ? new Date(String(conn.last_sync_attempt_at)).toLocaleString("zh-CN") : "—";
                       const isTesting = testingConnId === String(conn.id);
@@ -316,17 +320,29 @@ function PlatformConnectionsTab() {
                           {/* D-026: 连接异常 Alert + 引导重新配置 */}
                           {health === "error" && lastError && (
                             <Alert
-                              type="error"
+                              type={isNetworkIssue ? "warning" : "error"}
                               showIcon
                               style={{ marginTop: 6, padding: "4px 8px" }}
-                              message={<Text style={{ fontSize: 11 }}>该连接 API Key 已失效</Text>}
+                              message={
+                                <Text style={{ fontSize: 11 }}>
+                                  {isNetworkIssue ? "暂时拉不通（网络/服务器问题，非密钥失效）" : "该连接 API Key 已失效"}
+                                </Text>
+                              }
                               description={
                                 <div style={{ fontSize: 11 }}>
                                   <div><Text type="danger" style={{ fontSize: 11 }}>错误：{lastError}</Text></div>
                                   <div>上次成功同步：{lastSync}</div>
-                                  <Button danger size="small" style={{ marginTop: 4 }} onClick={() => openEditModal(conn)}>
-                                    重新配置 API Key
-                                  </Button>
+                                  {isNetworkIssue ? (
+                                    <div style={{ marginTop: 4 }}>
+                                      <Text type="secondary" style={{ fontSize: 11 }}>
+                                        重配密钥无用，请先点上方「测试连接」确认；持续异常请联系管理员查服务器。
+                                      </Text>
+                                    </div>
+                                  ) : (
+                                    <Button danger size="small" style={{ marginTop: 4 }} onClick={() => openEditModal(conn)}>
+                                      重新配置 API Key
+                                    </Button>
+                                  )}
                                 </div>
                               }
                             />

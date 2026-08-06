@@ -793,8 +793,10 @@ async function resolveViaBrowser(
   });
   if (!release) {
     // 错误信息带信号量瞬时状态（active/mainQ/exchangeQ/normalQ），用于区分「池满」vs「exchange 自排队（cap=1）」
-    console.warn(`[AffiliateResolver] 浏览器兜底失败：30s 内未抢到 puppeteer 槽位（no_puppeteer_slot）${slotErr ? ` [${slotErr}]` : ""} url=${startUrl.slice(0, 120)}`);
-    return { finalUrl: "", chain, error: "no_puppeteer_slot" };
+    // D-220：内存反压拒绝也走这里（code=PUPPETEER_LOW_MEMORY），错误码单列以便与真的抢不到槽区分
+    const lowMem = slotErr.includes("内存反压");
+    console.warn(`[AffiliateResolver] 浏览器兜底失败：${lowMem ? "内存不足，本次不启浏览器" : "30s 内未抢到 puppeteer 槽位"}（${lowMem ? "low_memory" : "no_puppeteer_slot"}）${slotErr ? ` [${slotErr}]` : ""} url=${startUrl.slice(0, 120)}`);
+    return { finalUrl: "", chain, error: lowMem ? "low_memory" : "no_puppeteer_slot" };
   }
 
   // 动态加载的 puppeteer 类型用 any（与 crawler.ts 一致），避免 puppeteer-extra/core 类型分叉
@@ -811,7 +813,8 @@ async function resolveViaBrowser(
       launcher = puppeteerCore.default || puppeteerCore;
     }
     browser = await launcher.launch({ executablePath: browserPath, headless: "new", args });
-    registerBrowser(browser, "affiliateResolver");
+    release.bindBrowser(browser);
+    registerBrowser(browser, "affiliateResolver", release.heartbeat);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const page: any = await browser.newPage();
     if (proxyAuth) {

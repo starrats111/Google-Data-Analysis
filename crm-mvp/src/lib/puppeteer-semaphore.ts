@@ -53,9 +53,29 @@
  *   - 代价评估：主爬排队拿的是**第一个释放**的槽，等的是「剩余最短」而非多个会话之和，故最坏仍与
  *     D-172 已接受的口径同量级；且实测换链接会话仅 1-14s，远低于当初假设的 25-40s 和主爬 60s 超时。
  *
+ * D-220 槽位与进程绑定 + 内存反压（2026-08-06，wj11「API Key 已失效」误报事故）：
+ *   - 现象：全站 14 个联盟连接被标成密钥失效，实测密钥全部有效。真因是进程内 fetch 全部
+ *     报 UND_ERR_CONNECT_TIMEOUT，而同一时刻 curl 直连这些域名只要 40-220ms —— 网络没问题，
+ *     是 Node 卡到连 undici 的 10s 建连计时器都超了。
+ *   - 根因：D-067 看门狗强制释放的是**计数**，D-184 收割器管的是**进程**，两者脱节。
+ *     合法长批量任务靠 refreshBrowserAge 不断给 browser 续命（按活动计龄，可远超 180s），
+ *     它的槽位却仍在 150s 被无条件强制释放 → 槽位还回池子、Chrome 还在跑 → 新任务立刻
+ *     launch → 实测「计数 ≤3、真实 Chrome 32 个占 3.1GB」，3.6G 机器被打穿：
+ *     next-server 1.67GB 进 swap、主要页错误 235 万次、事件循环长时间冻结。
+ *   - 对策一（生命周期绑定）：槽位释放器新增 heartbeat/bindBrowser。长批量任务续 browser 龄
+ *     时同步续槽位看门狗，两者不再脱节；看门狗真的超时强制释放时，一并 SIGKILL 绑定的 browser
+ *     ——既然判定失控，就不能只放计数留着进程继续吃内存。heartbeat 受 HARD_MAX_HOLD_MS 绝对
+ *     封顶，防卡死任务无限续期。
+ *   - 对策二（内存反压）：授予槽位前看 MemAvailable，低于水位直接拒绝，让调用方降级走 HTTP。
+ *     内存紧张时再 launch 只会把整机拖进 swap，连带所有出网请求超时——宁可这次不抓，
+ *     也不能让全站误判密钥失效。
+ *
  * 环境变量 PUPPETEER_SEMAPHORE_OFF=1 可一键 bypass（用于快速回滚定位）。
  * 环境变量 PUPPETEER_EXCHANGE_RESERVE_OFF=1 可单独回滚 D-199 借预留（无需重新部署）。
+ * 环境变量 PUPPETEER_MIN_AVAILABLE_MB 调内存水位（默认 500，设 0 关闭 D-220 反压）。
  */
+
+import fs from "fs";
 
 const MAX_PUPPETEER_SLOTS = 3;
 const RESERVED_MAIN_CRAWL_SLOTS = 1;
@@ -68,18 +88,101 @@ const EXCHANGE_FAST_SLOTS = 1;
 // （日志表现为持续 active=3/3 全超时）。正常一次爬取 ≤90s，故 150s 仍未释放必为泄漏。
 const MAX_SLOT_HOLD_MS = 150000;
 
+/**
+ * D-220：heartbeat 能把看门狗续到的绝对上限。合法长批量（6 页 harvest ≈ 300s、
+ * 16 条批量 meta）需要续期，但卡死的任务同样会「看起来在活动」，故封一个硬顶——
+ * 到点无论是否还在心跳都强制释放并杀进程。
+ */
+const HARD_MAX_HOLD_MS = 600000;
+
+/** D-220：可用内存低于此值不再授予新槽位（MB）。0 = 关闭反压。 */
+const DEFAULT_MIN_AVAILABLE_MB = 500;
+
 type SlotLane = "main" | "exchange" | "normal";
+
+/**
+ * D-220：槽位释放器。除了释放本身，还带两个与 browser 生命周期挂钩的能力。
+ * 仍可当普通 `() => void` 用，老调用点无需改动。
+ */
+export type SlotRelease = (() => void) & {
+  /** 长批量任务每完成一个单元调用，续期看门狗（受 HARD_MAX_HOLD_MS 封顶） */
+  heartbeat: () => void;
+  /** launch 后绑定 browser，看门狗强制释放时一并强杀，防计数与进程脱节 */
+  bindBrowser: (browser: unknown) => void;
+};
+
+/** 未持有槽位时的占位释放器（bypass / acquire 失败路径用） */
+export function noopSlotRelease(): SlotRelease {
+  const fn = (() => {}) as SlotRelease;
+  fn.heartbeat = () => {};
+  fn.bindBrowser = () => {};
+  return fn;
+}
 /** 实际授予的槽位种类（exchange 分快车道/弹性/借预留三种，释放时分别扣减计数） */
 type GrantKind = "main" | "exchangeFast" | "exchangeElastic" | "exchangeReserve" | "normal";
 
 let _active = 0;
 let _activeExchangeFast = 0;
-const _waitersMain: Array<(released: () => void) => void> = [];
-const _waitersExchange: Array<(released: () => void) => void> = [];
-const _waitersNormal: Array<(released: () => void) => void> = [];
+const _waitersMain: Array<(released: SlotRelease) => void> = [];
+const _waitersExchange: Array<(released: SlotRelease) => void> = [];
+const _waitersNormal: Array<(released: SlotRelease) => void> = [];
 
 function isDisabled(): boolean {
   return process.env.PUPPETEER_SEMAPHORE_OFF === "1";
+}
+
+// ── D-220 内存反压 ──
+
+let _memCache = { at: 0, availableMb: -1 };
+
+/**
+ * 读 /proc/meminfo 的 MemAvailable（MB）。非 Linux 或读不到返回 -1（视为不限制）。
+ * 2s 缓存：槽位申请可能密集，避免每次都读文件。
+ */
+function availableMemoryMb(): number {
+  // 测试注入口：生产不设此变量。反压逻辑只在 Linux 生效，否则本地/CI 无从验证。
+  const fake = process.env.PUPPETEER_FAKE_AVAILABLE_MB;
+  if (fake !== undefined) {
+    const n = parseInt(fake, 10);
+    return Number.isFinite(n) ? n : -1;
+  }
+  const now = Date.now();
+  if (now - _memCache.at < 2000) return _memCache.availableMb;
+  let mb = -1;
+  try {
+    const m = fs.readFileSync("/proc/meminfo", "utf8").match(/^MemAvailable:\s+(\d+) kB/m);
+    if (m) mb = Math.round(parseInt(m[1], 10) / 1024);
+  } catch {
+    // 非 Linux / 读不到：不做限制，交给原有的并发上限兜底
+  }
+  _memCache = { at: now, availableMb: mb };
+  return mb;
+}
+
+function minAvailableMb(): number {
+  const raw = process.env.PUPPETEER_MIN_AVAILABLE_MB;
+  if (raw === undefined) return DEFAULT_MIN_AVAILABLE_MB;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 0 ? n : DEFAULT_MIN_AVAILABLE_MB;
+}
+
+/**
+ * D-220：内存不足时拒绝授予新槽位。
+ *
+ * 已持有槽位的任务不受影响（不会被中途掐断），只挡新的 launch。调用方 catch 后
+ * 降级走 HTTP，比让整机进 swap、把所有出网请求拖到超时要好得多。
+ */
+function checkMemoryHeadroom(lane: SlotLane): void {
+  const floor = minAvailableMb();
+  if (floor <= 0) return;
+  const avail = availableMemoryMb();
+  if (avail < 0 || avail >= floor) return;
+  const err = new Error(
+    `Puppeteer 内存反压：可用内存 ${avail}MB 低于水位 ${floor}MB，拒绝新建 browser ` +
+      `(active=${_active}/${MAX_PUPPETEER_SLOTS}, lane=${lane})`,
+  );
+  (err as Error & { code?: string }).code = "PUPPETEER_LOW_MEMORY";
+  throw err;
 }
 
 /** exchange 保底快车道可授予：可借完整池（含主爬预留余量），快车道自身并发封顶 */
@@ -134,7 +237,7 @@ function tryClassifyGrant(lane: SlotLane): GrantKind | null {
  * @param timeoutMs 最长排队等待时间（默认 45000ms）。超时抛 PUPPETEER_SLOT_TIMEOUT，
  *                   调用方应 catch 并降级（跳过 Puppeteer 阶段）。
  */
-export async function acquirePuppeteerSlot(timeoutMs = 45000): Promise<() => void> {
+export async function acquirePuppeteerSlot(timeoutMs = 45000): Promise<SlotRelease> {
   return _acquire(timeoutMs, "normal");
 }
 
@@ -143,7 +246,7 @@ export async function acquirePuppeteerSlot(timeoutMs = 45000): Promise<() => voi
  * 优先级最高：可使用 RESERVED_MAIN_CRAWL_SLOTS 个预留 slot，等待队列也优先唤醒。
  * 默认 60s 超时（比普通 45s 长，因为主爬一旦失败整个广告创建流程 sitelinks 兜底变差）。
  */
-export async function acquireMainCrawlSlot(timeoutMs = 60000): Promise<() => void> {
+export async function acquireMainCrawlSlot(timeoutMs = 60000): Promise<SlotRelease> {
   return _acquire(timeoutMs, "main");
 }
 
@@ -153,25 +256,28 @@ export async function acquireMainCrawlSlot(timeoutMs = 60000): Promise<() => voi
  * 保证不被 sitelinks/图片代理长批量饿死；突发时额外会话走弹性配额（normal 池余量，
  * 唤醒优先级排在 normal 之后），不反过来饿死 sitelinks。
  */
-export async function acquireExchangeSlot(timeoutMs = 30000): Promise<() => void> {
+export async function acquireExchangeSlot(timeoutMs = 30000): Promise<SlotRelease> {
   return _acquire(timeoutMs, "exchange");
 }
 
-function grant(kind: GrantKind): () => void {
+function grant(kind: GrantKind): SlotRelease {
   _active++;
   if (kind === "exchangeFast") _activeExchangeFast++;
   return makeReleaser(kind);
 }
 
-async function _acquire(timeoutMs: number, lane: SlotLane): Promise<() => void> {
+async function _acquire(timeoutMs: number, lane: SlotLane): Promise<SlotRelease> {
   if (isDisabled()) {
-    return () => {};
+    return noopSlotRelease();
   }
+
+  // D-220：内存不足直接拒绝，不进队列白等——排队等到的也只是再压垮一次
+  checkMemoryHeadroom(lane);
 
   const kind = tryClassifyGrant(lane);
   if (kind) return grant(kind);
 
-  return new Promise<() => void>((resolve, reject) => {
+  return new Promise<SlotRelease>((resolve, reject) => {
     let settled = false;
     const queue = lane === "main" ? _waitersMain : lane === "exchange" ? _waitersExchange : _waitersNormal;
     const timer = setTimeout(() => {
@@ -187,7 +293,7 @@ async function _acquire(timeoutMs: number, lane: SlotLane): Promise<() => void> 
       reject(err);
     }, timeoutMs);
 
-    const onReady = (released: () => void) => {
+    const onReady = (released: SlotRelease) => {
       if (settled) {
         released();
         return;
@@ -200,8 +306,27 @@ async function _acquire(timeoutMs: number, lane: SlotLane): Promise<() => void> 
   });
 }
 
-function makeReleaser(kind: GrantKind): () => void {
+/**
+ * D-220：强杀绑定的 browser。这里内联而不复用 puppeteer-browser-registry 的同名逻辑，
+ * 是为了让本模块保持零依赖（registry 依赖 fs/child_process，反向 import 会成环）。
+ */
+function killBoundBrowser(browser: unknown, kind: GrantKind): void {
+  try {
+    const b = browser as { process?: () => { kill?: (sig: string) => void } | null };
+    const proc = typeof b?.process === "function" ? b.process() : null;
+    if (proc && typeof proc.kill === "function") {
+      proc.kill("SIGKILL");
+      console.warn(`[PuppeteerSemaphore] D-220 槽位失控，一并强杀绑定的 Chrome（kind=${kind}）`);
+    }
+  } catch {
+    // 进程已退出等情况，忽略
+  }
+}
+
+function makeReleaser(kind: GrantKind): SlotRelease {
   let done = false;
+  let boundBrowser: unknown = null;
+  const grantedAt = Date.now();
 
   const release = () => {
     if (done) return;
@@ -242,17 +367,37 @@ function makeReleaser(kind: GrantKind): () => void {
   };
 
   // D-067 看门狗：持有超过 MAX_SLOT_HOLD_MS 仍未释放 → 强制释放，防永久泄漏死锁。
-  const watchdog = setTimeout(() => {
+  // D-220：强制释放时连带强杀绑定的 browser——只放计数会让「计数 ≤3、真实 Chrome 32 个」重演。
+  const onWatchdogFire = () => {
     if (done) return;
     console.warn(
       `[PuppeteerSemaphore] D-067 槽位持有超过 ${MAX_SLOT_HOLD_MS}ms，强制释放防死锁 ` +
         `(active=${_active}/${MAX_PUPPETEER_SLOTS}, kind=${kind}, mainQ=${_waitersMain.length}, exchangeQ=${_waitersExchange.length}, normalQ=${_waitersNormal.length})`,
     );
+    if (boundBrowser) killBoundBrowser(boundBrowser, kind);
     release();
-  }, MAX_SLOT_HOLD_MS);
+  };
+
+  let watchdog = setTimeout(onWatchdogFire, MAX_SLOT_HOLD_MS);
   if (typeof watchdog.unref === "function") watchdog.unref();
 
-  return release;
+  const out = release as SlotRelease;
+
+  // D-220：长批量任务续期。与 refreshBrowserAge 成对调用，让槽位和 browser 同龄；
+  // 超过 HARD_MAX_HOLD_MS 不再续，交给看门狗按失控处理。
+  out.heartbeat = () => {
+    if (done || isDisabled()) return;
+    if (Date.now() - grantedAt >= HARD_MAX_HOLD_MS) return;
+    clearTimeout(watchdog);
+    watchdog = setTimeout(onWatchdogFire, MAX_SLOT_HOLD_MS);
+    if (typeof watchdog.unref === "function") watchdog.unref();
+  };
+
+  out.bindBrowser = (browser: unknown) => {
+    boundBrowser = browser;
+  };
+
+  return out;
 }
 
 /** 仅供诊断/日志用，勿用于业务分支。 */
@@ -267,6 +412,8 @@ export function puppeteerSemaphoreStats(): {
   exchangeFastMax: number;
   reservedMainCrawl: number;
   disabled: boolean;
+  availableMb: number;
+  minAvailableMb: number;
 } {
   return {
     active: _active,
@@ -279,5 +426,7 @@ export function puppeteerSemaphoreStats(): {
     exchangeFastMax: EXCHANGE_FAST_SLOTS,
     reservedMainCrawl: RESERVED_MAIN_CRAWL_SLOTS,
     disabled: isDisabled(),
+    availableMb: availableMemoryMb(),
+    minAvailableMb: minAvailableMb(),
   };
 }
