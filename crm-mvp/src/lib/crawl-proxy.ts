@@ -217,21 +217,39 @@ export interface CountryEgressHttpProxyResult {
   egressVerified: boolean;
 }
 
-export async function ensureCountryEgressHttpProxyDetailed(
+interface EgressVerifyOptions {
+  maxRetries?: number;
+  checkTimeoutMs?: number;
+  userId?: bigint | null;
+  exchange?: boolean;
+  /** 降耗（2026-07-24）：住宅代理访问 ipinfo 易超时，线上绝大多数校验失败是「探活超时」而非出口国真不符
+   *  （模板锁国家、实测地理定向 100% 准确）。true 时若所有尝试均为超时/网络错（从未探到「出口国不符」的
+   *  确定性结论），放行最后一个会话而不是丢弃——旧行为把好会话白白废弃（仍占上游 IP 5 分钟），还让上层
+   *  报 proxy_unavailable 触发整条链路冷却重试，是流量白烧的放大器。出口国真不符时仍返回 null。 */
+  fallbackToUnverified?: boolean;
+  /** 探活超时/网络错时是否换新会话重拨（默认 true，保持 HTTP 路径既有行为）。
+   *  D-222 实测（2026-08-07，6 国 × 20 会话）：漏国率 2.5%，探活失败率 10%——失败是漏国的 4 倍。
+   *  探活超时不构成「这个会话坏了」的证据，换会话既丢掉一个多半可用的会话（仍占上游 IP 5 分钟），
+   *  又多赔一次 5s 超时。故跟链路径置 false：只有确定性漏国才重拨，超时直接按未验证放行。 */
+  retryOnProbeError?: boolean;
+  /** 彻底失败时回传原因，让上层能区分「压根取不到代理」与「出口国反复不符」（两者返回值都是 null）。 */
+  onFailure?: (reason: "no_proxy" | "mismatch" | "probe_error") => void;
+}
+
+/**
+ * 出口国校验的公共循环：建会话 → ipinfo 探出口国 → 不符就换会话重拨。
+ *
+ * 三种收敛（HTTP/SOCKS 两条路径语义一致）：
+ *   - 校验通过 → 返回该会话 + 已探到的出口 IP（调用方复用，别再探第二次）
+ *   - 反复探活超时（无「不符」的确定性证据）→ fallbackToUnverified 时放行最后一个会话
+ *   - 真探到错国出口且重试耗尽 → 返回 null，由调用方决定降级方式
+ */
+async function verifyCountryEgress(
   country: string,
-  options: {
-    maxRetries?: number;
-    checkTimeoutMs?: number;
-    userId?: bigint | null;
-    exchange?: boolean;
-    /** 降耗（2026-07-24）：住宅代理访问 ipinfo 易超时，线上绝大多数校验失败是「探活超时」而非出口国真不符
-     *  （模板锁国家、实测地理定向 100% 准确）。true 时若所有尝试均为超时/网络错（从未探到「出口国不符」的
-     *  确定性结论），放行最后一个会话而不是丢弃——旧行为把好会话白白废弃（仍占上游 IP 5 分钟），还让上层
-     *  报 proxy_unavailable 触发整条链路冷却重试，是流量白烧的放大器。出口国真不符时仍返回 null。 */
-    fallbackToUnverified?: boolean;
-  } = {},
+  acquire: () => Promise<string | null>,
+  options: EgressVerifyOptions,
+  label: string,
 ): Promise<CountryEgressHttpProxyResult | null> {
-  if (!country) return null;
   const maxRetries = options.maxRetries ?? 3;
   const checkTimeoutMs = options.checkTimeoutMs ?? 5000;
   const targetCountry = toIsoCountryCode(country);
@@ -239,36 +257,78 @@ export async function ensureCountryEgressHttpProxyDetailed(
   let lastProxyUrl: string | null = null;
   let lastFailure: "probe_error" | "mismatch" | null = null;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    // exchange=换链接路径（kookeey http，每次新会话换出口 IP）；否则=AI 路径（arxlabs http 模板）
-    const proxyUrl = await getHttpProxyUrlForCountry(country, { userId: options.userId, exchange: options.exchange }).catch(() => null);
+    const proxyUrl = await acquire().catch(() => null);
     if (!proxyUrl) {
-      console.warn(`[CrawlProxy] getHttpProxyUrlForCountry(${country}) 返回 null，放弃代理`);
+      console.warn(`[CrawlProxy] ${label} 取 ${country} 代理返回 null，放弃代理`);
+      options.onFailure?.("no_proxy");
       return null;
     }
     lastProxyUrl = proxyUrl;
     try {
       const egress = await checkProxyEgress(proxyUrl, checkTimeoutMs);
       if (egress.country === targetCountry) {
-        console.log(`[CrawlProxy] 代理出口校验通过 (尝试${attempt}/${maxRetries}): country=${egress.country} ip=${egress.ip}`);
+        console.log(`[CrawlProxy] ${label} 出口校验通过 (尝试${attempt}/${maxRetries}): country=${egress.country} ip=${egress.ip}`);
         return { proxyUrl, exitIp: egress.ip, egressVerified: true };
       }
       lastFailure = "mismatch";
-      console.warn(`[CrawlProxy] 代理出口国不符 (尝试${attempt}/${maxRetries}): 期望=${targetCountry} 实际=${egress.country} ip=${egress.ip}，换 sid 重试`);
+      console.warn(`[CrawlProxy] ${label} 出口国不符 (尝试${attempt}/${maxRetries}): 期望=${targetCountry} 实际=${egress.country} ip=${egress.ip}，换会话重拨`);
     } catch (err) {
       lastFailure = "probe_error";
-      console.warn(`[CrawlProxy] 代理探活失败 (尝试${attempt}/${maxRetries}): ${err instanceof Error ? err.message : err}，换 sid 重试`);
+      const retry = options.retryOnProbeError !== false;
+      console.warn(
+        `[CrawlProxy] ${label} 探活失败 (尝试${attempt}/${maxRetries}): ${err instanceof Error ? err.message : err}，${retry ? "换会话重拨" : "不重拨（超时非漏国证据）"}`,
+      );
+      if (!retry) break;
     }
   }
   // 最后一次尝试仅是探活超时/网络错（没有「出口国不符」的确定性证据）→ 按模板国家未验证放行，
   // 保住会话避免白烧；真探到错国出口才彻底放弃。
   if (options.fallbackToUnverified && lastProxyUrl && lastFailure === "probe_error") {
-    console.warn(`[CrawlProxy] ${targetCountry} 出口校验 ${maxRetries} 次均为探活超时（非出口国不符），按模板国家未验证放行，避免丢弃可用会话`);
+    console.warn(`[CrawlProxy] ${label} ${targetCountry} 出口校验 ${maxRetries} 次均为探活超时（非出口国不符），按模板国家未验证放行，避免丢弃可用会话`);
     return { proxyUrl: lastProxyUrl, exitIp: null, egressVerified: false };
   }
-  console.warn(`[CrawlProxy] 代理出口校验 ${maxRetries} 次均不符 ${targetCountry}，降级处理`);
-  // 校验失败：返回 null 让上层降级直连（直连虽然出口在腾讯云 CN，但很多站点接受）；
-  // 经验数据：直连拿 4000+ 字 vs 错国代理拿 0 字，直连胜出
+  console.warn(`[CrawlProxy] ${label} 出口校验 ${maxRetries} 次均不符 ${targetCountry}，降级处理`);
+  options.onFailure?.(lastFailure ?? "no_proxy");
   return null;
+}
+
+export async function ensureCountryEgressHttpProxyDetailed(
+  country: string,
+  options: EgressVerifyOptions = {},
+): Promise<CountryEgressHttpProxyResult | null> {
+  if (!country) return null;
+  // 校验失败返回 null：AI 路径让上层降级直连（直连虽然出口在腾讯云 CN，但很多站点接受）；
+  // 经验数据：直连拿 4000+ 字 vs 错国代理拿 0 字，直连胜出
+  return verifyCountryEgress(
+    country,
+    // exchange=换链接路径（kookeey http，每次新会话换出口 IP）；否则=AI 路径（arxlabs http 模板）
+    () => getHttpProxyUrlForCountry(country, { userId: options.userId, exchange: options.exchange }),
+    options,
+    "http",
+  );
+}
+
+/**
+ * 取一个「出口国已校验」的 SOCKS5 代理（D-222：巡航/跟链主路径专用）。
+ *
+ * 换链接路径此前只有浏览器兜底（HTTP 代理）校出口国，纯 HTTP 跟链这条主路径拿到代理就直接跟——
+ * kookeey 偶发漏国（模板写 UK 实际出在别处）时，跟出来的 403/地区拦截页会被判成 tracker_forbidden，
+ * 把地区限流的活链写成死链（D-222 wj05 Sassy Saints 即此形态）。
+ *
+ * 与 HTTP 版的差别只在失败语义：换链接路径禁止降级直连（D-177），出口国真不符时返回 null，
+ * 由调用方报 proxy_unavailable「本次不判定链接死活」——宁可不下结论，也不下错结论。
+ */
+export async function ensureCountryEgressSocksProxyDetailed(
+  country: string,
+  options: EgressVerifyOptions = {},
+): Promise<CountryEgressHttpProxyResult | null> {
+  if (!country) return null;
+  return verifyCountryEgress(
+    country,
+    () => getProxyUrlForCountry(country, { userId: options.userId, exchange: options.exchange }),
+    options,
+    "socks",
+  );
 }
 
 /** 兼容旧签名（AI 爬虫路径 crawl-pipeline 在用）：仅返回校验通过的 proxyUrl，行为与改造前完全一致。 */

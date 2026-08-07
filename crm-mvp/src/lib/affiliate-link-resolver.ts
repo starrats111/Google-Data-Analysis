@@ -18,7 +18,11 @@ import * as http from "node:http";
 import * as zlib from "node:zlib";
 import { existsSync } from "node:fs";
 import prisma from "@/lib/prisma";
-import { getProxyUrlForCountry, ensureCountryEgressHttpProxyDetailed } from "@/lib/crawl-proxy";
+import {
+  getProxyUrlForCountry,
+  ensureCountryEgressHttpProxyDetailed,
+  ensureCountryEgressSocksProxyDetailed,
+} from "@/lib/crawl-proxy";
 import { acquireExchangeSlot } from "@/lib/puppeteer-semaphore";
 import { probeExitIp } from "@/lib/suffix-engine/exit-ip";
 import { pickMobileUserAgent } from "@/lib/mobile-user-agents";
@@ -43,6 +47,12 @@ export type LinkStatus = "ok" | "no_tracking" | "forbidden_network" | "resolve_f
  * 关闭时走原有 fetchChain 路径，行为与 D-193 之前逐字节一致。
  */
 const RESOLVER_V2 = process.env.AFFILIATE_RESOLVER_V2 === "1";
+
+/**
+ * D-222：跟链前是否先校一次代理出口国（默认开，置 0 可一键退回旧行为）。
+ * 关掉即恢复「拿到代理直接跟」，用于漏国率极低时省掉校验开销或应急排障。
+ */
+const EGRESS_VERIFY = process.env.RESOLVER_EGRESS_VERIFY !== "0";
 
 /**
  * 剔除 URL 中「未展开的模板变量字面量」，如 `${http.request.uri.path}`（商家 Cloudflare
@@ -1264,15 +1274,47 @@ export async function resolveAffiliateLink(
 
   // 取代理：调用方预取了粘性会话（出口 IP 去重）则直接复用，否则内部按国取。
   // exchange:true —— 换链接引擎一律只用换链接供应商池(kookeey)，绝不兜底到 AI 出口(arxlabs)。
-  const acquireProxy = async (): Promise<string | null> =>
-    opts.proxyUrl != null ? opts.proxyUrl : await getProxyUrlForCountry(cc, { userId: opts.userId, exchange: true }).catch(() => null);
+  //
+  // D-222 出口国前置校验：kookeey 偶发漏国（模板写 UK、实际出在别国）。此前纯 HTTP 跟链这条主路径
+  // 拿到代理就直接跟，错国出口撞上地区限流会拿到 403，被判成 tracker_forbidden——地区限流的活链被
+  // 写成死链（wj05 Sassy Saints 即此形态）。现在跟链前先探一次出口国，不符就换会话重拨。
+  // 成本上近乎白拿：校验探到的出口 IP 直接复用回 result.exitIp，省掉原先「跟链成功后再探一次」的
+  // 那趟 ipinfo——成功路径净增 0 次请求，只有失败路径多探一次，而失败正是要救的场景。
+  let internalProxyExitIp: string | null = null;
+  let egressMismatch = false;
+  const acquireProxy = async (): Promise<string | null> => {
+    // 调用方预取的粘性会话（补货/刷点击）已在 acquireDedupedProxy 里校过出口国，不重复探
+    if (opts.proxyUrl != null) return opts.proxyUrl;
+    if (!EGRESS_VERIFY) {
+      return await getProxyUrlForCountry(cc, { userId: opts.userId, exchange: true }).catch(() => null);
+    }
+    const got = await ensureCountryEgressSocksProxyDetailed(cc, {
+      userId: opts.userId,
+      exchange: true,
+      // 每次重拨都新开一个 kookeey 粘性会话（life-5m，丢弃也占上游 IP），故只给 2 次
+      maxRetries: 2,
+      // 探活超时不算证据：住宅代理访问 ipinfo 本就易超时（实测 10%，是漏国率的 4 倍），
+      // 直接按未验证放行、且不换会话——丢会话的代价远大于「这次可能漏国」的风险
+      fallbackToUnverified: true,
+      retryOnProbeError: false,
+      onFailure: (reason) => {
+        if (reason === "mismatch") egressMismatch = true;
+      },
+    }).catch(() => null);
+    if (!got) return null;
+    internalProxyExitIp = got.exitIp;
+    return got.proxyUrl;
+  };
 
   // D-177（采纳 kyads「代理不可用不下结论」）：换链接路径拿不到代理（kookeey 余额耗尽/熔断/供应商池空）
   // 时不再直连跟链——CN 出口跟出来的「无追踪参数落地页」是假结论，会把活链误判成死链（D-176 事故根源）。
   // 统一返回 proxy_unavailable 瞬时错误，上层短冷却重试，不计入链接死活判定。
+  // D-222：出口国反复不符也走同一出口——错国出口只会跟出地区拦截页，宁可不下结论，也不下错结论。
   const proxyUnavailable = (): ResolveResult => ({
     ...base,
-    error: "proxy_unavailable: 换链接代理不可用（余额耗尽/熔断/供应商池空），本次不判定链接死活",
+    error: egressMismatch
+      ? `proxy_unavailable: ${cc} 代理出口国反复不符（换会话重拨 2 次仍漏国），本次不判定链接死活`
+      : "proxy_unavailable: 换链接代理不可用（余额耗尽/熔断/供应商池空），本次不判定链接死活",
   });
 
   // ── 第一遍抓取 ──
@@ -1420,7 +1462,9 @@ export async function resolveAffiliateLink(
     if (result.usedBrowser) {
       result.exitIp = browserExitIp;
     } else if (opts.proxyUrl == null && httpProxyUsed) {
-      result.exitIp = await probeExitIp(httpProxyUsed);
+      // D-222：出口国校验已在同一粘性会话上探过 IP（会话内出口稳定），直接复用；
+      // 只有校验被关掉或探活超时未验证放行时才补探一次。
+      result.exitIp = internalProxyExitIp ?? (await probeExitIp(httpProxyUsed));
     }
   }
 
