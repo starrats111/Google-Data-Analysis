@@ -48,6 +48,10 @@ const CATEGORY_CN: Record<string, string> = {
   "Software": "软件", "SaaS": "SaaS", "Crypto": "加密货币",
   "CBD & Cannabis": "CBD", "Supplements": "保健品", "Skincare": "护肤",
   "Cosmetics": "化妆品", "Fragrance": "香水", "Hair Care": "护发",
+  // D-221：Hermes 禁投品类闸查出来的品类。联盟平台对这些商家一律只给 `Others>Others`，
+  // 是 Hermes 抓落地页/数词频/回灌 Google 拒登才定出来的，落到这一栏是为了让看表的人一眼知道碰不得。
+  "Adult": "成人用品", "Gambling": "博彩", "Tobacco & Vape": "烟草电子烟",
+  "Weapons": "武器刀具", "Counterfeit": "仿冒商品",
 };
 const catCn = (v: string | null) => { if (!v) return "-"; return CATEGORY_CN[v] || v; };
 /** D-050 政策类别下拉选项（按 4 大类 + 子项中文名展示，value=policyName code） */
