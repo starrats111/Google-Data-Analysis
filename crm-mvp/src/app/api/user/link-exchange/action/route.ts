@@ -5,11 +5,15 @@ import { replenishCampaign, triggerReplenishAsync } from '@/lib/suffix-engine/st
 import { startBrushTask, startBrushAllTasks } from '@/lib/suffix-engine/click-brush'
 import { syncUserLinks, resolveMerchantNow } from '@/lib/suffix-engine/link-sync'
 import { resolveAlertsByType } from '@/lib/suffix-engine/alerts'
-import { ensureCampaignMerchant } from '@/lib/campaign-merchant-link'
+import { ensureCampaignMerchant, parseCampaignNameFull } from '@/lib/campaign-merchant-link'
+import { reassignByConfirmedIndex } from '@/lib/account-index-reassign'
+import { pickCampaignAffiliateLink, loadConnectionAliasMap } from '@/lib/merchant-connection'
+import { connectionCode, connectionLabel } from '@/lib/connection-label'
+import { isValidPlatformCode, normalizePlatformCode } from '@/lib/constants'
 import { STOCK_CONFIG } from '@/lib/suffix-engine/config'
 
 interface ActionBody {
-  action: 'replenish' | 'replenishAll' | 'toggle' | 'brushClicks' | 'brushAll' | 'syncLinks' | 'updateLink' | 'setClickControl' | 'setScriptInterval' | 'recheckLink'
+  action: 'replenish' | 'replenishAll' | 'toggle' | 'brushClicks' | 'brushAll' | 'syncLinks' | 'updateLink' | 'setClickControl' | 'setScriptInterval' | 'recheckLink' | 'fixConnection'
   campaignId?: string
   enabled?: boolean
   count?: number
@@ -266,8 +270,10 @@ export async function POST(req: NextRequest) {
     })
 
     // 即时巡航验证（最多 ~35s）：成功即返回状态；超时则后台继续，前端稍后刷新
+    // D-224 必须把系列归属账号传下去：链接刚按归属账号写进 per-conn 槽位，巡航侧若按商家主连接
+    // 取链就取不到（归属 ≠ 主连接时），会把可用链接误判成「无可用联盟链接」→ 前端显示「解析失败」
     const result = await Promise.race([
-      resolveMerchantNow(merchantId, userId),
+      resolveMerchantNow(merchantId, userId, campaign.platform_connection_id),
       new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), 35000)),
     ])
     // 验证后顺带触发该系列补货（链接可用即开始蓄库存）
@@ -279,6 +285,110 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       code: 0,
       data: { saved: true, trackingStatus: result?.trackingStatus ?? null, parentNetwork: result?.parentNetwork ?? null },
+    })
+  }
+
+  // D-223 按系列名纠正归属账号：把该系列的 platform_connection_id 改成系列名平台段指向的那个联盟账号。
+  // 07 定的口径是「系列名为准」——改名就是改意图，归属跟着走；但只在用户点这个按钮时才动，
+  // 同步流程仍只检测+告警不自动改（D-200 的「自动归属只填空值不覆盖」那条保证要留着）。
+  if (body.action === 'fixConnection') {
+    if (!body.campaignId) return NextResponse.json({ code: -1, message: '缺少 campaignId' }, { status: 400 })
+    const campaignId = BigInt(body.campaignId)
+    const campaign = await prisma.campaigns.findFirst({
+      where: { id: campaignId, user_id: userId, is_deleted: 0 },
+      select: { id: true, campaign_name: true, platform_connection_id: true, user_merchant_id: true },
+    })
+    if (!campaign) return NextResponse.json({ code: -1, message: '广告系列不存在或无权限' }, { status: 404 })
+
+    const parsed = parseCampaignNameFull(campaign.campaign_name || '')
+    if (!parsed || !isValidPlatformCode(parsed.platform)) {
+      return NextResponse.json(
+        { code: -1, message: '该广告系列名解析不出「平台+账号位次」，无法据名纠正。请先在 Google Ads 里按 `序号-平台位次-商家-国家-日期-MID` 规范改名' },
+        { status: 400 },
+      )
+    }
+    const wantIdx = parsed.accountIndex ?? 1
+    // platform 列存的不保证是归一化后的码，按 normalizePlatformCode 在内存里比，与 backfill/重排同口径
+    const target =
+      (
+        await prisma.platform_connections.findMany({
+          where: { user_id: userId, account_index: wantIdx, is_deleted: 0 },
+          select: { id: true, platform: true, account_index: true, account_name: true },
+        })
+      ).find((c) => normalizePlatformCode(c.platform) === parsed.platform) ?? null
+    // 找不到就明说，绝不退而求其次挂到别的号上（全站 78 条 `pm2-` 却只有 1 个 PM 号的就是这类）
+    if (!target) {
+      return NextResponse.json(
+        { code: -1, message: `你名下没有 ${parsed.platform}${wantIdx} 这个联盟账号，无法纠正。要么到「设置 → 联盟平台」把该账号录进来，要么把系列名改回实际在用的账号位次` },
+        { status: 400 },
+      )
+    }
+    if (campaign.platform_connection_id && campaign.platform_connection_id === target.id) {
+      return NextResponse.json({ code: -1, message: '该系列归属本来就与系列名一致，无需纠正' }, { status: 400 })
+    }
+
+    // 名字里的平台与该系列所属商家的平台对不上（如 `112-CG1-creality-…-18647353` 挂的是 MUI 商家）：
+    // 这是把平台段写错了，不是改名。真按名字改归属会指到一个根本没有这个商家的账号上，链接永远补不回来。
+    const linkedMerchant =
+      campaign.user_merchant_id && campaign.user_merchant_id > BigInt(0)
+        ? await prisma.user_merchants.findFirst({
+            where: { id: campaign.user_merchant_id, user_id: userId, is_deleted: 0 },
+            select: { platform: true, merchant_id: true },
+          })
+        : null
+    if (linkedMerchant && normalizePlatformCode(linkedMerchant.platform) !== parsed.platform) {
+      return NextResponse.json(
+        {
+          code: -1,
+          message:
+            `系列名里的平台是 ${parsed.platform}，但这条广告投的商家 ${linkedMerchant.merchant_id} 属于 ${normalizePlatformCode(linkedMerchant.platform)}。` +
+            `这是系列名的平台段写错了，不是归属错了——改归属会指到一个没有该商家的账号上。请到 Google Ads 把系列名的平台段改成 ${normalizePlatformCode(linkedMerchant.platform)}，下一轮同步后告警会自动解除`,
+        },
+        { status: 400 },
+      )
+    }
+
+    // 复用 D-180 的重排：除了改归属，还会把同一个联盟账号名下旧连接的链接键迁到目标连接。
+    // 限定 onlyCampaignIds，只动这一条，不波及该平台其他系列。
+    const reassign = await reassignByConfirmedIndex(userId, parsed.platform, false, { onlyCampaignIds: [campaignId] })
+
+    // 换号等价于换链接：旧号那条链接的失败历史对新号无意义，全部作废重新学
+    await prisma.campaigns.update({
+      where: { id: campaignId },
+      data: { suffix_fail_count: 0, suffix_cooldown_until: null, suffix_no_tracking_streak: 0, suffix_needs_v2: 0 },
+    })
+    await resolveAlertsByType(userId, campaignId, ['connection_mismatch', 'invalid_link', 'merchant_not_found', 'brush_blocked'])
+
+    // 新账号名下有没有这个商家的链接，直接查一次告诉用户，别让他改完还得自己去看
+    let hasLink = false
+    if (campaign.user_merchant_id && campaign.user_merchant_id > BigInt(0)) {
+      const merchant = await prisma.user_merchants.findFirst({
+        where: { id: campaign.user_merchant_id, user_id: userId, is_deleted: 0 },
+        select: { tracking_link: true, campaign_link: true, connection_campaign_links: true, platform_connection_id: true },
+      })
+      if (merchant) {
+        hasLink = !!pickCampaignAffiliateLink(target.id, merchant, await loadConnectionAliasMap(userId))
+      }
+    }
+
+    const targetLabel = connectionLabel(target)
+    const migrated = reassign.linkMigrations.filter((l) => l.migrated).length
+    if (hasLink) {
+      // 新号已有链接 → 立刻按新链接蓄库存，不用等下一轮 cron
+      triggerReplenishAsync(campaignId, { force: true, manual: true })
+    }
+    return NextResponse.json({
+      code: 0,
+      data: {
+        fixed: true,
+        targetConnId: target.id.toString(),
+        targetLabel,
+        hasLink,
+        migratedLinks: migrated,
+        message: hasLink
+          ? `已把该系列改归 ${targetLabel}${migrated > 0 ? `，并迁移了 ${migrated} 条同账号链接` : ''}，正在按新账号的链接补货。`
+          : `已把该系列改归 ${targetLabel}，但该账号名下还没有这个商家的推广链接，链接列会显示「缺链接」。请到 ${connectionCode(target)} 的联盟后台取一条该商家的推广链接，点链接列的编辑图标填进来。`,
+      },
     })
   }
 

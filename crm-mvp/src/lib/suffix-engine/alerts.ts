@@ -21,6 +21,10 @@ export type SuffixAlertType =
   // 其余告警都由补货/跟链流程触发，而这些流程此时压根没被调用，页面上一片安静，
   // wj10 因此静默停摆一个月（621 单共用一个跟踪码）。挂用户维度，campaign_id 为 NULL。
   | 'script_auth_failed'
+  // D-223 系列名的账号位次与该系列实际归属的联盟账号对不上（如名字改成 RW1、归属还停在 RW2）。
+  // 改名只会同步 campaign_name，归属由 backfillCampaignConnections 管而它只填空值不覆盖，
+  // 于是换链接继续按旧账号取链，佣金记到旧号上，页面「对应平台」只显示平台码看不出来。
+  | 'connection_mismatch'
 
 export type SuffixAlertLevel = 'info' | 'warning' | 'error'
 
@@ -211,6 +215,7 @@ export async function getAlertSummary(userId: bigint) {
     link_forbidden: 0,
     no_tracking_stuck: 0,
     script_auth_failed: 0,
+    connection_mismatch: 0,
   }
   let totalOpen = 0
   for (const r of rows) {

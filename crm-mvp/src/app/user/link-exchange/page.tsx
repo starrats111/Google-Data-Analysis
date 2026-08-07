@@ -26,6 +26,13 @@ interface CampaignRow {
   country: string;
   googleStatus: string | null;
   platform: string;
+  /** D-223 该系列实际归属的联盟账号，如 `RW2 · loreenhorn1@gmail.com`；未回填归属为 null */
+  connLabel: string | null;
+  connCode: string | null;
+  /** D-223 系列名指向的账号 ≠ 实际归属账号（改名后归属没跟着走），换链接会按旧号取链 */
+  connMismatch: boolean;
+  nameConnCode: string | null;
+  nameConnLabel: string | null;
   mid: string;
   matched: boolean;
   merchantId: string | null;
@@ -111,6 +118,7 @@ const ALERT_TYPE_LABEL: Record<string, string> = {
   link_forbidden: "链接被联盟拒绝·换链接",
   no_tracking_stuck: "链接不记点击·换链接",
   script_auth_failed: "脚本被拒·重发脚本",
+  connection_mismatch: "归属账号与系列名不符",
 };
 
 function LinkStatusTag({ status, reason }: { status: string; reason?: string | null }) {
@@ -152,6 +160,8 @@ export default function LinkExchangePage() {
   const [savingLink, setSavingLink] = useState(false);
   // D-178 告警处理通道：重验中的告警 id
   const [recheckingAlert, setRecheckingAlert] = useState<string | null>(null);
+  // D-223 正在纠正归属的告警 id
+  const [fixingConn, setFixingConn] = useState<string | null>(null);
   // 「取链接」工具：输入联盟链接 + 国家 → 用该国动态住宅代理跟链，返回最终落地 URL
   const [fetchLinkInput, setFetchLinkInput] = useState("");
   const [fetchLinkCountry, setFetchLinkCountry] = useState<string>("US");
@@ -480,6 +490,25 @@ export default function LinkExchangePage() {
     finally { setRecheckingAlert(null); }
   };
 
+  // D-223：按系列名把归属账号改过来（改名后归属没跟着走的那类）
+  const handleFixConnection = async (alertId: string, campaignId: string) => {
+    setFixingConn(alertId);
+    try {
+      const res = await fetch("/api/user/link-exchange/action", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "fixConnection", campaignId }),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        const { hasLink, message: msg } = res.data as { hasLink: boolean; message: string };
+        // 新号没链接不是失败，是「改对了但还缺一步」，用 warning 而不是 error，且给足阅读时间
+        if (hasLink) message.success(msg, 8);
+        else message.warning(msg, 14);
+        fetchAlerts(); fetchData();
+      } else message.error(res.message ?? "纠正失败", 10);
+    } catch { message.error("网络异常，请重试"); }
+    finally { setFixingConn(null); }
+  };
+
   // D-178 告警处理通道：换链接——跳「链接管理」tab 并直接打开该系列的链接编辑框
   const handleGoEditLink = (campaignId: string) => {
     const row = (data?.rows ?? []).find((r) => r.campaignId === campaignId);
@@ -510,10 +539,20 @@ export default function LinkExchangePage() {
       ),
     },
     {
-      title: "平台 / MID", width: 110,
+      title: "平台 / MID", width: 130,
       render: (_: unknown, row) => row.platform ? (
         <Space size={2} direction="vertical" style={{ gap: 0 }}>
-          <Tag color="blue" style={{ margin: 0 }}>{row.platform}</Tag>
+          {/* D-223：标签显示归属账号的编号（RW2）而不是光秃秃的平台码（RW）——
+              后者让「名字改成 RW1、归属还在 RW2」这种串号在页面上完全隐形 */}
+          {row.connMismatch ? (
+            <Tooltip title={`系列名指向 ${row.nameConnLabel}，实际归属 ${row.connLabel}。换链接按 ${row.connCode} 取链接，点击和佣金也记在它名下——到告警中心点「纠正归属」改过来`}>
+              <Tag color="red" style={{ margin: 0 }}>{row.connCode} ≠ {row.nameConnCode}</Tag>
+            </Tooltip>
+          ) : (
+            <Tooltip title={row.connLabel ?? undefined}>
+              <Tag color="blue" style={{ margin: 0 }}>{row.connCode ?? row.platform}</Tag>
+            </Tooltip>
+          )}
           <Text type="secondary" style={{ fontSize: 11 }}>{row.mid}</Text>
         </Space>
       ) : <Text type="secondary" style={{ fontSize: 12 }}>未解析</Text>,
@@ -735,20 +774,33 @@ export default function LinkExchangePage() {
 
   // ───────── 告警中心列（D-178：每类告警配处理动作，不止报警） ─────────
   const alertColumns: ColumnsType<AlertRow> = [
-    { title: "类型", dataIndex: "type", width: 130, render: (t: string) => <Tag color={t === "merchant_not_found" || t === "invalid_link" || t === "brush_blocked" || t === "link_forbidden" || t === "no_tracking_stuck" || t === "script_auth_failed" ? "red" : t === "replenish_failed" ? "volcano" : "orange"}>{ALERT_TYPE_LABEL[t] ?? t}</Tag> },
+    { title: "类型", dataIndex: "type", width: 130, render: (t: string) => <Tag color={t === "merchant_not_found" || t === "invalid_link" || t === "brush_blocked" || t === "link_forbidden" || t === "no_tracking_stuck" || t === "script_auth_failed" || t === "connection_mismatch" ? "red" : t === "replenish_failed" ? "volcano" : "orange"}>{ALERT_TYPE_LABEL[t] ?? t}</Tag> },
     { title: "级别", dataIndex: "level", width: 80, render: (l: string) => <Tag color={l === "error" ? "error" : l === "warning" ? "warning" : "default"}>{l}</Tag> },
     { title: "告警内容", dataIndex: "message", ellipsis: true, render: (m: string) => <Tooltip title={m}><Text style={{ fontSize: 13 }}>{m}</Text></Tooltip> },
     { title: "次数", dataIndex: "occurCount", width: 70, align: "center", render: (c: number) => <Badge count={c} overflowCount={999} style={{ backgroundColor: "#faad14" }} /> },
     { title: "最近", dataIndex: "lastSeenAt", width: 150, render: (v: string | null) => v ? <Text style={{ fontSize: 12 }}>{new Date(v).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}</Text> : "—" },
     {
-      title: "操作", width: 230, align: "center",
+      title: "操作", width: 260, align: "center",
       render: (_: unknown, row) => {
         const cid = row.campaignId;
         const canRecheck = !!cid && (row.type === "invalid_link" || row.type === "replenish_failed" || row.type === "link_forbidden" || row.type === "no_tracking_stuck");
-        const canEditLink = !!cid && (row.type === "invalid_link" || row.type === "replenish_failed" || row.type === "merchant_not_found" || row.type === "brush_blocked" || row.type === "link_forbidden" || row.type === "no_tracking_stuck");
+        const canEditLink = !!cid && (row.type === "invalid_link" || row.type === "replenish_failed" || row.type === "merchant_not_found" || row.type === "brush_blocked" || row.type === "link_forbidden" || row.type === "no_tracking_stuck" || row.type === "connection_mismatch");
         const canReplenish = !!cid && row.type === "low_stock";
+        const canFixConn = !!cid && row.type === "connection_mismatch";
+        const ctxFix = (row.context ?? {}) as { targetLabel?: string; currentLabel?: string };
         return (
           <Space size={0}>
+            {canFixConn && (
+              <Popconfirm
+                title="按系列名纠正归属"
+                description={`把该系列从 ${ctxFix.currentLabel ?? "当前账号"} 改归 ${ctxFix.targetLabel ?? "系列名指向的账号"}。若新账号名下还没有这个商家的链接，链接列会先显示「缺链接」，需要你去补一条。`}
+                onConfirm={() => handleFixConnection(row.id, cid!)}
+                okText="确认纠正"
+                cancelText="取消"
+              >
+                <Button size="small" type="link" danger loading={fixingConn === row.id}>纠正归属</Button>
+              </Popconfirm>
+            )}
             {canRecheck && (
               <Tooltip title="清除失败记录后立即重新跟链验证（约 20-60 秒），当场返回结论">
                 <Button size="small" type="link" icon={<SyncOutlined />}
@@ -826,6 +878,13 @@ export default function LinkExchangePage() {
       "⑤ 想再确认一次：点「重验」会立刻重跟一遍（不受长冷却限制），当场返回结论。",
       "⑥ 若该商家已下架/停止合作：暂停该系列广告，关掉换链开关，然后点「已处理」。",
     ],
+    connection_mismatch: [
+      "① 含义：这条系列名字里写的账号（如 RW1）和它在 CRM 里实际归属的账号（如 RW2）对不上。换链接按实际归属那个号取链接，联盟点击和佣金也记在那个号名下。",
+      "② 最常见的成因：在 Google Ads 里把系列改了名。改名只会同步名字，归属不会自动跟着走（这是刻意的，防止误改绑已经配好的系列），所以要你确认一下到底哪个才对。",
+      "③ 名字是对的、归属错了（改名后想换号跑）：点「纠正归属」，系统按系列名把归属改过来，同一个联盟账号下已有的链接会一并迁过去。",
+      "④ 归属是对的、名字写错了：到 Google Ads 里把系列名的平台位次改回来，下一轮同步后本告警自动解除，不用点任何按钮。",
+      "⑤ 纠正后若提示「缺链接」：说明新账号名下还没有这个商家的推广链接。到该联盟账号后台取一条，点「换链接」填进来即可。",
+    ],
     script_auth_failed: [
       "① 含义：你的 Google Ads 脚本在调用 CRM 接口时被拒绝（HTTP 401：无效的 API Key），换链接已整体停摆——不是某一条链接坏了，是脚本根本进不来。",
       "② 后果：脚本每轮都查不到联盟追踪链接，所有在投系列会长期沿用同一个跟踪码，联盟侧极可能判为异常。花费和点击数据仍在正常更新（那部分不需要 API Key），所以只看数据发现不了。",
@@ -834,7 +893,7 @@ export default function LinkExchangePage() {
     ],
   };
   const renderAlertGuide = (row: AlertRow) => {
-    const ctx = (row.context ?? {}) as { affiliateUrl?: string; finalUrl?: string | null; failCount?: number; reason?: string; platform?: string; merchantId?: string; ordersToday?: number; deficit?: number };
+    const ctx = (row.context ?? {}) as { affiliateUrl?: string; finalUrl?: string | null; failCount?: number; reason?: string; platform?: string; merchantId?: string; ordersToday?: number; deficit?: number; campaignName?: string; currentLabel?: string; targetLabel?: string };
     return (
       <div style={{ padding: "4px 8px" }}>
         {(ALERT_GUIDE[row.type] ?? ["点「已处理」标记解决。"]).map((step, i) => (
@@ -845,6 +904,12 @@ export default function LinkExchangePage() {
             {ctx.failCount != null && <>连续失败 {ctx.failCount} 次；</>}
             {ctx.affiliateUrl && <>联盟链接：{ctx.affiliateUrl.slice(0, 160)}；</>}
             {ctx.finalUrl && <>实际落到：{String(ctx.finalUrl).slice(0, 160)}</>}
+          </Paragraph>
+        )}
+        {row.type === "connection_mismatch" && (
+          <Paragraph type="secondary" style={{ marginBottom: 0, fontSize: 12 }}>
+            {ctx.campaignName && <>系列 {ctx.campaignName}；</>}
+            当前归属 {ctx.currentLabel ?? "—"} → 系列名指向 {ctx.targetLabel ?? "—"}
           </Paragraph>
         )}
         {row.type === "brush_blocked" && (

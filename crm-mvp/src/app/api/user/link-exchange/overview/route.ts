@@ -7,6 +7,7 @@ import { STOCK_CONFIG } from '@/lib/suffix-engine/config'
 import { parseCampaignNameFull } from '@/lib/campaign-merchant-link'
 import { loadConnectionAliasMap, pickCampaignAffiliateLink } from '@/lib/merchant-connection'
 import { normalizePlatformCode } from '@/lib/constants'
+import { connectionCode, connectionLabel } from '@/lib/connection-label'
 import { todayCST, parseCSTDateStart, parseCSTDateEndExclusive, dateColumnStart, dateColumnTodayEndExclusive } from '@/lib/date-utils'
 import { computeClickDebtSummary } from '@/lib/auto-click'
 
@@ -43,9 +44,27 @@ export async function GET(req: NextRequest) {
       ...c,
       platform: p?.platform ?? '',
       mid: p?.mid ?? '',
+      // D-223 系列名平台段的账号位次（RW1 → 1）。无序号段视为 1 号，与 backfill/重排同口径
+      nameAccountIndex: p ? (p.accountIndex ?? 1) : null,
       country: c.target_country || p?.country || '',
     }
   })
+
+  // ── D-223 归属账号：展示「对应平台」时带上账号位次，并标出与系列名不符的行 ──
+  // 「对应平台」原先只显示平台码 RW，RW1 改名成 RW2 这类串号肉眼完全看不出来。
+  const userConns = await prisma.platform_connections.findMany({
+    where: { user_id: userId, is_deleted: 0 },
+    select: { id: true, platform: true, account_index: true, account_name: true },
+  })
+  const connById = new Map(userConns.map((c) => [c.id.toString(), c]))
+  // 只认已回填 account_index 的连接，与 fixConnection 判定目标账号同口径
+  const connByPlatformIdx = new Map<string, Map<number, (typeof userConns)[0]>>()
+  for (const c of userConns) {
+    if (!c.account_index) continue
+    const p = normalizePlatformCode(c.platform)
+    if (!connByPlatformIdx.has(p)) connByPlatformIdx.set(p, new Map())
+    connByPlatformIdx.get(p)!.set(c.account_index, c)
+  }
 
   // 商家精准提取：优先权威关联 campaigns.user_merchant_id，回退按 (平台, MID) 名称匹配
   const umIds = [...new Set(parsed.map((p) => p.user_merchant_id).filter((id) => id && id > BigInt(0)))]
@@ -318,6 +337,13 @@ export async function GET(req: NextRequest) {
     const conversion = todayClicks > 0 ? todayOrders / todayClicks : null // 订单/点击；无点击为 null（前端显示 —）
     // 账号感知有效链接：与补货/刷点击引擎同口径（广告归属连接的 per-conn 键 > 主连接主链接）
     const effectiveLink = merchant ? pickCampaignAffiliateLink(c.platform_connection_id, merchant, connAliasMap) : ''
+    // D-223 归属账号 vs 系列名。目标账号不存在时不算「不符」——那是命名口径问题，系统本就只能挂唯一那个号
+    const curConn = c.platform_connection_id ? connById.get(c.platform_connection_id.toString()) ?? null : null
+    const nameTargetConn =
+      c.platform && c.nameAccountIndex != null
+        ? connByPlatformIdx.get(c.platform)?.get(c.nameAccountIndex) ?? null
+        : null
+    const connMismatch = !!curConn && !!nameTargetConn && curConn.id !== nameTargetConn.id
     return {
       campaignId: c.id.toString(),
       googleCampaignId: c.google_campaign_id,
@@ -325,6 +351,12 @@ export async function GET(req: NextRequest) {
       country: c.country,
       googleStatus: c.google_status,
       platform: c.platform || (merchant ? normalizePlatformCode(merchant.platform) : ''),
+      // D-223：归属账号的完整标签（`RW2 · loreenhorn1@gmail.com`）与系列名指向的账号，供前端标红提示
+      connLabel: curConn ? connectionLabel(curConn) : null,
+      connCode: curConn ? connectionCode(curConn) : null,
+      connMismatch,
+      nameConnCode: nameTargetConn ? connectionCode(nameTargetConn) : null,
+      nameConnLabel: nameTargetConn ? connectionLabel(nameTargetConn) : null,
       mid: c.mid || merchant?.merchant_id || '',
       matched: !!merchant,
       merchantId: merchant?.id.toString() ?? null,

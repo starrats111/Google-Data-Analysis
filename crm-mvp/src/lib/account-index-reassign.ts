@@ -49,11 +49,14 @@ export interface ReassignResult {
 /**
  * 按确认后的联盟序号，重排某 (user, platform) 的广告归属并迁移链接键。
  * @param dryRun true=只算不写（上线前影子库验证用）
+ * @param opts.onlyCampaignIds 只处理这几条系列（D-223 换链接页「按系列名纠正归属」按单条纠正用）；
+ *        不传 = 该平台全量，与 D-180 原行为一致
  */
 export async function reassignByConfirmedIndex(
   userId: bigint,
   platformRaw: string,
   dryRun = false,
+  opts?: { onlyCampaignIds?: bigint[] },
 ): Promise<ReassignResult> {
   const platform = normalizePlatformCode(platformRaw);
   const result: ReassignResult = {
@@ -95,6 +98,7 @@ export async function reassignByConfirmedIndex(
       google_campaign_id: { not: null },
       status: { not: "removed" },
       google_status: { not: "REMOVED" },
+      ...(opts?.onlyCampaignIds ? { id: { in: opts.onlyCampaignIds } } : {}),
     },
     select: { id: true, campaign_name: true, platform_connection_id: true, user_merchant_id: true },
   });

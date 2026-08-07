@@ -16,6 +16,8 @@
 
 import prisma from "@/lib/prisma";
 import { normalizePlatformCode, isValidPlatformCode, parsePlatformSegment } from "@/lib/constants";
+import { connectionLabel, connectionCode } from "@/lib/connection-label";
+import { raiseAlert } from "@/lib/suffix-engine/alerts";
 
 // ── 命名解析 ──
 
@@ -197,8 +199,121 @@ export async function syncMerchantStatusForUser(userId: bigint): Promise<{
 }> {
   const linked = await autoLinkCampaigns(userId);
   await backfillCampaignConnections(userId);
+  await detectConnectionMismatch(userId);
   const merchantsUpdated = await forceUpdateMerchantStatus(userId);
   return { linked, merchantsUpdated };
+}
+
+// ── D-223: 系列名账号位次 ≠ 实际归属账号的检测 ──
+
+/**
+ * 比对「系列名平台段的账号位次」与「该系列实际归属的联盟账号」，不一致时抛 connection_mismatch 告警。
+ *
+ * 为什么需要：改名只会同步 campaign_name，归属归 backfillCampaignConnections 管，而它只填空值不覆盖
+ * （D-168 刻意为之，保护手工回填/发布时写入的归属）。于是把 `181-RW2-…` 改成 `181-RW1-…` 之后，
+ * 换链接仍按 RW2 取链、佣金也继续记在 RW2 名下，而页面「对应平台」只显示平台码 `RW`，肉眼看不出来。
+ *
+ * **只报「目标账号真实存在」的那些**。名字里写了个不存在的号（如只有 1 个 PM 号却全命名 `pm2-`，
+ * 全站 78 条属此类）时，系统本就只能挂到那个唯一的号上，没有串号损失，纯属命名不规范——
+ * 报出来只会刷屏。这类留在 D-223 表格里等 07 统一定命名口径。
+ *
+ * 只检在投系列：告警中心本就按 ENABLED 过滤展示，暂停的系列重新启用时会自然浮出来。
+ */
+export async function detectConnectionMismatch(userId: bigint): Promise<number> {
+  const campaigns = await prisma.campaigns.findMany({
+    where: {
+      user_id: userId,
+      is_deleted: 0,
+      status: "active",
+      google_status: "ENABLED",
+      google_campaign_id: { not: null },
+      platform_connection_id: { not: null },
+    },
+    select: { id: true, campaign_name: true, platform_connection_id: true },
+    take: 2000,
+  });
+  if (campaigns.length === 0) return 0;
+
+  const conns = await prisma.platform_connections.findMany({
+    where: { user_id: userId, is_deleted: 0 },
+    select: { id: true, platform: true, account_index: true, account_name: true },
+  });
+  const connById = new Map(conns.map((c) => [c.id.toString(), c]));
+  // platform → 位次 → 连接。与 reassignByConfirmedIndex 同口径：只认已回填 account_index 的连接，
+  // 避免这里判「可纠正」而纠正时又找不到目标号。
+  const byPlatformIdx = new Map<string, Map<number, (typeof conns)[0]>>();
+  for (const c of conns) {
+    if (!c.account_index) continue;
+    const p = normalizePlatformCode(c.platform);
+    if (!byPlatformIdx.has(p)) byPlatformIdx.set(p, new Map());
+    byPlatformIdx.get(p)!.set(c.account_index, c);
+  }
+
+  const okIds: bigint[] = [];
+  const mismatches: { id: bigint; name: string; cur: (typeof conns)[0]; tgt: (typeof conns)[0] }[] = [];
+
+  for (const c of campaigns) {
+    const cur = connById.get(c.platform_connection_id!.toString());
+    // 归属指向已删连接：属另一类问题（D-180 序号重排的场景），不在本告警范围
+    if (!cur) continue;
+    const parsed = parseCampaignNameFull(c.campaign_name || "");
+    if (!parsed || !isValidPlatformCode(parsed.platform)) continue;
+
+    const wantIdx = parsed.accountIndex ?? 1;
+    const curOk =
+      normalizePlatformCode(cur.platform) === parsed.platform && (cur.account_index ?? 1) === wantIdx;
+    if (curOk) {
+      okIds.push(c.id);
+      continue;
+    }
+    const tgt = byPlatformIdx.get(parsed.platform)?.get(wantIdx);
+    if (!tgt) continue; // 位次无对应连接 → 命名口径问题，不报警（见函数注释）
+    mismatches.push({ id: c.id, name: c.campaign_name || "", cur, tgt });
+  }
+
+  // 恢复一致的（用户已纠正、或把名字改回去了）批量销掉旧告警，一次 updateMany 不逐条打库
+  if (okIds.length > 0) {
+    await prisma.suffix_alerts
+      .updateMany({
+        where: {
+          user_id: userId,
+          campaign_id: { in: okIds },
+          type: "connection_mismatch",
+          status: "open",
+          is_deleted: 0,
+        },
+        data: { status: "resolved", resolved_at: new Date() },
+      })
+      .catch((e) => console.error("[ConnMismatch] resolve failed:", e));
+  }
+
+  for (const m of mismatches) {
+    const nameCode = connectionCode({ platform: m.tgt.platform, account_index: m.tgt.account_index });
+    const curLabel = connectionLabel(m.cur);
+    await raiseAlert(userId, {
+      type: "connection_mismatch",
+      campaignId: m.id,
+      level: "error",
+      message:
+        `广告系列「${m.name}」名字里写的是 ${nameCode}，实际归属却是 ${curLabel}。` +
+        `换链接会按 ${connectionCode(m.cur)} 取链接、点击和佣金也记在它名下——两者必有一个是错的。`,
+      context: {
+        campaignName: m.name,
+        nameCode,
+        currentCode: connectionCode(m.cur),
+        currentLabel: curLabel,
+        currentConnId: m.cur.id.toString(),
+        targetCode: nameCode,
+        targetLabel: connectionLabel(m.tgt),
+        targetConnId: m.tgt.id.toString(),
+      },
+    });
+  }
+
+  if (mismatches.length > 0) {
+    console.log(`[ConnMismatch] D-223 user=${userId} 名实不符 ${mismatches.length} 条`);
+  }
+  return mismatches.length;
 }
 
 // ── D-168: 按系列名平台段序号回填广告系列的联盟账号 ──
