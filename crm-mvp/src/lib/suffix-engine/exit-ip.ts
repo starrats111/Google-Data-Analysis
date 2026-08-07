@@ -23,7 +23,7 @@
  */
 
 import { prisma } from '@/lib/prisma'
-import { getProxyUrlForCountry, fetchViaProxy } from '@/lib/crawl-proxy'
+import { getProxyUrlForCountry, fetchViaProxy, toIsoCountryCode } from '@/lib/crawl-proxy'
 import { getProviderSelection } from './proxy-provider'
 
 /** 去重范围：跨用户、不跨组，按 (team_id, platform, merchant_id) 聚合。 */
@@ -150,15 +150,22 @@ export async function cleanupExpiredExitIps(): Promise<number> {
   }
 }
 
-/** 通过指定代理 URL 探出口 IP（访问 ipinfo.io/json）。失败返回 null。 */
-export async function probeExitIp(proxyUrl: string): Promise<string | null> {
+/**
+ * 通过指定代理 URL 探出口 IP 与出口国（访问 ipinfo.io/json）。失败返回 null。
+ *
+ * D-222：出口国本就在同一份 ipinfo 响应里，此前只取了 ip 字段丢掉 country。取回来即可让
+ * 去重路径顺带校出口国，零额外请求。
+ */
+export async function probeExitEgress(proxyUrl: string): Promise<{ ip: string; country: string | null } | null> {
   const ctrl = new AbortController()
   const tm = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS)
   try {
     const resp = await fetchViaProxy('https://ipinfo.io/json', { signal: ctrl.signal }, proxyUrl, 3)
     if (!resp.ok) return null
-    const json = JSON.parse(await resp.text()) as { ip?: string }
-    return json.ip ? String(json.ip).trim() : null
+    const json = JSON.parse(await resp.text()) as { ip?: string; country?: string }
+    const ip = json.ip ? String(json.ip).trim() : ''
+    if (!ip) return null
+    return { ip, country: json.country ? String(json.country).trim().toUpperCase() : null }
   } catch {
     return null
   } finally {
@@ -166,10 +173,19 @@ export async function probeExitIp(proxyUrl: string): Promise<string | null> {
   }
 }
 
+/** 通过指定代理 URL 探出口 IP（访问 ipinfo.io/json）。失败返回 null。 */
+export async function probeExitIp(proxyUrl: string): Promise<string | null> {
+  return (await probeExitEgress(proxyUrl))?.ip ?? null
+}
+
 /**
  * 取一个「出口 IP 与 /24 段都未在 24h 内为该组该商家使用过」的粘性代理。
  * 每次 getProxyUrlForCountry 生成新会话（新出口 IP）；命中已用 IP 或已用 /24 段则换会话重试。
  * 探活失败时返回当前会话 + exitIp=null（降级无去重，仍可换链）。
+ *
+ * D-222：探活顺带校出口国（country 就在同一份 ipinfo 响应里，零额外请求）。漏国的会话直接弃用，
+ * 与「撞已用 IP」同样处理——错国出口跟出来的地区拦截页会被判成死链。两次都拿不到对国出口时返回
+ * proxyUrl=null，让 resolver 走自己那套带校验的取代理，而不是把错国会话交出去。
  */
 export async function acquireDedupedProxy(
   country: string,
@@ -177,9 +193,12 @@ export async function acquireDedupedProxy(
 ): Promise<DedupedProxy> {
   const usedIps = opts.used?.ips ?? new Set<string>()
   const usedSubnets = opts.used?.subnets ?? new Set<string>()
+  // 业务侧惯用 UK，ipinfo 返回 ISO 的 GB，不归一会让 UK 系列每次都判成漏国（D-176 教训）
+  const targetCountry = toIsoCountryCode(country)
   let lastUrl: string | null = null
   let lastIp: string | null = null
   let lastProviderId: string | null = null
+  let sawMismatch = false
 
   for (let i = 0; i < MAX_FRESH_TRIES; i++) {
     // 优先走供应商选择（含熔断故障转移 + 回传 providerId 供归因）；无供应商时回退 system_config/env 模板。
@@ -199,17 +218,32 @@ export async function acquireDedupedProxy(
     }
     lastUrl = proxyUrl
     lastProviderId = providerId
-    const ip = await probeExitIp(proxyUrl)
-    if (!ip) {
-      // 探活失败：用当前会话，放弃去重（降级），不再多探以省时间
+    const egress = await probeExitEgress(proxyUrl)
+    if (!egress) {
+      // 探活失败：用当前会话，放弃去重（降级），不再多探以省时间。
+      // 超时不构成漏国证据（实测探活失败率 10%，是漏国率的 4 倍），换会话只会白丢好会话。
       return { proxyUrl, exitIp: null, dup: false, providerId }
     }
+    const ip = egress.ip
     lastIp = ip
+    // 出口国不符 → 与撞车同等处理，换会话重拨
+    if (egress.country && egress.country !== targetCountry) {
+      sawMismatch = true
+      console.warn(`[exit-ip] 出口国不符(${targetCountry})：实际=${egress.country} ip=${ip}，换会话重拨`)
+      continue
+    }
     // 精确 IP 或 /24 段任一撞已用即视为重复（商家风控按段判定，段级更严）
     if (!usedIps.has(ip) && !usedSubnets.has(computeSubnet(ip))) {
       return { proxyUrl, exitIp: ip, dup: false, providerId }
     }
     // 命中 24h 已用 IP/段 → 换会话再试
+  }
+
+  // 全部尝试都漏国：不把错国会话交出去（会跟出地区拦截页误判死链），
+  // 返回 null 让 resolver 用自己那套带校验的取代理逻辑重来。
+  if (sawMismatch) {
+    console.warn(`[exit-ip] ${MAX_FRESH_TRIES} 次均未拿到 ${targetCountry} 出口，交回 resolver 自取（带出口国校验）`)
+    return { proxyUrl: null, exitIp: null, dup: false, providerId: null }
   }
 
   // 多次都命中已用 IP/段：尽力而为返回最后一个（不阻断换链；rotating 池 IP 有限时可能发生）。
