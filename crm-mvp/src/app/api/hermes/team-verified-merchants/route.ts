@@ -127,8 +127,22 @@ export async function GET(req: NextRequest) {
       ...(since ? [since] : []),
     );
 
-    // ── 2) 点击/花费侧：ads_daily_stats 挂的是 user_merchant_id，借 user_merchants 换成 platform+MID。
-    // 不走 campaigns：那样会多一层 join，且日表本就带 user_merchant_id。
+    // ── 2) 点击/花费侧：经 campaigns 归到 platform+MID。
+    //
+    // ⚠️ 这里原本直接 join ads_daily_stats.user_merchant_id，理由是「日表本就带这个键，
+    // 少一层 join」。那个键是坏的：全库 100,931 条存活日表行里 59,005 条（58.5%）的
+    // user_merchant_id 是 0 或指向已删记录，从来不是 NULL，所以 INNER JOIN 只会静默丢行、
+    // 不报任何错。后果是本接口只看得见 $28,427 花费 / 51.7 万点击，而真实是
+    // $218,312 / 326 万——**丢掉 87%**。丢掉的商家 clicks=0 → breakeven_quality 判成
+    // no_ad_data → Hermes 拿不到盈亏平衡值，只能对所有人回落到统一基准出价。
+    // cpc-ceiling.js 里「88% 商家走 base」那句归咎于 campaign_id 填充率，实际主因是这里。
+    //
+    // campaigns.user_merchant_id 是 NOT NULL 且只有 461/14,948（3.1%）指向已删记录，
+    // 改走它之后覆盖到 $212,825 / 319 万（97.5%），能算盈亏平衡的商家从 631 涨到 3,321。
+    // 实测 LAGOS(MUI/8005348)：旧链路 0 点击 $0，新链路 607 点击 $95.18、8 条系列，
+    // 与直接按系列名核对的手算值一致。
+    //
+    // 多出来的这层 join 只扫 14,948 行 campaigns，实测对 17 秒的总耗时无可测影响。
     const adsRows = await prisma.$queryRawUnsafe<AdsRow[]>(
       `SELECT um.platform,
               um.merchant_id,
@@ -137,8 +151,9 @@ export async function GET(req: NextRequest) {
               COUNT(DISTINCT s.campaign_id) AS campaigns,
               COUNT(DISTINCT s.user_id) AS users_ran
          FROM ads_daily_stats s
-         JOIN user_merchants um ON um.id = s.user_merchant_id
-        WHERE s.is_deleted = 0 AND um.is_deleted = 0 ${since ? "AND s.date >= ?" : ""}
+         JOIN campaigns c ON c.id = s.campaign_id AND c.is_deleted = 0
+         JOIN user_merchants um ON um.id = c.user_merchant_id AND um.is_deleted = 0
+        WHERE s.is_deleted = 0 ${since ? "AND s.date >= ?" : ""}
         GROUP BY um.platform, um.merchant_id`,
       ...(since ? [since] : []),
     );
@@ -281,10 +296,11 @@ export async function GET(req: NextRequest) {
         },
         caveat_attribution:
           "inflated 档的根因是 affiliate_transactions.campaign_id 全库填充率 0.0%，" +
-          "做不了系列级归因，故无法把非广告流量的佣金剔出去",
+          "做不了系列级归因，故无法把非广告流量的佣金剔出去。" +
+          "需要系列级真实业绩请改用 /api/hermes/campaign-stats（它按 ads_daily_stats.campaign_id 取数）",
         caveat_coverage:
-          "有订单的商家里仅约 20% 在 CRM 有广告数据，其余 breakeven_cpc 为 null，" +
-          "只能用 team_verified 这个布尔信号",
+          "点击/花费经 campaigns.user_merchant_id 归因，覆盖 97.5% 的广告花费；" +
+          "余下 2.5% 是 461 条 campaigns 的 user_merchant_id 指向已删商家记录",
       },
       counts: {
         merchants: merchants.length,
