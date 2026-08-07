@@ -358,29 +358,50 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ code: -1, message: '该系列归属本来就与系列名一致，无需纠正' }, { status: 400 })
     }
 
-    // 名字里的平台与该系列所属商家的平台对不上（如 `112-CG1-creality-…-18647353` 挂的是 MUI 商家）：
-    // 这是把平台段写错了，不是改名。真按名字改归属会指到一个根本没有这个商家的账号上，链接永远补不回来。
-    const linkedMerchant =
-      campaign.user_merchant_id && campaign.user_merchant_id > BigInt(0)
-        ? await prisma.user_merchants.findFirst({
-            where: { id: campaign.user_merchant_id, user_id: userId, is_deleted: 0 },
-            select: { platform: true, merchant_id: true },
-          })
-        : null
-    if (linkedMerchant && normalizePlatformCode(linkedMerchant.platform) !== parsed.platform) {
+    // 平台段可不可信，得看这个 MID 在该平台下是否真有其人，而不能拿「当前关联商家的平台」去判——
+    // 那个关联本身就是错归属的产物。yz04 的 `112-CG1-creality-…-18647353` 就是反例：
+    // MID 18647353 在 CG 下有 11 条真商家，MUI 下唯一那条是错归属时自建出来的，
+    // 里面存的还是 link.collabglow.com（CG 的域名）。拿它反证「名字写错」是循环论证，
+    // 正好把最该纠正的那类——名字对、归属错——全挡在门外。
+    const midRows = await prisma.user_merchants.findMany({
+      where: { merchant_id: parsed.mid, is_deleted: 0 },
+      select: { platform: true },
+      take: 500,
+    })
+    const midPlatforms = new Set(midRows.map((m) => normalizePlatformCode(m.platform)))
+    if (midPlatforms.size > 0 && !midPlatforms.has(parsed.platform)) {
+      const actual = [...midPlatforms].join(' / ')
       return NextResponse.json(
         {
           code: -1,
           message:
-            `系列名里的平台是 ${parsed.platform}，但这条广告投的商家 ${linkedMerchant.merchant_id} 属于 ${normalizePlatformCode(linkedMerchant.platform)}。` +
-            `这是系列名的平台段写错了，不是归属错了——改归属会指到一个没有该商家的账号上。请到 Google Ads 把系列名的平台段改成 ${normalizePlatformCode(linkedMerchant.platform)}，下一轮同步后告警会自动解除`,
+            `系列名里的平台是 ${parsed.platform}，但商家 ${parsed.mid} 只在 ${actual} 平台下有，${parsed.platform} 平台没有这个商家。` +
+            `这是系列名的平台段写错了，不是归属错了——改归属会指到一个没有该商家的账号上，链接永远补不回来。` +
+            `请到 Google Ads 把平台段改成 ${actual}，下一轮同步后告警会自动解除`,
         },
         { status: 400 },
       )
     }
 
+    // 跨平台纠正时商家关联必须跟着换。只改 platform_connection_id 而仍挂着错平台的商家行，
+    // 取链接会去翻那条记录的 connection_campaign_links，结果还是「缺链接」——
+    // 而正确那条商家行（CG 下的 Creality EU）在目标账号下本来就有链接。
+    // 只认已同步存在的商家行，不自建：自建等于凭系列名臆造一条没有链接的商家（D-223 就是被这种自建记录坑的）。
+    const myMidRows = await prisma.user_merchants.findMany({
+      where: { user_id: userId, merchant_id: parsed.mid, is_deleted: 0 },
+      select: { id: true, platform: true, merchant_name: true },
+    })
+    const targetMerchant = myMidRows.find((m) => normalizePlatformCode(m.platform) === parsed.platform) ?? null
+    if (targetMerchant && targetMerchant.id !== campaign.user_merchant_id) {
+      await prisma.campaigns.update({
+        where: { id: campaignId },
+        data: { user_merchant_id: targetMerchant.id },
+      })
+    }
+
     // 复用 D-180 的重排：除了改归属，还会把同一个联盟账号名下旧连接的链接键迁到目标连接。
     // 限定 onlyCampaignIds，只动这一条，不波及该平台其他系列。
+    // 放在改 user_merchant_id 之后，它收集「商家→目标连接」时才拿得到纠正后的商家。
     const reassign = await reassignByConfirmedIndex(userId, parsed.platform, false, { onlyCampaignIds: [campaignId] })
 
     // 换号等价于换链接：旧号那条链接的失败历史对新号无意义，全部作废重新学
@@ -390,11 +411,13 @@ export async function POST(req: NextRequest) {
     })
     await resolveAlertsByType(userId, campaignId, ['connection_mismatch', 'invalid_link', 'merchant_not_found', 'brush_blocked'])
 
-    // 新账号名下有没有这个商家的链接，直接查一次告诉用户，别让他改完还得自己去看
+    // 新账号名下有没有这个商家的链接，直接查一次告诉用户，别让他改完还得自己去看。
+    // 按纠正后的商家行查——跨平台那种，旧商家行本就不该再参与判断。
+    const effectiveMerchantId = targetMerchant?.id ?? campaign.user_merchant_id
     let hasLink = false
-    if (campaign.user_merchant_id && campaign.user_merchant_id > BigInt(0)) {
+    if (effectiveMerchantId && effectiveMerchantId > BigInt(0)) {
       const merchant = await prisma.user_merchants.findFirst({
-        where: { id: campaign.user_merchant_id, user_id: userId, is_deleted: 0 },
+        where: { id: effectiveMerchantId, user_id: userId, is_deleted: 0 },
         select: { tracking_link: true, campaign_link: true, connection_campaign_links: true, platform_connection_id: true },
       })
       if (merchant) {
@@ -404,9 +427,24 @@ export async function POST(req: NextRequest) {
 
     const targetLabel = connectionLabel(target)
     const migrated = reassign.linkMigrations.filter((l) => l.migrated).length
+    const switchedMerchant = !!targetMerchant && targetMerchant.id !== campaign.user_merchant_id
     if (hasLink) {
       // 新号已有链接 → 立刻按新链接蓄库存，不用等下一轮 cron
       triggerReplenishAsync(campaignId, { force: true, manual: true })
+    }
+
+    const merchantNote = switchedMerchant ? `，商家也改挂到 ${parsed.platform} 的「${targetMerchant!.merchant_name || parsed.mid}」` : ''
+    let message: string
+    if (hasLink) {
+      message = `已把该系列改归 ${targetLabel}${merchantNote}${migrated > 0 ? `，并迁移了 ${migrated} 条同账号链接` : ''}，正在按新账号的链接补货。`
+    } else if (!targetMerchant) {
+      message =
+        `已把该系列改归 ${targetLabel}，但你在 ${connectionCode(target)} 名下还没同步到商家 ${parsed.mid}，链接列会显示「缺链接」。` +
+        `先确认这个商家在该联盟账号里已经通过申请，等下一轮商家同步补进来；急用就点链接列的编辑图标手填一条。`
+    } else {
+      message =
+        `已把该系列改归 ${targetLabel}${merchantNote}，但该账号名下还没有这个商家的推广链接，链接列会显示「缺链接」。` +
+        `请到 ${connectionCode(target)} 的联盟后台取一条该商家的推广链接，点链接列的编辑图标填进来。`
     }
     return NextResponse.json({
       code: 0,
@@ -416,9 +454,8 @@ export async function POST(req: NextRequest) {
         targetLabel,
         hasLink,
         migratedLinks: migrated,
-        message: hasLink
-          ? `已把该系列改归 ${targetLabel}${migrated > 0 ? `，并迁移了 ${migrated} 条同账号链接` : ''}，正在按新账号的链接补货。`
-          : `已把该系列改归 ${targetLabel}，但该账号名下还没有这个商家的推广链接，链接列会显示「缺链接」。请到 ${connectionCode(target)} 的联盟后台取一条该商家的推广链接，点链接列的编辑图标填进来。`,
+        switchedMerchant,
+        message,
       },
     })
   }
