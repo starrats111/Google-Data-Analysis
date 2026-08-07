@@ -17,7 +17,9 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { Prisma } from '@/generated/prisma/client'
 import { resolveAffiliateLink, detectParentNetworkFromText } from '@/lib/affiliate-link-resolver'
+import { pickCruiseAffiliateLink } from '@/lib/merchant-connection'
 import { getMerchantCampaignCountries, pickCruiseCountry } from '@/lib/suffix-engine/merchant-country'
 
 export const dynamic = 'force-dynamic'
@@ -31,23 +33,6 @@ function verifyCron(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET
   if (!secret) return false
   return req.headers.get('authorization') === `Bearer ${secret}`
-}
-
-/** 取商家可用联盟追踪链接（账号级优先，与 cruise/submit 一致） */
-function pickAffiliateUrl(m: {
-  tracking_link: string | null
-  campaign_link: string | null
-  connection_campaign_links: unknown
-  platform_connection_id: bigint | null
-}): string {
-  const connLinks = (m.connection_campaign_links || null) as Record<string, string> | null
-  if (connLinks && m.platform_connection_id) {
-    const v = String(connLinks[String(m.platform_connection_id)] || '').trim()
-    if (v) return v
-  }
-  const camp = String(m.campaign_link || '').trim()
-  if (camp) return camp
-  return String(m.tracking_link || '').trim()
 }
 
 async function runWithConcurrency<T>(items: T[], limit: number, worker: (item: T) => Promise<void>): Promise<void> {
@@ -81,9 +66,19 @@ export async function GET(req: NextRequest) {
     // 会出现「上级联盟 未识别」的那批；全表 user_merchants 高达百万级，不应也无法全量巡航。
     const enabledCampaigns = await prisma.campaigns.findMany({
       where: { status: 'active', google_status: 'ENABLED', is_deleted: 0, google_campaign_id: { not: null } },
-      select: { user_merchant_id: true, final_url_suffix: true },
+      select: { user_merchant_id: true, final_url_suffix: true, platform_connection_id: true },
     })
     const merchantIds = [...new Set(enabledCampaigns.map((c) => c.user_merchant_id))]
+
+    // D-224 商家 → 广告归属账号，取链时与「保存链接」写入 per-conn 槽位的口径对齐。
+    // 同一商家的在投系列归属到不同账号时留空，退回主连接/兜底逻辑。
+    const connByMerchant = new Map<string, bigint | null>()
+    for (const c of enabledCampaigns) {
+      if (!c.user_merchant_id) continue
+      const key = c.user_merchant_id.toString()
+      if (!connByMerchant.has(key)) connByMerchant.set(key, c.platform_connection_id)
+      else if (connByMerchant.get(key)?.toString() !== c.platform_connection_id?.toString()) connByMerchant.set(key, null)
+    }
 
     // 商家 → 关联在投系列的 final_url_suffix 合并串（离线识别快路径用）。
     // final_url_suffix 由换链脚本从 Google 反向回填，含上级联盟铁证（pzevent/irclickid/ranMID…）。
@@ -135,11 +130,18 @@ export async function GET(req: NextRequest) {
     // 跳过最近 24h 内已巡航过的（含失败）——失败项不应每轮被反复重选阻塞队列；
     // 24h 后允许重试（应对临时坏链接/代理抖动）。一次性回填会在单轮跑内自然收敛。
     const retryCutoff = new Date(Date.now() - 24 * 3600_000)
-    const whereHasLinkNoParent = {
+    const whereHasLinkNoParent: Prisma.user_merchantsWhereInput = {
       id: { in: merchantIds },
       is_deleted: 0,
       parent_network: null,
-      OR: [{ tracking_link: { not: null } }, { campaign_link: { not: null } }],
+      // D-224 补上 connection_campaign_links：链接只存在账号槽位里的商家（广告归属 ≠ 商家主连接
+      // 时的常态）原先被这个筛选整批漏掉，永远回填不到上级联盟。真没链接的由下面 noUrl 分支
+      // 标记 parent_checked_at 后自然退出 24h 窗口，不会长期占队列。
+      OR: [
+        { tracking_link: { not: null } },
+        { campaign_link: { not: null } },
+        { connection_campaign_links: { not: Prisma.DbNull } },
+      ],
       AND: [{ OR: [{ parent_checked_at: null }, { parent_checked_at: { lt: retryCutoff } }] }],
     }
 
@@ -168,7 +170,7 @@ export async function GET(req: NextRequest) {
     const campaignCountries = await getMerchantCampaignCountries(candidates.map((m) => m.id))
 
     await runWithConcurrency(candidates, concurrency, async (m) => {
-      const affiliateUrl = pickAffiliateUrl(m)
+      const affiliateUrl = pickCruiseAffiliateLink(m, connByMerchant.get(m.id.toString()) ?? null)
       if (!affiliateUrl || !/^https?:\/\//i.test(affiliateUrl)) {
         noUrl++
         // 标记已检查（reason=no_link），避免每轮重复扫描

@@ -179,6 +179,56 @@ export function pickCampaignAffiliateLink(
   return "";
 }
 
+/**
+ * D-224 为「巡航校验」挑链接：只读地跟一次跳转链，验可达性 + 认上级联盟。
+ *
+ * 与 `pickCampaignAffiliateLink` 的差别只在最后一步——那个函数服务于补货/刷点击，
+ * 归属账号没链接时必须返回 '' 以免刷错号；巡航不写库存、不刷点击，且同一商家各账号链接
+ * 的上级联盟本就一致，用哪条都得出同样结论，所以这里兜底到任意账号槽位。
+ *
+ * 不兜底会误报：`updateLink` 按广告归属账号写槽位，归属 ≠ 商家主连接时链接不进主链接字段，
+ * 巡航侧若只认商家主连接就取不到，把刚存的可用链接判成「无可用联盟链接」。
+ *
+ * @param campaignConnId 广告归属账号；批量场景（一个商家多条广告）不确定时传 null
+ */
+export function pickCruiseAffiliateLink(
+  merchant: {
+    tracking_link?: string | null;
+    campaign_link?: string | null;
+    connection_campaign_links?: unknown;
+    platform_connection_id?: bigint | null;
+  },
+  campaignConnId?: bigint | null,
+  aliasMap?: ConnectionAliasMap,
+): string {
+  if (campaignConnId != null) {
+    const byCampaign = pickCampaignAffiliateLink(campaignConnId, merchant, aliasMap);
+    if (byCampaign) return byCampaign;
+  }
+  // 商家主连接槽位 → 主链接（改动前的既有优先级，保持不变）
+  const links =
+    merchant.connection_campaign_links &&
+    typeof merchant.connection_campaign_links === "object" &&
+    !Array.isArray(merchant.connection_campaign_links)
+      ? (merchant.connection_campaign_links as Record<string, string>)
+      : null;
+  if (links && merchant.platform_connection_id != null) {
+    const v = String(links[String(merchant.platform_connection_id)] || "").trim();
+    if (v) return v;
+  }
+  const camp = String(merchant.campaign_link || "").trim();
+  if (camp) return camp;
+  const tracking = String(merchant.tracking_link || "").trim();
+  if (tracking) return tracking;
+  // 兜底：链接只存在别的账号槽位里（归属 ≠ 主连接时的常态）
+  if (links) {
+    for (const v of Object.values(links)) {
+      if (typeof v === "string" && v.trim()) return v.trim();
+    }
+  }
+  return "";
+}
+
 export function buildConnectionAccounts(
   linksRaw: unknown,
   connAccountMap: Map<string, { account_name: string; account_index: number | null; platform: string }>,

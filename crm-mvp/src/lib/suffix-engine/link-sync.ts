@@ -7,26 +7,10 @@
  */
 import { prisma } from '@/lib/prisma'
 import { resolveAffiliateLink } from '@/lib/affiliate-link-resolver'
+import { pickCruiseAffiliateLink, loadConnectionAliasMap, type ConnectionAliasMap } from '@/lib/merchant-connection'
 import { getMerchantCampaignCountries, pickCruiseCountry } from './merchant-country'
 
 const ITEM_TIMEOUT_MS = 60000
-
-/** 取商家可用联盟追踪链接（账号级优先，与 cruise/submit/backfill 一致） */
-function pickAffiliateUrl(m: {
-  tracking_link: string | null
-  campaign_link: string | null
-  connection_campaign_links: unknown
-  platform_connection_id: bigint | null
-}): string {
-  const connLinks = (m.connection_campaign_links || null) as Record<string, string> | null
-  if (connLinks && m.platform_connection_id) {
-    const v = String(connLinks[String(m.platform_connection_id)] || '').trim()
-    if (v) return v
-  }
-  const camp = String(m.campaign_link || '').trim()
-  if (camp) return camp
-  return String(m.tracking_link || '').trim()
-}
 
 async function runWithConcurrency<T>(items: T[], limit: number, worker: (item: T) => Promise<void>): Promise<void> {
   let next = 0
@@ -54,8 +38,11 @@ async function resolveOne(
   userId?: bigint | null,
   /** D-222：该商家在投系列的投放国，商家自己没记国家时用它兜底 */
   campaignCountry?: string | null,
+  /** D-224：触发本次校验的广告归属账号，与「保存链接」写入槽位的口径对齐 */
+  campaignConnId?: bigint | null,
+  aliasMap?: ConnectionAliasMap,
 ): Promise<void> {
-  const affiliateUrl = pickAffiliateUrl(m)
+  const affiliateUrl = pickCruiseAffiliateLink(m, campaignConnId, aliasMap)
   if (!affiliateUrl || !/^https?:\/\//i.test(affiliateUrl)) {
     await prisma.user_merchants
       .update({
@@ -111,10 +98,14 @@ async function resolveOne(
 /**
  * 即时校验单个商家的联盟链接（用户手动填写/编辑链接后调用）。
  * 同步执行一次巡航并写回 tracking_status / parent_network，返回结果供前端即时展示。
+ *
+ * @param campaignConnId D-224 触发本次校验的广告归属账号。必须传：归属 ≠ 商家主连接时，
+ *   刚存进归属账号槽位的链接只有按这个 id 才取得到，否则一律误报「无可用联盟链接」。
  */
 export async function resolveMerchantNow(
   merchantId: bigint,
   userId: bigint,
+  campaignConnId?: bigint | null,
 ): Promise<{ trackingStatus: string; parentNetwork: string | null } | null> {
   const m = await prisma.user_merchants.findFirst({
     where: { id: merchantId, user_id: userId, is_deleted: 0 },
@@ -131,7 +122,8 @@ export async function resolveMerchantNow(
   })
   if (!m) return null
   const campaignCountries = await getMerchantCampaignCountries([m.id])
-  await resolveOne(m, userId, campaignCountries.get(String(m.id)))
+  const aliasMap = await loadConnectionAliasMap(userId)
+  await resolveOne(m, userId, campaignCountries.get(String(m.id)), campaignConnId, aliasMap)
   const updated = await prisma.user_merchants.findUnique({
     where: { id: merchantId },
     select: { tracking_status: true, parent_network: true },
@@ -154,12 +146,21 @@ export async function syncUserLinks(
 
   const enabledCampaigns = await prisma.campaigns.findMany({
     where: { user_id: userId, status: 'active', google_status: 'ENABLED', is_deleted: 0, google_campaign_id: { not: null } },
-    select: { user_merchant_id: true },
+    select: { user_merchant_id: true, platform_connection_id: true },
   })
   const merchantIds = [...new Set(enabledCampaigns.map((c) => c.user_merchant_id).filter((id) => id && id > BigInt(0)))]
   if (merchantIds.length === 0) return { queued: 0 }
 
-  const candidates = await prisma.user_merchants.findMany({
+  // D-224 商家 → 广告归属账号。同一商家的在投系列归属到不同账号时留空（按哪个号取都可能不是
+  // 另一个号想验的那条），交给 pickCruiseAffiliateLink 的主连接/兜底逻辑。
+  const connByMerchant = new Map<string, bigint | null>()
+  for (const c of enabledCampaigns) {
+    const key = c.user_merchant_id.toString()
+    if (!connByMerchant.has(key)) connByMerchant.set(key, c.platform_connection_id)
+    else if (connByMerchant.get(key)?.toString() !== c.platform_connection_id?.toString()) connByMerchant.set(key, null)
+  }
+
+  const rows = await prisma.user_merchants.findMany({
     where: {
       id: { in: merchantIds },
       user_id: userId,
@@ -169,7 +170,9 @@ export async function syncUserLinks(
         { parent_network: null },
         { tracking_status: { in: ['no_tracking', 'resolve_failed', 'unchecked'] } },
       ],
-      AND: [{ OR: [{ tracking_link: { not: null } }, { campaign_link: { not: null } }] }],
+      // D-224 刻意不再按 tracking_link/campaign_link 非空筛：链接只存在
+      // connection_campaign_links 槽位里的商家（广告归属 ≠ 商家主连接时的常态）会被整批漏掉，
+      // 点「同步链接」永远轮不到它们。有无可用链接改由下面 pickCruiseAffiliateLink 逐条判。
     },
     select: {
       id: true,
@@ -182,13 +185,18 @@ export async function syncUserLinks(
       platform_connection_id: true,
     },
   })
+  const aliasMap = await loadConnectionAliasMap(userId)
+  const candidates = rows.filter((m) => {
+    const url = pickCruiseAffiliateLink(m, connByMerchant.get(m.id.toString()) ?? null, aliasMap)
+    return !!url && /^https?:\/\//i.test(url)
+  })
   if (candidates.length === 0) return { queued: 0 }
 
   const campaignCountries = await getMerchantCampaignCountries(candidates.map((m) => m.id))
 
   // fire-and-forget：后台巡航，不阻塞请求
   void runWithConcurrency(candidates, concurrency, (m) =>
-    resolveOne(m, userId, campaignCountries.get(String(m.id))),
+    resolveOne(m, userId, campaignCountries.get(String(m.id)), connByMerchant.get(m.id.toString()) ?? null, aliasMap),
   ).catch((e) => console.error('[link-sync] batch error:', e instanceof Error ? e.message : e))
 
   return { queued: candidates.length }

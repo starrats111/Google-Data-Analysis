@@ -340,6 +340,8 @@ export default function LinkExchangePage() {
           const label = ts === "ok" ? "有效" : ts === "forbidden_network" ? "命中黑名单" : ts === "no_tracking" ? "未取到追踪参数" : ts === "resolve_failed" ? "解析失败" : ts === "tracker_forbidden" ? "被联盟拒绝（HTTP 4xx），请到平台重新取链接" : (ts ?? "已保存");
           message.success(`链接已保存并验证：${label}`);
         }
+        // D-224 名实不符只提示不阻断：链接已按当前归属账号入库，用户自行判断要不要先纠正归属再重填
+        if (res.data.mismatchHint) message.warning(res.data.mismatchHint, 12);
         setEditingLinkId(null);
         fetchData(); fetchAlerts();
       } else message.error(res.message ?? "保存失败");

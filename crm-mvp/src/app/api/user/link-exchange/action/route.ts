@@ -222,6 +222,32 @@ export async function POST(req: NextRequest) {
     // 现在：归属账号的 per-conn 键始终写入新链接（取链第一优先级，同时天然清掉旧冻结链接）；
     // 仅当归属账号 = 商家主连接（或系列未回填归属）时才同步写主链接 tracking_link 并清 campaign_link，
     // 不碰其他账号的链接。
+    // D-224 名实不符提示（07 定：只提示不阻断）。归属没纠正就填链接，链接会落进「当前归属账号」
+    // 的槽位——若系列名指的是另一个号，等于把这个号取的链接记成了别号的。这里先算出提示文案，
+    // 保存流程照常走完，把「要不要先纠正归属」交给用户判断。
+    let mismatchHint: string | null = null
+    const parsedName = parseCampaignNameFull(campaign.campaign_name || '')
+    if (parsedName && isValidPlatformCode(parsedName.platform) && campaign.platform_connection_id) {
+      const wantIdx = parsedName.accountIndex ?? 1
+      const conns = await prisma.platform_connections.findMany({
+        where: { user_id: userId, is_deleted: 0 },
+        select: { id: true, platform: true, account_index: true, account_name: true },
+      })
+      const cur = conns.find((c) => c.id === campaign.platform_connection_id)
+      const curOk = cur && normalizePlatformCode(cur.platform) === parsedName.platform && (cur.account_index ?? 1) === wantIdx
+      // 只在「系列名指的那个号确实存在」时提示：名字里写了个不存在的号属命名不规范（D-223 那 78 条），
+      // 系统本就只能挂唯一那个号，没有串号损失，提示了也无从下手
+      const target = conns.find(
+        (c) => normalizePlatformCode(c.platform) === parsedName.platform && (c.account_index ?? 1) === wantIdx,
+      )
+      if (cur && !curOk && target) {
+        mismatchHint =
+          `注意：该系列名是 ${parsedName.platform}${wantIdx}，但当前归属账号是 ${connectionLabel(cur)}，` +
+          `链接会存进「${connectionLabel(cur)}」名下。若这条链接是从 ${connectionLabel(target)} 取的，` +
+          `建议先点「一键纠正归属」再重新填一次，否则会把 ${connectionLabel(target)} 的链接记成 ${connectionLabel(cur)} 的。`
+      }
+    }
+
     const connKey = campaign.platform_connection_id?.toString()
     let newConnLinks: Record<string, string> | undefined = undefined
     let touchPrimary = true
@@ -280,11 +306,16 @@ export async function POST(req: NextRequest) {
     triggerReplenishAsync(BigInt(body.campaignId), { force: true, manual: true })
 
     if (result === 'timeout') {
-      return NextResponse.json({ code: 0, data: { saved: true, validating: true } })
+      return NextResponse.json({ code: 0, data: { saved: true, validating: true, mismatchHint } })
     }
     return NextResponse.json({
       code: 0,
-      data: { saved: true, trackingStatus: result?.trackingStatus ?? null, parentNetwork: result?.parentNetwork ?? null },
+      data: {
+        saved: true,
+        trackingStatus: result?.trackingStatus ?? null,
+        parentNetwork: result?.parentNetwork ?? null,
+        mismatchHint,
+      },
     })
   }
 
