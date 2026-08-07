@@ -7,6 +7,7 @@
  */
 import { prisma } from '@/lib/prisma'
 import { resolveAffiliateLink } from '@/lib/affiliate-link-resolver'
+import { getMerchantCampaignCountries, pickCruiseCountry } from './merchant-country'
 
 const ITEM_TIMEOUT_MS = 60000
 
@@ -51,6 +52,8 @@ async function resolveOne(
     platform_connection_id: bigint | null
   },
   userId?: bigint | null,
+  /** D-222：该商家在投系列的投放国，商家自己没记国家时用它兜底 */
+  campaignCountry?: string | null,
 ): Promise<void> {
   const affiliateUrl = pickAffiliateUrl(m)
   if (!affiliateUrl || !/^https?:\/\//i.test(affiliateUrl)) {
@@ -62,7 +65,7 @@ async function resolveOne(
       .catch(() => {})
     return
   }
-  const country = (m.target_country || 'US').toUpperCase()
+  const country = pickCruiseCountry(m.target_country, campaignCountry)
   try {
     const cruise = await Promise.race([
       // 开启无头浏览器兜底：no_tracking/停跳板时自动重试，纠正 pepperjam/impact 等 JS 联盟误判
@@ -127,7 +130,8 @@ export async function resolveMerchantNow(
     },
   })
   if (!m) return null
-  await resolveOne(m, userId)
+  const campaignCountries = await getMerchantCampaignCountries([m.id])
+  await resolveOne(m, userId, campaignCountries.get(String(m.id)))
   const updated = await prisma.user_merchants.findUnique({
     where: { id: merchantId },
     select: { tracking_status: true, parent_network: true },
@@ -180,10 +184,12 @@ export async function syncUserLinks(
   })
   if (candidates.length === 0) return { queued: 0 }
 
+  const campaignCountries = await getMerchantCampaignCountries(candidates.map((m) => m.id))
+
   // fire-and-forget：后台巡航，不阻塞请求
-  void runWithConcurrency(candidates, concurrency, (m) => resolveOne(m, userId)).catch((e) =>
-    console.error('[link-sync] batch error:', e instanceof Error ? e.message : e),
-  )
+  void runWithConcurrency(candidates, concurrency, (m) =>
+    resolveOne(m, userId, campaignCountries.get(String(m.id))),
+  ).catch((e) => console.error('[link-sync] batch error:', e instanceof Error ? e.message : e))
 
   return { queued: candidates.length }
 }

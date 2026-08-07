@@ -3,12 +3,13 @@ import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { resolveAffiliateLink } from "@/lib/affiliate-link-resolver";
+import { getMerchantCampaignCountries, pickCruiseCountry } from "@/lib/suffix-engine/merchant-country";
 
 /**
  * POST /api/user/merchants/:id/cruise
  * 手动「测试巡航」：按投放国代理跟随该商家联盟追踪链接，识别上级联盟 + 黑名单 + 追踪参数。
  * 启用无头 Chrome（过 FlexOffers/Impact 指纹门），结果落库。
- * body: { country?: string }（默认取商家 target_country / US）
+ * body: { country?: string }（不传则按 商家 target_country → 在投系列投放国 → US 逐级兜底）
  */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const user = await getUserFromRequest(req);
@@ -46,7 +47,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return apiError("该商家没有可用的联盟追踪链接（campaign_link / tracking_link 均为空）");
   }
 
-  const country = (body.country || merchant.target_country || "US").toUpperCase();
+  const country = body.country
+    ? body.country.toUpperCase()
+    : pickCruiseCountry(
+        merchant.target_country,
+        (await getMerchantCampaignCountries([merchant.id])).get(String(merchant.id)),
+      );
 
   const cruise = await resolveAffiliateLink(affiliateUrl, country, merchant.platform || null, {
     useBrowser: true,

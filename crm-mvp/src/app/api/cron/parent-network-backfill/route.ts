@@ -18,6 +18,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { resolveAffiliateLink, detectParentNetworkFromText } from '@/lib/affiliate-link-resolver'
+import { getMerchantCampaignCountries, pickCruiseCountry } from '@/lib/suffix-engine/merchant-country'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
@@ -163,6 +164,9 @@ export async function GET(req: NextRequest) {
     let failed = 0
     let noUrl = 0
 
+    // D-222：商家自己没记国家时用它在投系列的投放国，别再一律拿美国出口去点非美国的链接
+    const campaignCountries = await getMerchantCampaignCountries(candidates.map((m) => m.id))
+
     await runWithConcurrency(candidates, concurrency, async (m) => {
       const affiliateUrl = pickAffiliateUrl(m)
       if (!affiliateUrl || !/^https?:\/\//i.test(affiliateUrl)) {
@@ -176,7 +180,7 @@ export async function GET(req: NextRequest) {
           .catch(() => {})
         return
       }
-      const country = (m.target_country || 'US').toUpperCase()
+      const country = pickCruiseCountry(m.target_country, campaignCountries.get(String(m.id)))
       try {
         const cruise = await Promise.race([
           // 开启无头浏览器兜底：纠正 pepperjam/impact 等 JS 联盟的 no_tracking 误判
