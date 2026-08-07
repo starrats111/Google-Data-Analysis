@@ -2,7 +2,6 @@ import { NextRequest } from "next/server";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { verifyHermesToken } from "@/lib/hermes-auth";
-import { extractDomain } from "@/lib/atc-service";
 
 // D-221：接收 Hermes 的禁投品类判定，回写「主营业务」+ 政策标记。
 //
@@ -164,25 +163,45 @@ export async function POST(req: NextRequest) {
     const matchedByMid = rows.length;
 
     // ── ② 域名传播：同一个商家在别的平台是另一个 MID，只按 MID 写会漏掉 ──
+    //
+    // 这一步不是可选的锦上添花：实测 Acmejoy（就是让账号被判 SEXUALLY_EXPLICIT 的那个）
+    // 在 MUI 之外还挂在 BSH 平台上、另一个 MID、12 行，只按 MID 写的话那 12 行仍是
+    // `Others>Others` + `clean`，别人照样能领取去投。
+    //
+    // 写法上刻意不用 343 个 `contains`（那是 343 遍全表 LIKE）。`merchant_url` 没有索引、
+    // 模糊匹配注定要全扫，那就只扫一遍：库侧把 URL 规范成裸域名，与传入域名做等值 JOIN。
+    // 去 www 用 TRIM(LEADING) 而不是 REPLACE，否则 `shopwww.com` 这种会被从中间削掉。
     let matchedByDomain = 0;
     if (expandDomain && byDomain.size) {
       const domains = [...byDomain.keys()];
-      const cand = await prisma.user_merchants.findMany({
-        where: { is_deleted: 0, OR: domains.map((d) => ({ merchant_url: { contains: d } })) },
-        select: {
-          id: true, platform: true, merchant_id: true, merchant_url: true,
-          category: true, category_manual: true, policy_status: true, policy_category_code: true,
-        },
-      });
+      const placeholders = domains.map(() => "?").join(",");
+      const cand = await prisma.$queryRawUnsafe<Array<{
+        id: bigint; platform: string; merchant_id: string; merchant_url: string | null;
+        category: string | null; category_manual: number; policy_status: string | null;
+        policy_category_code: string | null; dom: string;
+      }>>(
+        `SELECT id, platform, merchant_id, merchant_url, category, category_manual,
+                policy_status, policy_category_code,
+                LOWER(TRIM(LEADING 'www.' FROM
+                  SUBSTRING_INDEX(SUBSTRING_INDEX(
+                    REPLACE(REPLACE(merchant_url, 'https://', ''), 'http://', ''), '/', 1), '?', 1))) AS dom
+           FROM user_merchants
+          WHERE is_deleted = 0 AND merchant_url IS NOT NULL
+         HAVING dom IN (${placeholders})`,
+        ...domains,
+      );
       const seen = new Set(rows.map((r) => String(r.id)));
       for (const c of cand) {
         if (seen.has(String(c.id))) continue;
-        // contains 只是预筛，必须精确比对裸域名，否则 abc.com 会误中 xabc.com
-        const d = extractDomain(c.merchant_url);
-        const v = d ? byDomain.get(d.toLowerCase()) : undefined;
+        const v = byDomain.get(String(c.dom || "").toLowerCase());
         if (!v) continue;
         matchedByDomain++;
-        planRow(c, v);
+        planRow({
+          id: c.id,
+          category: c.category,
+          category_manual: Number(c.category_manual || 0),
+          policy_status: c.policy_status,
+        }, v);
       }
     }
 
