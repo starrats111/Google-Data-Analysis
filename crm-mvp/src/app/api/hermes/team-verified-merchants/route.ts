@@ -72,6 +72,12 @@ type MetaRow = {
   merchant_name: string | null;
 };
 
+type MedianRow = {
+  platform: string;
+  merchant_id: string;
+  median_commission: string | number | null;
+};
+
 // 订单/点击比超过这个值就认为佣金里混进了非广告流量，breakeven_cpc 偏高。
 // 取 0.3 的依据：实测「订单 ≤ 30% 点击」那批的 breakeven 是 $0.565，
 // 而超过这条线的 345 家高达 $2.12–$9.08，两者不是同一种东西。
@@ -157,6 +163,36 @@ export async function GET(req: NextRequest) {
         GROUP BY um.platform, um.merchant_id`,
       ...(since ? [since] : []),
     );
+
+    // ── 2b) 单笔佣金中位数。
+    //
+    // 为什么均值不够用：均值会被一笔运气单绑架，而调用方正是拿它去反解出价上限
+    //（可付 CPC = 单笔佣金 ÷ 每单点击 ÷ 目标倍数），一旦被抬高就会授权一个买不起的价。
+    // 实测 LAGOS(MUI/8005348) 四笔佣金 $5.45 / $12.51 / $22.52 / $105.78：均值 $36.57、
+    // 中位数 $17.52，差 2.1 倍。按均值算它能付 $0.120、按中位数只能付 $0.058，
+    // 而它实际成交价是 $0.157——用均值会判「还能投」，用中位数才判得出「早该停」。
+    // Hermes 的 netLossCapFor(HM-D57) 早就因为同一个商家改用过中位数，这里与之同口径。
+    //
+    // MariaDB 10.11 的 MEDIAN() 是窗口函数不是聚合函数，只能先 OVER(PARTITION BY) 再
+    // GROUP BY collapse，不能直接套在 group function 里（会报 ERROR 4074）。
+    // 全量 15 秒，与上面两段合计约 32 秒，仍在 maxDuration 60 内；只供每日一次同步调用。
+    const medianRows = await prisma.$queryRawUnsafe<MedianRow[]>(
+      `SELECT platform, merchant_id, MAX(med) AS median_commission
+         FROM (
+           SELECT platform, merchant_id,
+                  MEDIAN(CAST(commission_amount AS DECIMAL(14,4)))
+                    OVER (PARTITION BY platform, merchant_id) AS med
+             FROM affiliate_transactions
+            WHERE is_deleted = 0 AND status <> 'rejected'
+              ${since ? "AND transaction_time >= ?" : ""}
+         ) t
+        GROUP BY platform, merchant_id`,
+      ...(since ? [since] : []),
+    );
+    const medianByKey = new Map<string, number>();
+    for (const m of medianRows) {
+      medianByKey.set(`${m.platform}|${m.merchant_id}`, num(m.median_commission));
+    }
 
     // ── 3) 域名映射：CRM 没有 normalized_domain 列，只有 user_merchants.merchant_url，运行时解析。
     //
@@ -251,6 +287,10 @@ export async function GET(req: NextRequest) {
         total_commission: r(commissionOk, 2),
         rejected_commission: r(num(t.commission_rejected), 2),
         per_order_commission: ordersOk > 0 ? r(commissionOk / ordersOk, 2) : null,
+        // 抗离群的单笔佣金。反解出价上限、算商家级累计防线都该用它而不是上面的均值。
+        median_order_commission: medianByKey.has(key)
+          ? r(medianByKey.get(key)!, 2)
+          : null,
         avg_roi: cost > 0 ? r((commissionOk - cost) / cost, 4) : null,
         campaigns_ran: num(ads?.campaigns),
         users_ran: num(ads?.users_ran),
@@ -286,6 +326,9 @@ export async function GET(req: NextRequest) {
         clicks_cost: "ads_daily_stats（is_deleted=0）经 user_merchants 归到 platform+merchant_id",
         breakeven_cpc: "有效佣金 ÷ 点击；无广告数据时为 null，调用方应走探测下限而非当 0",
         aggregate_key: "platform + merchant_id（同一 MID 在不同联盟是不同商家）",
+        median_order_commission:
+          "单笔佣金中位数（排除 rejected）。反解出价上限与商家级累计判断都应优先用它：" +
+          "均值会被一笔运气单绑架，实测 LAGOS 均值 $36.57 / 中位数 $17.52，差 2.1 倍",
         caveat_window:
           "佣金按 transaction_time、点击按 date；转化有延迟，since 收得越窄 breakeven_cpc 越偏低",
         breakeven_quality: {
