@@ -95,8 +95,24 @@ const AD_LANGUAGES = [
   { code: "uk", name: "Українська 乌克兰语" },
 ];
 // D-004：ALL_COUNTRIES 已抽到 @/lib/constants，下方代码统一 import 复用
+// 0佣金判定（07/徐克 2026-08-10「只要有0佣金的，都不跑」）：佣金串里能解析出数值且全为0
+// 才算（"0%"、"Up to 0%"、"0.00 %"、"EUR0"）。混合档 "0%/Up to USD10.5" 有固定赏金不算；
+// 空值=佣金未知也不算。与 Hermes 侧 isZeroCommission 同口径
+const isZeroCommission = (v: string | null | undefined): boolean => {
+  if (!v) return false;
+  const nums = String(v).match(/\d+(?:\.\d+)?/g);
+  if (!nums || nums.length === 0) return false;
+  return nums.every((n) => parseFloat(n) === 0);
+};
 const CommissionCell = ({ v }: { v: string | null }) => {
   if (!v) return <span style={{ color: "#bfbfbf" }}>-</span>;
+  if (isZeroCommission(v)) {
+    return (
+      <Tooltip title="佣金率为0，跑了也没有收入，不要投放（徐克：只要有0佣金的，都不跑）">
+        <Tag color="red" style={{ marginInlineEnd: 0 }}>0佣金 {v}</Tag>
+      </Tooltip>
+    );
+  }
   return <span>{v}</span>;
 };
 // __TYPES__
