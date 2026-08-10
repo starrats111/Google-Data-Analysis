@@ -23,12 +23,11 @@ export interface CampaignInfoRow {
 }
 
 /**
- * 解析 CampaignInfo 表，返回「近两日（今日+昨日 CST）创建」的 campaign 行明细。
+ * 解析 CampaignInfo 表的全部行（不做日期过滤，日期筛选由调用方按需做）。
  * 列结构：CampaignId | CampaignName | Status | CreationDateCST | CustomerId
  * CreationDateCST 由脚本将账户时区的 creation_time 转为 Asia/Shanghai 日期。
- * 含昨日：跨午夜/脚本延迟写入的行也能被回填，不会漏在两轮 cron 之间。
  */
-function parseCampaignInfoRows(rows: string[][], recentDates: Set<string>): CampaignInfoRow[] {
+function parseCampaignInfoRows(rows: string[][]): CampaignInfoRow[] {
   if (rows.length < 2) return [];
 
   const headers = rows[0].map((h) => h.trim());
@@ -43,7 +42,6 @@ function parseCampaignInfoRows(rows: string[][], recentDates: Set<string>): Camp
   const result: CampaignInfoRow[] = [];
   for (const row of rows.slice(1)) {
     const creationDate = (row[creationDateIdx] ?? "").trim();
-    if (!recentDates.has(creationDate)) continue;
     const campaignId = (row[campaignIdIdx] ?? "").trim();
     if (!campaignId) continue;
     result.push({
@@ -63,6 +61,13 @@ export interface TodayMerchantsResult {
   byUser: Map<string, number>;
   /** 近两日新建系列行明细（供快速回填新广告进 campaigns 表），带归属 user/mcc */
   recentRows: Array<CampaignInfoRow & { userId: string; mccDbId: string }>;
+  /**
+   * D-225：userId → (gcid → Sheet 当前系列名)，CampaignInfo **全量**行。
+   * 供改名回写：Google 后台改名后 30 分钟内同步回 CRM，不再等每日 daily-sync。
+   * CampaignInfo 是全量清单，连「已暂停无花费的系列被改名」也能捕捉
+   * （daily-sync 走 DailyData + 近 3 天闸门，看不到这类行）。
+   */
+  nameByUserGcid: Map<string, Map<string, string>>;
   /** 参与同步的 MCC 数量 */
   mccCount: number;
   /** 有数据的 MCC 数量 */
@@ -105,6 +110,7 @@ export async function fetchTodayMerchantsFromSheets(): Promise<TodayMerchantsRes
   // 2. 按 MCC 读取 Sheet CampaignInfo，收集近两日新建系列（今日行计数 + 全部行供回填）
   const userCampaignIds = new Map<string, Set<string>>();
   const recentRows: TodayMerchantsResult["recentRows"] = [];
+  const nameByUserGcid: TodayMerchantsResult["nameByUserGcid"] = new Map();
 
   for (const mcc of mccs) {
     if (!mcc.sheet_url) continue;
@@ -125,7 +131,8 @@ export async function fetchTodayMerchantsFromSheets(): Promise<TodayMerchantsRes
         errors.push(`MCC ${mcc.mcc_id} [MISSING_TAB]: sheet 缺 CampaignInfo tab（需 Google Ads Script 生成）`);
         continue;
       }
-      const parsedRows = parseCampaignInfoRows(rows, recentDates);
+      const allRows = parseCampaignInfoRows(rows);
+      const parsedRows = allRows.filter((r) => recentDates.has(r.creationDate));
 
       const todayRows = parsedRows.filter((r) => r.creationDate === todayStr);
       if (todayRows.length > 0) {
@@ -134,6 +141,13 @@ export async function fetchTodayMerchantsFromSheets(): Promise<TodayMerchantsRes
         for (const r of todayRows) userCampaignIds.get(userId)!.add(r.campaignId);
       }
       for (const r of parsedRows) recentRows.push({ ...r, userId, mccDbId });
+
+      // D-225：全量行进名字映射（同 gcid 出现在多张 Sheet 时先到先得，与回填去重口径一致）
+      if (!nameByUserGcid.has(userId)) nameByUserGcid.set(userId, new Map());
+      const nameMap = nameByUserGcid.get(userId)!;
+      for (const r of allRows) {
+        if (r.campaignName && !nameMap.has(r.campaignId)) nameMap.set(r.campaignId, r.campaignName);
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       errors.push(`MCC ${mcc.mcc_id}: ${msg.slice(0, 200)}`);
@@ -168,5 +182,5 @@ export async function fetchTodayMerchantsFromSheets(): Promise<TodayMerchantsRes
     byUser.set(userId, merchantIds.size);
   }
 
-  return { byUser, recentRows, mccCount, mccWithData, date: todayStr, errors };
+  return { byUser, recentRows, nameByUserGcid, mccCount, mccWithData, date: todayStr, errors };
 }

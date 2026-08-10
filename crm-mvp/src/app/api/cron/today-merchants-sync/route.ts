@@ -11,6 +11,10 @@
  *   3. D-196 当日花费同步：顺带读同一批 Sheet 的 DailyData Tab，把「今天」的
  *      花费/点击/展示写回 ads_daily_stats。此前花费一天只在 daily-sync 写一次，
  *      佣金却是每 30 分钟一轮，当天新起的系列必然「有佣金没费用」。
+ *   4. D-225 改名回写：CampaignInfo 全量行的 CampaignName 与 DB 比对，不一致即更新。
+ *      此前名字回写只挂在每日 06:00 daily-sync（DailyData + 近 3 天闸门），Google 后台
+ *      改名要等最多一天才进 CRM（yz04 RW2→RW1 事件根因之一），且暂停无花费的系列
+ *      被改名根本看不到。只改名字；归属仍按 D-200/D-223 口径（检测告警 + 手动纠正）。
  */
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
@@ -134,6 +138,48 @@ async function backfillNewCampaigns(
       out.usersLinked++;
     } catch (e) {
       out.errors.push(`link user ${userId}: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`);
+    }
+  }
+
+  return out;
+}
+
+/**
+ * D-225 改名回写：CampaignInfo 全量行的 CampaignName 与 DB campaign_name 比对，
+ * 不一致（且 Sheet 名非空）即更新，并刷 last_google_sync_at。
+ * 与 daily-sync 的 nameChanged 判断同口径（Google/Sheet 为真相），只在变化时写库。
+ * 只改名字，不动归属/商家关联——那些仍走 D-200 检测告警 + D-223 手动纠正。
+ */
+async function syncCampaignNames(
+  nameByUserGcid: Map<string, Map<string, string>>,
+): Promise<{ updated: number; errors: string[] }> {
+  const out = { updated: 0, errors: [] as string[] };
+
+  for (const [userId, nameByGcid] of nameByUserGcid) {
+    if (nameByGcid.size === 0) continue;
+    const uid = BigInt(userId);
+    const gcids = [...nameByGcid.keys()];
+    try {
+      const BATCH = 500;
+      for (let i = 0; i < gcids.length; i += BATCH) {
+        const batch = gcids.slice(i, i + BATCH);
+        const rows = await prisma.campaigns.findMany({
+          where: { user_id: uid, is_deleted: 0, google_campaign_id: { in: batch } },
+          select: { id: true, google_campaign_id: true, campaign_name: true },
+        });
+        for (const c of rows) {
+          const sheetName = nameByGcid.get(c.google_campaign_id!) || "";
+          if (!sheetName || sheetName === c.campaign_name) continue;
+          await prisma.campaigns.update({
+            where: { id: c.id },
+            data: { campaign_name: sheetName, last_google_sync_at: new Date() },
+          });
+          out.updated++;
+          log(`  [改名回写] campaign#${c.id}「${c.campaign_name}」→「${sheetName}」(user ${userId})`);
+        }
+      }
+    } catch (e) {
+      out.errors.push(`user ${userId}: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`);
     }
   }
 
@@ -266,6 +312,15 @@ export async function GET(req: NextRequest) {
       log(`回填错误 (${backfill.errors.length}): ${backfill.errors.join("; ")}`);
     }
 
+    // D-225 改名回写。放在回填之后：本轮新补录的行名字本就取自 Sheet，不会白比一轮。
+    const nameSync = await syncCampaignNames(result.nameByUserGcid);
+    if (nameSync.updated > 0) {
+      log(`改名回写：更新 ${nameSync.updated} 条系列名`);
+    }
+    if (nameSync.errors.length > 0) {
+      log(`改名回写错误 (${nameSync.errors.length}): ${nameSync.errors.join("; ")}`);
+    }
+
     // D-196 当日花费同步。放在回填之后，本轮新补录的系列这一轮就能拿到花费。
     // 失败不影响前面已完成的投放商家统计与回填，只记录错误。
     let cost: Awaited<ReturnType<typeof syncTodayCostFromSheets>> | null = null;
@@ -306,6 +361,10 @@ export async function GET(req: NextRequest) {
         resurrected: backfill.resurrected,
         users_linked: backfill.usersLinked,
         errors: backfill.errors,
+      },
+      name_sync: {
+        updated: nameSync.updated,
+        errors: nameSync.errors,
       },
       today_cost: cost && {
         mcc_with_data: cost.mccWithData,
