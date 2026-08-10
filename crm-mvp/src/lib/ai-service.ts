@@ -865,7 +865,10 @@ async function callAi(
           "Content-Type": "application/json",
         },
         body,
-        signal: AbortSignal.timeout(120000),
+        // 2026-08-10 事故：hajimi 的 claude 通道挂死（零字节响应），120s 超时导致
+        // 每个 AI 步骤空等 2 分钟才切下一模型/兜底，广告生成整体拖慢数倍。
+        // 降到 45s：正常推理足够（实测秒级返回），通道挂死时快速切换备选模型。
+        signal: AbortSignal.timeout(45000),
       });
     } catch (err) {
       if (isConnectError(err) && attempt < MAX_RETRIES) {
