@@ -115,6 +115,7 @@ const ALERT_TYPE_LABEL: Record<string, string> = {
   low_stock: "库存偏低",
   replenish_failed: "补货失败",
   brush_blocked: "补刷受阻·挂人工",
+  brush_failing: "补刷刷不动·换链接",
   link_forbidden: "链接被联盟拒绝·换链接",
   no_tracking_stuck: "链接不记点击·换链接",
   script_auth_failed: "脚本被拒·重发脚本",
@@ -776,7 +777,7 @@ export default function LinkExchangePage() {
 
   // ───────── 告警中心列（D-178：每类告警配处理动作，不止报警） ─────────
   const alertColumns: ColumnsType<AlertRow> = [
-    { title: "类型", dataIndex: "type", width: 130, render: (t: string) => <Tag color={t === "merchant_not_found" || t === "invalid_link" || t === "brush_blocked" || t === "link_forbidden" || t === "no_tracking_stuck" || t === "script_auth_failed" || t === "connection_mismatch" ? "red" : t === "replenish_failed" ? "volcano" : "orange"}>{ALERT_TYPE_LABEL[t] ?? t}</Tag> },
+    { title: "类型", dataIndex: "type", width: 130, render: (t: string) => <Tag color={t === "merchant_not_found" || t === "invalid_link" || t === "brush_blocked" || t === "brush_failing" || t === "link_forbidden" || t === "no_tracking_stuck" || t === "script_auth_failed" || t === "connection_mismatch" ? "red" : t === "replenish_failed" ? "volcano" : "orange"}>{ALERT_TYPE_LABEL[t] ?? t}</Tag> },
     { title: "级别", dataIndex: "level", width: 80, render: (l: string) => <Tag color={l === "error" ? "error" : l === "warning" ? "warning" : "default"}>{l}</Tag> },
     { title: "告警内容", dataIndex: "message", ellipsis: true, render: (m: string) => <Tooltip title={m}><Text style={{ fontSize: 13 }}>{m}</Text></Tooltip> },
     { title: "次数", dataIndex: "occurCount", width: 70, align: "center", render: (c: number) => <Badge count={c} overflowCount={999} style={{ backgroundColor: "#faad14" }} /> },
@@ -785,8 +786,8 @@ export default function LinkExchangePage() {
       title: "操作", width: 260, align: "center",
       render: (_: unknown, row) => {
         const cid = row.campaignId;
-        const canRecheck = !!cid && (row.type === "invalid_link" || row.type === "replenish_failed" || row.type === "link_forbidden" || row.type === "no_tracking_stuck");
-        const canEditLink = !!cid && (row.type === "invalid_link" || row.type === "replenish_failed" || row.type === "merchant_not_found" || row.type === "brush_blocked" || row.type === "link_forbidden" || row.type === "no_tracking_stuck" || row.type === "connection_mismatch");
+        const canRecheck = !!cid && (row.type === "invalid_link" || row.type === "replenish_failed" || row.type === "link_forbidden" || row.type === "no_tracking_stuck" || row.type === "brush_failing");
+        const canEditLink = !!cid && (row.type === "invalid_link" || row.type === "replenish_failed" || row.type === "merchant_not_found" || row.type === "brush_blocked" || row.type === "brush_failing" || row.type === "link_forbidden" || row.type === "no_tracking_stuck" || row.type === "connection_mismatch");
         const canReplenish = !!cid && row.type === "low_stock";
         const canFixConn = !!cid && row.type === "connection_mismatch";
         const ctxFix = (row.context ?? {}) as { targetLabel?: string; currentLabel?: string };
@@ -880,6 +881,14 @@ export default function LinkExchangePage() {
       "⑤ 想再确认一次：点「重验」会立刻重跟一遍（不受长冷却限制），当场返回结论。",
       "⑥ 若该商家已下架/停止合作：暂停该系列广告，关掉换链开关，然后点「已处理」。",
     ],
+    brush_failing: [
+      "① 含义：这个商家有订单要净化转化率，补刷任务也正常建出来了，但排出去的点击近 3 天一次都没成功过。链接层的检查（跟链/被拒/零参数）可能都显示正常，问题出在点击真正执行的时候。",
+      "② 系统已自动降速：不再按缺口整批排（原本每轮最多 80 次），改成每轮只放 3 次探测，把产能让给刷得动的商家。刷成功一次就自动恢复满速，本告警一并自动解除。",
+      "③ 与「补刷受阻」的区别：那个是任务压根建不出来（缺链接）；这个是任务建出来了、点击执行不成功。",
+      "④ 先点「重验」看当场跟链结论，多数情况会直接指出是链接被联盟拒绝还是跟不到追踪参数。",
+      "⑤ 到联盟平台后台重新生成该商家的追踪链接，点「换链接」粘贴保存。系统会立即验证补货，下一轮补刷探测成功后自动恢复。",
+      "⑥ 注意：联盟只看当天转化率，熔断期间这个商家的订单基本处于「有单无点击」状态，处理越快损失越小。",
+    ],
     connection_mismatch: [
       "① 含义：这条系列名字里写的账号（如 RW1）和它在 CRM 里实际归属的账号（如 RW2）对不上。换链接按实际归属那个号取链接，联盟点击和佣金也记在那个号名下。",
       "② 最常见的成因：在 Google Ads 里把系列改了名。改名只会同步名字，归属不会自动跟着走（这是刻意的，防止误改绑已经配好的系列），所以要你确认一下到底哪个才对。",
@@ -896,7 +905,9 @@ export default function LinkExchangePage() {
     ],
   };
   const renderAlertGuide = (row: AlertRow) => {
-    const ctx = (row.context ?? {}) as { affiliateUrl?: string; finalUrl?: string | null; failCount?: number; reason?: string; platform?: string; merchantId?: string; ordersToday?: number; deficit?: number; campaignName?: string; currentLabel?: string; targetLabel?: string };
+    // ordersToday 是旧字段名，写入侧早已改成 ordersInWindow（近 3 天入库口径），两个都读以兼容历史告警。
+    const ctx = (row.context ?? {}) as { affiliateUrl?: string; finalUrl?: string | null; failCount?: number; reason?: string; platform?: string; merchantId?: string; ordersToday?: number; ordersInWindow?: number; deficit?: number; brushExecuted?: number; brushFailed?: number; fullDeficit?: number; campaignName?: string; currentLabel?: string; targetLabel?: string };
+    const ctxOrders = ctx.ordersInWindow ?? ctx.ordersToday;
     return (
       <div style={{ padding: "4px 8px" }}>
         {(ALERT_GUIDE[row.type] ?? ["点「已处理」标记解决。"]).map((step, i) => (
@@ -919,9 +930,18 @@ export default function LinkExchangePage() {
           <Paragraph type="secondary" style={{ marginBottom: 0, fontSize: 12 }}>
             {ctx.platform && <>平台 {ctx.platform}；</>}
             {ctx.merchantId && <>商家 MID {ctx.merchantId}；</>}
-            {ctx.ordersToday != null && <>当天订单 {ctx.ordersToday}；</>}
+            {ctxOrders != null && <>近 3 天订单 {ctxOrders}；</>}
             {ctx.deficit != null && <>缺口 {ctx.deficit} 次点击；</>}
             {ctx.reason && <>原因：{String(ctx.reason).slice(0, 120)}</>}
+          </Paragraph>
+        )}
+        {row.type === "brush_failing" && (
+          <Paragraph type="secondary" style={{ marginBottom: 0, fontSize: 12 }}>
+            {ctx.platform && <>平台 {ctx.platform}；</>}
+            {ctx.merchantId && <>商家 MID {ctx.merchantId}；</>}
+            {ctxOrders != null && <>近 3 天订单 {ctxOrders}；</>}
+            {ctx.brushExecuted != null && <>已执行 {ctx.brushExecuted} 次全败；</>}
+            {ctx.fullDeficit != null && <>当前缺口 {ctx.fullDeficit} 次点击（已降速为每轮 3 次探测）</>}
           </Paragraph>
         )}
       </div>

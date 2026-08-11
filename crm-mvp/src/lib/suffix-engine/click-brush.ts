@@ -20,6 +20,7 @@ import { raiseAlert, resolveAlertsByType } from './alerts'
 import { STOCK_CONFIG } from './config'
 import { generateClickSchedule, generateClickScheduleWithinWindow, randomPick, randomInt, USER_AGENTS, RESOLVE_REFERERS } from './click-scheduler'
 import { resolveMerchantReferer } from './referer-resolver'
+import { parseV2Stage, shouldUseV2Engine } from './replenish-gate'
 import { loadConnectionAliasMap, pickCampaignAffiliateLink } from '@/lib/merchant-connection'
 
 /** 单次刷点击允许的最大次数（低配生产机保护） */
@@ -274,6 +275,12 @@ interface TaskRuntime {
   existingSuffixes: Set<string>
   /** D-197：本系列已学到「纯 HTTP 跟不动」（suffix_needs_browser=1），刷点击同样跳过必败的 HTTP 第一步 */
   needsBrowser: boolean
+  /**
+   * D-230：本系列本轮该不该走 V2 跟跳引擎。undefined = 不表态，沿用全局 env。
+   * 判定口径与补货路径（stock-producer）逐字节一致，否则同一条链接会出现
+   * 「补货用 V2 跟得通、补刷用 V1 跟不通」的分裂。
+   */
+  useV2Engine: boolean | undefined
   /** 本任务是否已顺带清过库存类告警（刷点击也在产出库存，成功一次即清一次，避免高消耗系列告警常驻） */
   alertsResolved?: boolean
 }
@@ -296,7 +303,10 @@ async function buildTaskRuntime(taskId: bigint): Promise<TaskRuntime | null> {
 
   const campaign = await prisma.campaigns.findFirst({
     where: { id: task.campaign_id, is_deleted: 0 },
-    select: { id: true, user_id: true, user_merchant_id: true, target_country: true, campaign_name: true, suffix_needs_browser: true },
+    select: {
+      id: true, user_id: true, user_merchant_id: true, target_country: true, campaign_name: true,
+      suffix_needs_browser: true, suffix_needs_v2: true, suffix_no_tracking_streak: true,
+    },
   })
   if (!campaign) return null
 
@@ -327,6 +337,9 @@ async function buildTaskRuntime(taskId: bigint): Promise<TaskRuntime | null> {
     merchantIdStr: merchant?.merchant_id ?? null,
     existingSuffixes: new Set(existing.map((r) => r.suffix_content)),
     needsBrowser: campaign.suffix_needs_browser === 1,
+    useV2Engine: campaign.suffix_needs_v2 === 1
+      ? true
+      : shouldUseV2Engine(parseV2Stage(process.env.AFFILIATE_RESOLVER_V2_STAGE), campaign.suffix_no_tracking_streak),
   }
 }
 
@@ -363,6 +376,9 @@ async function executeItem(rt: TaskRuntime, itemId: bigint): Promise<{ ok: boole
     // D-197：这类系列今天已回探过就直接浏览器优先。点击语义不变——纯 HTTP 本来也跟不通、
     // 最终仍是靠浏览器完成这次点击，只是不再先白跑一次注定失败的 HTTP。
     needsBrowser: rt.needsBrowser,
+    // D-230：补刷此前一直漏传本参数，于是 suffix_needs_v2=1 的系列在补货侧走 V2、
+    // 到了补刷侧又掉回 V1，跟不通的那一族链接每次点击都必败（实测成功率 13.6% vs 全站 47.2%）。
+    useV2Engine: rt.useV2Engine,
   })
   const duration = Date.now() - startedAt
 
@@ -402,7 +418,7 @@ async function executeItem(rt: TaskRuntime, itemId: bigint): Promise<{ ok: boole
     // 但 low_stock/replenish_failed/invalid_link 告警因只有 cron 补货成功才清而常驻」的问题。
     if (!rt.alertsResolved) {
       rt.alertsResolved = true
-      await resolveAlertsByType(rt.userId, rt.campaignId, ['low_stock', 'replenish_failed', 'invalid_link', 'brush_blocked', 'link_forbidden', 'no_tracking_stuck']).catch(() => {})
+      await resolveAlertsByType(rt.userId, rt.campaignId, ['low_stock', 'replenish_failed', 'invalid_link', 'brush_blocked', 'brush_failing', 'link_forbidden', 'no_tracking_stuck']).catch(() => {})
     }
     return { ok: true }
   }
@@ -480,7 +496,7 @@ async function finalizeTask(taskId: bigint): Promise<boolean> {
   })
 
   if (done > 0) {
-    await resolveAlertsByType(task.user_id, task.campaign_id, ['low_stock', 'replenish_failed', 'invalid_link', 'brush_blocked', 'link_forbidden', 'no_tracking_stuck'])
+    await resolveAlertsByType(task.user_id, task.campaign_id, ['low_stock', 'replenish_failed', 'invalid_link', 'brush_blocked', 'brush_failing', 'link_forbidden', 'no_tracking_stuck'])
   } else {
     const campaign = await prisma.campaigns.findUnique({ where: { id: task.campaign_id }, select: { campaign_name: true } })
     await raiseAlert(task.user_id, {

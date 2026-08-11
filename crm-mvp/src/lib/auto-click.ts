@@ -55,6 +55,19 @@ const BRUSHABLE_WITHOUT_CLICK_API = new Set(['RW'])
 const ARRIVAL_WINDOW_DAYS = 3
 /** 单个商家单轮补刷上限，余量下轮（每 30min）续补，避免一次性砸出不自然的尖峰 */
 const MAX_DEFICIT_PER_ROUND = 80
+/**
+ * D-230 死循环熔断的判据样本量：窗口内已执行（成功+失败）达到这么多次才够格判死。
+ * 取 20 是为了不误伤「刚起步、只跑了几次恰好都失败」的系列。
+ */
+const BRUSH_CIRCUIT_MIN_SAMPLE = 20
+/**
+ * D-230 熔断后每轮仍放行的探测次数。
+ *
+ * 不设 0 是刻意的：链接被人工换好、或联盟侧恢复之后，得有点击去证明它活了，
+ * 否则熔断一旦合上就再也打不开，需要人来手动解锁——那等于把自愈能力换成了工单。
+ * 放 3 次相当于把该商家的产能从 80 压到 3（省 96%），又保留自愈通路。
+ */
+const BRUSH_CIRCUIT_PROBE = 3
 /** 欠账起算游标：首轮写入「当时」，只对之后入库的订单计账（不追补历史，07 拍板） */
 const DEBT_CUTOFF_KEY = 'auto_click_debt_cutoff'
 
@@ -118,6 +131,8 @@ export interface AutoClickResult {
   deficitIdentified: number
   /** D-207 看板指标：其中「几乎零点击」的紧急商家数（优先排程） */
   urgentScheduled: number
+  /** D-230：本轮被熔断（补刷连续全败，已压到探测量）的商家数 */
+  circuitOpen: number
   details: string[]
 }
 
@@ -138,6 +153,7 @@ export async function runAutoClickForUser(
     skippedNoOrders: 0,
     deficitIdentified: 0,
     urgentScheduled: 0,
+    circuitOpen: 0,
     details: [],
   }
 
@@ -283,10 +299,13 @@ export async function runAutoClickForUser(
     const windowTaskIds = windowTasks.map((t) => t.id)
     let ourSuccess = 0
     let ourPending = 0
+    // D-230 熔断判据用：窗口内已失败数。与上面两个计数同批查询，不额外增加往返。
+    let ourFailed = 0
     if (windowTaskIds.length > 0) {
-      ;[ourSuccess, ourPending] = await Promise.all([
+      ;[ourSuccess, ourPending, ourFailed] = await Promise.all([
         prisma.kyads_click_task_items.count({ where: { task_id: { in: windowTaskIds }, status: 'success', is_deleted: 0 } }),
         prisma.kyads_click_task_items.count({ where: { task_id: { in: windowTaskIds }, status: { in: ['pending', 'executing'] }, is_deleted: 0 } }),
+        prisma.kyads_click_task_items.count({ where: { task_id: { in: windowTaskIds }, status: 'failed', is_deleted: 0 } }),
       ])
     }
 
@@ -312,12 +331,38 @@ export async function runAutoClickForUser(
     }
     res.deficitIdentified += fullDeficit
     // 单轮封顶：余量在下一轮（每 30min 的订单同步）续补。effectiveC 已含我方 pending，不会重复下单。
-    const deficit = Math.min(fullDeficit, MAX_DEFICIT_PER_ROUND)
+    let deficit = Math.min(fullDeficit, MAX_DEFICIT_PER_ROUND)
+
+    // ★ D-230 死循环熔断。
+    // 缺口越大排得越多，而排出去的点击成不成功没人回头看——于是链接已死的商家反而被最用力地刷：
+    // 生产实测 17 家「窗口内 0 成功、数百次失败」的商家白烧掉 25,111 次点击（占全站失败量的 88%），
+    // 抢走的正是那些链接健康、刷了就能救回来的商家的产能。
+    // 这里只看我方补刷的成败（自然点击充足的商家早在上面的比值闸门就放行了），
+    // 窗口内够样本且一次没成过 → 判定这条链路当前无效，压到探测量，并报警叫人来换链接。
+    const brushExecuted = ourSuccess + ourFailed
+    const brushDead = ourSuccess === 0 && brushExecuted >= BRUSH_CIRCUIT_MIN_SAMPLE
+    if (brushDead) {
+      deficit = Math.min(deficit, BRUSH_CIRCUIT_PROBE)
+      res.circuitOpen++
+      await raiseAlert(userId, {
+        type: 'brush_failing',
+        campaignId: c.id,
+        level: 'error',
+        message: `广告系列「${c.campaign_name ?? c.id.toString()}」近 ${ARRIVAL_WINDOW_DAYS} 天补刷 ${brushExecuted} 次全部失败（0 次成功），已暂停按缺口排程、每轮只放 ${BRUSH_CIRCUIT_PROBE} 次探测。该商家仍有 ${O} 单待净化，需人工换链接`,
+        context: { platform, merchantId: mid, connId: connId != null ? connId.toString() : null, ordersInWindow: O, brushExecuted, brushFailed: ourFailed, fullDeficit },
+      }).catch(() => {})
+    } else if (ourSuccess > 0) {
+      // 窗口内刷成过 = 这条链路是通的，把可能存在的旧熔断告警收掉（人工换链接后自动生效）。
+      await resolveAlertsByType(userId, c.id, ['brush_failing']).catch(() => {})
+    }
 
     // 优先级（D-207）：click-execute 按 scheduled_at 先到先执行，故「窗口越短 = 优先级越高」。
     // 几乎零点击的商家（联盟侧看到的转化率是目标上限的 3 倍以上）最扎眼，压到 30 分钟内洗完；
     // 其余铺 120 分钟。产能不足时，先被消化的自然是最危险的那批。
-    const urgent = effectiveC * 3 < O * cpoMin
+    // D-230：熔断中的商家排除在紧急通道外。它的 effectiveC 恒为 0，紧急判据必然命中，
+    // 若不排除，那 3 次探测反而会插到 30 分钟窗口的队首，抢走真正刷得动的商家的产能——
+    // 与熔断的目的正好相反。探测不急于一时，铺进常规窗口即可。
+    const urgent = !brushDead && effectiveC * 3 < O * cpoMin
     if (urgent) res.urgentScheduled++
     // 距当日 CST 午夜的剩余分钟：仅用于避免把任务铺过午夜（跨日的点击对任何一天都不自然）。
     const minutesToMidnight = Math.max(1, Math.floor((todayEndUTC.getTime() - now.getTime()) / 60_000))
@@ -327,7 +372,7 @@ export async function runAutoClickForUser(
       res.scheduled++
       res.clicksScheduled += r.target
       res.details.push(
-        `${platform}:${mid} O=${O}(入库${ARRIVAL_WINDOW_DAYS}天) C=${effectiveC} T=${T} 缺${fullDeficit} 铺${r.target}点击/${windowMinutes}min${urgent ? ' [紧急]' : ''}`,
+        `${platform}:${mid} O=${O}(入库${ARRIVAL_WINDOW_DAYS}天) C=${effectiveC} T=${T} 缺${fullDeficit} 铺${r.target}点击/${windowMinutes}min${urgent ? ' [紧急]' : ''}${brushDead ? ` [熔断:已执行${brushExecuted}次全败，仅探测]` : ''}`,
       )
       // 补刷任务已成功创建 → 清掉该系列的「补刷受阻」挂人工告警（若有）。
       await resolveAlertsByType(userId, c.id, ['brush_blocked']).catch(() => {})

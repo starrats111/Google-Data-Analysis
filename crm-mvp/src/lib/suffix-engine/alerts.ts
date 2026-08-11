@@ -17,6 +17,10 @@ export type SuffixAlertType =
   | 'brush_blocked' // 有订单需当天净化转化率，但补刷无法进行（无链接/任务创建失败），需人工介入
   | 'link_forbidden' // 联盟跳板在自己的重定向端点返回 4xx（403 等）拒绝点击：商家目录仍在但 token 已失效/被停用，需人工到平台重新获取链接
   | 'no_tracking_stuck' // D-201 连续多轮跟链都落到商家官网但零追踪参数：链接「活着但不记点击」，此前无任何告警可覆盖，系列会静默死并每天白开上百次浏览器
+  // D-230 补刷连续全败：有订单要净化、任务也建得出来，但排出去的点击一次都没成过。
+  // 既有告警全是「链接层」的（跟链失败/被拒/零参数），补刷这一层的成功率此前无人看守——
+  // 17 家死循环商家白烧 25,111 次点击，页面上一条告警都没有。熔断触发时同步抛出。
+  | 'brush_failing'
   // D-212 Google Ads 脚本里的 API Key 与库里不一致，脚本调 /api/v1/* 全部 401。
   // 其余告警都由补货/跟链流程触发，而这些流程此时压根没被调用，页面上一片安静，
   // wj10 因此静默停摆一个月（621 单共用一个跟踪码）。挂用户维度，campaign_id 为 NULL。
@@ -212,6 +216,7 @@ export async function getAlertSummary(userId: bigint) {
     low_stock: 0,
     replenish_failed: 0,
     brush_blocked: 0,
+    brush_failing: 0,
     link_forbidden: 0,
     no_tracking_stuck: 0,
     script_auth_failed: 0,

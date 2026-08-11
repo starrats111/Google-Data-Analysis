@@ -409,7 +409,7 @@ export async function POST(req: NextRequest) {
       where: { id: campaignId },
       data: { suffix_fail_count: 0, suffix_cooldown_until: null, suffix_no_tracking_streak: 0, suffix_needs_v2: 0 },
     })
-    await resolveAlertsByType(userId, campaignId, ['connection_mismatch', 'invalid_link', 'merchant_not_found', 'brush_blocked'])
+    await resolveAlertsByType(userId, campaignId, ['connection_mismatch', 'invalid_link', 'merchant_not_found', 'brush_blocked', 'brush_failing'])
 
     // 新账号名下有没有这个商家的链接，直接查一次告诉用户，别让他改完还得自己去看。
     // 按纠正后的商家行查——跨平台那种，旧商家行本就不该再参与判断。
