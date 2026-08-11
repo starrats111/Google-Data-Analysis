@@ -344,13 +344,20 @@ export async function runAutoClickForUser(
     if (brushDead) {
       deficit = Math.min(deficit, BRUSH_CIRCUIT_PROBE)
       res.circuitOpen++
-      await raiseAlert(userId, {
-        type: 'brush_failing',
-        campaignId: c.id,
-        level: 'error',
-        message: `广告系列「${c.campaign_name ?? c.id.toString()}」近 ${ARRIVAL_WINDOW_DAYS} 天补刷 ${brushExecuted} 次全部失败（0 次成功），已暂停按缺口排程、每轮只放 ${BRUSH_CIRCUIT_PROBE} 次探测。该商家仍有 ${O} 单待净化，需人工换链接`,
-        context: { platform, merchantId: mid, connId: connId != null ? connId.toString() : null, ordersInWindow: O, brushExecuted, brushFailed: ourFailed, fullDeficit },
-      }).catch(() => {})
+      // 只给「在投」系列报警。本函数刻意也处理已暂停的系列（暂停后订单仍随 cookie 归因回传数天，
+      // 照样要补点击），但告警中心按 ENABLED 过滤展示，且 resolveAlertsForInactiveCampaigns
+      // 每 5 分钟会把非 ENABLED 系列的 open 告警收敛掉——对暂停系列报警等于每轮建一条、
+      // 5 分钟后被收掉、下轮再建，人一条都看不见，只在 suffix_alerts 里堆行。
+      // 熔断本身照常生效（省的是产能，与可见性无关）。
+      if (c.status === 'active' && c.google_status === 'ENABLED') {
+        await raiseAlert(userId, {
+          type: 'brush_failing',
+          campaignId: c.id,
+          level: 'error',
+          message: `广告系列「${c.campaign_name ?? c.id.toString()}」近 ${ARRIVAL_WINDOW_DAYS} 天补刷 ${brushExecuted} 次全部失败（0 次成功），已暂停按缺口排程、每轮只放 ${BRUSH_CIRCUIT_PROBE} 次探测。该商家仍有 ${O} 单待净化，需人工换链接`,
+          context: { platform, merchantId: mid, connId: connId != null ? connId.toString() : null, ordersInWindow: O, brushExecuted, brushFailed: ourFailed, fullDeficit },
+        }).catch(() => {})
+      }
     } else if (ourSuccess > 0) {
       // 窗口内刷成过 = 这条链路是通的，把可能存在的旧熔断告警收掉（人工换链接后自动生效）。
       await resolveAlertsByType(userId, c.id, ['brush_failing']).catch(() => {})
