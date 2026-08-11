@@ -333,7 +333,10 @@ export function sanitizeAdText(text: string, opts?: { allowExclamation?: boolean
   }
 
   // 移除开头/结尾的多余标点符号
-  s = s.replace(/^[.,;:!?\-–—]+\s*/, "").replace(/\s*[.,;:!?\-–—]+$/, "");
+  // D-229：结尾的句号「.」是合法的句子标点（Google Ads 允许），不再剥掉——
+  // 旧正则把 RSA 描述/标题末尾的句号也删了，导致 CRM 预览有句号、Google 实际投放没有
+  s = s.replace(/^[.,;:!?\-–—]+\s*/, "").replace(/\s*[,;:!?\-–—]+$/, "");
+  s = s.replace(/\s+\.$/, ".");
 
   // 清理多余空格
   s = s.replace(/\s+/g, " ").trim();
