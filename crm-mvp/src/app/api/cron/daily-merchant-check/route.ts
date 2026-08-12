@@ -64,7 +64,7 @@ async function doMerchantCheck() {
       select: { id: true, username: true },
     });
 
-    let totalRemoved = 0, totalAdded = 0, totalInvalidLinks = 0;
+    let totalRemoved = 0, totalAdded = 0, totalInvalidLinks = 0, totalLinksFilled = 0;
 
     for (const user of users) {
       try {
@@ -77,6 +77,7 @@ async function doMerchantCheck() {
         if (relResult && typeof relResult === "object" && "removed" in relResult) {
           totalRemoved += (relResult as any).removed || 0;
           totalAdded += (relResult as any).added || 0;
+          totalLinksFilled += (relResult as any).linksFilled || 0;
         }
 
         const linkResult = await checkUserMerchantLinks(user.id, user.username);
@@ -90,7 +91,7 @@ async function doMerchantCheck() {
     const circuitInfo = platformCircuitOpen.size > 0
       ? ` | ????: ${[...platformCircuitOpen].join(", ")}`
       : "";
-    log(`All done in ${elapsed}s ? removed: ${totalRemoved}, added: ${totalAdded}, invalidLinks: ${totalInvalidLinks}${circuitInfo}`);
+    log(`All done in ${elapsed}s ? removed: ${totalRemoved}, added: ${totalAdded}, invalidLinks: ${totalInvalidLinks}, linksFilled: ${totalLinksFilled}${circuitInfo}`);
   } catch (e) {
     log(`FATAL: ${e instanceof Error ? e.message : String(e)}`);
   }
@@ -122,6 +123,9 @@ async function checkUserMerchants(
     campaign_link: string; supported_regions: string[];
     conn_id: bigint;
   }>();
+  // D-232：各账号对同一商家的追踪链接（key = platform:merchant_id → connId → link）。
+  // 同平台多账号时每个账号的链接不同，领取/新增广告的校验按 connId 取键，缺键即被判「无链接」拦下。
+  const linksByMerchant = new Map<string, Map<string, string>>();
   // ???????????????API ??????????????
   // ????"?? API ??"?"?????? joined ???"
   const successfulPlatforms = new Set<string>();
@@ -162,6 +166,13 @@ async function checkUserMerchants(
             merchant_url: m.merchant_url, campaign_link: m.campaign_link,
             supported_regions: m.supported_regions, conn_id: conn.id,
           });
+          // D-232：joinedMerchants 按 platform:mid 去重后只留下最后一个账号，
+          // 各账号自己的追踪链接必须单独留存，否则同平台第 2、3 个账号的链接永远进不了库。
+          if (m.campaign_link) {
+            const perConn = linksByMerchant.get(key) || new Map<string, string>();
+            perConn.set(conn.id.toString(), m.campaign_link);
+            linksByMerchant.set(key, perConn);
+          }
         }
       }
 
@@ -227,6 +238,7 @@ async function checkUserMerchants(
 
   for (const [key, m] of joinedMerchants) {
     if (existingKeys.has(key)) continue;
+    const perConn = linksByMerchant.get(key);
     await prisma.user_merchants.create({
       data: {
         user_id: userId, platform: m.platform, merchant_id: m.merchant_id,
@@ -235,6 +247,7 @@ async function checkUserMerchants(
         supported_regions: m.supported_regions.length > 0 ? m.supported_regions : undefined,
         merchant_url: m.merchant_url || null, campaign_link: m.campaign_link || null,
         tracking_link: m.campaign_link || null, platform_connection_id: m.conn_id,
+        connection_campaign_links: perConn && perConn.size > 0 ? Object.fromEntries(perConn) : undefined,
         status: "available",
       },
     });
@@ -242,6 +255,10 @@ async function checkUserMerchants(
     addedList.push({ name: m.merchant_name, platform: m.platform });
     log(`  ADDED: ${m.merchant_name} [${m.platform}]`);
   }
+
+  // 补链接失败不能连带吞掉下面的清单变更通知
+  const linksFilled = await backfillConnectionLinks(userId, validConns, successfulPlatforms, linksByMerchant)
+    .catch((e) => { log(`  linkFill ERROR: ${e instanceof Error ? e.message : String(e)}`); return 0; });
 
   if (statusChangedList.length > 0) {
     const names = statusChangedList.slice(0, 5).map(e => `${e.name}（${e.platform}）`).join("、");
@@ -268,8 +285,75 @@ async function checkUserMerchants(
     }).catch(() => {});
   }
 
-  log(`  ${username}: removed=${removed}, added=${added}`);
-  return { checked: claimedMerchants.length, removed, added };
+  log(`  ${username}: removed=${removed}, added=${added}, linksFilled=${linksFilled}`);
+  return { checked: claimedMerchants.length, removed, added, linksFilled };
+}
+
+/**
+ * D-232：把各联盟账号自己的追踪链接补进 `connection_campaign_links`。
+ *
+ * 只对「同平台有 2 个及以上账号」的平台做，因为单账号平台走单值 tracking_link 即可命中。
+ * 病灶：本 cron 是唯一的定时商家刷新，此前只写单值链接（第一个返回该商家的账号），
+ * 做多账号合并的全量同步只在用户手点「同步商家」时才跑 —— 后加入的账号链接永远进不了库，
+ * 领取/新增广告时被「所选账号未配置该商家追踪链接」硬拦（wj10 RW bloomroots、wj111 RW wenjun03）。
+ *
+ * 只补「缺失/空」的键，不覆盖已有值、不删键、不动 status / tracking_link / campaign_link。
+ * 不覆盖是必须的：RW 实测每次调 merchant_details 都返回一条**全新随机 token** 的 tracking_url
+ * （同 token 同 mid 连查两次得到两条不同链接，两条都有效）。按值比对就会每晚把该用户
+ * 该平台的全部商家重写一遍（wj10 RW 单人 1 万行），纯写放大，对 2 核生产机不可接受。
+ */
+async function backfillConnectionLinks(
+  userId: bigint,
+  validConns: { id: bigint; platform: string }[],
+  successfulPlatforms: Set<string>,
+  linksByMerchant: Map<string, Map<string, string>>,
+): Promise<number> {
+  const connCountByPlatform = new Map<string, number>();
+  for (const c of validConns) {
+    const p = normalizePlatformCode(c.platform);
+    connCountByPlatform.set(p, (connCountByPlatform.get(p) || 0) + 1);
+  }
+  const targetPlatforms = [...successfulPlatforms].filter(p => (connCountByPlatform.get(p) || 0) >= 2);
+  if (targetPlatforms.length === 0 || linksByMerchant.size === 0) return 0;
+
+  let filled = 0;
+  for (const platform of targetPlatforms) {
+    // 游标分页扫，避免把整个用户的商家（wj111 单平台 8 万+）连 longtext 一起读进内存
+    let cursor: bigint | null = null;
+    for (;;) {
+      const rows: Array<{ id: bigint; merchant_id: string; connection_campaign_links: unknown }> =
+        await prisma.user_merchants.findMany({
+          where: { user_id: userId, platform, is_deleted: 0, ...(cursor ? { id: { gt: cursor } } : {}) },
+          select: { id: true, merchant_id: true, connection_campaign_links: true },
+          orderBy: { id: "asc" },
+          take: 500,
+        });
+      if (rows.length === 0) break;
+      cursor = rows[rows.length - 1].id;
+
+      for (const r of rows) {
+        const perConn = linksByMerchant.get(`${platform}:${r.merchant_id}`);
+        if (!perConn || perConn.size === 0) continue;
+        const raw = r.connection_campaign_links;
+        const links: Record<string, string> =
+          raw && typeof raw === "object" && !Array.isArray(raw) ? { ...(raw as Record<string, string>) } : {};
+        let dirty = false;
+        for (const [connId, link] of perConn) {
+          if (typeof links[connId] === "string" && links[connId].trim()) continue;
+          links[connId] = link;
+          dirty = true;
+        }
+        if (!dirty) continue;
+        try {
+          await prisma.user_merchants.update({ where: { id: r.id }, data: { connection_campaign_links: links } });
+          filled++;
+        } catch (e) {
+          log(`  linkFill FAIL id=${r.id}: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+    }
+  }
+  return filled;
 }
 
 // ========== 2. ??????? ==========
