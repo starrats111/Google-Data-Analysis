@@ -509,6 +509,23 @@ function extractEmbeddedTarget(rawUrl: string): string | null {
  * 网络层失败 / 5xx 时尝试从 URL 参数提取嵌入目标继续跟（联盟跳板临时故障兜底）。
  * ⚠️ 4xx 不兜底：403/401/451 等是跳板主动拒绝点击，原样上抛由上层判 tracker_forbidden。
  */
+/**
+ * D-231：V1 跟链目标域早停的灰度比例（`AFFILIATE_V1_EARLY_STOP_PCT`，0~100，默认 10）。
+ *
+ * 早停本身是 D-193 已在 V2 跑了一段时间的成熟机制，但 V1 承载的是没开 V2 的存量系列，
+ * 所以按起始链接做稳定分桶灰度：同一条链接每次落进同一个桶，开与不开可直接对照观察。
+ * 置 0 即整体回滚到早停前行为，置 100 全量。
+ */
+function v1EarlyStopEnabled(startUrl: string): boolean {
+  const raw = process.env.AFFILIATE_V1_EARLY_STOP_PCT;
+  const pct = raw === undefined || raw === "" ? 10 : Number.parseInt(raw, 10);
+  if (!Number.isFinite(pct) || pct <= 0) return false;
+  if (pct >= 100) return true;
+  let h = 0;
+  for (let i = 0; i < startUrl.length; i++) h = (Math.imul(h, 31) + startUrl.charCodeAt(i)) >>> 0;
+  return h % 100 < pct;
+}
+
 export async function fetchChain(
   startUrl: string,
   proxyUrl: string | null,
@@ -516,6 +533,8 @@ export async function fetchChain(
   perHopTimeoutMs = 18000,
   fp: { userAgent?: string | null; referer?: string | null } = {},
   retryCount = 2,
+  /** D-231：已知的广告主域名。跟到它就收工，不再把整张落地页跟完（判据同 V2）。 */
+  targetDomain?: string | null,
 ): Promise<ChainResult> {
   let agent = proxyUrl ? await makeAgent(proxyUrl) : undefined;
   // 重拨：轮换住宅网关每次连接换出口 IP，重建 agent 即换节点
@@ -531,7 +550,8 @@ export async function fetchChain(
     | { type: "final"; status: number };
 
   // 单跳一次网络请求（成功 resolve，网络层失败 reject）
-  const requestOnce = (targetUrl: string, hop: number): Promise<HopResult> => {
+  // skipBody：这一跳注定是最后一跳（目标域早停），只要状态码，正文一个字节都不收
+  const requestOnce = (targetUrl: string, hop: number, skipBody = false): Promise<HopResult> => {
     return new Promise((resolve, reject) => {
       let parsed: URL;
       try {
@@ -568,7 +588,9 @@ export async function fetchChain(
           return resolve({ type: "redirect", location: String(location), status });
         }
         const ctype = String(res.headers["content-type"] || "").toLowerCase();
-        if (status >= 200 && status < 300 && (ctype.includes("html") || ctype === "")) {
+        // body 的唯一用途是 extractClientRedirect 找下一跳；早停这一跳不会再有下一跳，
+        // 于是走下面的 else 直接断开——省掉的正是商家落地页那几百 KB 和它的加载时间。
+        if (!skipBody && status >= 200 && status < 300 && (ctype.includes("html") || ctype === "")) {
           // 降耗（2026-07-24）：旧逻辑 total<120000 只是「不再缓存」，socket 不断开——多 MB 的电商落地页
           // 仍全量流经 kookeey 代理白烧流量。现改为：攒够 120KB 立即 destroy 断开；gzip 压缩体流式解压
           // （我们主动截断会让 gunzip 报 unexpected end / res 报 aborted，此时已有字节足够，按成功完成）。
@@ -616,24 +638,42 @@ export async function fetchChain(
     });
   };
 
+  // D-231：早停只在「已知广告主域名」且本条链接落进灰度桶时启用
+  const earlyStopOn = !!targetDomain && v1EarlyStopEnabled(startUrl);
+
   let targetUrl = startUrl;
   for (let hop = 0; hop <= maxRedirects; hop++) {
     chain.push(targetUrl);
 
+    // D-231 目标域早停：当前 URL 的根域名已经是广告主自己的域名，说明联盟跳板那几跳已经走完、
+    // 追踪参数（irclickid 等）就在这个 URL 上，点击也已在联盟侧登记。再跟下去只剩「加载商家首页」，
+    // 对拿后缀毫无贡献，却要为它等一次整页加载——慢站超时后整条链被判失效，正是超时误报的来源。
+    // 判据与 V2 一致：hop>0（起始链接自身不算）+ 根域名相同。
+    const stopHere = earlyStopOn && hop > 0 && sameRootDomain(targetUrl, targetDomain);
+
     // 单跳带重试+重拨
     let res: HopResult | null = null;
     let lastErr: string | undefined;
-    for (let attempt = 0; attempt <= retryCount; attempt++) {
+    // 早停这一跳不重试：请求照发是为了完成点击注册（同 V2），但成败都不改变结论。
+    // 若还按 3 次重试打，一个慢商家站就能把 18s 变成 54s——恰好是要治的病。
+    const attempts = stopHere ? 0 : retryCount;
+    for (let attempt = 0; attempt <= attempts; attempt++) {
       try {
-        res = await requestOnce(targetUrl, hop);
+        res = await requestOnce(targetUrl, hop, stopHere);
         lastErr = undefined;
         break;
       } catch (e) {
         lastErr = (e instanceof Error ? e.message : String(e)).slice(0, 120);
-        if (!isRetryableNetErr(lastErr) || attempt === retryCount) break;
+        if (!isRetryableNetErr(lastErr) || attempt === attempts) break;
         await redial();
         await sleep(150 * (attempt + 1));
       }
+    }
+
+    // 早停命中：无论这一跳 2xx / 4xx / 连接失败，都以「已到广告主域名」为准收工，不带 error。
+    // 商家站拒绝一次爬虫或超时，都不构成「这条联盟链接失效」的证据。
+    if (stopHere) {
+      return { finalUrl: targetUrl, chain, status: res ? res.status : 0 };
     }
 
     // 网络层彻底失败：尝试联盟跳板兜底（从参数提取目标继续），否则结束
@@ -1385,7 +1425,16 @@ export async function resolveAffiliateLink(
           2,
           effectiveTargetDomain || null,
         )
-      : fetchChain(affiliateUrl, proxyUrl, 10, 18000, { userAgent: opts.userAgent, referer: opts.referer });
+      : fetchChain(
+          affiliateUrl,
+          proxyUrl,
+          10,
+          18000,
+          { userAgent: opts.userAgent, referer: opts.referer },
+          2,
+          // D-231：V1 也用上目标域早停（灰度受 AFFILIATE_V1_EARLY_STOP_PCT 控制）
+          effectiveTargetDomain || null,
+        );
   // D-197：浏览器是否已经跑过一次（含跑失败后回退 HTTP 的情况）。跑过就不再进第二步——
   // 否则同一条链接会连开两次整页浏览器，白烧一次约 99KB 且第二次不会有新结果。
   let browserAttempted = false;
