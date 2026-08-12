@@ -419,7 +419,10 @@ async function doReplenish(
   if (remaining > 0) {
     let consecutiveFail = 0
     let circuitOpen = false
-    await runWithConcurrency(remaining, STOCK_CONFIG.CONCURRENCY, async () => {
+    // D-231：probe 用上浏览器 = 本系列每条都要开浏览器，按 exchange 车道真实可用槽位投喂。
+    // 用 probe.usedBrowser 而非库里的 needs_browser 标记：前者是本轮实测，后者可能还没学到。
+    const concurrency = probe.usedBrowser ? STOCK_CONFIG.BROWSER_CONCURRENCY : STOCK_CONFIG.CONCURRENCY
+    await runWithConcurrency(remaining, concurrency, async () => {
       if (circuitOpen) return
       const r = await generateOneSuffix(effectiveUrl, country, platform, { userId: campaign.user_id, campaignId, teamId, merchantId: merchantIdStr, referer: refererUrl, targetDomain: merchant.merchant_url, needsBrowser, useV2Engine })
       if (r.ok) {
@@ -450,19 +453,27 @@ async function doReplenish(
   if (generated === 0) {
     // 批量全失败
     const sample = failures[0]
-    await raiseAlert(campaign.user_id, {
-      type: 'replenish_failed',
-      campaignId,
-      level: 'error',
-      message: `广告系列「${campaign.campaign_name ?? cid}」补货失败（尝试 ${failed} 次全部失败）：${sample?.error ?? '未知原因'}`,
-      context: {
-        campaignName: campaign.campaign_name,
-        platform,
-        country,
-        affiliateUrl: effectiveUrl.slice(0, 300),
-        reason: sample?.reason,
-      },
-    })
+    // D-231：整批都栽在我方环境（开不出浏览器 / 跟链超时 / 代理不可用）时不报警。
+    // 这不是「补货失败」，是我方没资源去补——probe 明明已经成功过，链接是好的。
+    // 报出来只会让人去联盟后台白折腾，且把告警中心淹掉真正需要人工处理的断链/token 失效。
+    const allLocalResource =
+      failures.length > 0 &&
+      failures.every((f) => f.reason === 'local_resource' || f.reason === 'timeout' || f.reason === 'proxy_unavailable')
+    if (!allLocalResource) {
+      await raiseAlert(campaign.user_id, {
+        type: 'replenish_failed',
+        campaignId,
+        level: 'error',
+        message: `广告系列「${campaign.campaign_name ?? cid}」补货失败（尝试 ${failed} 次全部失败）：${sample?.error ?? '未知原因'}`,
+        context: {
+          campaignName: campaign.campaign_name,
+          platform,
+          country,
+          affiliateUrl: effectiveUrl.slice(0, 300),
+          reason: sample?.reason,
+        },
+      })
+    }
   } else {
     // 有产出：解决该系列旧的库存类告警（含 link_forbidden——能产出即证明新链接已被联盟接受）
     await resolveAlertsByType(campaign.user_id, campaignId, ['low_stock', 'replenish_failed', 'invalid_link', 'merchant_not_found', 'link_forbidden', 'no_tracking_stuck'])
@@ -531,9 +542,13 @@ async function setFailCooldown(
  *
  * 1) proxy_unavailable —— kookeey 余额耗尽/熔断/池空，resolver 未发起真实跟链。环境故障，
  *    短冷却(10min)重试，不计死链、不告警（D-176 事故：此类被误判成 3316 次 no_tracking 假死）。
+ * 1a) local_resource / timeout（D-231）—— 故障在我方机器，不在联盟链接：前者是浏览器兜底被内存反压
+ *    或槽位耗尽挡住（本轮压根没检验过链接），后者是 55s 没跟完（只证明没跟完，不证明链接失效）。
+ *    同样不计死链、不告警，冷却 10min / 30min。**这一档必须排在第 3 档之前**，否则「我方开不出
+ *    浏览器」会被记成「链接失效」——2026-08-12 事故即此，详见设计方案 D-231。
  * 2) alive_no_tracking —— 跟链落地根域名 == 商家官网根域名，只是没拿到追踪参数：链接活着
  *    （需浏览器执行 JS / 参数被吃），冷却 30min 换出口重试，不报 invalid_link，并清疑似死链计数。
- * 3) probe_failed —— 其余硬失败（域名也不匹配 / 停跳板 / 超时等）：疑似死链计数 +1，
+ * 3) probe_failed —— 其余硬失败（域名也不匹配 / 停跳板）：疑似死链计数 +1，
  *    达 DEAD_LINK_FAIL_THRESHOLD 才升级 invalid_link 告警 + 长冷却(8h)；未达阈值先短冷却(30min)。
  *    连续达标才告警，避免把代理抖动/慢站误报成死链刷屏。
  */
@@ -553,6 +568,26 @@ async function handleProbeFailure(
   if (fail.reason === 'proxy_unavailable') {
     await setFailCooldown(campaign, campaign.suffix_fail_count, new Date(Date.now() + STOCK_CONFIG.PROXY_UNAVAILABLE_COOLDOWN_MS))
     return 'proxy_unavailable'
+  }
+
+  // 1a) D-231 本机资源故障，同样不下链接死活结论：
+  //     - local_resource：浏览器兜底本该跑却被内存反压/抢不到槽位挡住，本轮没检验过这条链接；
+  //     - timeout：55s 内没跟完。超时只证明「没跟完」，不能证明「链接失效」——它恰恰是资源紧张
+  //       时最常见的表现（等 30s 槽位 + 浏览器整页导航一挤就满）。
+  //     此前这两类都掉进下方「疑似死链」分支，把「我方开不出浏览器」记成「联盟链接失效」：
+  //     CG/LB 系 JS 跳板必须浏览器才跟得到落地页，一次开不出就 +1，累到 3 次报 invalid_link
+  //     并冷却 8 小时，期间库存耗尽、脚本 lease 不到后缀 —— 误报还会自我放大成业务停摆。
+  //     实测 2026-08-12 单日：exchange 车道 1577 次抢不到槽、193 次内存反压拒绝，全部计入死链，
+  //     而告警点名的那条链接 curl 实测 HTTP 200 完全正常（详见设计方案 D-231）。
+  //     冷却按性质区分：资源阻塞是瞬时的，10 分钟后再试；超时可能是慢链，退到 30 分钟避免空转。
+  if (fail.reason === 'local_resource' || fail.reason === 'timeout') {
+    const cooldownMs =
+      fail.reason === 'local_resource'
+        ? STOCK_CONFIG.PROXY_UNAVAILABLE_COOLDOWN_MS
+        : STOCK_CONFIG.ALIVE_LINK_COOLDOWN_MS
+    // 保持 suffix_fail_count 不变：既不累加（不冤枉链接），也不清零（不抹掉真实的历史失败证据）
+    await setFailCooldown(campaign, campaign.suffix_fail_count, new Date(Date.now() + cooldownMs))
+    return fail.reason
   }
 
   // 1b) 联盟跳板 4xx 拒绝点击（tracker_forbidden）：不同于代理抖动/慢站，这是跳板对该 token 的确定性

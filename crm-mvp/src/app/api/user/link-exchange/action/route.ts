@@ -113,7 +113,7 @@ export async function POST(req: NextRequest) {
     const r = await replenishCampaign(campaignId, { force: true, target: available + 2, manual: true })
 
     // 翻译成员工可执行的结论
-    let verdict: 'ok' | 'alive' | 'dead' | 'proxy' | 'other'
+    let verdict: 'ok' | 'alive' | 'dead' | 'proxy' | 'busy' | 'other'
     let advice: string
     if (r.generated > 0 || r.reason === 'static_suffix') {
       verdict = 'ok'
@@ -131,6 +131,13 @@ export async function POST(req: NextRequest) {
     } else if (r.reason === 'proxy_unavailable') {
       verdict = 'proxy'
       advice = '代理暂不可用（流量耗尽或熔断中），这不是链接问题。请先到本页顶部查看 kookeey 剩余流量，稍后再点重验。'
+    } else if (r.reason === 'local_resource') {
+      // D-231：本轮压根没检验过链接，必须说清楚「不是链接的问题」，否则员工会去联盟后台白折腾一趟
+      verdict = 'busy'
+      advice = '系统当前繁忙，没能启动浏览器跟这条链接（内存紧张或跟链通道排队），因此本次没有对链接下任何结论。这不是链接问题，稍后会自动重试，也可以过几分钟再点重验。'
+    } else if (r.reason === 'timeout') {
+      verdict = 'busy'
+      advice = '本次跟链超时（55 秒内没跟完），多为跟链通道排队或目标站慢，未能验证链接好坏。系统会自动重试；若连续多次都超时，再考虑到联盟后台换链接。'
     } else if (r.reason === 'probe_failed') {
       verdict = 'dead'
       advice = `重验仍失败：${r.probeError ?? '未跟到商家落地页'}${r.probeFinalUrl ? `（实际落到 ${r.probeFinalUrl.slice(0, 120)}）` : ''}。请到联盟平台后台重新生成该商家的追踪链接，然后点告警行的「换链接」按钮替换，保存后会自动验证。`

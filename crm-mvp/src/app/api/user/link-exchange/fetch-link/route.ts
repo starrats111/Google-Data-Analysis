@@ -54,6 +54,9 @@ export async function POST(req: NextRequest) {
       ? `命中上级联盟黑名单，无法跟链：${r.error}`
       : r.reason === 'timeout'
         ? '跟链超时，请重试或更换国家'
-        : `跟链失败：${r.error}`
+        : // D-231：本机开不出浏览器，本轮没验过这条链接，别让人以为链接有问题
+          r.reason === 'local_resource'
+          ? '系统当前繁忙，暂时没能启动浏览器跟这条链接（不是链接的问题），请稍后重试'
+          : `跟链失败：${r.error}`
   return NextResponse.json({ code: -1, message: msg }, { status: 200 })
 }

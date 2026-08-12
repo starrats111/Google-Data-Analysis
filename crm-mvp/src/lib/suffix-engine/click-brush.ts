@@ -425,8 +425,14 @@ async function executeItem(rt: TaskRuntime, itemId: bigint): Promise<{ ok: boole
 
   // 瞬时代理并发错误（撞 kookeey 并发上限被拒/连接抖动）或 D-177 代理不可用（余额耗尽/熔断/池空，
   // 未发起真实跟链）：延后重排一次，等会话名额/余额恢复后再试，不把环境故障算成点击失败。
+  // D-231 补入 local_resource：浏览器兜底被内存反压/槽位耗尽挡住，同样是我方环境故障且没发起点击。
+  // 此前它被记成 failed，既拉低补刷成功率（进而触发 D-230 熔断），又让整个任务全败时刷出
+  // 「刷点击全部失败」告警——都是把「我方开不出浏览器」写成了「链接有问题」。
   // 已重排过（alreadyRequeued）则按失败处理，避免无限重排。
-  if ((TRANSIENT_PROXY_ERR.test(r.error) || r.reason === 'proxy_unavailable') && !alreadyRequeued) {
+  if (
+    (TRANSIENT_PROXY_ERR.test(r.error) || r.reason === 'proxy_unavailable' || r.reason === 'local_resource') &&
+    !alreadyRequeued
+  ) {
     const delayMs = randomInt(REQUEUE_MIN_MS, REQUEUE_MAX_MS)
     await prisma.kyads_click_task_items
       .update({

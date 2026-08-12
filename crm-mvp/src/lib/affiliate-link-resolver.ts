@@ -71,6 +71,19 @@ export function stripUnexpandedTemplateVars(url: string): string {
   return url.replace(/\$\{[^}]*\}/g, "");
 }
 
+/**
+ * D-231：浏览器兜底「本该跑、却在起飞前就被本机条件挡住」的原因。
+ * 共同点是**没有产生任何真实点击**，也没对联盟链接做出任何检验——故障全在我方机器，
+ * 调用方不得据此判断链接死活（见 suffix-generator 的 local_resource）。
+ */
+export const BROWSER_BLOCKED_REASONS = [
+  "proxy_unavailable",
+  "no_browser",
+  "no_puppeteer_slot",
+  "low_memory",
+] as const;
+export type BrowserBlockedReason = (typeof BROWSER_BLOCKED_REASONS)[number];
+
 export interface ResolveResult {
   status: LinkStatus;
   landingUrl: string | null;
@@ -91,6 +104,9 @@ export interface ResolveResult {
   /** D-193：本次解析走了「第一步 HTTP 未达标 → 升级浏览器」的两步流程。
    *  用于把这次点击标成升级点击（同一出口 IP 上对同一链接的第二次请求），排障与风控对账时能区分。 */
   escalated?: boolean;
+  /** D-231：浏览器兜底本该跑，却因本机条件（内存反压/槽位耗尽/无代理）没跑成。
+   *  非空即表示「本轮没检验过这条链接」，调用方据此避免把自家资源不足误判成链接失效。 */
+  browserBlocked?: BrowserBlockedReason | null;
 }
 
 // 跟链/换链一律用「移动端」UA（安卓 Chrome + iPhone Safari，见 @/lib/mobile-user-agents），不再用 Windows 桌面：
@@ -1461,9 +1477,12 @@ export async function resolveAffiliateLink(
         }) as BrowserChainResult,
     );
     // D-193 升级打标：只要浏览器真的发起了导航，这条链接本轮就被点了第二次（复用同一出口 IP）。
-    // 起飞前就失败的三种情况（无代理/无浏览器/抢不到槽位）没有产生点击，不打标。
-    const preflightFailed = br.error === "proxy_unavailable" || br.error === "no_browser" || br.error === "no_puppeteer_slot";
-    if (!preflightFailed) result.escalated = true;
+    // 起飞前就失败的几种情况没有产生点击，不打标。
+    // D-231：原判定漏了 low_memory —— 内存反压时浏览器根本没 launch，却仍被记成一次升级点击，
+    // 污染点击对账；同时把阻塞原因回传给调用方，供其区分「链接有问题」与「我方没资源去验」。
+    const blocked = BROWSER_BLOCKED_REASONS.find((r) => r === br.error) ?? null;
+    if (blocked) result.browserBlocked = blocked;
+    else result.escalated = true;
     if (br.finalUrl) {
       const r2 = await evaluate(br, false, true);
       // 仅当浏览器结果更优（拿到 ok / 命中黑名单）才采用，否则保留首次结果

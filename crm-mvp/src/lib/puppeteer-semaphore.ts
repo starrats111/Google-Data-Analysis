@@ -70,6 +70,17 @@
  *     内存紧张时再 launch 只会把整机拖进 swap，连带所有出网请求超时——宁可这次不抓，
  *     也不能让全站误判密钥失效。
  *
+ * D-231 内存反压时机订正（2026-08-12，换链接「链接失效」误报事故）：
+ *   - 现象：换链接 exchange 车道单日 1577 次 30s 抢不到槽、332 次 low_memory 被拒，
+ *     CG/LB 系必须浏览器才跟得动的 JS 跳板因此被判成「联盟链接疑似失效」，2359 个在投系列
+ *     里 1726 个（73%）库存归零。
+ *   - 根因：D-220 的内存检查放在 _acquire 入口无条件执行，而满载时可用内存本来就被在跑的
+ *     Chrome 占着（现场快照几乎全是 active=3/3、可用内存 467-499MB 贴着水位）。于是「有浏览器
+ *     在跑」本身成了「拒绝排队等浏览器」的理由，池子越忙拒绝越多。
+ *   - 改造：检查下移到「已确定有空槽、下一步真要 launch」的那一刻；满载回归排队。
+ *     队列唤醒路径刻意不再查内存——唤醒恰好发生在一个 Chrome 刚释放之后，是内存最宽裕的时刻。
+ *   - D-220 要防的「再 launch 一个就把整机打进 swap」保护完全保留，只是不再误伤排队者。
+ *
  * 环境变量 PUPPETEER_SEMAPHORE_OFF=1 可一键 bypass（用于快速回滚定位）。
  * 环境变量 PUPPETEER_EXCHANGE_RESERVE_OFF=1 可单独回滚 D-199 借预留（无需重新部署）。
  * 环境变量 PUPPETEER_MIN_AVAILABLE_MB 调内存水位（默认 500，设 0 关闭 D-220 反压）。
@@ -271,11 +282,21 @@ async function _acquire(timeoutMs: number, lane: SlotLane): Promise<SlotRelease>
     return noopSlotRelease();
   }
 
-  // D-220：内存不足直接拒绝，不进队列白等——排队等到的也只是再压垮一次
-  checkMemoryHeadroom(lane);
-
   const kind = tryClassifyGrant(lane);
-  if (kind) return grant(kind);
+  if (kind) {
+    // D-231：内存反压只在「这一刻真的要 launch」时才判。
+    //
+    // D-220 当初把这个检查放在函数入口无条件执行，意图是「内存不足就别进队列白等」。
+    // 但池子满载时可用内存本来就低——低就低在那几个正在跑的 Chrome 身上。此时抛 low_memory
+    // 等于「因为已经有浏览器在跑，所以拒绝你排队等浏览器」，自相矛盾，而且它们马上就会释放。
+    // 实测 2026-08-12：当日 332 次 low_memory 的现场快照几乎全是 `active=3/3`，即根本没有空槽
+    // 可授、本就该排队，却被当成资源耗尽拒掉，换链接因此把好链接判成失效（详见设计方案 D-231）。
+    //
+    // 改后 D-220 的保护原样保留：只要还有空槽、下一步真要 launch，内存不够照样拒绝降级走 HTTP。
+    // 变化的只是满载场景——回归排队，由槽位释放自然节流，这本就是信号量该干的事。
+    checkMemoryHeadroom(lane);
+    return grant(kind);
+  }
 
   return new Promise<SlotRelease>((resolve, reject) => {
     let settled = false;

@@ -26,6 +26,11 @@ export type GenFailReason =
   // D-177：换链接代理不可用（kookeey 余额耗尽/熔断/供应商池空）。瞬时环境故障，
   // 不代表链接死活——调用方短冷却重试即可，绝不计入死链失败计数/invalid_link 告警。
   | 'proxy_unavailable'
+  // D-231：浏览器兜底本该跑却因**本机资源**没跑成（内存反压 low_memory / 30s 抢不到 puppeteer 槽位）。
+  // 与 proxy_unavailable 同性质：故障在我方机器，本轮压根没检验过这条链接，同样不得计入死链。
+  // CG/LB 系跳板用 JS 跳转，纯 HTTP 必然停在跳板域名，只能靠浏览器——它一开不出来，
+  // 这类链接就会被无限误判成「失效」（2026-08-12 事故：单日 1577 次抢槽失败全部计入死链）。
+  | 'local_resource'
 
 export interface GenSuccess {
   ok: true
@@ -196,6 +201,21 @@ export async function generateOneSuffix(
         ok: false,
         reason: 'tracker_forbidden',
         error: r.error || '联盟跳板拒绝点击（HTTP 4xx），追踪链接可能已失效，需人工重新获取',
+        finalUrl: r.finalUrl,
+      }
+    }
+    // D-231：浏览器兜底本该跑、却被本机条件挡住（内存反压 low_memory / 30s 抢不到 puppeteer 槽位）。
+    // 此时的 no_tracking / resolve_failed 只是「纯 HTTP 跟不动」的中间态，不是对链接的结论——
+    // CG/LB 系 JS 跳板本来就只有浏览器跟得动。放行到下面会被计成死链，正是误报的源头。
+    // 黑名单命中（forbidden_network）与跳板 4xx（tracker_forbidden，已在上方返回）都是 HTTP 阶段
+    // 即已成立的确定判定，不受本条影响。
+    if (r.browserBlocked && r.status !== 'forbidden_network') {
+      // 浏览器点击压根没发起：对代理健康度保持中性，不上报成败
+      const blockedReason: GenFailReason = r.browserBlocked === 'proxy_unavailable' ? 'proxy_unavailable' : 'local_resource'
+      return {
+        ok: false,
+        reason: blockedReason,
+        error: `本机资源不足，未能启动浏览器跟链（${r.browserBlocked}），本轮未检验该链接`,
         finalUrl: r.finalUrl,
       }
     }

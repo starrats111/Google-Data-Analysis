@@ -485,7 +485,7 @@ export default function LinkExchangePage() {
       if (res.code === 0) {
         const { verdict, advice } = res.data as { verdict: string; advice: string };
         if (verdict === "ok") message.success(advice, 8);
-        else if (verdict === "alive" || verdict === "proxy") message.info(advice, 10);
+        else if (verdict === "alive" || verdict === "proxy" || verdict === "busy") message.info(advice, 10);
         else message.warning(advice, 12);
         fetchAlerts(); fetchData();
       } else message.error(res.message ?? "重验失败，请稍后重试");
