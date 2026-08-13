@@ -3,7 +3,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import {
   Card, Input, Button, Select, Space, Table, Tag, Typography,
-  Collapse, Empty, Alert, App, Tooltip, Switch, InputNumber, Badge,
+  Collapse, Empty, Alert, App, Tooltip, Switch, InputNumber, Badge, Tabs,
 } from "antd";
 import {
   SearchOutlined, EyeOutlined, LinkOutlined, SettingOutlined,
@@ -12,6 +12,7 @@ import {
 import { useRouter, useSearchParams } from "next/navigation";
 import AppPageHeader from "@/components/AppPageHeader";
 import { COLORS } from "@/styles/themeConfig";
+import BrandAssessmentPanel from "./_components/BrandAssessmentPanel";
 
 const { Text } = Typography;
 
@@ -516,9 +517,17 @@ export default function IntelligencePage() {
       <AppPageHeader
         icon={<EyeOutlined />}
         title="广告情报"
-        subtitle="按广告主名称/域名搜索，查看其在 Google 全平台投放的广告创意，筛选持续投放的高价值广告"
+        subtitle="按广告主名称/域名搜索广告创意；「品牌评估」看某个域名在目标国的品牌盘子"
         marginBottom={8}
       />
+      <Tabs
+        defaultActiveKey="atc"
+        items={[
+          {
+            key: "atc",
+            label: "ATC 广告创意",
+            children: (
+              <>
       <Text type="secondary" style={{ display: "block", marginBottom: 16, fontSize: 12, color: COLORS.warningOrange }}>
         ⚠️ 中文广告主名称（如"包新蕾"）无法通过名称直接搜索——建议先在「我的商家」页查竞争度，系统会自动记录 AR ID；或输入 AR 编号（如 AR123456789）精确查询。
       </Text>
@@ -693,6 +702,16 @@ export default function IntelligencePage() {
           </div>
         </div>
       )}
+              </>
+            ),
+          },
+          {
+            key: "brand",
+            label: "品牌评估",
+            children: <BrandAssessmentPanel />,
+          },
+        ]}
+      />
     </div>
   );
 }

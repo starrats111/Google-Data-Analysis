@@ -159,7 +159,6 @@ model user_merchants {
   status                    String    @default("available") @db.VarChar(16)
   claimed_at                DateTime? @db.DateTime(0)
   target_country            String?   @db.VarChar(8)
-  holiday_name              String?   @db.VarChar(128)
   tracking_link             String?   @db.VarChar(1024)
   campaign_link             String?   @db.Text // 联盟平台推广链接
   // C-020 URL 直投来源标记（R1.1 入档 §20.5.2）
@@ -364,6 +363,7 @@ model ad_default_settings {
   naming_rule      String   @default("global") @db.VarChar(20) // global | per_platform
   naming_prefix    String   @default("") @db.VarChar(10) // 全局序号前缀（空=纯数字）
   eu_political_ad  Int      @default(0) @db.TinyInt // 0=不含EU政治广告 1=含
+  ad_engine        String   @default("evidence") @db.VarChar(32) // D-233 上广告引擎：evidence | rival_intel
   ai_rule_profile  Json?
   is_deleted       Int      @default(0) @db.TinyInt
   created_at       DateTime @default(now()) @db.DateTime(0)
@@ -371,21 +371,10 @@ model ad_default_settings {
 }
 
 // -----------------------------------------------------------
-// 8. 节日日历表
+// 8. （已移除）节日日历表 — D-233 节日营销功能整体下线，
+//     该卡片位置改为上广告引擎选择器；holiday_calendar 表与
+//     user_merchants.holiday_name 字段一并删除。
 // -----------------------------------------------------------
-model holiday_calendar {
-  id               BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
-  country_code     String   @db.VarChar(8)
-  holiday_name     String   @db.VarChar(128)
-  holiday_date     DateTime @db.Date
-  holiday_type     String   @default("commercial") @db.VarChar(16)
-  related_holidays Json?
-  is_deleted       Int      @default(0) @db.TinyInt
-  created_at       DateTime @default(now()) @db.DateTime(0)
-  updated_at       DateTime @default(now()) @updatedAt @db.DateTime(0)
-
-  @@index([country_code, holiday_date], map: "idx_country_date")
-}
 
 // -----------------------------------------------------------
 // 9. 广告系列表
@@ -1639,4 +1628,173 @@ model ad_decision_journal {
   @@index([user_id, created_at], map: "idx_adj_user_created")
   @@index([campaign_id, created_at], map: "idx_adj_campaign_created")
   @@index([verdict], map: "idx_adj_verdict")
+}
+
+// ===========================================================
+// D-233 竞品情报引擎（ad_engine = rival_intel）
+//
+// 从 kyads 移植过来的第二套上广告链路。与 CRM 原生 evidence 引擎并存，
+// 员工在「我的商家」页顶部卡片选哪套生效。
+//
+// 与 kyads 原表的差异：
+//   - 隔离维度 team_id → user_id，跟 CRM 其余业务表一致
+//   - 去掉 delete_token 软删 token，统一用 CRM 的 is_deleted
+//   - 草稿新增 user_merchant_id / campaign_id，因为 CRM 侧动线是
+//     「商家列表点新增广告 → 自动带入域名和联盟链接」，不是手工贴链接
+//   - 批量上广告（batch job / batch item）不移植
+//   - 品牌评估结果与品牌词缓存按 (域名, 国家) 全公司共享，不重复付费
+//   - kyads 的 ad_creation_publish_jobs 不建：本引擎发布走 CRM 现成的 submit
+//     流水线（六段命名、共用序号池、CID 自动切换、campaigns 回写全部继承），
+//     发布任务行落在 ad_submit_jobs。生成产物在发布前会同步进
+//     ad_creatives / keywords，因此下游功能看不出这条广告是哪个引擎产的。
+// ===========================================================
+
+// -----------------------------------------------------------
+// D-233a 竞品情报引擎 — 广告草稿
+// 生成阶段的全部产物都落在本表 JSON 列，kyads 原样保留（无独立素材表）。
+// 5 阶段：fetch_rival_ads → extract_brand_keywords → discover_sitelink_urls
+//         → ai_generate_assets → build_preview
+// -----------------------------------------------------------
+model ad_creation_drafts {
+  id                      BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id                 BigInt    @db.UnsignedBigInt
+  user_merchant_id        BigInt?   @db.UnsignedBigInt // 来源商家（自动带入域名/联盟链接）
+  campaign_id             BigInt?   @db.UnsignedBigInt // 发布成功后回写的 campaigns.id
+  domain                  String    @db.VarChar(255)
+  country_code            String    @db.VarChar(10)
+  language_code           String?   @db.VarChar(10) // NULL = 跟随国家推导
+  landing_page_url        String?   @db.VarChar(1024)
+  // ─── 生成产物 ───
+  core_brand_keywords     Json?
+  headlines               Json?
+  descriptions            Json?
+  sitelinks               Json?
+  negative_keywords       Json?
+  preview_payload         Json?
+  gap_report              Json?
+  // ─── 溯源 ───
+  source_payload          Json? // 竞品创意样本（来自品牌评估结果）
+  sitelink_source_payload Json?
+  raw_payload_excerpt     String?   @db.Text
+  // ─── 状态机 ───
+  generation_mode         String    @default("ai_generate") @db.VarChar(32) // filter | ai_generate
+  status                  String    @default("draft_generating") @db.VarChar(30) // draft_generating | draft_ready | draft_failed
+  current_stage           String?   @db.VarChar(50)
+  completed_stages        Json?
+  failed_stage            String?   @db.VarChar(50)
+  error_code              String?   @db.VarChar(50)
+  error_message           String?   @db.VarChar(1000)
+  retryable               Int       @default(0) @db.TinyInt
+  // ─── 后台 runner 并发锁（120s TTL 抢锁，避免同一草稿被两个 worker 同时推进）───
+  stage_running           Int       @default(0) @db.TinyInt
+  stage_claimed_at        DateTime? @db.DateTime(0)
+  default_campaign_name   String?   @db.VarChar(128)
+  is_deleted              Int       @default(0) @db.TinyInt
+  created_at              DateTime  @default(now()) @db.DateTime(0)
+  updated_at              DateTime  @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([user_id, status], map: "idx_acd_user_status")
+  @@index([user_id, created_at], map: "idx_acd_user_created")
+  @@index([user_merchant_id], map: "idx_acd_merchant")
+  @@index([domain, country_code, status], map: "idx_acd_domain_country") // 草稿缓存复用
+  @@index([status, stage_running, stage_claimed_at], map: "idx_acd_runner_pick")
+}
+
+// -----------------------------------------------------------
+// D-233c 品牌评估 — 任务
+// 输入 域名 + 国家列表，走 SerpApi（serp / trends / 广告透明中心 / autocomplete）
+// 抓竞品在投创意，再交 LLM 评估。结果按 (域名, 国家) 落 brand_assessment_results。
+// -----------------------------------------------------------
+model brand_assessment_jobs {
+  id                   BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id              BigInt    @db.UnsignedBigInt // 发起人
+  domain               String    @db.VarChar(255)
+  countries            Json
+  force_refresh        Int       @default(0) @db.TinyInt
+  estimated_cost_usd   Decimal   @default(0) @db.Decimal(10, 4)
+  actual_cost_usd      Decimal   @default(0) @db.Decimal(10, 4)
+  status               String    @default("pending") @db.VarChar(20) // pending | running | ok | partial | failed | cost_aborted
+  error_message        String?   @db.VarChar(500)
+  started_at           DateTime? @db.DateTime(0)
+  finished_at          DateTime? @db.DateTime(0)
+  is_deleted           Int       @default(0) @db.TinyInt
+  created_at           DateTime  @default(now()) @db.DateTime(0)
+  updated_at           DateTime  @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([status, created_at], map: "idx_baj_status_created")
+  @@index([user_id, created_at], map: "idx_baj_user_created")
+  @@index([domain], map: "idx_baj_domain")
+}
+
+// -----------------------------------------------------------
+// D-233d 品牌评估 — 结果
+// 维度 (域名, 国家) 全公司共享：同一商家同一国家别人已经买过 SerpApi 数据就直接复用，
+// 不重复付费。故本表不带 user_id 隔离，只用 first_requested_by_user_id 留审计线索。
+// ttl_expires_at 到期后才重新买（kyads 原口径 7 天）。
+// -----------------------------------------------------------
+model brand_assessment_results {
+  id                        BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  job_id                    BigInt   @db.UnsignedBigInt
+  first_requested_by_user_id BigInt? @db.UnsignedBigInt
+  domain                    String   @db.VarChar(255)
+  country                   String   @db.VarChar(8)
+  brand_token               String?  @db.VarChar(120)
+  country_snapshot          Json?
+  brand_level               Json?
+  brand_own_ads             Json? // 商家自己在投的广告创意
+  non_brand_ads             Json? // 同类竞品在投的广告创意（生成文案的主要样本）
+  trends                    Json?
+  transparency              Json? // Google 广告透明中心创意
+  autocomplete_variants     Json?
+  engine_status             Json
+  llm_output                Json?
+  warnings                  Json?
+  source                    String   @default("fresh") @db.VarChar(20) // fresh | cache_hit
+  serpapi_cost_usd          Decimal  @default(0) @db.Decimal(10, 4)
+  llm_cost_usd              Decimal  @default(0) @db.Decimal(10, 4)
+  ttl_expires_at            DateTime @db.DateTime(0)
+  is_deleted                Int      @default(0) @db.TinyInt
+  created_at                DateTime @default(now()) @db.DateTime(0)
+  updated_at                DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@unique([domain, country], map: "uk_bar_domain_country")
+  @@index([job_id], map: "idx_bar_job")
+  @@index([ttl_expires_at], map: "idx_bar_ttl")
+}
+
+// -----------------------------------------------------------
+// D-233e 品牌评估 / DataForSEO 每日成本账本
+// SerpApi 与 DataForSEO 共用这一本账，按天聚合做预算门控。
+// 全公司一本账（DataForSEO 是复用 kyads 的单一账号，SerpApi 走 user_serpapi_keys 池）。
+// 每日上限读 system_configs.brand_intel_daily_budget_usd。
+// -----------------------------------------------------------
+model brand_intel_cost_ledger {
+  id             BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  ledger_date    DateTime @db.Date
+  provider       String   @default("all") @db.VarChar(20) // serpapi | dataforseo | llm | all
+  total_cost_usd Decimal  @default(0) @db.Decimal(12, 4)
+  call_count     Int      @default(0) @db.UnsignedInt
+  created_at     DateTime @default(now()) @db.DateTime(0)
+  updated_at     DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@unique([ledger_date, provider], map: "uk_bicl_date_provider")
+}
+
+// -----------------------------------------------------------
+// D-233f DataForSEO 品牌词排名缓存
+// 维度 (域名, 国家, prompt_hash) 全公司共享，理由同品牌评估结果。
+// -----------------------------------------------------------
+model dataforseo_brand_keyword_cache {
+  id            BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  domain        String   @db.VarChar(255)
+  country       String   @db.VarChar(8)
+  prompt_hash   String   @db.VarChar(64)
+  top_keywords  Json
+  ai_extraction Json?
+  cost_usd      Decimal  @default(0) @db.Decimal(10, 4)
+  fetched_at    DateTime @default(now()) @db.DateTime(0)
+  expires_at    DateTime @db.DateTime(0)
+
+  @@unique([domain, country, prompt_hash], map: "uk_dfsbkc_domain_country_prompt")
+  @@index([expires_at], map: "idx_dfsbkc_expires")
 }

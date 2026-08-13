@@ -11,7 +11,7 @@ const { Text } = Typography;
  *
  * 替代场景：
  * - advertisers 今日广告 Tab 4 卡片（339/108/92/16）
- * - merchants 4 stat-card-hero（我的商家/广告投放/节日营销/AI 人设）
+ * - merchants 4 stat-card-hero（我的商家/广告投放/上广告引擎/AI 人设）
  * - team-overview 多 StatCard
  * - data-center 顶部数据条
  *

@@ -65,7 +65,6 @@ export const ModelName = {
   merchant_recommendations: 'merchant_recommendations',
   sheet_configs: 'sheet_configs',
   ad_default_settings: 'ad_default_settings',
-  holiday_calendar: 'holiday_calendar',
   campaigns: 'campaigns',
   ad_groups: 'ad_groups',
   keywords: 'keywords',
@@ -117,7 +116,12 @@ export const ModelName = {
   team_developer_tokens: 'team_developer_tokens',
   token_usage_daily: 'token_usage_daily',
   google_ads_api_usage: 'google_ads_api_usage',
-  ad_decision_journal: 'ad_decision_journal'
+  ad_decision_journal: 'ad_decision_journal',
+  ad_creation_drafts: 'ad_creation_drafts',
+  brand_assessment_jobs: 'brand_assessment_jobs',
+  brand_assessment_results: 'brand_assessment_results',
+  brand_intel_cost_ledger: 'brand_intel_cost_ledger',
+  dataforseo_brand_keyword_cache: 'dataforseo_brand_keyword_cache'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -264,7 +268,6 @@ export const User_merchantsScalarFieldEnum = {
   status: 'status',
   claimed_at: 'claimed_at',
   target_country: 'target_country',
-  holiday_name: 'holiday_name',
   tracking_link: 'tracking_link',
   campaign_link: 'campaign_link',
   source: 'source',
@@ -421,6 +424,7 @@ export const Ad_default_settingsScalarFieldEnum = {
   naming_rule: 'naming_rule',
   naming_prefix: 'naming_prefix',
   eu_political_ad: 'eu_political_ad',
+  ad_engine: 'ad_engine',
   ai_rule_profile: 'ai_rule_profile',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
@@ -428,21 +432,6 @@ export const Ad_default_settingsScalarFieldEnum = {
 } as const
 
 export type Ad_default_settingsScalarFieldEnum = (typeof Ad_default_settingsScalarFieldEnum)[keyof typeof Ad_default_settingsScalarFieldEnum]
-
-
-export const Holiday_calendarScalarFieldEnum = {
-  id: 'id',
-  country_code: 'country_code',
-  holiday_name: 'holiday_name',
-  holiday_date: 'holiday_date',
-  holiday_type: 'holiday_type',
-  related_holidays: 'related_holidays',
-  is_deleted: 'is_deleted',
-  created_at: 'created_at',
-  updated_at: 'updated_at'
-} as const
-
-export type Holiday_calendarScalarFieldEnum = (typeof Holiday_calendarScalarFieldEnum)[keyof typeof Holiday_calendarScalarFieldEnum]
 
 
 export const CampaignsScalarFieldEnum = {
@@ -1436,6 +1425,121 @@ export const Ad_decision_journalScalarFieldEnum = {
 export type Ad_decision_journalScalarFieldEnum = (typeof Ad_decision_journalScalarFieldEnum)[keyof typeof Ad_decision_journalScalarFieldEnum]
 
 
+export const Ad_creation_draftsScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  user_merchant_id: 'user_merchant_id',
+  campaign_id: 'campaign_id',
+  domain: 'domain',
+  country_code: 'country_code',
+  language_code: 'language_code',
+  landing_page_url: 'landing_page_url',
+  core_brand_keywords: 'core_brand_keywords',
+  headlines: 'headlines',
+  descriptions: 'descriptions',
+  sitelinks: 'sitelinks',
+  negative_keywords: 'negative_keywords',
+  preview_payload: 'preview_payload',
+  gap_report: 'gap_report',
+  source_payload: 'source_payload',
+  sitelink_source_payload: 'sitelink_source_payload',
+  raw_payload_excerpt: 'raw_payload_excerpt',
+  generation_mode: 'generation_mode',
+  status: 'status',
+  current_stage: 'current_stage',
+  completed_stages: 'completed_stages',
+  failed_stage: 'failed_stage',
+  error_code: 'error_code',
+  error_message: 'error_message',
+  retryable: 'retryable',
+  stage_running: 'stage_running',
+  stage_claimed_at: 'stage_claimed_at',
+  default_campaign_name: 'default_campaign_name',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Ad_creation_draftsScalarFieldEnum = (typeof Ad_creation_draftsScalarFieldEnum)[keyof typeof Ad_creation_draftsScalarFieldEnum]
+
+
+export const Brand_assessment_jobsScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  domain: 'domain',
+  countries: 'countries',
+  force_refresh: 'force_refresh',
+  estimated_cost_usd: 'estimated_cost_usd',
+  actual_cost_usd: 'actual_cost_usd',
+  status: 'status',
+  error_message: 'error_message',
+  started_at: 'started_at',
+  finished_at: 'finished_at',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Brand_assessment_jobsScalarFieldEnum = (typeof Brand_assessment_jobsScalarFieldEnum)[keyof typeof Brand_assessment_jobsScalarFieldEnum]
+
+
+export const Brand_assessment_resultsScalarFieldEnum = {
+  id: 'id',
+  job_id: 'job_id',
+  first_requested_by_user_id: 'first_requested_by_user_id',
+  domain: 'domain',
+  country: 'country',
+  brand_token: 'brand_token',
+  country_snapshot: 'country_snapshot',
+  brand_level: 'brand_level',
+  brand_own_ads: 'brand_own_ads',
+  non_brand_ads: 'non_brand_ads',
+  trends: 'trends',
+  transparency: 'transparency',
+  autocomplete_variants: 'autocomplete_variants',
+  engine_status: 'engine_status',
+  llm_output: 'llm_output',
+  warnings: 'warnings',
+  source: 'source',
+  serpapi_cost_usd: 'serpapi_cost_usd',
+  llm_cost_usd: 'llm_cost_usd',
+  ttl_expires_at: 'ttl_expires_at',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Brand_assessment_resultsScalarFieldEnum = (typeof Brand_assessment_resultsScalarFieldEnum)[keyof typeof Brand_assessment_resultsScalarFieldEnum]
+
+
+export const Brand_intel_cost_ledgerScalarFieldEnum = {
+  id: 'id',
+  ledger_date: 'ledger_date',
+  provider: 'provider',
+  total_cost_usd: 'total_cost_usd',
+  call_count: 'call_count',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Brand_intel_cost_ledgerScalarFieldEnum = (typeof Brand_intel_cost_ledgerScalarFieldEnum)[keyof typeof Brand_intel_cost_ledgerScalarFieldEnum]
+
+
+export const Dataforseo_brand_keyword_cacheScalarFieldEnum = {
+  id: 'id',
+  domain: 'domain',
+  country: 'country',
+  prompt_hash: 'prompt_hash',
+  top_keywords: 'top_keywords',
+  ai_extraction: 'ai_extraction',
+  cost_usd: 'cost_usd',
+  fetched_at: 'fetched_at',
+  expires_at: 'expires_at'
+} as const
+
+export type Dataforseo_brand_keyword_cacheScalarFieldEnum = (typeof Dataforseo_brand_keyword_cacheScalarFieldEnum)[keyof typeof Dataforseo_brand_keyword_cacheScalarFieldEnum]
+
+
 export const SortOrder = {
   asc: 'asc',
   desc: 'desc'
@@ -1558,7 +1662,6 @@ export const user_merchantsOrderByRelevanceFieldEnum = {
   commission_rate: 'commission_rate',
   status: 'status',
   target_country: 'target_country',
-  holiday_name: 'holiday_name',
   tracking_link: 'tracking_link',
   campaign_link: 'campaign_link',
   source: 'source',
@@ -1657,19 +1760,11 @@ export type sheet_configsOrderByRelevanceFieldEnum = (typeof sheet_configsOrderB
 export const ad_default_settingsOrderByRelevanceFieldEnum = {
   bidding_strategy: 'bidding_strategy',
   naming_rule: 'naming_rule',
-  naming_prefix: 'naming_prefix'
+  naming_prefix: 'naming_prefix',
+  ad_engine: 'ad_engine'
 } as const
 
 export type ad_default_settingsOrderByRelevanceFieldEnum = (typeof ad_default_settingsOrderByRelevanceFieldEnum)[keyof typeof ad_default_settingsOrderByRelevanceFieldEnum]
-
-
-export const holiday_calendarOrderByRelevanceFieldEnum = {
-  country_code: 'country_code',
-  holiday_name: 'holiday_name',
-  holiday_type: 'holiday_type'
-} as const
-
-export type holiday_calendarOrderByRelevanceFieldEnum = (typeof holiday_calendarOrderByRelevanceFieldEnum)[keyof typeof holiday_calendarOrderByRelevanceFieldEnum]
 
 
 export const campaignsOrderByRelevanceFieldEnum = {
@@ -2205,4 +2300,57 @@ export const ad_decision_journalOrderByRelevanceFieldEnum = {
 } as const
 
 export type ad_decision_journalOrderByRelevanceFieldEnum = (typeof ad_decision_journalOrderByRelevanceFieldEnum)[keyof typeof ad_decision_journalOrderByRelevanceFieldEnum]
+
+
+export const ad_creation_draftsOrderByRelevanceFieldEnum = {
+  domain: 'domain',
+  country_code: 'country_code',
+  language_code: 'language_code',
+  landing_page_url: 'landing_page_url',
+  raw_payload_excerpt: 'raw_payload_excerpt',
+  generation_mode: 'generation_mode',
+  status: 'status',
+  current_stage: 'current_stage',
+  failed_stage: 'failed_stage',
+  error_code: 'error_code',
+  error_message: 'error_message',
+  default_campaign_name: 'default_campaign_name'
+} as const
+
+export type ad_creation_draftsOrderByRelevanceFieldEnum = (typeof ad_creation_draftsOrderByRelevanceFieldEnum)[keyof typeof ad_creation_draftsOrderByRelevanceFieldEnum]
+
+
+export const brand_assessment_jobsOrderByRelevanceFieldEnum = {
+  domain: 'domain',
+  status: 'status',
+  error_message: 'error_message'
+} as const
+
+export type brand_assessment_jobsOrderByRelevanceFieldEnum = (typeof brand_assessment_jobsOrderByRelevanceFieldEnum)[keyof typeof brand_assessment_jobsOrderByRelevanceFieldEnum]
+
+
+export const brand_assessment_resultsOrderByRelevanceFieldEnum = {
+  domain: 'domain',
+  country: 'country',
+  brand_token: 'brand_token',
+  source: 'source'
+} as const
+
+export type brand_assessment_resultsOrderByRelevanceFieldEnum = (typeof brand_assessment_resultsOrderByRelevanceFieldEnum)[keyof typeof brand_assessment_resultsOrderByRelevanceFieldEnum]
+
+
+export const brand_intel_cost_ledgerOrderByRelevanceFieldEnum = {
+  provider: 'provider'
+} as const
+
+export type brand_intel_cost_ledgerOrderByRelevanceFieldEnum = (typeof brand_intel_cost_ledgerOrderByRelevanceFieldEnum)[keyof typeof brand_intel_cost_ledgerOrderByRelevanceFieldEnum]
+
+
+export const dataforseo_brand_keyword_cacheOrderByRelevanceFieldEnum = {
+  domain: 'domain',
+  country: 'country',
+  prompt_hash: 'prompt_hash'
+} as const
+
+export type dataforseo_brand_keyword_cacheOrderByRelevanceFieldEnum = (typeof dataforseo_brand_keyword_cacheOrderByRelevanceFieldEnum)[keyof typeof dataforseo_brand_keyword_cacheOrderByRelevanceFieldEnum]
 

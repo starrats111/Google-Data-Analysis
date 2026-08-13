@@ -122,56 +122,7 @@ async function main() {
       console.log("✓ 系统配置初始值已创建");
     }
 
-    // ─── 6. 节日日历数据（主要商业节日） ───
-    const holidayCount = await prisma.holiday_calendar.count({ where: { is_deleted: 0 } });
-    if (holidayCount === 0) {
-      const holidays = [
-        // 美国
-        { country_code: "US", holiday_name: "New Year's Day", holiday_date: new Date("2026-01-01"), holiday_type: "public" },
-        { country_code: "US", holiday_name: "Valentine's Day", holiday_date: new Date("2026-02-14"), holiday_type: "commercial" },
-        { country_code: "US", holiday_name: "Presidents' Day", holiday_date: new Date("2026-02-16"), holiday_type: "public" },
-        { country_code: "US", holiday_name: "Easter", holiday_date: new Date("2026-04-05"), holiday_type: "religious" },
-        { country_code: "US", holiday_name: "Mother's Day", holiday_date: new Date("2026-05-10"), holiday_type: "commercial" },
-        { country_code: "US", holiday_name: "Memorial Day", holiday_date: new Date("2026-05-25"), holiday_type: "public" },
-        { country_code: "US", holiday_name: "Father's Day", holiday_date: new Date("2026-06-21"), holiday_type: "commercial" },
-        { country_code: "US", holiday_name: "Independence Day", holiday_date: new Date("2026-07-04"), holiday_type: "public" },
-        { country_code: "US", holiday_name: "Labor Day", holiday_date: new Date("2026-09-07"), holiday_type: "public" },
-        { country_code: "US", holiday_name: "Halloween", holiday_date: new Date("2026-10-31"), holiday_type: "commercial" },
-        { country_code: "US", holiday_name: "Thanksgiving", holiday_date: new Date("2026-11-26"), holiday_type: "public" },
-        { country_code: "US", holiday_name: "Black Friday", holiday_date: new Date("2026-11-27"), holiday_type: "commercial" },
-        { country_code: "US", holiday_name: "Cyber Monday", holiday_date: new Date("2026-11-30"), holiday_type: "commercial" },
-        { country_code: "US", holiday_name: "Christmas", holiday_date: new Date("2026-12-25"), holiday_type: "public" },
-        // 英国
-        { country_code: "GB", holiday_name: "New Year's Day", holiday_date: new Date("2026-01-01"), holiday_type: "public" },
-        { country_code: "GB", holiday_name: "Valentine's Day", holiday_date: new Date("2026-02-14"), holiday_type: "commercial" },
-        { country_code: "GB", holiday_name: "Easter Monday", holiday_date: new Date("2026-04-06"), holiday_type: "public" },
-        { country_code: "GB", holiday_name: "May Day", holiday_date: new Date("2026-05-04"), holiday_type: "public" },
-        { country_code: "GB", holiday_name: "Boxing Day", holiday_date: new Date("2026-12-26"), holiday_type: "commercial" },
-        { country_code: "GB", holiday_name: "Christmas", holiday_date: new Date("2026-12-25"), holiday_type: "public" },
-        // 澳大利亚
-        { country_code: "AU", holiday_name: "Australia Day", holiday_date: new Date("2026-01-26"), holiday_type: "public" },
-        { country_code: "AU", holiday_name: "EOFY Sales", holiday_date: new Date("2026-06-30"), holiday_type: "commercial" },
-        { country_code: "AU", holiday_name: "Click Frenzy", holiday_date: new Date("2026-11-10"), holiday_type: "commercial" },
-        { country_code: "AU", holiday_name: "Christmas", holiday_date: new Date("2026-12-25"), holiday_type: "public" },
-        // 加拿大
-        { country_code: "CA", holiday_name: "Canada Day", holiday_date: new Date("2026-07-01"), holiday_type: "public" },
-        { country_code: "CA", holiday_name: "Thanksgiving", holiday_date: new Date("2026-10-12"), holiday_type: "public" },
-        { country_code: "CA", holiday_name: "Boxing Day", holiday_date: new Date("2026-12-26"), holiday_type: "commercial" },
-        // 德国
-        { country_code: "DE", holiday_name: "Neujahr", holiday_date: new Date("2026-01-01"), holiday_type: "public" },
-        { country_code: "DE", holiday_name: "Ostern", holiday_date: new Date("2026-04-05"), holiday_type: "religious" },
-        { country_code: "DE", holiday_name: "Tag der Deutschen Einheit", holiday_date: new Date("2026-10-03"), holiday_type: "public" },
-        { country_code: "DE", holiday_name: "Weihnachten", holiday_date: new Date("2026-12-25"), holiday_type: "public" },
-        // 法国
-        { country_code: "FR", holiday_name: "Jour de l'An", holiday_date: new Date("2026-01-01"), holiday_type: "public" },
-        { country_code: "FR", holiday_name: "Fête Nationale", holiday_date: new Date("2026-07-14"), holiday_type: "public" },
-        { country_code: "FR", holiday_name: "Soldes d'été", holiday_date: new Date("2026-06-24"), holiday_type: "commercial" },
-        { country_code: "FR", holiday_name: "Noël", holiday_date: new Date("2026-12-25"), holiday_type: "public" },
-      ];
-
-      await prisma.holiday_calendar.createMany({ data: holidays });
-      console.log(`✓ 节日日历已创建 (${holidays.length} 条)`);
-    }
+    // ─── 6. （已移除）节日日历数据 — D-230 节日营销功能整体下线 ───
 
     // ─── 7. Google Ads 政策限制类别预置数据 ───
     const policyCount = await prisma.ad_policy_categories.count({ where: { is_deleted: 0 } });

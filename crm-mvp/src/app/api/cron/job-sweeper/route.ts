@@ -15,6 +15,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sweepSubmitJobs } from "@/lib/submit-runner";
 import { sweepGenerationJobs } from "@/lib/generation-runner";
+import { sweepDraftGeneration } from "@/lib/rival-intel/draft-generation-runner";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -38,8 +39,13 @@ export async function GET(req: NextRequest) {
   try {
     const submit = await sweepSubmitJobs();
     const generation = await sweepGenerationJobs();
-    const summary = { submit, generation };
-    if (submit.requeued + submit.failed + generation.requeued + generation.failed > 0) {
+    // D-233：竞品情报引擎的草稿生成也是进程内队列，同样需要扫僵尸
+    const rivalDrafts = await sweepDraftGeneration();
+    const summary = { submit, generation, rivalDrafts };
+    if (
+      submit.requeued + submit.failed + generation.requeued + generation.failed + rivalDrafts.requeued >
+      0
+    ) {
       console.warn(`[CRON job-sweeper] ${JSON.stringify(summary)}`);
     }
     return NextResponse.json({ code: 0, message: "ok", data: summary });

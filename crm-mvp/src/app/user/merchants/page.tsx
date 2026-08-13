@@ -1,7 +1,7 @@
 "use client";
 import { useState, useCallback, useMemo, useEffect } from "react";
 import { Card, Row, Col, Table, Input, Select, Button, Space, Tag, Modal, Form, Typography, Popconfirm, Popover, Switch, InputNumber, Tabs, App, Tooltip, Radio, DatePicker, Slider, Progress, Alert, AutoComplete } from "antd";
-import { ShopOutlined, SearchOutlined, CheckOutlined, DollarOutlined, CalendarOutlined, SaveOutlined, SyncOutlined, WarningOutlined, StarOutlined, ReloadOutlined, RobotOutlined, DeleteOutlined, CloseCircleOutlined, ThunderboltOutlined, EditOutlined, RedoOutlined } from "@ant-design/icons";
+import { ShopOutlined, SearchOutlined, CheckOutlined, DollarOutlined, ExperimentOutlined, SaveOutlined, SyncOutlined, WarningOutlined, StarOutlined, ReloadOutlined, RobotOutlined, DeleteOutlined, CloseCircleOutlined, ThunderboltOutlined, EditOutlined, RedoOutlined } from "@ant-design/icons";
 import { PLATFORMS, BIDDING_STRATEGIES, ALL_COUNTRIES } from "@/lib/constants";
 import { POLICY_CATEGORY_MAP, POLICY_CATEGORY_LABELS } from "@/lib/policy-hub/policy-categories";
 import { compareConnections, connectionLabel, type ConnectionLabelInput } from "@/lib/connection-label";
@@ -13,6 +13,7 @@ import { useApiWithParams, useStaleApi, useApi, mutateApi, refreshApi } from "@/
 import { useRouter, useSearchParams } from "next/navigation";
 import dayjs, { type Dayjs } from "dayjs";
 import { normalizeAiRuleProfile, SYSTEM_ADRIAN_PERSONA, type AiRuleProfile, type AiPersona } from "@/lib/ai-rule-profile";
+import { AD_ENGINES, AD_ENGINE_META, DEFAULT_AD_ENGINE, parseAdEngine, type AdEngine } from "@/lib/ad-engine";
 const { Text } = Typography;
 const { TextArea } = Input;
 
@@ -27,6 +28,7 @@ interface AdSettingsApiData {
   naming_rule: string;
   naming_prefix: string;
   eu_political_ad?: number;
+  ad_engine?: string;
   ai_rule_profile?: Record<string, unknown>;
 }
 // 主营业务英中翻译
@@ -144,7 +146,6 @@ interface MerchantResponse {
   merchants: Merchant[]; total: number; page: number; pageSize: number;
   stats: { total: number; claimed: number; byPlatform: { platform: string; _count: number }[] };
 }
-interface Holiday { id: string; holiday_name: string; holiday_date: string; holiday_type: string; country_code: string; }
 const PC: Record<string, string> = { RW: "#7c3aed", LH: "#16a34a", CG: "#2563eb", PM: "#ea580c", LB: "#0891b2", BSH: "#be185d", CF: "#ca8a04", AD: "#0f766e", MUI: "#b91c1c", EV: "#4338ca" };
 const PN: Record<string, string> = { alcohol: "酒精类", gambling: "赌博类", healthcare: "医疗保健", financial: "金融服务", adult: "成人内容", weapons: "武器/刀具", cannabis: "大麻类", tobacco: "烟草类" };
 function RB({ r }: { r: unknown[] | null }) {
@@ -184,6 +185,7 @@ export default function MerchantsPage() {
   const [adForm] = Form.useForm();
   useEffect(() => {
     if (!adData) return;
+    setAdEngine(parseAdEngine(adData.ad_engine));
     // 解析 v2 人设 profile
     setPersonaProfile(normalizeAiRuleProfile(adData.ai_rule_profile));
     const profile = adData.ai_rule_profile;
@@ -608,8 +610,6 @@ export default function MerchantsPage() {
     void fireClassify();
   }, [serpApiConfigured, batchForce, atcLocalData, batchRegion, triggerAtcQuery, message]);
 
-  const [cc, setCc] = useState(""); const [qc, setQc] = useState("");
-  const { data: holidays, isLoading: hl } = useApiWithParams<Holiday[]>(qc ? "/api/user/holidays" : null, { country: qc });
   const [claimModal, setClaimModal] = useState(false); const [claimM, setClaimM] = useState<Merchant | null>(null); const [claimForm] = Form.useForm();
   // 新增广告（同一商家多广告，非破坏性）：复用领取弹窗，提交时带 relaunch=true
   const [relaunchMode, setRelaunchMode] = useState(false);
@@ -658,6 +658,22 @@ export default function MerchantsPage() {
     } catch { message.error("同步失败"); }
     finally { setSyncing(false); }
   }, [message]);
+  // D-233 上广告引擎：卡片选中即生效，不跟「广告投放设置」的保存按钮绑定
+  const [adEngine, setAdEngine] = useState<AdEngine>(DEFAULT_AD_ENGINE);
+  const [savingEngine, setSavingEngine] = useState(false);
+  const saveAdEngine = useCallback(async (next: AdEngine) => {
+    if (savingEngine || next === adEngine) return;
+    const prev = adEngine;
+    setAdEngine(next);
+    setSavingEngine(true);
+    try {
+      const r = await mutateApi("/api/user/ad-settings", { method: "PUT", body: { ad_engine: next } }, ["/api/user/ad-settings"]);
+      if (r.code === 0) message.success(`已切换到「${AD_ENGINE_META[next].label}」`);
+      else { setAdEngine(prev); message.error(r.message); }
+    } catch { setAdEngine(prev); message.error("网络异常，请重试"); }
+    finally { setSavingEngine(false); }
+  }, [adEngine, savingEngine, message]);
+
   const [savingAd, setSavingAd] = useState(false);
   const saveAd = useCallback(async () => {
     if (savingAd) return;
@@ -773,7 +789,22 @@ export default function MerchantsPage() {
     setClaimSubmitting(true);
     try {
       const r = await mutateApi("/api/user/merchants", { method: "POST", body: { merchant_id: claimM?.id, ...v, ...(relaunchMode ? { relaunch: true } : {}) } }, [/\/api\/user\/merchants/]);
-      if (r.code === 0) { message.success(relaunchMode ? "已新增广告！正在跳转到广告预览..." : "领取成功！正在跳转到广告预览..."); setClaimModal(false); const cid = (r.data as any)?.campaign_id; if (cid) { setTimeout(() => router.push(`/user/ad-preview/${cid}`), 800); } else { setTab("claimed"); } } else message.error(r.message);
+      if (r.code === 0) {
+        // D-233：按后端返回的生效引擎决定去哪。竞品情报引擎有自己的四步向导（草稿已在后台生成），
+        // 落地页证据引擎照旧进广告预览页。
+        const data = (r.data as any) || {};
+        const rivalDraftId = data.rival_draft_id;
+        const target = data.ad_engine === "rival_intel" && rivalDraftId
+          ? `/user/rival-ad-create/${rivalDraftId}`
+          : (data.campaign_id ? `/user/ad-preview/${data.campaign_id}` : null);
+        message.success(
+          target?.startsWith("/user/rival-ad-create")
+            ? (relaunchMode ? "已新增广告！正在跳转到竞品情报向导..." : "领取成功！正在跳转到竞品情报向导...")
+            : (relaunchMode ? "已新增广告！正在跳转到广告预览..." : "领取成功！正在跳转到广告预览..."),
+        );
+        setClaimModal(false);
+        if (target) setTimeout(() => router.push(target), 800); else setTab("claimed");
+      } else message.error(r.message);
     } catch { message.error("网络异常，请重试"); }
     finally { setClaimSubmitting(false); }
   }, [claimForm, claimM, relaunchMode, message, router]);
@@ -1279,16 +1310,18 @@ export default function MerchantsPage() {
             </Row>
           </div>)}
         </Card></Col>
-        <Col xs={24} sm={12} md={6}><Card size="small" className="func-card-holiday" title={<><CalendarOutlined style={{ color: "#999" }} /> 节日营销</>} style={{ height: "100%" }}>
-          <Space style={{ marginBottom: 8, width: "100%" }}>
-            <Select placeholder="选择国家" showSearch style={{ width: 120 }} size="small" value={cc || undefined} onChange={(v) => setCc(v || "")} options={[{ value: "US", label: "美国" }, { value: "GB", label: "英国" }, { value: "AU", label: "澳洲" }, { value: "CA", label: "加拿大" }, { value: "DE", label: "德国" }, { value: "FR", label: "法国" }, { value: "JP", label: "日本" }]} />
-            <Button type="primary" size="small" icon={<SearchOutlined />} loading={hl} onClick={() => setQc(cc)}>查询</Button>
-          </Space>
-          <div style={{ maxHeight: 120, overflowY: "auto" }}>{(holidays || []).length > 0 ? (holidays || []).map((h) => (
-            <div key={h.id} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", borderBottom: "1px solid #f5f5f5", fontSize: 12 }}>
-              <Text style={{ fontSize: 12 }}>{new Date(h.holiday_date).toLocaleDateString("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit" })} {h.holiday_name}</Text>
-              <Tag style={{ fontSize: 11, lineHeight: "18px", margin: 0 }}>{h.holiday_type}</Tag>
-            </div>)) : <Text type="secondary" style={{ fontSize: 12 }}>选择国家查询节日信息</Text>}</div>
+        <Col xs={24} sm={12} md={6}><Card size="small" className="func-card-engine" title={<><ExperimentOutlined style={{ color: "#999" }} /> 上广告引擎</>} extra={savingEngine ? <Text type="secondary" style={{ fontSize: 12 }}>保存中…</Text> : null} style={{ height: "100%" }}>
+          <Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 8 }}>选中的引擎立即生效，之后「领取商家 / 新增广告」都走它</Text>
+          <Radio.Group value={adEngine} onChange={(e) => void saveAdEngine(e.target.value as AdEngine)} disabled={savingEngine} style={{ width: "100%" }}>
+            <Space direction="vertical" size={8} style={{ width: "100%" }}>
+              {AD_ENGINES.map((key) => (
+                <Radio key={key} value={key} style={{ alignItems: "flex-start" }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, lineHeight: 1.5 }}>{AD_ENGINE_META[key].label}</div>
+                  <div style={{ fontSize: 11, color: "#999", lineHeight: 1.5 }}>{AD_ENGINE_META[key].hint}</div>
+                </Radio>
+              ))}
+            </Space>
+          </Radio.Group>
         </Card></Col>
         <Col xs={24} sm={12} md={6}><Card size="small" className="func-card-ai" title={<><RobotOutlined style={{ color: "#722ed1" }} /> AI 人设库</>} style={{ height: "100%" }}>
           {(() => {
@@ -1660,7 +1693,6 @@ export default function MerchantsPage() {
             </Form.Item>
           );
         })()}
-        <Form.Item name="holiday_name" label="关联节日（可选）"><Input placeholder="输入节日名称" /></Form.Item>
       </Form>
     </Modal>
     <Modal title={rTitle} open={rModal} onCancel={() => setRModal(false)} footer={null} width={480}><div style={{ whiteSpace: "pre-wrap", lineHeight: 1.8, padding: "8px 0" }}>{rContent}</div></Modal>

@@ -8,6 +8,8 @@ import { loadConnectionAccountMap, buildConnectionAccounts, loadConnectionAliasM
 import { extractDomain } from "@/lib/atc-service";
 import { parseTxnDateStart, parseTxnDateEndExclusive } from "@/lib/date-utils";
 import { getTeamVisibility, getVisibleUserIdSet } from "@/lib/team-visibility";
+import { parseAdEngine } from "@/lib/ad-engine";
+import { startRivalIntelDraft } from "@/lib/rival-intel/start-draft";
 
 // 领取弹窗可显式选择的广告语言代码白名单（与前端 AD_LANGUAGES 对齐）
 const KNOWN_LANG_CODES = new Set<string>([
@@ -661,7 +663,7 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
   // relaunch=true：对「已领取」商家再上一条独立广告（同一商家多广告），
   // 不走破坏性的「取消领取→重领取」，不覆盖已有广告依赖的 user_merchants 单值字段，
   // 只新建一条 campaign 并显式绑定所选连接（见下文 isRelaunch）。
-  const { merchant_id, target_country, holiday_name, platform_connection_id, mcc_account_id, language, relaunch } = await req.json();
+  const { merchant_id, target_country, platform_connection_id, mcc_account_id, language, relaunch } = await req.json();
   if (!merchant_id) return apiError("缺少商家 ID");
   if (!target_country) return apiError("请选择目标国家");
   if (target_country.length > 8) return apiError("国家代码格式无效");
@@ -803,7 +805,6 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
         status: "claimed",
         claimed_at: new Date(),
         target_country,
-        holiday_name: holiday_name || null,
         platform_connection_id: connId,
         ...(selectedCampaignLink ? { campaign_link: selectedCampaignLink, tracking_link: selectedCampaignLink } : {}),
       },
@@ -943,21 +944,51 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
     },
   });
 
-  // ─── 异步任务 A：SemRush 竞品数据获取 + AI 补充 ───
-  triggerAdCopyGeneration(
-    adCreative.id,
-    adGroup.id,
-    merchant.merchant_name,
-    merchant.merchant_url || "",
-    target_country,
-    {
-      dailyBudget: Number(adSettings?.daily_budget || 2.0),
-      maxCpc: Number(adSettings?.max_cpc || 0.3),
-      biddingStrategy: adSettings?.bidding_strategy || "MAXIMIZE_CLICKS",
-      aiRuleProfile: (adSettings as any)?.ai_rule_profile,
+  // D-233：员工在「我的商家」页顶部卡片选的引擎决定这条广告走哪套生成链路。
+  //   evidence   → 下面的 triggerAdCopyGeneration（爬商家落地页，按页面证据生成）
+  //   rival_intel→ 竞品情报草稿（品牌评估里的竞品在投创意 + 品牌词），域名与落地页
+  //                从商家自动带入，员工不需要在弹窗里再填任何东西
+  const adEngine = parseAdEngine(adSettings?.ad_engine);
+  let rivalDraftId: bigint | null = null;
+  if (adEngine === "rival_intel") {
+    const started = await startRivalIntelDraft({
       userId: BigInt(user.userId),
-    },
-  ).catch((err) => console.error("[异步] 广告文案生成失败:", err));
+      userMerchantId: BigInt(merchant_id),
+      campaignId: campaign.id,
+      countryCode: target_country,
+      languageCode: langCode,
+      merchant: {
+        merchant_url: merchant.merchant_url,
+        campaign_link: effectiveCampaignLink,
+        tracking_link: merchant.tracking_link,
+      },
+      landingPageUrl: finalUrl || null,
+    }).catch((err) => {
+      console.error("[RivalIntel] 竞品情报草稿创建失败:", err);
+      return null;
+    });
+    rivalDraftId = started?.draftId ?? null;
+  }
+
+  // ─── 异步任务 A：SemRush 竞品数据获取 + AI 补充 ───
+  // 竞品情报引擎有自己的生成链，这里不再重复跑一遍落地页爬取 + AI（会白烧一份 token，
+  // 且两套产物互相覆盖 ad_creatives）。
+  if (adEngine !== "rival_intel") {
+    triggerAdCopyGeneration(
+      adCreative.id,
+      adGroup.id,
+      merchant.merchant_name,
+      merchant.merchant_url || "",
+      target_country,
+      {
+        dailyBudget: Number(adSettings?.daily_budget || 2.0),
+        maxCpc: Number(adSettings?.max_cpc || 0.3),
+        biddingStrategy: adSettings?.bidding_strategy || "MAXIMIZE_CLICKS",
+        aiRuleProfile: (adSettings as any)?.ai_rule_profile,
+        userId: BigInt(user.userId),
+      },
+    ).catch((err) => console.error("[异步] 广告文案生成失败:", err));
+  }
 
   // ─── 异步任务 B：爬取商家网站 + 文章生成（CRM 自有 AI） ───
   triggerArticleGeneration(
@@ -978,6 +1009,9 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
     article_id: article.id,
     policy_status: merchant.policy_status,
     policy_category_code: merchant.policy_category_code,
+    // 前端按引擎决定跳哪个页面：evidence → 广告预览页；rival_intel → 竞品情报向导
+    ad_engine: adEngine,
+    rival_draft_id: rivalDraftId,
   }), isRelaunch ? "再投成功，已新增一条独立广告" : "领取成功");
 });
 
@@ -1070,7 +1104,7 @@ export const PUT = withUser(async (req: NextRequest, { user }) => {
     // 重置商家状态
     const released = await prisma.user_merchants.updateMany({
       where: { id: { in: merchantIds }, user_id: userId },
-      data: { status: "available", claimed_at: null, target_country: null, holiday_name: null },
+      data: { status: "available", claimed_at: null, target_country: null },
     });
     // D-163⑬：核对实际释放数，混入他人/不存在的 ID 时不再假报「全部成功」
     if (released.count < merchantIds.length) {

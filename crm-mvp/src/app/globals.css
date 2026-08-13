@@ -128,7 +128,7 @@ body {
 
 /* @deprecated D-009 改用 <StatCard /> */
 .func-card-ad,
-.func-card-holiday,
+.func-card-engine,
 .func-card-ai {
   border: 1px solid #f0f0f0 !important;
 }

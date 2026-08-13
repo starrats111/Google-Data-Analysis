@@ -3,6 +3,7 @@ import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { normalizeAiRuleProfile, SYSTEM_ADRIAN_PERSONA } from "@/lib/ai-rule-profile";
+import { parseAdEngine } from "@/lib/ad-engine";
 
 // 获取广告默认设置
 export async function GET(req: NextRequest) {
@@ -46,6 +47,7 @@ export async function PUT(req: NextRequest) {
     naming_rule,
     naming_prefix,
     eu_political_ad,
+    ad_engine,
     ai_rule_profile,
   } = body;
 
@@ -60,6 +62,7 @@ export async function PUT(req: NextRequest) {
   if (naming_rule !== undefined) data.naming_rule = naming_rule;
   if (naming_prefix !== undefined) data.naming_prefix = naming_prefix;
   if (eu_political_ad !== undefined) data.eu_political_ad = eu_political_ad;
+  if (ad_engine !== undefined) data.ad_engine = parseAdEngine(ad_engine);
   if (ai_rule_profile !== undefined) data.ai_rule_profile = normalizeAiRuleProfile(ai_rule_profile) as unknown as object;
 
   const existing = await prisma.ad_default_settings.findFirst({

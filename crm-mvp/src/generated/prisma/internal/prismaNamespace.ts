@@ -398,7 +398,6 @@ export const ModelName = {
   merchant_recommendations: 'merchant_recommendations',
   sheet_configs: 'sheet_configs',
   ad_default_settings: 'ad_default_settings',
-  holiday_calendar: 'holiday_calendar',
   campaigns: 'campaigns',
   ad_groups: 'ad_groups',
   keywords: 'keywords',
@@ -450,7 +449,12 @@ export const ModelName = {
   team_developer_tokens: 'team_developer_tokens',
   token_usage_daily: 'token_usage_daily',
   google_ads_api_usage: 'google_ads_api_usage',
-  ad_decision_journal: 'ad_decision_journal'
+  ad_decision_journal: 'ad_decision_journal',
+  ad_creation_drafts: 'ad_creation_drafts',
+  brand_assessment_jobs: 'brand_assessment_jobs',
+  brand_assessment_results: 'brand_assessment_results',
+  brand_intel_cost_ledger: 'brand_intel_cost_ledger',
+  dataforseo_brand_keyword_cache: 'dataforseo_brand_keyword_cache'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -466,7 +470,7 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
     omit: GlobalOmitOptions
   }
   meta: {
-    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "parent_networks" | "platform_blacklist" | "ad_rejection_feedback" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "holiday_calendar" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "ad_generation_jobs" | "ad_submit_jobs" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "spend_guard_actions" | "google_mcc_accounts" | "affiliate_transactions" | "affiliate_click_daily" | "affiliate_payments" | "notifications" | "notification_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "kyads_click_task_items" | "proxy_exit_ip_usage" | "suffix_alerts" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "user_serpapi_keys" | "user_semrush_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log" | "semrush_keyword_cache" | "semrush_health_logs" | "payment_methods" | "report_overrides" | "payment_binding_snapshots" | "bank_flow_entries" | "policy_violations" | "team_developer_tokens" | "token_usage_daily" | "google_ads_api_usage" | "ad_decision_journal"
+    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "parent_networks" | "platform_blacklist" | "ad_rejection_feedback" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "ad_generation_jobs" | "ad_submit_jobs" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "spend_guard_actions" | "google_mcc_accounts" | "affiliate_transactions" | "affiliate_click_daily" | "affiliate_payments" | "notifications" | "notification_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "kyads_click_task_items" | "proxy_exit_ip_usage" | "suffix_alerts" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "user_serpapi_keys" | "user_semrush_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log" | "semrush_keyword_cache" | "semrush_health_logs" | "payment_methods" | "report_overrides" | "payment_binding_snapshots" | "bank_flow_entries" | "policy_violations" | "team_developer_tokens" | "token_usage_daily" | "google_ads_api_usage" | "ad_decision_journal" | "ad_creation_drafts" | "brand_assessment_jobs" | "brand_assessment_results" | "brand_intel_cost_ledger" | "dataforseo_brand_keyword_cache"
     txIsolationLevel: TransactionIsolationLevel
   }
   model: {
@@ -1391,72 +1395,6 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         count: {
           args: Prisma.ad_default_settingsCountArgs<ExtArgs>
           result: runtime.Types.Utils.Optional<Prisma.Ad_default_settingsCountAggregateOutputType> | number
-        }
-      }
-    }
-    holiday_calendar: {
-      payload: Prisma.$holiday_calendarPayload<ExtArgs>
-      fields: Prisma.holiday_calendarFieldRefs
-      operations: {
-        findUnique: {
-          args: Prisma.holiday_calendarFindUniqueArgs<ExtArgs>
-          result: runtime.Types.Utils.PayloadToResult<Prisma.$holiday_calendarPayload> | null
-        }
-        findUniqueOrThrow: {
-          args: Prisma.holiday_calendarFindUniqueOrThrowArgs<ExtArgs>
-          result: runtime.Types.Utils.PayloadToResult<Prisma.$holiday_calendarPayload>
-        }
-        findFirst: {
-          args: Prisma.holiday_calendarFindFirstArgs<ExtArgs>
-          result: runtime.Types.Utils.PayloadToResult<Prisma.$holiday_calendarPayload> | null
-        }
-        findFirstOrThrow: {
-          args: Prisma.holiday_calendarFindFirstOrThrowArgs<ExtArgs>
-          result: runtime.Types.Utils.PayloadToResult<Prisma.$holiday_calendarPayload>
-        }
-        findMany: {
-          args: Prisma.holiday_calendarFindManyArgs<ExtArgs>
-          result: runtime.Types.Utils.PayloadToResult<Prisma.$holiday_calendarPayload>[]
-        }
-        create: {
-          args: Prisma.holiday_calendarCreateArgs<ExtArgs>
-          result: runtime.Types.Utils.PayloadToResult<Prisma.$holiday_calendarPayload>
-        }
-        createMany: {
-          args: Prisma.holiday_calendarCreateManyArgs<ExtArgs>
-          result: BatchPayload
-        }
-        delete: {
-          args: Prisma.holiday_calendarDeleteArgs<ExtArgs>
-          result: runtime.Types.Utils.PayloadToResult<Prisma.$holiday_calendarPayload>
-        }
-        update: {
-          args: Prisma.holiday_calendarUpdateArgs<ExtArgs>
-          result: runtime.Types.Utils.PayloadToResult<Prisma.$holiday_calendarPayload>
-        }
-        deleteMany: {
-          args: Prisma.holiday_calendarDeleteManyArgs<ExtArgs>
-          result: BatchPayload
-        }
-        updateMany: {
-          args: Prisma.holiday_calendarUpdateManyArgs<ExtArgs>
-          result: BatchPayload
-        }
-        upsert: {
-          args: Prisma.holiday_calendarUpsertArgs<ExtArgs>
-          result: runtime.Types.Utils.PayloadToResult<Prisma.$holiday_calendarPayload>
-        }
-        aggregate: {
-          args: Prisma.Holiday_calendarAggregateArgs<ExtArgs>
-          result: runtime.Types.Utils.Optional<Prisma.AggregateHoliday_calendar>
-        }
-        groupBy: {
-          args: Prisma.holiday_calendarGroupByArgs<ExtArgs>
-          result: runtime.Types.Utils.Optional<Prisma.Holiday_calendarGroupByOutputType>[]
-        }
-        count: {
-          args: Prisma.holiday_calendarCountArgs<ExtArgs>
-          result: runtime.Types.Utils.Optional<Prisma.Holiday_calendarCountAggregateOutputType> | number
         }
       }
     }
@@ -4892,6 +4830,336 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         }
       }
     }
+    ad_creation_drafts: {
+      payload: Prisma.$ad_creation_draftsPayload<ExtArgs>
+      fields: Prisma.ad_creation_draftsFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.ad_creation_draftsFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_creation_draftsPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.ad_creation_draftsFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_creation_draftsPayload>
+        }
+        findFirst: {
+          args: Prisma.ad_creation_draftsFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_creation_draftsPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.ad_creation_draftsFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_creation_draftsPayload>
+        }
+        findMany: {
+          args: Prisma.ad_creation_draftsFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_creation_draftsPayload>[]
+        }
+        create: {
+          args: Prisma.ad_creation_draftsCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_creation_draftsPayload>
+        }
+        createMany: {
+          args: Prisma.ad_creation_draftsCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.ad_creation_draftsDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_creation_draftsPayload>
+        }
+        update: {
+          args: Prisma.ad_creation_draftsUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_creation_draftsPayload>
+        }
+        deleteMany: {
+          args: Prisma.ad_creation_draftsDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.ad_creation_draftsUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.ad_creation_draftsUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_creation_draftsPayload>
+        }
+        aggregate: {
+          args: Prisma.Ad_creation_draftsAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateAd_creation_drafts>
+        }
+        groupBy: {
+          args: Prisma.ad_creation_draftsGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Ad_creation_draftsGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.ad_creation_draftsCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Ad_creation_draftsCountAggregateOutputType> | number
+        }
+      }
+    }
+    brand_assessment_jobs: {
+      payload: Prisma.$brand_assessment_jobsPayload<ExtArgs>
+      fields: Prisma.brand_assessment_jobsFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.brand_assessment_jobsFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$brand_assessment_jobsPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.brand_assessment_jobsFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$brand_assessment_jobsPayload>
+        }
+        findFirst: {
+          args: Prisma.brand_assessment_jobsFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$brand_assessment_jobsPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.brand_assessment_jobsFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$brand_assessment_jobsPayload>
+        }
+        findMany: {
+          args: Prisma.brand_assessment_jobsFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$brand_assessment_jobsPayload>[]
+        }
+        create: {
+          args: Prisma.brand_assessment_jobsCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$brand_assessment_jobsPayload>
+        }
+        createMany: {
+          args: Prisma.brand_assessment_jobsCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.brand_assessment_jobsDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$brand_assessment_jobsPayload>
+        }
+        update: {
+          args: Prisma.brand_assessment_jobsUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$brand_assessment_jobsPayload>
+        }
+        deleteMany: {
+          args: Prisma.brand_assessment_jobsDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.brand_assessment_jobsUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.brand_assessment_jobsUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$brand_assessment_jobsPayload>
+        }
+        aggregate: {
+          args: Prisma.Brand_assessment_jobsAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateBrand_assessment_jobs>
+        }
+        groupBy: {
+          args: Prisma.brand_assessment_jobsGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Brand_assessment_jobsGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.brand_assessment_jobsCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Brand_assessment_jobsCountAggregateOutputType> | number
+        }
+      }
+    }
+    brand_assessment_results: {
+      payload: Prisma.$brand_assessment_resultsPayload<ExtArgs>
+      fields: Prisma.brand_assessment_resultsFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.brand_assessment_resultsFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$brand_assessment_resultsPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.brand_assessment_resultsFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$brand_assessment_resultsPayload>
+        }
+        findFirst: {
+          args: Prisma.brand_assessment_resultsFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$brand_assessment_resultsPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.brand_assessment_resultsFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$brand_assessment_resultsPayload>
+        }
+        findMany: {
+          args: Prisma.brand_assessment_resultsFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$brand_assessment_resultsPayload>[]
+        }
+        create: {
+          args: Prisma.brand_assessment_resultsCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$brand_assessment_resultsPayload>
+        }
+        createMany: {
+          args: Prisma.brand_assessment_resultsCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.brand_assessment_resultsDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$brand_assessment_resultsPayload>
+        }
+        update: {
+          args: Prisma.brand_assessment_resultsUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$brand_assessment_resultsPayload>
+        }
+        deleteMany: {
+          args: Prisma.brand_assessment_resultsDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.brand_assessment_resultsUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.brand_assessment_resultsUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$brand_assessment_resultsPayload>
+        }
+        aggregate: {
+          args: Prisma.Brand_assessment_resultsAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateBrand_assessment_results>
+        }
+        groupBy: {
+          args: Prisma.brand_assessment_resultsGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Brand_assessment_resultsGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.brand_assessment_resultsCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Brand_assessment_resultsCountAggregateOutputType> | number
+        }
+      }
+    }
+    brand_intel_cost_ledger: {
+      payload: Prisma.$brand_intel_cost_ledgerPayload<ExtArgs>
+      fields: Prisma.brand_intel_cost_ledgerFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.brand_intel_cost_ledgerFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$brand_intel_cost_ledgerPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.brand_intel_cost_ledgerFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$brand_intel_cost_ledgerPayload>
+        }
+        findFirst: {
+          args: Prisma.brand_intel_cost_ledgerFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$brand_intel_cost_ledgerPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.brand_intel_cost_ledgerFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$brand_intel_cost_ledgerPayload>
+        }
+        findMany: {
+          args: Prisma.brand_intel_cost_ledgerFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$brand_intel_cost_ledgerPayload>[]
+        }
+        create: {
+          args: Prisma.brand_intel_cost_ledgerCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$brand_intel_cost_ledgerPayload>
+        }
+        createMany: {
+          args: Prisma.brand_intel_cost_ledgerCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.brand_intel_cost_ledgerDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$brand_intel_cost_ledgerPayload>
+        }
+        update: {
+          args: Prisma.brand_intel_cost_ledgerUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$brand_intel_cost_ledgerPayload>
+        }
+        deleteMany: {
+          args: Prisma.brand_intel_cost_ledgerDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.brand_intel_cost_ledgerUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.brand_intel_cost_ledgerUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$brand_intel_cost_ledgerPayload>
+        }
+        aggregate: {
+          args: Prisma.Brand_intel_cost_ledgerAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateBrand_intel_cost_ledger>
+        }
+        groupBy: {
+          args: Prisma.brand_intel_cost_ledgerGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Brand_intel_cost_ledgerGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.brand_intel_cost_ledgerCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Brand_intel_cost_ledgerCountAggregateOutputType> | number
+        }
+      }
+    }
+    dataforseo_brand_keyword_cache: {
+      payload: Prisma.$dataforseo_brand_keyword_cachePayload<ExtArgs>
+      fields: Prisma.dataforseo_brand_keyword_cacheFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.dataforseo_brand_keyword_cacheFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$dataforseo_brand_keyword_cachePayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.dataforseo_brand_keyword_cacheFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$dataforseo_brand_keyword_cachePayload>
+        }
+        findFirst: {
+          args: Prisma.dataforseo_brand_keyword_cacheFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$dataforseo_brand_keyword_cachePayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.dataforseo_brand_keyword_cacheFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$dataforseo_brand_keyword_cachePayload>
+        }
+        findMany: {
+          args: Prisma.dataforseo_brand_keyword_cacheFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$dataforseo_brand_keyword_cachePayload>[]
+        }
+        create: {
+          args: Prisma.dataforseo_brand_keyword_cacheCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$dataforseo_brand_keyword_cachePayload>
+        }
+        createMany: {
+          args: Prisma.dataforseo_brand_keyword_cacheCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.dataforseo_brand_keyword_cacheDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$dataforseo_brand_keyword_cachePayload>
+        }
+        update: {
+          args: Prisma.dataforseo_brand_keyword_cacheUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$dataforseo_brand_keyword_cachePayload>
+        }
+        deleteMany: {
+          args: Prisma.dataforseo_brand_keyword_cacheDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.dataforseo_brand_keyword_cacheUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.dataforseo_brand_keyword_cacheUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$dataforseo_brand_keyword_cachePayload>
+        }
+        aggregate: {
+          args: Prisma.Dataforseo_brand_keyword_cacheAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateDataforseo_brand_keyword_cache>
+        }
+        groupBy: {
+          args: Prisma.dataforseo_brand_keyword_cacheGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Dataforseo_brand_keyword_cacheGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.dataforseo_brand_keyword_cacheCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Dataforseo_brand_keyword_cacheCountAggregateOutputType> | number
+        }
+      }
+    }
   }
 } & {
   other: {
@@ -5059,7 +5327,6 @@ export const User_merchantsScalarFieldEnum = {
   status: 'status',
   claimed_at: 'claimed_at',
   target_country: 'target_country',
-  holiday_name: 'holiday_name',
   tracking_link: 'tracking_link',
   campaign_link: 'campaign_link',
   source: 'source',
@@ -5216,6 +5483,7 @@ export const Ad_default_settingsScalarFieldEnum = {
   naming_rule: 'naming_rule',
   naming_prefix: 'naming_prefix',
   eu_political_ad: 'eu_political_ad',
+  ad_engine: 'ad_engine',
   ai_rule_profile: 'ai_rule_profile',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
@@ -5223,21 +5491,6 @@ export const Ad_default_settingsScalarFieldEnum = {
 } as const
 
 export type Ad_default_settingsScalarFieldEnum = (typeof Ad_default_settingsScalarFieldEnum)[keyof typeof Ad_default_settingsScalarFieldEnum]
-
-
-export const Holiday_calendarScalarFieldEnum = {
-  id: 'id',
-  country_code: 'country_code',
-  holiday_name: 'holiday_name',
-  holiday_date: 'holiday_date',
-  holiday_type: 'holiday_type',
-  related_holidays: 'related_holidays',
-  is_deleted: 'is_deleted',
-  created_at: 'created_at',
-  updated_at: 'updated_at'
-} as const
-
-export type Holiday_calendarScalarFieldEnum = (typeof Holiday_calendarScalarFieldEnum)[keyof typeof Holiday_calendarScalarFieldEnum]
 
 
 export const CampaignsScalarFieldEnum = {
@@ -6231,6 +6484,121 @@ export const Ad_decision_journalScalarFieldEnum = {
 export type Ad_decision_journalScalarFieldEnum = (typeof Ad_decision_journalScalarFieldEnum)[keyof typeof Ad_decision_journalScalarFieldEnum]
 
 
+export const Ad_creation_draftsScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  user_merchant_id: 'user_merchant_id',
+  campaign_id: 'campaign_id',
+  domain: 'domain',
+  country_code: 'country_code',
+  language_code: 'language_code',
+  landing_page_url: 'landing_page_url',
+  core_brand_keywords: 'core_brand_keywords',
+  headlines: 'headlines',
+  descriptions: 'descriptions',
+  sitelinks: 'sitelinks',
+  negative_keywords: 'negative_keywords',
+  preview_payload: 'preview_payload',
+  gap_report: 'gap_report',
+  source_payload: 'source_payload',
+  sitelink_source_payload: 'sitelink_source_payload',
+  raw_payload_excerpt: 'raw_payload_excerpt',
+  generation_mode: 'generation_mode',
+  status: 'status',
+  current_stage: 'current_stage',
+  completed_stages: 'completed_stages',
+  failed_stage: 'failed_stage',
+  error_code: 'error_code',
+  error_message: 'error_message',
+  retryable: 'retryable',
+  stage_running: 'stage_running',
+  stage_claimed_at: 'stage_claimed_at',
+  default_campaign_name: 'default_campaign_name',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Ad_creation_draftsScalarFieldEnum = (typeof Ad_creation_draftsScalarFieldEnum)[keyof typeof Ad_creation_draftsScalarFieldEnum]
+
+
+export const Brand_assessment_jobsScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  domain: 'domain',
+  countries: 'countries',
+  force_refresh: 'force_refresh',
+  estimated_cost_usd: 'estimated_cost_usd',
+  actual_cost_usd: 'actual_cost_usd',
+  status: 'status',
+  error_message: 'error_message',
+  started_at: 'started_at',
+  finished_at: 'finished_at',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Brand_assessment_jobsScalarFieldEnum = (typeof Brand_assessment_jobsScalarFieldEnum)[keyof typeof Brand_assessment_jobsScalarFieldEnum]
+
+
+export const Brand_assessment_resultsScalarFieldEnum = {
+  id: 'id',
+  job_id: 'job_id',
+  first_requested_by_user_id: 'first_requested_by_user_id',
+  domain: 'domain',
+  country: 'country',
+  brand_token: 'brand_token',
+  country_snapshot: 'country_snapshot',
+  brand_level: 'brand_level',
+  brand_own_ads: 'brand_own_ads',
+  non_brand_ads: 'non_brand_ads',
+  trends: 'trends',
+  transparency: 'transparency',
+  autocomplete_variants: 'autocomplete_variants',
+  engine_status: 'engine_status',
+  llm_output: 'llm_output',
+  warnings: 'warnings',
+  source: 'source',
+  serpapi_cost_usd: 'serpapi_cost_usd',
+  llm_cost_usd: 'llm_cost_usd',
+  ttl_expires_at: 'ttl_expires_at',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Brand_assessment_resultsScalarFieldEnum = (typeof Brand_assessment_resultsScalarFieldEnum)[keyof typeof Brand_assessment_resultsScalarFieldEnum]
+
+
+export const Brand_intel_cost_ledgerScalarFieldEnum = {
+  id: 'id',
+  ledger_date: 'ledger_date',
+  provider: 'provider',
+  total_cost_usd: 'total_cost_usd',
+  call_count: 'call_count',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Brand_intel_cost_ledgerScalarFieldEnum = (typeof Brand_intel_cost_ledgerScalarFieldEnum)[keyof typeof Brand_intel_cost_ledgerScalarFieldEnum]
+
+
+export const Dataforseo_brand_keyword_cacheScalarFieldEnum = {
+  id: 'id',
+  domain: 'domain',
+  country: 'country',
+  prompt_hash: 'prompt_hash',
+  top_keywords: 'top_keywords',
+  ai_extraction: 'ai_extraction',
+  cost_usd: 'cost_usd',
+  fetched_at: 'fetched_at',
+  expires_at: 'expires_at'
+} as const
+
+export type Dataforseo_brand_keyword_cacheScalarFieldEnum = (typeof Dataforseo_brand_keyword_cacheScalarFieldEnum)[keyof typeof Dataforseo_brand_keyword_cacheScalarFieldEnum]
+
+
 export const SortOrder = {
   asc: 'asc',
   desc: 'desc'
@@ -6353,7 +6721,6 @@ export const user_merchantsOrderByRelevanceFieldEnum = {
   commission_rate: 'commission_rate',
   status: 'status',
   target_country: 'target_country',
-  holiday_name: 'holiday_name',
   tracking_link: 'tracking_link',
   campaign_link: 'campaign_link',
   source: 'source',
@@ -6452,19 +6819,11 @@ export type sheet_configsOrderByRelevanceFieldEnum = (typeof sheet_configsOrderB
 export const ad_default_settingsOrderByRelevanceFieldEnum = {
   bidding_strategy: 'bidding_strategy',
   naming_rule: 'naming_rule',
-  naming_prefix: 'naming_prefix'
+  naming_prefix: 'naming_prefix',
+  ad_engine: 'ad_engine'
 } as const
 
 export type ad_default_settingsOrderByRelevanceFieldEnum = (typeof ad_default_settingsOrderByRelevanceFieldEnum)[keyof typeof ad_default_settingsOrderByRelevanceFieldEnum]
-
-
-export const holiday_calendarOrderByRelevanceFieldEnum = {
-  country_code: 'country_code',
-  holiday_name: 'holiday_name',
-  holiday_type: 'holiday_type'
-} as const
-
-export type holiday_calendarOrderByRelevanceFieldEnum = (typeof holiday_calendarOrderByRelevanceFieldEnum)[keyof typeof holiday_calendarOrderByRelevanceFieldEnum]
 
 
 export const campaignsOrderByRelevanceFieldEnum = {
@@ -7002,6 +7361,59 @@ export const ad_decision_journalOrderByRelevanceFieldEnum = {
 export type ad_decision_journalOrderByRelevanceFieldEnum = (typeof ad_decision_journalOrderByRelevanceFieldEnum)[keyof typeof ad_decision_journalOrderByRelevanceFieldEnum]
 
 
+export const ad_creation_draftsOrderByRelevanceFieldEnum = {
+  domain: 'domain',
+  country_code: 'country_code',
+  language_code: 'language_code',
+  landing_page_url: 'landing_page_url',
+  raw_payload_excerpt: 'raw_payload_excerpt',
+  generation_mode: 'generation_mode',
+  status: 'status',
+  current_stage: 'current_stage',
+  failed_stage: 'failed_stage',
+  error_code: 'error_code',
+  error_message: 'error_message',
+  default_campaign_name: 'default_campaign_name'
+} as const
+
+export type ad_creation_draftsOrderByRelevanceFieldEnum = (typeof ad_creation_draftsOrderByRelevanceFieldEnum)[keyof typeof ad_creation_draftsOrderByRelevanceFieldEnum]
+
+
+export const brand_assessment_jobsOrderByRelevanceFieldEnum = {
+  domain: 'domain',
+  status: 'status',
+  error_message: 'error_message'
+} as const
+
+export type brand_assessment_jobsOrderByRelevanceFieldEnum = (typeof brand_assessment_jobsOrderByRelevanceFieldEnum)[keyof typeof brand_assessment_jobsOrderByRelevanceFieldEnum]
+
+
+export const brand_assessment_resultsOrderByRelevanceFieldEnum = {
+  domain: 'domain',
+  country: 'country',
+  brand_token: 'brand_token',
+  source: 'source'
+} as const
+
+export type brand_assessment_resultsOrderByRelevanceFieldEnum = (typeof brand_assessment_resultsOrderByRelevanceFieldEnum)[keyof typeof brand_assessment_resultsOrderByRelevanceFieldEnum]
+
+
+export const brand_intel_cost_ledgerOrderByRelevanceFieldEnum = {
+  provider: 'provider'
+} as const
+
+export type brand_intel_cost_ledgerOrderByRelevanceFieldEnum = (typeof brand_intel_cost_ledgerOrderByRelevanceFieldEnum)[keyof typeof brand_intel_cost_ledgerOrderByRelevanceFieldEnum]
+
+
+export const dataforseo_brand_keyword_cacheOrderByRelevanceFieldEnum = {
+  domain: 'domain',
+  country: 'country',
+  prompt_hash: 'prompt_hash'
+} as const
+
+export type dataforseo_brand_keyword_cacheOrderByRelevanceFieldEnum = (typeof dataforseo_brand_keyword_cacheOrderByRelevanceFieldEnum)[keyof typeof dataforseo_brand_keyword_cacheOrderByRelevanceFieldEnum]
+
+
 
 /**
  * Field references
@@ -7179,7 +7591,6 @@ export type GlobalOmitConfig = {
   merchant_recommendations?: Prisma.merchant_recommendationsOmit
   sheet_configs?: Prisma.sheet_configsOmit
   ad_default_settings?: Prisma.ad_default_settingsOmit
-  holiday_calendar?: Prisma.holiday_calendarOmit
   campaigns?: Prisma.campaignsOmit
   ad_groups?: Prisma.ad_groupsOmit
   keywords?: Prisma.keywordsOmit
@@ -7232,6 +7643,11 @@ export type GlobalOmitConfig = {
   token_usage_daily?: Prisma.token_usage_dailyOmit
   google_ads_api_usage?: Prisma.google_ads_api_usageOmit
   ad_decision_journal?: Prisma.ad_decision_journalOmit
+  ad_creation_drafts?: Prisma.ad_creation_draftsOmit
+  brand_assessment_jobs?: Prisma.brand_assessment_jobsOmit
+  brand_assessment_results?: Prisma.brand_assessment_resultsOmit
+  brand_intel_cost_ledger?: Prisma.brand_intel_cost_ledgerOmit
+  dataforseo_brand_keyword_cache?: Prisma.dataforseo_brand_keyword_cacheOmit
 }
 
 /* Types for Logging */

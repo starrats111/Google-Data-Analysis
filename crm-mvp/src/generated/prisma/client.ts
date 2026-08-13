@@ -112,11 +112,6 @@ export type sheet_configs = Prisma.sheet_configsModel
  */
 export type ad_default_settings = Prisma.ad_default_settingsModel
 /**
- * Model holiday_calendar
- * 
- */
-export type holiday_calendar = Prisma.holiday_calendarModel
-/**
  * Model campaigns
  * 
  */
@@ -378,3 +373,28 @@ export type google_ads_api_usage = Prisma.google_ads_api_usageModel
  * 
  */
 export type ad_decision_journal = Prisma.ad_decision_journalModel
+/**
+ * Model ad_creation_drafts
+ * 
+ */
+export type ad_creation_drafts = Prisma.ad_creation_draftsModel
+/**
+ * Model brand_assessment_jobs
+ * 
+ */
+export type brand_assessment_jobs = Prisma.brand_assessment_jobsModel
+/**
+ * Model brand_assessment_results
+ * 
+ */
+export type brand_assessment_results = Prisma.brand_assessment_resultsModel
+/**
+ * Model brand_intel_cost_ledger
+ * 
+ */
+export type brand_intel_cost_ledger = Prisma.brand_intel_cost_ledgerModel
+/**
+ * Model dataforseo_brand_keyword_cache
+ * 
+ */
+export type dataforseo_brand_keyword_cache = Prisma.dataforseo_brand_keyword_cacheModel
