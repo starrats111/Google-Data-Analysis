@@ -676,7 +676,7 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
               // 7 天缓存复用：近期已巡航过且有结果 → 直接用 resolved_final_url 拆出落地页+后缀，省一次巡航
               const TTL_MS = 7 * 24 * 60 * 60 * 1000;
               const checkedAt = merchant.parent_checked_at ? new Date(merchant.parent_checked_at).getTime() : 0;
-              const { resolveAffiliateLink, isNonLandingHost } = await import("@/lib/affiliate-link-resolver");
+              const { resolveAffiliateLink, isNonLandingHost, sanitizeTrackingQuery } = await import("@/lib/affiliate-link-resolver");
               const cacheFresh = checkedAt > 0 && Date.now() - checkedAt < TTL_MS && !!merchant.resolved_final_url;
               if (cacheFresh && merchant.resolved_final_url) {
                 try {
@@ -684,7 +684,9 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
                   // 缓存若落在联盟跳板/点击中转/App 深链域名上即为脏数据（曾把追踪链接当落地页）→ 丢弃缓存，走现场重巡
                   if (!isNonLandingHost(u.hostname)) {
                     landing = u.origin + u.pathname;
-                    trackingQuery = u.search.replace(/^\?/, "") || null;
+                    // D-234：缓存的 resolved_final_url 是历史脏数据的重灾区（存量含 referer= 的 17 行），
+                    // 从它拆后缀必须同样过清洗，否则脏参数会绕过 resolver 直接写进 final_url_suffix
+                    trackingQuery = sanitizeTrackingQuery(u.search);
                   }
                 } catch { /* 缓存 URL 异常则走现场巡航 */ }
               }

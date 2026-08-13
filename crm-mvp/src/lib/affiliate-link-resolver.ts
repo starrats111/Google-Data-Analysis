@@ -178,6 +178,46 @@ export function queryHasTrackingKey(search: string): boolean {
 }
 
 /**
+ * D-234：落地页 query 里**绝不能进后缀**的参数名（小写比对）。
+ *
+ * `referer` / `referrer`：跳板（实测 Tradedoubler）会把它收到的 Referer 头回显成这个参数带到落地页。
+ * 值就是我方联盟中转链接（含 track token），一旦进了 `final_url_suffix`，等于把发布者身份与中转链路
+ * 印在广告到达网址上交给广告主和合规检测方——这是 D-234 的报案现象，已真实投放 1985 次。
+ */
+const SUFFIX_FORBIDDEN_KEYS = new Set(["referer", "referrer"]);
+
+/**
+ * D-234：清洗「要拿去当 Google `final_url_suffix` 的 query 串」。
+ *
+ * 剔两类：
+ *   1. `SUFFIX_FORBIDDEN_KEYS` 里的键，任何值都剔；
+ *   2. `url=<一个 URL>` —— 这是跳板自己的深链目标参数（值即落地页本身）。后缀是拼在 final_url
+ *      后面的，再带一份落地页毫无意义，还会让展示网址与到达网址不一致（DESTINATION_MISMATCH
+ *      拒登的已知成因）。仅在值确实是 URL 时剔，避免误伤商家站自己的 `url=` 站内参数。
+ *
+ * 实现刻意走**字符串分段**而非 `URLSearchParams`：后者会把整串重新编码，
+ * 把 `%3A%2F%2F` 之类的原始编码改写掉，可能改变其余追踪参数的字面值（联盟对此敏感）。
+ * 顺带丢掉空段（连续 `&&`），Google 不接受。
+ */
+export function sanitizeTrackingQuery(search: string | null | undefined): string | null {
+  const raw = (search || "").replace(/^\?/, "").trim();
+  if (!raw) return null;
+  const kept = raw.split("&").filter((seg) => {
+    if (!seg) return false;
+    const eq = seg.indexOf("=");
+    const key = (eq === -1 ? seg : seg.slice(0, eq)).toLowerCase();
+    if (SUFFIX_FORBIDDEN_KEYS.has(key)) return false;
+    if (key === "url") {
+      const val = eq === -1 ? "" : seg.slice(eq + 1);
+      // 裸写与 URL 编码两种形态都见过（url=https://… / url=https%3A%2F%2F…）
+      if (/^https?(:|%3a)/i.test(val)) return false;
+    }
+    return true;
+  });
+  return kept.join("&").trim() || null;
+}
+
+/**
  * 落地页无 query 时的兜底取参：在跳转链里回溯与最终落地页「同根域名」且带联盟追踪参数的那一跳，
  * 返回该跳的 query 串（不含前导 ?）；未找到返回 null。
  */
@@ -195,7 +235,10 @@ export function salvageTrackingFromChain(chain: string[], finalUrl: string): str
     if (!q) continue;
     if (!sameRootDomain(hop, finalUrl)) continue;
     if (!queryHasTrackingKey(q)) continue;
-    return q;
+    // D-234：这条兜底路径同样会取到带 referer=/url= 的跳，清洗后若空则继续往前回溯
+    const cleaned = sanitizeTrackingQuery(q);
+    if (!cleaned) continue;
+    return cleaned;
   }
   return null;
 }
@@ -1278,7 +1321,9 @@ export async function resolveAffiliateLink(
     }
 
     r.landingUrl = `${finalParsed.origin}${finalParsed.pathname}`;
-    r.trackingLink = finalParsed.search.replace(/^\?/, "").trim() || null;
+    // D-234：入库前剔掉 referer=/url= 这类「把中转链接与落地页自己塞回后缀」的参数。
+    // 清洗后为空会落到下方 no_tracking 分支（那条链接确实没有真追踪参数），语义正确。
+    r.trackingLink = sanitizeTrackingQuery(finalParsed.search);
 
     // D-162：停在跳板/深链/点击中转域名 = 没跟到广告主落地页。除了判失败，还必须把
     // landingUrl / trackingLink / finalUrl 全部清空 —— 旧逻辑只改 status，脏 URL 原样

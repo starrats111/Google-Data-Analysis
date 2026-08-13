@@ -1084,6 +1084,36 @@ function fixMalformedQueryInHostname(rawUrl: string): string {
 }
 
 /**
+ * D-234：算出跳转链中间跳该发什么 Referer，口径 = 浏览器默认的 `strict-origin-when-cross-origin`。
+ *
+ * 原实现（移植自 kylink）第 2 跳起直接把**上一跳完整 URL** 当 Referer 发出去，两个后果：
+ *   1. 合规事故——Tradedoubler 收到后会把它回显成 `referer=` 参数一路带到落地页，
+ *      落地页 query 又被当作追踪后缀入库，等于把我方联盟中转链接（含 track token）
+ *      印在广告到达网址上交给广告主（D-234 报案，已投 1985 次）。
+ *   2. 反爬指纹破绽——真实浏览器跨源跳转只发 origin，绝不发完整 path，
+ *      发完整 path 本身就是「这不是浏览器」的特征。
+ *
+ * 现按浏览器真实行为：同源发完整 URL、跨源只发 origin、https→http 降级不发。
+ */
+export function computeHopReferer(previousUrl: string | null, targetUrl: string): string | undefined {
+  if (!previousUrl) return undefined
+  let prev: URL
+  let next: URL
+  try {
+    prev = new URL(previousUrl)
+    next = new URL(targetUrl)
+  } catch {
+    return undefined
+  }
+  // 安全降级（https → http）：浏览器完全不发 Referer
+  if (prev.protocol === 'https:' && next.protocol !== 'https:') return undefined
+  // 同源：发完整 URL（含 path/query），与浏览器一致
+  if (prev.origin === next.origin) return previousUrl
+  // 跨源：只发 origin，不泄露 path 与 token
+  return `${prev.origin}/`
+}
+
+/**
  * 将 Location 头解析为绝对 http(s) URL
  * 
  * @param location Location 头的值
@@ -1961,9 +1991,9 @@ export async function trackRedirects(options: TrackRedirectsOptions): Promise<Tr
     const stepNumber = i + 1
     
     // 确定本次请求的 Referer
-    // 第 1 跳：使用 initialReferer
-    // 第 2 跳开始：使用上一跳 URL
-    const referer = stepNumber === 1 ? initialReferer : previousUrl ?? undefined
+    // 第 1 跳：使用 initialReferer（调用方给的真实来路，模拟从文章/站点点进来）
+    // 第 2 跳开始：D-234 按浏览器 strict-origin-when-cross-origin 口径算，不再发完整上一跳 URL
+    const referer = stepNumber === 1 ? initialReferer : computeHopReferer(previousUrl, currentUrl)
 
     // 早停检查：如果目标域名存在，检查当前 URL 是否已匹配
     // ⚠️ 关键改动：匹配后仍然先访问该 URL（完成点击注册），然后再停止
