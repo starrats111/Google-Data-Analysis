@@ -208,9 +208,35 @@ export function parsePolicyError(errBody: string): ParsedPolicyError {
       const externalPolicyName = pvd?.externalPolicyName != null ? String(pvd.externalPolicyName) : null;
       const externalPolicyDescription =
         pvd?.externalPolicyDescription != null ? String(pvd.externalPolicyDescription) : null;
-      const policyName = pvdKey?.policyName != null ? String(pvdKey.policyName) : null;
-      const violatingText = pvdKey?.violatingText != null ? String(pvdKey.violatingText) : null;
+      let policyName = pvdKey?.policyName != null ? String(pvdKey.policyName) : null;
+      let violatingText = pvdKey?.violatingText != null ? String(pvdKey.violatingText) : null;
       const isExemptible = pvd?.isExemptible === true;
+
+      // ── policyFindingDetails 解析（D-237）──
+      // POLICY_FINDING 类拒登（policyFindingError）的真实政策主题不在 policyViolationDetails，
+      // 而在 policyFindingDetails.policyTopicEntries[].topic（如 "DESTINATION_NOT_WORKING"）。
+      // 旧逻辑漏解析导致 policyName=null → 兜底误映射为「编辑规范」，AI 拿错原因瞎改文案死循环。
+      if (!policyName) {
+        const pfd = (detailsField?.policyFindingDetails || {}) as Record<string, unknown>;
+        const topicEntries = (pfd?.policyTopicEntries || []) as Array<Record<string, unknown>>;
+        const firstTopic = topicEntries.map((t) => String(t?.topic || "")).find((t) => t.length > 0);
+        if (firstTopic) policyName = firstTopic.toLowerCase();
+        // evidences 里可能带违规文本（textList.texts）
+        if (!violatingText) {
+          for (const t of topicEntries) {
+            const evs = (t?.evidences || []) as Array<Record<string, unknown>>;
+            for (const ev of evs) {
+              const tl = (ev?.textList || {}) as Record<string, unknown>;
+              const texts = (tl?.texts || []) as unknown[];
+              if (Array.isArray(texts) && texts.length > 0) {
+                violatingText = texts.map(String).join("、");
+                break;
+              }
+            }
+            if (violatingText) break;
+          }
+        }
+      }
 
       // ── 4 大类映射 ──
       const category = mapToPolicyCategory({

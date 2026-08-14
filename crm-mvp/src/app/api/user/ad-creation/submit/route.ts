@@ -1926,7 +1926,27 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
             // 这里跟踪「当前已提交版本」，每轮以它为改写基准。
             let submittedH: string[] = headlineAssets.map((h: { text: string }) => h.text);
             let submittedD: string[] = descriptionAssets.map((d: { text: string }) => d.text);
+            // D-237：DESTINATION 类拒登（目标网址无效/无法抓取/域名不一致）与文案无关——
+            // AI 改写只会把词序换来换去（下一轮甚至把上一轮改写改回去），Google 照样拒，
+            // 员工看到「已尝试改写」里反复出现自己的原文案，形成死循环。
+            // 一律直接终止改写闭环，把真实原因（落地页问题）如实告知。
+            const isDestinationOnlyPolicy = (pe: ParsedPolicyError | null): boolean => {
+              const prim = (pe?.primary || []).filter((p) => !p.isCascade);
+              if (prim.length === 0) return false;
+              return prim.every((p) =>
+                (p.policyName || "").toLowerCase().startsWith("destination")
+                || (p.category?.subcategory || "").startsWith("destination"));
+            };
             for (let round = 1; round <= MAX_AI_POLICY_ROUNDS && !result!; round++) {
+              if (isDestinationOnlyPolicy(lastParsed)) {
+                const destReadable = lastParsed?.readableMessage;
+                throw new Error(
+                  "Google Ads 拒登原因是「落地页问题」（DESTINATION 类政策，如目标网址无效/无法抓取），与广告文案无关，修改文案无法解决，请勿反复改写文案。"
+                  + "请检查最终到达网址（联盟跟踪链接与商家落地页）能否正常打开、是否拦截 Google 爬虫（AdsBot），修复后再重新提交。"
+                  + (aiFixNotes.length > 0 ? `\n（此前已尝试 AI 改写文案 ${aiFixNotes.length} 处，均无效，已停止）` : "")
+                  + (destReadable ? `\n${destReadable}` : ""),
+                );
+              }
               const rw = await rewriteAdCopyForPolicy({
                 headlines: submittedH,
                 descriptions: submittedD,
@@ -1974,8 +1994,10 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
             }
 
             if (!aiFixed) {
-              // 回落人工提示（保留 D-041 逻辑），并附上已尝试的 AI 改写明细
-              const readable = parsedPolicyError?.readableMessage;
+              // 回落人工提示（保留 D-041 逻辑），并附上已尝试的 AI 改写明细。
+              // D-237：优先用最新一轮的拒登原因（lastParsed），旧逻辑用首轮 parsedPolicyError
+              // 会把改写前旧文案的违规原因展示给员工，误导排查方向。
+              const readable = lastParsed?.readableMessage || parsedPolicyError?.readableMessage;
               const prefix = aiFixNotes.length > 0
                 ? `Google Ads 拒登广告，已自动用 AI 改写文案重试仍未通过，请人工修改。\n已尝试改写：\n${aiFixNotes.join("\n")}\n\n`
                 : "";
