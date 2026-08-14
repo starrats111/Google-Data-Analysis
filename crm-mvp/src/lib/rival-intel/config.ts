@@ -8,8 +8,8 @@
  * |---|---|
  * | SerpApi key | `user_serpapi_keys` 共享池（serpapi-key-pool.ts） |
  * | AI 模型凭据 | `ai_providers` + `ai_model_configs` 管理台（ai-service.ts 按场景取） |
- * | DataForSEO 账号 | `system_configs.dataforseo_login` / `dataforseo_password`（复用 kyads 账号） |
- * | 每日花费上限 | `system_configs.brand_intel_daily_budget_usd` |
+ * | DataForSEO 账号 | `system_configs.dataforseo_username` / `dataforseo_password` |
+ * | 每日花费上限 | `system_configs.brand_intel_daily_budget_usd`（未配置=不设限） |
  * | 三份 prompt | `system_configs` 可覆盖，缺省用代码里的默认值 |
  *
  * prompt 走「库里有就用库里的、没有就用代码默认值」的两层结构：上线不用先去后台
@@ -19,7 +19,13 @@ import { getSystemConfig } from "@/lib/system-config";
 import type { AdGenerationMode } from "./deps/generation-mode";
 
 export const RIVAL_INTEL_CONFIG_KEYS = {
-  DATAFORSEO_LOGIN: "dataforseo_login",
+  /**
+   * 生产库里这条自 D-021（2026-05-19）就存在，键名是 `dataforseo_username`。
+   * 移植时按 kyads 的叫法写成 `dataforseo_login`，导致取不到现成账号、白走兜底。
+   * 以生产实际键名为主，旧名保留作后备。
+   */
+  DATAFORSEO_LOGIN: "dataforseo_username",
+  DATAFORSEO_LOGIN_LEGACY: "dataforseo_login",
   DATAFORSEO_PASSWORD: "dataforseo_password",
   BRAND_KEYWORD_EXTRACT_PROMPT: "brand_keyword_extract_prompt",
   AD_PROMPT_FILTER: "rival_intel_ad_prompt_filter",
@@ -37,12 +43,14 @@ export interface DataForSeoCredentials {
  * （退回品牌词兜底），不让整条生成链因为少一个可选数据源而失败。
  */
 export async function readDataForSeoCredentials(): Promise<DataForSeoCredentials | null> {
-  const [login, password] = await Promise.all([
+  const [username, legacyLogin, password] = await Promise.all([
     getSystemConfig(RIVAL_INTEL_CONFIG_KEYS.DATAFORSEO_LOGIN).catch(() => null),
+    getSystemConfig(RIVAL_INTEL_CONFIG_KEYS.DATAFORSEO_LOGIN_LEGACY).catch(() => null),
     getSystemConfig(RIVAL_INTEL_CONFIG_KEYS.DATAFORSEO_PASSWORD).catch(() => null),
   ]);
-  if (!login?.trim() || !password?.trim()) return null;
-  return { login: login.trim(), password: password.trim() };
+  const login = username?.trim() || legacyLogin?.trim() || "";
+  if (!login || !password?.trim()) return null;
+  return { login, password: password.trim() };
 }
 
 export async function readBrandKeywordExtractPrompt(): Promise<string> {
