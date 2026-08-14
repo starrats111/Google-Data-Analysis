@@ -27,6 +27,10 @@ PARENT_BACKFILL_CRON="*/30 * * * * curl -s -H 'Authorization: Bearer ${CRON_SECR
 # SPEND_GUARD_CRON="*/15 * * * * curl -s -H 'Authorization: Bearer ${CRON_SECRET}' '${APP_URL}/api/cron/spend-guard' >> /var/log/crm-cron/spend-guard.log 2>&1"
 # D-191 每日亏损提醒（每天 09:30 CST）：在投但一直亏钱的系列，按归属人推站内通知 + 飞书汇总
 LOSS_DIGEST_CRON="30 9 * * * curl -s -H 'Authorization: Bearer ${CRON_SECRET}' '${APP_URL}/api/cron/loss-digest' >> /var/log/crm-cron/loss-digest.log 2>&1"
+# D-238 广告分析指标采集（每天 06:10，排在 06:00 daily-sync 之后）：Google Ads API 直拉 IS/QS/MaxCpc 补日表
+ADS_METRICS_CRON="10 6 * * * curl -s -m 280 -H 'Authorization: Bearer ${CRON_SECRET}' '${APP_URL}/api/cron/ads-metrics-sync' >> /var/log/crm-cron/ads-metrics-sync.log 2>&1"
+# D-238 广告 AI 分析（每天 06:40，07 拍板）：对昨日有花费的 ENABLED 系列跑批量分析，结果进 ai_recommendations
+ANALYZE_CRON="40 6 * * * curl -s -m 280 -H 'Authorization: Bearer ${CRON_SECRET}' '${APP_URL}/api/cron/analyze-campaigns' >> /var/log/crm-cron/analyze-campaigns.log 2>&1"
 
 echo "=== Will add the following cron jobs ==="
 echo ""
@@ -48,16 +52,24 @@ echo ""
 echo "loss digest (09:30 every day):"
 echo "  $LOSS_DIGEST_CRON"
 echo ""
+echo "ads metrics sync (06:10 every day):"
+echo "  $ADS_METRICS_CRON"
+echo ""
+echo "analyze campaigns (06:40 every day):"
+echo "  $ANALYZE_CRON"
+echo ""
 
 # 添加到 crontab（保留现有条目，避免重复）
 TEMP_CRON=$(mktemp)
-crontab -l 2>/dev/null | grep -v '/api/cron/daily-sync' | grep -v '/api/cron/weekly-merchant-check' | grep -v '/api/cron/kylink-sync' | grep -v '/api/cron/suffix-replenish' | grep -v '/api/cron/parent-network-backfill' | grep -v '/api/cron/spend-guard' | grep -v '/api/cron/loss-digest' > "$TEMP_CRON" || true
+crontab -l 2>/dev/null | grep -v '/api/cron/daily-sync' | grep -v '/api/cron/weekly-merchant-check' | grep -v '/api/cron/kylink-sync' | grep -v '/api/cron/suffix-replenish' | grep -v '/api/cron/parent-network-backfill' | grep -v '/api/cron/spend-guard' | grep -v '/api/cron/loss-digest' | grep -v '/api/cron/ads-metrics-sync' | grep -v '/api/cron/analyze-campaigns' > "$TEMP_CRON" || true
 echo "$DAILY_CRON" >> "$TEMP_CRON"
 echo "$MERCHANT_CRON" >> "$TEMP_CRON"
 echo "$KYLINK_SYNC_CRON" >> "$TEMP_CRON"
 echo "$SUFFIX_REPLENISH_CRON" >> "$TEMP_CRON"
 echo "$PARENT_BACKFILL_CRON" >> "$TEMP_CRON"
 echo "$LOSS_DIGEST_CRON" >> "$TEMP_CRON"
+echo "$ADS_METRICS_CRON" >> "$TEMP_CRON"
+echo "$ANALYZE_CRON" >> "$TEMP_CRON"
 crontab "$TEMP_CRON"
 rm -f "$TEMP_CRON"
 

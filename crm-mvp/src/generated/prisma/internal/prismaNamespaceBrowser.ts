@@ -75,6 +75,7 @@ export const ModelName = {
   site_migrations: 'site_migrations',
   articles: 'articles',
   ads_daily_stats: 'ads_daily_stats',
+  ai_recommendations: 'ai_recommendations',
   spend_guard_actions: 'spend_guard_actions',
   google_mcc_accounts: 'google_mcc_accounts',
   affiliate_transactions: 'affiliate_transactions',
@@ -188,6 +189,7 @@ export const Ai_providersScalarFieldEnum = {
   provider_name: 'provider_name',
   api_key: 'api_key',
   api_base_url: 'api_base_url',
+  protocol: 'protocol',
   status: 'status',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
@@ -658,12 +660,46 @@ export const Ads_daily_statsScalarFieldEnum = {
   roi: 'roi',
   orders: 'orders',
   data_source: 'data_source',
+  quality_score: 'quality_score',
+  is_budget: 'is_budget',
+  is_rank: 'is_rank',
+  max_cpc: 'max_cpc',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
   updated_at: 'updated_at'
 } as const
 
 export type Ads_daily_statsScalarFieldEnum = (typeof Ads_daily_statsScalarFieldEnum)[keyof typeof Ads_daily_statsScalarFieldEnum]
+
+
+export const Ai_recommendationsScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  campaign_id: 'campaign_id',
+  google_campaign_id: 'google_campaign_id',
+  campaign_name: 'campaign_name',
+  scope_key: 'scope_key',
+  date_range_start: 'date_range_start',
+  date_range_end: 'date_range_end',
+  impressions: 'impressions',
+  clicks: 'clicks',
+  spend: 'spend',
+  orders: 'orders',
+  commission: 'commission',
+  roi: 'roi',
+  recommendation_type: 'recommendation_type',
+  strategy: 'strategy',
+  reason_summary: 'reason_summary',
+  reason_detail: 'reason_detail',
+  action_items: 'action_items',
+  engine_type: 'engine_type',
+  status: 'status',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Ai_recommendationsScalarFieldEnum = (typeof Ai_recommendationsScalarFieldEnum)[keyof typeof Ai_recommendationsScalarFieldEnum]
 
 
 export const Spend_guard_actionsScalarFieldEnum = {
@@ -1599,6 +1635,7 @@ export const ai_providersOrderByRelevanceFieldEnum = {
   provider_name: 'provider_name',
   api_key: 'api_key',
   api_base_url: 'api_base_url',
+  protocol: 'protocol',
   status: 'status'
 } as const
 
@@ -1880,6 +1917,21 @@ export const ads_daily_statsOrderByRelevanceFieldEnum = {
 } as const
 
 export type ads_daily_statsOrderByRelevanceFieldEnum = (typeof ads_daily_statsOrderByRelevanceFieldEnum)[keyof typeof ads_daily_statsOrderByRelevanceFieldEnum]
+
+
+export const ai_recommendationsOrderByRelevanceFieldEnum = {
+  google_campaign_id: 'google_campaign_id',
+  campaign_name: 'campaign_name',
+  scope_key: 'scope_key',
+  recommendation_type: 'recommendation_type',
+  strategy: 'strategy',
+  reason_summary: 'reason_summary',
+  reason_detail: 'reason_detail',
+  engine_type: 'engine_type',
+  status: 'status'
+} as const
+
+export type ai_recommendationsOrderByRelevanceFieldEnum = (typeof ai_recommendationsOrderByRelevanceFieldEnum)[keyof typeof ai_recommendationsOrderByRelevanceFieldEnum]
 
 
 export const spend_guard_actionsOrderByRelevanceFieldEnum = {

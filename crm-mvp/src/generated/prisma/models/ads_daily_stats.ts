@@ -41,6 +41,10 @@ export type Ads_daily_statsAvgAggregateOutputType = {
   rejected_commission: runtime.Decimal | null
   roi: runtime.Decimal | null
   orders: number | null
+  quality_score: runtime.Decimal | null
+  is_budget: runtime.Decimal | null
+  is_rank: runtime.Decimal | null
+  max_cpc: runtime.Decimal | null
   is_deleted: number | null
 }
 
@@ -59,6 +63,10 @@ export type Ads_daily_statsSumAggregateOutputType = {
   rejected_commission: runtime.Decimal | null
   roi: runtime.Decimal | null
   orders: number | null
+  quality_score: runtime.Decimal | null
+  is_budget: runtime.Decimal | null
+  is_rank: runtime.Decimal | null
+  max_cpc: runtime.Decimal | null
   is_deleted: number | null
 }
 
@@ -79,6 +87,10 @@ export type Ads_daily_statsMinAggregateOutputType = {
   roi: runtime.Decimal | null
   orders: number | null
   data_source: string | null
+  quality_score: runtime.Decimal | null
+  is_budget: runtime.Decimal | null
+  is_rank: runtime.Decimal | null
+  max_cpc: runtime.Decimal | null
   is_deleted: number | null
   created_at: Date | null
   updated_at: Date | null
@@ -101,6 +113,10 @@ export type Ads_daily_statsMaxAggregateOutputType = {
   roi: runtime.Decimal | null
   orders: number | null
   data_source: string | null
+  quality_score: runtime.Decimal | null
+  is_budget: runtime.Decimal | null
+  is_rank: runtime.Decimal | null
+  max_cpc: runtime.Decimal | null
   is_deleted: number | null
   created_at: Date | null
   updated_at: Date | null
@@ -123,6 +139,10 @@ export type Ads_daily_statsCountAggregateOutputType = {
   roi: number
   orders: number
   data_source: number
+  quality_score: number
+  is_budget: number
+  is_rank: number
+  max_cpc: number
   is_deleted: number
   created_at: number
   updated_at: number
@@ -145,6 +165,10 @@ export type Ads_daily_statsAvgAggregateInputType = {
   rejected_commission?: true
   roi?: true
   orders?: true
+  quality_score?: true
+  is_budget?: true
+  is_rank?: true
+  max_cpc?: true
   is_deleted?: true
 }
 
@@ -163,6 +187,10 @@ export type Ads_daily_statsSumAggregateInputType = {
   rejected_commission?: true
   roi?: true
   orders?: true
+  quality_score?: true
+  is_budget?: true
+  is_rank?: true
+  max_cpc?: true
   is_deleted?: true
 }
 
@@ -183,6 +211,10 @@ export type Ads_daily_statsMinAggregateInputType = {
   roi?: true
   orders?: true
   data_source?: true
+  quality_score?: true
+  is_budget?: true
+  is_rank?: true
+  max_cpc?: true
   is_deleted?: true
   created_at?: true
   updated_at?: true
@@ -205,6 +237,10 @@ export type Ads_daily_statsMaxAggregateInputType = {
   roi?: true
   orders?: true
   data_source?: true
+  quality_score?: true
+  is_budget?: true
+  is_rank?: true
+  max_cpc?: true
   is_deleted?: true
   created_at?: true
   updated_at?: true
@@ -227,6 +263,10 @@ export type Ads_daily_statsCountAggregateInputType = {
   roi?: true
   orders?: true
   data_source?: true
+  quality_score?: true
+  is_budget?: true
+  is_rank?: true
+  max_cpc?: true
   is_deleted?: true
   created_at?: true
   updated_at?: true
@@ -336,6 +376,10 @@ export type Ads_daily_statsGroupByOutputType = {
   roi: runtime.Decimal | null
   orders: number | null
   data_source: string | null
+  quality_score: runtime.Decimal | null
+  is_budget: runtime.Decimal | null
+  is_rank: runtime.Decimal | null
+  max_cpc: runtime.Decimal | null
   is_deleted: number
   created_at: Date
   updated_at: Date
@@ -381,6 +425,10 @@ export type ads_daily_statsWhereInput = {
   roi?: Prisma.DecimalNullableFilter<"ads_daily_stats"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
   orders?: Prisma.IntNullableFilter<"ads_daily_stats"> | number | null
   data_source?: Prisma.StringNullableFilter<"ads_daily_stats"> | string | null
+  quality_score?: Prisma.DecimalNullableFilter<"ads_daily_stats"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  is_budget?: Prisma.DecimalNullableFilter<"ads_daily_stats"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  is_rank?: Prisma.DecimalNullableFilter<"ads_daily_stats"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  max_cpc?: Prisma.DecimalNullableFilter<"ads_daily_stats"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
   is_deleted?: Prisma.IntFilter<"ads_daily_stats"> | number
   created_at?: Prisma.DateTimeFilter<"ads_daily_stats"> | Date | string
   updated_at?: Prisma.DateTimeFilter<"ads_daily_stats"> | Date | string
@@ -403,6 +451,10 @@ export type ads_daily_statsOrderByWithRelationInput = {
   roi?: Prisma.SortOrderInput | Prisma.SortOrder
   orders?: Prisma.SortOrderInput | Prisma.SortOrder
   data_source?: Prisma.SortOrderInput | Prisma.SortOrder
+  quality_score?: Prisma.SortOrderInput | Prisma.SortOrder
+  is_budget?: Prisma.SortOrderInput | Prisma.SortOrder
+  is_rank?: Prisma.SortOrderInput | Prisma.SortOrder
+  max_cpc?: Prisma.SortOrderInput | Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -430,6 +482,10 @@ export type ads_daily_statsWhereUniqueInput = Prisma.AtLeast<{
   roi?: Prisma.DecimalNullableFilter<"ads_daily_stats"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
   orders?: Prisma.IntNullableFilter<"ads_daily_stats"> | number | null
   data_source?: Prisma.StringNullableFilter<"ads_daily_stats"> | string | null
+  quality_score?: Prisma.DecimalNullableFilter<"ads_daily_stats"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  is_budget?: Prisma.DecimalNullableFilter<"ads_daily_stats"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  is_rank?: Prisma.DecimalNullableFilter<"ads_daily_stats"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  max_cpc?: Prisma.DecimalNullableFilter<"ads_daily_stats"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
   is_deleted?: Prisma.IntFilter<"ads_daily_stats"> | number
   created_at?: Prisma.DateTimeFilter<"ads_daily_stats"> | Date | string
   updated_at?: Prisma.DateTimeFilter<"ads_daily_stats"> | Date | string
@@ -452,6 +508,10 @@ export type ads_daily_statsOrderByWithAggregationInput = {
   roi?: Prisma.SortOrderInput | Prisma.SortOrder
   orders?: Prisma.SortOrderInput | Prisma.SortOrder
   data_source?: Prisma.SortOrderInput | Prisma.SortOrder
+  quality_score?: Prisma.SortOrderInput | Prisma.SortOrder
+  is_budget?: Prisma.SortOrderInput | Prisma.SortOrder
+  is_rank?: Prisma.SortOrderInput | Prisma.SortOrder
+  max_cpc?: Prisma.SortOrderInput | Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -482,6 +542,10 @@ export type ads_daily_statsScalarWhereWithAggregatesInput = {
   roi?: Prisma.DecimalNullableWithAggregatesFilter<"ads_daily_stats"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
   orders?: Prisma.IntNullableWithAggregatesFilter<"ads_daily_stats"> | number | null
   data_source?: Prisma.StringNullableWithAggregatesFilter<"ads_daily_stats"> | string | null
+  quality_score?: Prisma.DecimalNullableWithAggregatesFilter<"ads_daily_stats"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  is_budget?: Prisma.DecimalNullableWithAggregatesFilter<"ads_daily_stats"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  is_rank?: Prisma.DecimalNullableWithAggregatesFilter<"ads_daily_stats"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  max_cpc?: Prisma.DecimalNullableWithAggregatesFilter<"ads_daily_stats"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
   is_deleted?: Prisma.IntWithAggregatesFilter<"ads_daily_stats"> | number
   created_at?: Prisma.DateTimeWithAggregatesFilter<"ads_daily_stats"> | Date | string
   updated_at?: Prisma.DateTimeWithAggregatesFilter<"ads_daily_stats"> | Date | string
@@ -504,6 +568,10 @@ export type ads_daily_statsCreateInput = {
   roi?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
   orders?: number | null
   data_source?: string | null
+  quality_score?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  is_budget?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  is_rank?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  max_cpc?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -526,6 +594,10 @@ export type ads_daily_statsUncheckedCreateInput = {
   roi?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
   orders?: number | null
   data_source?: string | null
+  quality_score?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  is_budget?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  is_rank?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  max_cpc?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -548,6 +620,10 @@ export type ads_daily_statsUpdateInput = {
   roi?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
   orders?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   data_source?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  quality_score?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  is_budget?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  is_rank?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  max_cpc?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -570,6 +646,10 @@ export type ads_daily_statsUncheckedUpdateInput = {
   roi?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
   orders?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   data_source?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  quality_score?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  is_budget?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  is_rank?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  max_cpc?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -592,6 +672,10 @@ export type ads_daily_statsCreateManyInput = {
   roi?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
   orders?: number | null
   data_source?: string | null
+  quality_score?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  is_budget?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  is_rank?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  max_cpc?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
   is_deleted?: number
   created_at?: Date | string
   updated_at?: Date | string
@@ -614,6 +698,10 @@ export type ads_daily_statsUpdateManyMutationInput = {
   roi?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
   orders?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   data_source?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  quality_score?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  is_budget?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  is_rank?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  max_cpc?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -636,6 +724,10 @@ export type ads_daily_statsUncheckedUpdateManyInput = {
   roi?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
   orders?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   data_source?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  quality_score?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  is_budget?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  is_rank?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  max_cpc?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -669,6 +761,10 @@ export type ads_daily_statsCountOrderByAggregateInput = {
   roi?: Prisma.SortOrder
   orders?: Prisma.SortOrder
   data_source?: Prisma.SortOrder
+  quality_score?: Prisma.SortOrder
+  is_budget?: Prisma.SortOrder
+  is_rank?: Prisma.SortOrder
+  max_cpc?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -689,6 +785,10 @@ export type ads_daily_statsAvgOrderByAggregateInput = {
   rejected_commission?: Prisma.SortOrder
   roi?: Prisma.SortOrder
   orders?: Prisma.SortOrder
+  quality_score?: Prisma.SortOrder
+  is_budget?: Prisma.SortOrder
+  is_rank?: Prisma.SortOrder
+  max_cpc?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
 }
 
@@ -709,6 +809,10 @@ export type ads_daily_statsMaxOrderByAggregateInput = {
   roi?: Prisma.SortOrder
   orders?: Prisma.SortOrder
   data_source?: Prisma.SortOrder
+  quality_score?: Prisma.SortOrder
+  is_budget?: Prisma.SortOrder
+  is_rank?: Prisma.SortOrder
+  max_cpc?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -731,6 +835,10 @@ export type ads_daily_statsMinOrderByAggregateInput = {
   roi?: Prisma.SortOrder
   orders?: Prisma.SortOrder
   data_source?: Prisma.SortOrder
+  quality_score?: Prisma.SortOrder
+  is_budget?: Prisma.SortOrder
+  is_rank?: Prisma.SortOrder
+  max_cpc?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -751,6 +859,10 @@ export type ads_daily_statsSumOrderByAggregateInput = {
   rejected_commission?: Prisma.SortOrder
   roi?: Prisma.SortOrder
   orders?: Prisma.SortOrder
+  quality_score?: Prisma.SortOrder
+  is_budget?: Prisma.SortOrder
+  is_rank?: Prisma.SortOrder
+  max_cpc?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
 }
 
@@ -773,6 +885,10 @@ export type ads_daily_statsSelect<ExtArgs extends runtime.Types.Extensions.Inter
   roi?: boolean
   orders?: boolean
   data_source?: boolean
+  quality_score?: boolean
+  is_budget?: boolean
+  is_rank?: boolean
+  max_cpc?: boolean
   is_deleted?: boolean
   created_at?: boolean
   updated_at?: boolean
@@ -797,12 +913,16 @@ export type ads_daily_statsSelectScalar = {
   roi?: boolean
   orders?: boolean
   data_source?: boolean
+  quality_score?: boolean
+  is_budget?: boolean
+  is_rank?: boolean
+  max_cpc?: boolean
   is_deleted?: boolean
   created_at?: boolean
   updated_at?: boolean
 }
 
-export type ads_daily_statsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "user_merchant_id" | "campaign_id" | "date" | "budget" | "cost" | "clicks" | "impressions" | "cpc" | "conversions" | "commission" | "rejected_commission" | "roi" | "orders" | "data_source" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["ads_daily_stats"]>
+export type ads_daily_statsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "user_merchant_id" | "campaign_id" | "date" | "budget" | "cost" | "clicks" | "impressions" | "cpc" | "conversions" | "commission" | "rejected_commission" | "roi" | "orders" | "data_source" | "quality_score" | "is_budget" | "is_rank" | "max_cpc" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["ads_daily_stats"]>
 
 export type $ads_daily_statsPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "ads_daily_stats"
@@ -824,6 +944,10 @@ export type $ads_daily_statsPayload<ExtArgs extends runtime.Types.Extensions.Int
     roi: runtime.Decimal | null
     orders: number | null
     data_source: string | null
+    quality_score: runtime.Decimal | null
+    is_budget: runtime.Decimal | null
+    is_rank: runtime.Decimal | null
+    max_cpc: runtime.Decimal | null
     is_deleted: number
     created_at: Date
     updated_at: Date
@@ -1212,6 +1336,10 @@ export interface ads_daily_statsFieldRefs {
   readonly roi: Prisma.FieldRef<"ads_daily_stats", 'Decimal'>
   readonly orders: Prisma.FieldRef<"ads_daily_stats", 'Int'>
   readonly data_source: Prisma.FieldRef<"ads_daily_stats", 'String'>
+  readonly quality_score: Prisma.FieldRef<"ads_daily_stats", 'Decimal'>
+  readonly is_budget: Prisma.FieldRef<"ads_daily_stats", 'Decimal'>
+  readonly is_rank: Prisma.FieldRef<"ads_daily_stats", 'Decimal'>
+  readonly max_cpc: Prisma.FieldRef<"ads_daily_stats", 'Decimal'>
   readonly is_deleted: Prisma.FieldRef<"ads_daily_stats", 'Int'>
   readonly created_at: Prisma.FieldRef<"ads_daily_stats", 'DateTime'>
   readonly updated_at: Prisma.FieldRef<"ads_daily_stats", 'DateTime'>

@@ -12,6 +12,8 @@ interface AiModelConfig {
   providerName: string;
   apiKey: string;
   baseUrl: string;
+  /** D-238：wire 协议，openai（默认）/ anthropic；来自 ai_providers.protocol */
+  protocol: string;
   modelName: string;
   maxTokens: number;
   temperature: number;
@@ -651,6 +653,7 @@ async function getSceneModels(scene: string): Promise<AiModelConfig[]> {
         providerName: provider.provider_name,
         apiKey: provider.api_key,
         baseUrl: provider.api_base_url || "https://api.openai.com",
+        protocol: (provider as { protocol?: string }).protocol || "openai",
         modelName: m.model_name,
         maxTokens: m.max_tokens || 4096,
         temperature: Number(m.temperature ?? 0.7),
@@ -839,7 +842,10 @@ async function callAi(
     .replace(/\/+$/, "")
     .replace(/\/v1\/messages$/, "")
     .replace(/\/v1$/, "");
-  const url = `${base}/v1/chat/completions`;
+  // D-238：anthropic 协议提供商（如 aicodewith 的 claude 通道）走 /v1/messages，
+  // 消息体和鉴权头都不同；响应解析 extractAiText 本就兼容 Anthropic 格式，无需分叉。
+  const isAnthropic = config.protocol === "anthropic";
+  const url = isAnthropic ? `${base}/v1/messages` : `${base}/v1/chat/completions`;
   // D-028 v9.1：紧急回滚 v9 的 "强制使用 DB max_tokens" 改动。
   // 真凶发现（trace 14:01:11）：API 网关 [特价]claude-sonnet-4-6 是**按 max_tokens
   // 预扣费**，max_tokens=10000 时单次预扣 ¥16。v9 错误地把所有调用方传入的小值
@@ -847,12 +853,31 @@ async function callAi(
   // 预扣 ¥160 → 余额秒空。
   // 修复方向：尊重调用方传入的 maxTokens（120/320/512/1024 等小值更经济），
   // 只在调用方完全不传时才用 DB 配置。
-  const body = JSON.stringify({
-    model: config.modelName,
-    messages,
-    max_tokens: maxTokens || config.maxTokens,
-    temperature: config.temperature,
-  });
+  // Anthropic /v1/messages：system 单独字段、messages 只留 user/assistant、max_tokens 必填
+  const body = isAnthropic
+    ? JSON.stringify({
+        model: config.modelName,
+        system: messages.filter((m) => m.role === "system").map((m) => m.content).join("\n\n") || undefined,
+        messages: messages.filter((m) => m.role !== "system"),
+        max_tokens: maxTokens || config.maxTokens,
+        temperature: config.temperature,
+      })
+    : JSON.stringify({
+        model: config.modelName,
+        messages,
+        max_tokens: maxTokens || config.maxTokens,
+        temperature: config.temperature,
+      });
+  const headers: Record<string, string> = isAnthropic
+    ? {
+        "x-api-key": config.apiKey,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+      }
+    : {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json",
+      };
 
   const MAX_RETRIES = 2;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -860,10 +885,7 @@ async function callAi(
     try {
       res = await fetch(url, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${config.apiKey}`,
-          "Content-Type": "application/json",
-        },
+        headers,
         body,
         // 2026-08-10 事故：hajimi 的 claude 通道挂死（零字节响应），120s 超时导致
         // 每个 AI 步骤空等 2 分钟才切下一模型/兜底，广告生成整体拖慢数倍。

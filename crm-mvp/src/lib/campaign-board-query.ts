@@ -69,6 +69,9 @@ export interface CampaignBoardRow {
   mcc_currency: string;
   is_removed: boolean;
   cid_removed: boolean;
+  /** D-238 IS_Bgt/IS_Rnk：区间内最新一日值（0-1 分数，前端 ×100 展示；未采集为 null） */
+  is_budget: number | null;
+  is_rank: number | null;
 }
 
 export interface CampaignBoardSummary {
@@ -390,6 +393,32 @@ export async function queryCampaignBoard(
       select: { campaign_id: true, date: true, cost: true },
     }),
   ]);
+
+  // D-238：IS_Bgt/IS_Rnk 取区间内最新一日非空值（与 kyads 列表口径一致，非平均）
+  const latestIsMap = new Map<string, { is_budget: number; is_rank: number; date: string }>();
+  if (allCampaignIdsIncludingDupes.length > 0) {
+    const isRows = await prisma.ads_daily_stats.findMany({
+      where: {
+        campaign_id: { in: allCampaignIdsIncludingDupes },
+        date: { gte: statsDateStart, lt: statsDateEnd },
+        is_deleted: 0,
+        is_budget: { not: null },
+      } as never,
+      select: { campaign_id: true, date: true, is_budget: true, is_rank: true },
+      orderBy: { date: "desc" },
+    });
+    for (const r of isRows) {
+      const gcid = campaignIdToGcid.get(String(r.campaign_id));
+      const primaryId = gcid ? (gcidToPrimaryCampaignId.get(gcid) || String(r.campaign_id)) : String(r.campaign_id);
+      if (!latestIsMap.has(primaryId)) {
+        latestIsMap.set(primaryId, {
+          is_budget: Number(r.is_budget),
+          is_rank: Number(r.is_rank ?? 0),
+          date: r.date.toISOString().slice(0, 10),
+        });
+      }
+    }
+  }
 
   if (rawStatsRows.length > 0) {
     const gcidDateBest = new Map<string, { primaryId: string; cost: number; clicks: number; impressions: number }>();
@@ -771,6 +800,8 @@ export async function queryCampaignBoard(
       // D-040 v3 Q-G2=b：前端据此标红——REMOVED 状态 或 属于已移除/停用 CID
       is_removed: c.google_status === "REMOVED",
       cid_removed: c.customer_id ? removedCidSet.has(c.customer_id.replace(/-/g, "")) : false,
+      is_budget: latestIsMap.get(String(c.id))?.is_budget ?? null,
+      is_rank: latestIsMap.get(String(c.id))?.is_rank ?? null,
     };
   });
 

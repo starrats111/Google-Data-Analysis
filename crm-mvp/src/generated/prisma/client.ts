@@ -162,6 +162,11 @@ export type articles = Prisma.articlesModel
  */
 export type ads_daily_stats = Prisma.ads_daily_statsModel
 /**
+ * Model ai_recommendations
+ * 
+ */
+export type ai_recommendations = Prisma.ai_recommendationsModel
+/**
  * Model spend_guard_actions
  * 
  */

@@ -10,7 +10,7 @@ import {
   RiseOutlined, FallOutlined, SyncOutlined,
   CloudDownloadOutlined, EditOutlined, SearchOutlined,
   PlayCircleOutlined, PauseCircleOutlined, RedoOutlined, PlusOutlined,
-  TableOutlined, WarningOutlined,
+  TableOutlined, WarningOutlined, EyeOutlined, RobotOutlined,
 } from "@ant-design/icons";
 import AppPageHeader from "@/components/AppPageHeader";
 import type { ColumnsType } from "antd/es/table";
@@ -20,6 +20,9 @@ import dayjs, { Dayjs } from "dayjs";
 import utc from "dayjs/plugin/utc";
 import timezone from "dayjs/plugin/timezone";
 import EditCampaignModal from "@/components/data-center/EditCampaignModal";
+import CampaignAnalysisModal, {
+  STRATEGY_OPTIONS, formatActionItem, actionColor, type AnalysisItem,
+} from "@/components/data-center/CampaignAnalysisModal";
 import { useStaleApi, useApiWithParams, refreshApi } from "@/lib/swr";
 
 dayjs.extend(utc);
@@ -27,11 +30,12 @@ dayjs.extend(timezone);
 const TZ = "Asia/Shanghai";
 
 /** 各列 width 之和，scroll.x 须 ≥ 此值否则固定列（CID）会与表体错位
- *  顺序：CID 110 | 广告系列 280 | 状态 100 | 预算 70 | 最高出价 90
- *       | 展示 95 | 点击 85 | 订单 75 | 平均CPC 80 | EPC 80 | 花费 85 | 佣金 70 | 拒付佣金 95 | 净利润 85 | ROI 75
+ *  顺序（D-238：删「展示」「净利润」，加 IS_Bgt / IS_Rnk / 操作建议 / 分析）：
+ *  CID 110 | 广告系列 280 | 状态 100 | 预算 70 | 最高出价 90 | IS_Bgt 80 | IS_Rnk 80
+ *  | 点击 85 | 订单 75 | 平均CPC 80 | EPC 80 | 花费 85 | 佣金 70 | 拒付佣金 95 | ROI 75 | 操作建议 170 | 分析 55
  */
 const DATA_CENTER_TABLE_SCROLL_X =
-  110 + 280 + 100 + 70 + 90 + 95 + 85 + 75 + 80 + 85 + 70 + 80 + 95 + 85 + 75;
+  110 + 280 + 100 + 70 + 90 + 80 + 80 + 85 + 75 + 80 + 80 + 85 + 70 + 95 + 75 + 170 + 55;
 
 const { Text } = Typography;
 const { RangePicker } = DatePicker;
@@ -46,6 +50,8 @@ interface CampaignRow {
   target_country: string; last_synced: string | null;
   mcc_currency?: string;
   is_removed?: boolean; cid_removed?: boolean;
+  /** D-238：IS 因预算/评级错失的展示份额（区间内最新一日，0-1 分数；未采集为 null） */
+  is_budget?: number | null; is_rank?: number | null;
 }
 
 interface CostByMcc {
@@ -85,10 +91,6 @@ function formatInt(value: number | null | undefined): string {
   return (value ?? 0).toLocaleString("en-US");
 }
 
-function calcNetProfit(commission: number, rejectedCommission: number, cost: number): number {
-  return (commission || 0) - (rejectedCommission || 0) - (cost || 0);
-}
-
 /** EPC = 佣金 / 点击，与「平均CPC」同量纲，可直接比较。无点击时返回 null（不是 0） */
 function calcEpc(commission: number | null | undefined, clicks: number | null | undefined): number | null {
   if (!clicks) return null;
@@ -107,7 +109,7 @@ const defaultStartDate = dayjs().tz(TZ).startOf("month");
 const defaultEndDate = dayjs().tz(TZ);
 
 export default function DataCenterPage() {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const [selectedMcc, setSelectedMcc] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [platformFilter, setPlatformFilter] = useState<string>("");
@@ -482,6 +484,153 @@ export default function DataCenterPage() {
     } finally { setTogglingId(null); }
   }, [message]);
 
+  // ========== D-238 广告 AI 分析 ==========
+  const [strategy, setStrategy] = useState("balanced");
+  const [analysisMap, setAnalysisMap] = useState<Record<string, AnalysisItem>>({});
+  const [bulkAnalyzing, setBulkAnalyzing] = useState(false);
+  const [bulkApplying, setBulkApplying] = useState(false);
+  const [applyingId, setApplyingId] = useState<string | null>(null);
+  const [analysisModal, setAnalysisModal] = useState<{ open: boolean; campaignId: string | null; campaignName: string }>({ open: false, campaignId: null, campaignName: "" });
+
+  // 行 id 列表（稳定字符串，避免 effect 频繁触发）
+  const rowIdsKey = useMemo(() => rows.map((r) => r.id).join(","), [rows]);
+  const [analysisVersion, setAnalysisVersion] = useState(0);
+
+  // 页面加载 / 行集变化 / 策略切换时，批量读取缓存的分析建议（只读缓存，不触发 AI）
+  useEffect(() => {
+    if (!rowIdsKey) { setAnalysisMap({}); return; }
+    const ids = rowIdsKey.split(",");
+    let cancelled = false;
+    (async () => {
+      const map: Record<string, AnalysisItem> = {};
+      // 分批防 URL 过长
+      for (let i = 0; i < ids.length; i += 100) {
+        const chunk = ids.slice(i, i + 100);
+        try {
+          const res = await fetch(`/api/user/data-center/ai-analysis?ids=${chunk.join(",")}&strategy=${strategy}`).then((r) => r.json());
+          if (res.code === 0) {
+            for (const item of (res.data?.items || []) as AnalysisItem[]) map[item.campaignId] = item;
+          }
+        } catch { /* 静默，建议列显示为空 */ }
+      }
+      if (!cancelled) setAnalysisMap(map);
+    })();
+    return () => { cancelled = true; };
+  }, [rowIdsKey, strategy, analysisVersion]);
+
+  const refreshAnalysis = useCallback(() => {
+    setAnalysisVersion((v) => v + 1);
+    refreshApi(/\/api\/user\/data-center/);
+  }, []);
+
+  // 一键分析：对当前筛选后的 ENABLED 行跑快速批量分析（命中当日缓存的不重跑）
+  const handleBulkAnalyze = useCallback(async () => {
+    const targets = rows.filter((r) => r.status === "ENABLED" && !r.cid_removed).map((r) => r.id).slice(0, 200);
+    if (targets.length === 0) { message.warning("当前列表没有已启用的广告系列"); return; }
+    setBulkAnalyzing(true);
+    try {
+      const res = await fetch("/api/user/data-center/ai-analysis", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ campaignIds: targets, strategy, forceRefresh: false, detailed: false }),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        const items = (res.data?.items || []) as AnalysisItem[];
+        setAnalysisMap((prev) => {
+          const next = { ...prev };
+          for (const item of items) next[item.campaignId] = item;
+          return next;
+        });
+        const ok = items.filter((i) => i.status === "generated" || i.status === "cached").length;
+        const failed = items.length - ok;
+        message.success(`分析完成：${ok} 个成功${failed > 0 ? `，${failed} 个失败` : ""}`);
+      } else {
+        message.error(res.message || "分析失败");
+      }
+    } catch {
+      message.error("网络异常，请重试");
+    } finally {
+      setBulkAnalyzing(false);
+    }
+  }, [rows, strategy, message]);
+
+  // 单行执行第 1 条建议（与 kyads 一致：一键调整只执行第 1 条）
+  const applyFirstAction = useCallback(async (campaignId: string): Promise<{ success: boolean; message: string }> => {
+    const item = analysisMap[campaignId];
+    const first = item?.actionItems?.[0];
+    if (!first) return { success: false, message: "无建议" };
+    if (first.type === "keep") return { success: true, message: "维持现状" };
+    const res = await fetch("/api/user/data-center/apply-actions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ campaignId, actions: [first] }),
+    }).then((r) => r.json());
+    if (res.code !== 0) return { success: false, message: res.message || "执行失败" };
+    const results: Array<{ success: boolean; message: string }> = res.data?.results || [];
+    const failed = results.find((r) => !r.success);
+    return failed ? { success: false, message: failed.message } : { success: true, message: results[0]?.message || "已执行" };
+  }, [analysisMap]);
+
+  const handleRowApply = useCallback(async (row: CampaignRow) => {
+    setApplyingId(row.id);
+    try {
+      const r = await applyFirstAction(row.id);
+      if (r.success) { message.success(r.message); refreshApi(/\/api\/user\/data-center/); }
+      else message.error(r.message);
+    } catch {
+      message.error("网络异常，请重试");
+    } finally {
+      setApplyingId(null);
+    }
+  }, [applyFirstAction, message]);
+
+  // 一键调整：批量执行所有有非 keep 建议的行（每行只执行第 1 条），逐行串行防 API 限流
+  const handleBulkApply = useCallback(() => {
+    const targets = rows.filter((r) => {
+      const first = analysisMap[r.id]?.actionItems?.[0];
+      return first && first.type !== "keep" && r.status === "ENABLED" && !r.cid_removed;
+    });
+    if (targets.length === 0) { message.warning("没有可执行的操作建议（keep 不执行）"); return; }
+    modal.confirm({
+      title: `确认批量执行 ${targets.length} 条操作建议？`,
+      content: (
+        <div style={{ fontSize: 12, maxHeight: 240, overflow: "auto" }}>
+          {targets.slice(0, 20).map((r) => (
+            <div key={r.id} style={{ lineHeight: 1.9 }}>
+              <Text style={{ fontSize: 12 }}>{r.campaign_name}</Text>
+              <Tag color={actionColor(analysisMap[r.id]!.actionItems![0].type)} style={{ marginLeft: 6, fontSize: 11 }}>
+                {formatActionItem(analysisMap[r.id]!.actionItems![0])}
+              </Tag>
+            </div>
+          ))}
+          {targets.length > 20 && <Text type="secondary">… 等共 {targets.length} 条</Text>}
+        </div>
+      ),
+      okText: "执行",
+      cancelText: "取消",
+      onOk: async () => {
+        setBulkApplying(true);
+        let ok = 0; const errors: string[] = [];
+        try {
+          for (const r of targets) {
+            try {
+              const result = await applyFirstAction(r.id);
+              if (result.success) ok++;
+              else errors.push(`${r.campaign_name}: ${result.message}`);
+            } catch {
+              errors.push(`${r.campaign_name}: 网络异常`);
+            }
+          }
+          if (errors.length === 0) message.success(`批量执行完成：${ok} 条成功`);
+          else message.warning(`执行完成：${ok} 条成功，${errors.length} 条失败（${errors[0]}）`);
+          refreshApi(/\/api\/user\/data-center/);
+        } finally {
+          setBulkApplying(false);
+        }
+      },
+    });
+  }, [rows, analysisMap, modal, message, applyFirstAction]);
+
   const statusColors: Record<string, string> = { ENABLED: "green", PAUSED: "orange", REMOVED: "red" };
   const statusLabels: Record<string, string> = { ENABLED: "已启用", PAUSED: "已暂停", REMOVED: "已移除" };
 
@@ -565,13 +714,29 @@ export default function DataCenterPage() {
     },
     {
       title: (
-        <Tooltip title="来自 Google Ads，与「花费」同源">
-          <span>展示</span>
+        <Tooltip title="IS_Bgt = 因预算不足错失的展示份额（区间内最新一日）。偏高说明预算钳制了曝光">
+          <span>IS_Bgt</span>
         </Tooltip>
       ),
-      dataIndex: "impressions", width: 95, align: "right",
-      sorter: (a, b) => (a.impressions ?? 0) - (b.impressions ?? 0),
-      render: (v: number | null | undefined) => <Text style={{ fontSize: 12 }}>{formatInt(v)}</Text>,
+      dataIndex: "is_budget", width: 80, align: "right",
+      sorter: (a, b) => (a.is_budget ?? -1) - (b.is_budget ?? -1),
+      render: (v: number | null | undefined) => {
+        if (v == null) return <Text type="secondary" style={{ fontSize: 12 }}>—</Text>;
+        return <Text style={{ fontSize: 12, color: v >= 0.1 ? "#cf1322" : undefined }}>{(v * 100).toFixed(1)}%</Text>;
+      },
+    },
+    {
+      title: (
+        <Tooltip title="IS_Rnk = 因广告评级错失的展示份额（区间内最新一日）。偏高说明出价/质量得分不足">
+          <span>IS_Rnk</span>
+        </Tooltip>
+      ),
+      dataIndex: "is_rank", width: 80, align: "right",
+      sorter: (a, b) => (a.is_rank ?? -1) - (b.is_rank ?? -1),
+      render: (v: number | null | undefined) => {
+        if (v == null) return <Text type="secondary" style={{ fontSize: 12 }}>—</Text>;
+        return <Text style={{ fontSize: 12, color: v >= 0.3 ? "#cf1322" : undefined }}>{(v * 100).toFixed(1)}%</Text>;
+      },
     },
     {
       title: (
@@ -640,14 +805,6 @@ export default function DataCenterPage() {
       render: (v: number) => <Text type={v > 0 ? "danger" : "secondary"} style={{ fontSize: 12 }}>${(v || 0).toFixed(2)}</Text>,
     },
     {
-      title: "净利润", key: "net_profit", width: 85, align: "right",
-      sorter: (a, b) => calcNetProfit(a.commission, a.rejected_commission, a.cost) - calcNetProfit(b.commission, b.rejected_commission, b.cost),
-      render: (_: unknown, r: IndexedRow) => {
-        const value = calcNetProfit(r.commission, r.rejected_commission, r.cost);
-        return <Text style={{ fontSize: 12, color: value >= 0 ? "#389e0d" : "#cf1322" }}>${value.toFixed(2)}</Text>;
-      },
-    },
-    {
       title: (
         <Tooltip title="（佣金 - 花费）/ 花费，倍数口径，不扣拒付佣金">
           <span>ROI</span>
@@ -659,6 +816,55 @@ export default function DataCenterPage() {
         const value = v ?? 0;
         return <Text style={{ fontSize: 12, color: value >= 0 ? "#389e0d" : "#cf1322" }}>{value.toFixed(2)}</Text>;
       },
+    },
+    {
+      title: (
+        <Tooltip title="AI 分析建议（每日 06:40 自动分析 + 手动一键分析），点击「执行」按第 1 条建议实际调整">
+          <span>操作建议</span>
+        </Tooltip>
+      ),
+      key: "ai_suggestion", width: 170,
+      render: (_: unknown, r: IndexedRow) => {
+        const item = analysisMap[r.id];
+        const actions = item?.actionItems || [];
+        if (actions.length === 0) return <Text type="secondary" style={{ fontSize: 12 }}>—</Text>;
+        const first = actions[0];
+        return (
+          <Space size={4} wrap>
+            {actions.slice(0, 2).map((a, i) => (
+              <Tooltip key={i} title={item?.summary || undefined}>
+                <Tag color={actionColor(a.type)} style={{ fontSize: 11, margin: 0 }}>{formatActionItem(a)}</Tag>
+              </Tooltip>
+            ))}
+            {first.type !== "keep" && r.status === "ENABLED" && !r.cid_removed && (
+              <Button
+                type="link" size="small" loading={applyingId === r.id}
+                style={{ padding: 0, fontSize: 11, height: 18 }}
+                onClick={() => {
+                  modal.confirm({
+                    title: `确认执行「${formatActionItem(first)}」？`,
+                    content: `广告系列：${r.campaign_name}`,
+                    okText: "执行", cancelText: "取消",
+                    onOk: () => handleRowApply(r),
+                  });
+                }}
+              >执行</Button>
+            )}
+          </Space>
+        );
+      },
+    },
+    {
+      title: "分析", key: "ai_detail", width: 55, align: "center",
+      render: (_: unknown, r: IndexedRow) => (
+        <Tooltip title="查看逐日明细与 AI 分析报告">
+          <Button
+            type="text" size="small" icon={<EyeOutlined style={{ color: "#1677ff" }} />}
+            style={{ padding: 0, height: 22, width: 22 }}
+            onClick={() => setAnalysisModal({ open: true, campaignId: r.id, campaignName: r.campaign_name })}
+          />
+        </Tooltip>
+      ),
     },
   ];
 
@@ -730,6 +936,24 @@ export default function DataCenterPage() {
                 <Button size="small" icon={<RedoOutlined />} loading={syncingFull} onClick={handleFullSync}>刷新</Button>
               </Tooltip>
               <Button size="small" icon={<CloudDownloadOutlined />} loading={syncingCid} onClick={handleSyncCids}>同步 CID</Button>
+            </Space>
+          </Col>
+          <Col>
+            <Space>
+              <Select
+                size="small" value={strategy} onChange={setStrategy}
+                options={STRATEGY_OPTIONS} style={{ width: 90 }}
+              />
+              <Tooltip title="对当前列表所有已启用系列跑 AI 分析（当天已分析过的直接用缓存）">
+                <Button size="small" icon={<RobotOutlined />} loading={bulkAnalyzing} onClick={handleBulkAnalyze}>
+                  一键分析
+                </Button>
+              </Tooltip>
+              <Tooltip title="批量执行所有非「维持现状」的第 1 条建议（改预算 / 改出价 / 暂停）">
+                <Button size="small" danger loading={bulkApplying} onClick={handleBulkApply}>
+                  一键调整
+                </Button>
+              </Tooltip>
             </Space>
           </Col>
         </Row>
@@ -804,7 +1028,7 @@ export default function DataCenterPage() {
             ? "统计口径：已选择单个 MCC——总花费 / 总佣金 / ROI 仅统计该 MCC 下广告系列（佣金按商家+联盟账号归属到系列），归不到该 MCC 系列的佣金不计入。"
             : "统计口径：总花费 / 总佣金 / ROI 基于全部去重 Campaign 聚合，不受表格展示行数限制。"}
         </span>
-        <span style={{ marginLeft: 8 }}>展示 / 点击与花费同源于 Google Ads。</span>
+        <span style={{ marginLeft: 8 }}>点击与花费同源于 Google Ads；IS_Bgt / IS_Rnk 为区间内最新一日值，每日 06:10 自动采集。</span>
         {rowMeta?.isLimited && (
           <span style={{ color: "#fa8c16", marginLeft: 8 }}>
             表格仅展示 {rowMeta.displayedCount} / {rowMeta.totalCount} 条 Campaign 行，合计行与上方总览一致。
@@ -827,20 +1051,22 @@ export default function DataCenterPage() {
                   <Table.Summary.Cell index={0} colSpan={3}><Text strong>合计</Text></Table.Summary.Cell>
                   <Table.Summary.Cell index={3} />
                   <Table.Summary.Cell index={4} />
-                  <Table.Summary.Cell index={5} align="right"><Text strong>{formatInt(summary.totalImpressions)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={6} align="right"><Text strong>{formatInt(summary.totalClicks)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={7} align="right"><Text strong>{formatInt(summary.totalOrders)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={8} align="right"><Text strong>${summary.avgCpc.toFixed(4)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={9} align="right">
+                  <Table.Summary.Cell index={5} />
+                  <Table.Summary.Cell index={6} />
+                  <Table.Summary.Cell index={7} align="right"><Text strong>{formatInt(summary.totalClicks)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={8} align="right"><Text strong>{formatInt(summary.totalOrders)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={9} align="right"><Text strong>${summary.avgCpc.toFixed(4)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={10} align="right">
                     {calcEpc(summary.totalCommission, summary.totalClicks) === null
                       ? <Text strong type="secondary">—</Text>
                       : <Text strong style={{ color: "#389e0d" }}>${calcEpc(summary.totalCommission, summary.totalClicks)!.toFixed(4)}</Text>}
                   </Table.Summary.Cell>
-                  <Table.Summary.Cell index={10} align="right"><Text strong style={{ color: "#cf1322" }}>${summary.totalCost.toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={11} align="right"><Text strong style={{ color: "#389e0d" }}>${summary.totalCommission.toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={12} align="right"><Text strong type="danger">${summary.totalRejectedCommission.toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={13} align="right"><Text strong style={{ color: calcNetProfit(summary.totalCommission, summary.totalRejectedCommission, summary.totalCost) >= 0 ? "#389e0d" : "#cf1322" }}>${calcNetProfit(summary.totalCommission, summary.totalRejectedCommission, summary.totalCost).toFixed(2)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={11} align="right"><Text strong style={{ color: "#cf1322" }}>${summary.totalCost.toFixed(2)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={12} align="right"><Text strong style={{ color: "#389e0d" }}>${summary.totalCommission.toFixed(2)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={13} align="right"><Text strong type="danger">${summary.totalRejectedCommission.toFixed(2)}</Text></Table.Summary.Cell>
                   <Table.Summary.Cell index={14} align="right"><Text strong style={{ color: summary.roi >= 0 ? "#389e0d" : "#cf1322" }}>{summary.roi.toFixed(2)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={15} />
+                  <Table.Summary.Cell index={16} />
                 </Table.Summary.Row>
               </Table.Summary>
             );
@@ -1100,6 +1326,17 @@ export default function DataCenterPage() {
         open={editModal.open} campaign={editModal.campaign} field={editModal.field}
         mccAccountId={selectedMcc || mccAccounts[0]?.id || ""} onSuccess={handleEditSuccess}
         onCancel={() => setEditModal({ open: false, campaign: null, field: "budget" })}
+      />
+
+      {/* ========== D-238 眼睛弹窗：逐日明细 + AI 分析报告 ========== */}
+      <CampaignAnalysisModal
+        open={analysisModal.open}
+        campaignId={analysisModal.campaignId}
+        campaignName={analysisModal.campaignName}
+        strategy={strategy}
+        onClose={() => setAnalysisModal({ open: false, campaignId: null, campaignName: "" })}
+        onApplied={refreshAnalysis}
+        onReanalyzed={refreshAnalysis}
       />
 
     </div>

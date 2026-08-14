@@ -408,6 +408,7 @@ export const ModelName = {
   site_migrations: 'site_migrations',
   articles: 'articles',
   ads_daily_stats: 'ads_daily_stats',
+  ai_recommendations: 'ai_recommendations',
   spend_guard_actions: 'spend_guard_actions',
   google_mcc_accounts: 'google_mcc_accounts',
   affiliate_transactions: 'affiliate_transactions',
@@ -470,7 +471,7 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
     omit: GlobalOmitOptions
   }
   meta: {
-    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "parent_networks" | "platform_blacklist" | "ad_rejection_feedback" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "ad_generation_jobs" | "ad_submit_jobs" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "spend_guard_actions" | "google_mcc_accounts" | "affiliate_transactions" | "affiliate_click_daily" | "affiliate_payments" | "notifications" | "notification_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "kyads_click_task_items" | "proxy_exit_ip_usage" | "suffix_alerts" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "user_serpapi_keys" | "user_semrush_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log" | "semrush_keyword_cache" | "semrush_health_logs" | "payment_methods" | "report_overrides" | "payment_binding_snapshots" | "bank_flow_entries" | "policy_violations" | "team_developer_tokens" | "token_usage_daily" | "google_ads_api_usage" | "ad_decision_journal" | "ad_creation_drafts" | "brand_assessment_jobs" | "brand_assessment_results" | "brand_intel_cost_ledger" | "dataforseo_brand_keyword_cache"
+    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "parent_networks" | "platform_blacklist" | "ad_rejection_feedback" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "ad_generation_jobs" | "ad_submit_jobs" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "ai_recommendations" | "spend_guard_actions" | "google_mcc_accounts" | "affiliate_transactions" | "affiliate_click_daily" | "affiliate_payments" | "notifications" | "notification_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "kyads_click_task_items" | "proxy_exit_ip_usage" | "suffix_alerts" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "user_serpapi_keys" | "user_semrush_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log" | "semrush_keyword_cache" | "semrush_health_logs" | "payment_methods" | "report_overrides" | "payment_binding_snapshots" | "bank_flow_entries" | "policy_violations" | "team_developer_tokens" | "token_usage_daily" | "google_ads_api_usage" | "ad_decision_journal" | "ad_creation_drafts" | "brand_assessment_jobs" | "brand_assessment_results" | "brand_intel_cost_ledger" | "dataforseo_brand_keyword_cache"
     txIsolationLevel: TransactionIsolationLevel
   }
   model: {
@@ -2055,6 +2056,72 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         count: {
           args: Prisma.ads_daily_statsCountArgs<ExtArgs>
           result: runtime.Types.Utils.Optional<Prisma.Ads_daily_statsCountAggregateOutputType> | number
+        }
+      }
+    }
+    ai_recommendations: {
+      payload: Prisma.$ai_recommendationsPayload<ExtArgs>
+      fields: Prisma.ai_recommendationsFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.ai_recommendationsFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ai_recommendationsPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.ai_recommendationsFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ai_recommendationsPayload>
+        }
+        findFirst: {
+          args: Prisma.ai_recommendationsFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ai_recommendationsPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.ai_recommendationsFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ai_recommendationsPayload>
+        }
+        findMany: {
+          args: Prisma.ai_recommendationsFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ai_recommendationsPayload>[]
+        }
+        create: {
+          args: Prisma.ai_recommendationsCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ai_recommendationsPayload>
+        }
+        createMany: {
+          args: Prisma.ai_recommendationsCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.ai_recommendationsDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ai_recommendationsPayload>
+        }
+        update: {
+          args: Prisma.ai_recommendationsUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ai_recommendationsPayload>
+        }
+        deleteMany: {
+          args: Prisma.ai_recommendationsDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.ai_recommendationsUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.ai_recommendationsUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ai_recommendationsPayload>
+        }
+        aggregate: {
+          args: Prisma.Ai_recommendationsAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateAi_recommendations>
+        }
+        groupBy: {
+          args: Prisma.ai_recommendationsGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Ai_recommendationsGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.ai_recommendationsCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Ai_recommendationsCountAggregateOutputType> | number
         }
       }
     }
@@ -5247,6 +5314,7 @@ export const Ai_providersScalarFieldEnum = {
   provider_name: 'provider_name',
   api_key: 'api_key',
   api_base_url: 'api_base_url',
+  protocol: 'protocol',
   status: 'status',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
@@ -5717,12 +5785,46 @@ export const Ads_daily_statsScalarFieldEnum = {
   roi: 'roi',
   orders: 'orders',
   data_source: 'data_source',
+  quality_score: 'quality_score',
+  is_budget: 'is_budget',
+  is_rank: 'is_rank',
+  max_cpc: 'max_cpc',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
   updated_at: 'updated_at'
 } as const
 
 export type Ads_daily_statsScalarFieldEnum = (typeof Ads_daily_statsScalarFieldEnum)[keyof typeof Ads_daily_statsScalarFieldEnum]
+
+
+export const Ai_recommendationsScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  campaign_id: 'campaign_id',
+  google_campaign_id: 'google_campaign_id',
+  campaign_name: 'campaign_name',
+  scope_key: 'scope_key',
+  date_range_start: 'date_range_start',
+  date_range_end: 'date_range_end',
+  impressions: 'impressions',
+  clicks: 'clicks',
+  spend: 'spend',
+  orders: 'orders',
+  commission: 'commission',
+  roi: 'roi',
+  recommendation_type: 'recommendation_type',
+  strategy: 'strategy',
+  reason_summary: 'reason_summary',
+  reason_detail: 'reason_detail',
+  action_items: 'action_items',
+  engine_type: 'engine_type',
+  status: 'status',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Ai_recommendationsScalarFieldEnum = (typeof Ai_recommendationsScalarFieldEnum)[keyof typeof Ai_recommendationsScalarFieldEnum]
 
 
 export const Spend_guard_actionsScalarFieldEnum = {
@@ -6658,6 +6760,7 @@ export const ai_providersOrderByRelevanceFieldEnum = {
   provider_name: 'provider_name',
   api_key: 'api_key',
   api_base_url: 'api_base_url',
+  protocol: 'protocol',
   status: 'status'
 } as const
 
@@ -6939,6 +7042,21 @@ export const ads_daily_statsOrderByRelevanceFieldEnum = {
 } as const
 
 export type ads_daily_statsOrderByRelevanceFieldEnum = (typeof ads_daily_statsOrderByRelevanceFieldEnum)[keyof typeof ads_daily_statsOrderByRelevanceFieldEnum]
+
+
+export const ai_recommendationsOrderByRelevanceFieldEnum = {
+  google_campaign_id: 'google_campaign_id',
+  campaign_name: 'campaign_name',
+  scope_key: 'scope_key',
+  recommendation_type: 'recommendation_type',
+  strategy: 'strategy',
+  reason_summary: 'reason_summary',
+  reason_detail: 'reason_detail',
+  engine_type: 'engine_type',
+  status: 'status'
+} as const
+
+export type ai_recommendationsOrderByRelevanceFieldEnum = (typeof ai_recommendationsOrderByRelevanceFieldEnum)[keyof typeof ai_recommendationsOrderByRelevanceFieldEnum]
 
 
 export const spend_guard_actionsOrderByRelevanceFieldEnum = {
@@ -7601,6 +7719,7 @@ export type GlobalOmitConfig = {
   site_migrations?: Prisma.site_migrationsOmit
   articles?: Prisma.articlesOmit
   ads_daily_stats?: Prisma.ads_daily_statsOmit
+  ai_recommendations?: Prisma.ai_recommendationsOmit
   spend_guard_actions?: Prisma.spend_guard_actionsOmit
   google_mcc_accounts?: Prisma.google_mcc_accountsOmit
   affiliate_transactions?: Prisma.affiliate_transactionsOmit

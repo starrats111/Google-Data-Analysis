@@ -66,6 +66,9 @@ model ai_providers {
   provider_name String   @db.VarChar(32)
   api_key       String   @db.Text
   api_base_url  String?  @db.VarChar(512)
+  // D-238：wire 协议。openai=/v1/chat/completions（默认）；anthropic=/v1/messages。
+  // 按提供商显式标记而非按模型名猜（hajimi 走 OpenAI 协议跑 claude，按名猜会切坏现有场景）
+  protocol      String   @default("openai") @db.VarChar(16)
   status        String   @default("active") @db.VarChar(16)
   is_deleted    Int      @default(0) @db.TinyInt
   created_at    DateTime @default(now()) @db.DateTime(0)
@@ -647,6 +650,11 @@ model ads_daily_stats {
   roi                 Decimal? @db.Decimal(10, 4)
   orders              Int?     @default(0) @db.UnsignedInt
   data_source         String?  @default("sheet") @db.VarChar(8) // 数据来源: sheet / api
+  // D-238 广告分析（kyads 移植）：以下四列由 /api/cron/ads-metrics-sync 走 Google Ads API 直拉
+  quality_score       Decimal? @db.Decimal(3, 1) // 质量得分（keyword_view 当前 QS 按当日点击加权）
+  is_budget           Decimal? @db.Decimal(7, 4) // IS_Bgt 因预算错失的展示份额（0-1 分数，segments.date 逐日值）
+  is_rank             Decimal? @db.Decimal(7, 4) // IS_Rnk 因评级错失的展示份额（0-1 分数，segments.date 逐日值）
+  max_cpc             Decimal? @db.Decimal(16, 6) // 最高出价快照（ad_group cpc_bid 最大值，USD）
   is_deleted          Int      @default(0) @db.TinyInt
   created_at          DateTime @default(now()) @db.DateTime(0)
   updated_at          DateTime @default(now()) @updatedAt @db.DateTime(0)
@@ -654,6 +662,41 @@ model ads_daily_stats {
   @@unique([campaign_id, date], map: "uk_campaign_date")
   @@index([user_id, date], map: "idx_user_date")
   @@index([user_merchant_id, date], map: "idx_merchant_date")
+}
+
+// -----------------------------------------------------------
+// 15a-2. 广告分析 AI 建议表（D-238，kyads ai_recommendations 移植，team 维度改 user 维度）
+// 每条 = 某系列在某分析范围（区间+策略）下的最新分析结果；重分析 upsert 覆盖。
+// -----------------------------------------------------------
+model ai_recommendations {
+  id                  BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id             BigInt   @db.UnsignedBigInt
+  campaign_id         BigInt   @db.UnsignedBigInt // campaigns.id（CRM 内部 ID）
+  google_campaign_id  String?  @db.VarChar(64)
+  campaign_name       String   @db.VarChar(255)
+  scope_key           String   @db.VarChar(160) // 分析范围指纹：区间+策略+模式
+  date_range_start    DateTime @db.Date
+  date_range_end      DateTime @db.Date
+  impressions         BigInt   @default(0) @db.UnsignedBigInt
+  clicks              Int      @default(0) @db.UnsignedInt
+  spend               Decimal  @default(0.00) @db.Decimal(18, 2)
+  orders              Int      @default(0) @db.UnsignedInt
+  commission          Decimal  @default(0.00) @db.Decimal(18, 2)
+  roi                 Decimal  @default(0.0000) @db.Decimal(18, 4)
+  recommendation_type String   @default("campaign_ad_analysis") @db.VarChar(50)
+  strategy            String   @default("balanced") @db.VarChar(16) // balanced / aggressive / conservative
+  reason_summary      String   @default("") @db.VarChar(500)
+  reason_detail       String?  @db.LongText // 完整分析报告（眼睛弹窗展示）
+  action_items        Json? // 结构化建议 [{type,targetValue?,percentChange?}]
+  engine_type         String   @default("rule_plus_ai") @db.VarChar(30)
+  status              String   @default("active") @db.VarChar(20)
+  is_deleted          Int      @default(0) @db.TinyInt
+  created_at          DateTime @default(now()) @db.DateTime(0)
+  updated_at          DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@unique([campaign_id, scope_key], map: "uk_campaign_scope")
+  @@index([user_id, updated_at], map: "idx_user_updated")
+  @@index([google_campaign_id], map: "idx_gcid")
 }
 
 // -----------------------------------------------------------

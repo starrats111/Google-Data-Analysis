@@ -19,11 +19,16 @@ export async function POST(req: NextRequest) {
   const admin = getAdminFromRequest(req);
   if (!admin) return apiError("未授权", 401);
 
-  const { provider_name, api_key, api_base_url } = await req.json();
+  const { provider_name, api_key, api_base_url, protocol } = await req.json();
   if (!provider_name || !api_key) return apiError("供应商名称和 API Key 不能为空");
 
   const provider = await prisma.ai_providers.create({
-    data: { provider_name, api_key, api_base_url: api_base_url || null },
+    data: {
+      provider_name,
+      api_key,
+      api_base_url: api_base_url || null,
+      protocol: protocol === "anthropic" ? "anthropic" : "openai",
+    },
   });
   return apiSuccess(serializeData(provider));
 }
@@ -32,7 +37,7 @@ export async function PUT(req: NextRequest) {
   const admin = getAdminFromRequest(req);
   if (!admin) return apiError("未授权", 401);
 
-  const { id, provider_name, api_key, api_base_url, status } = await req.json();
+  const { id, provider_name, api_key, api_base_url, status, protocol } = await req.json();
   if (!id) return apiError("缺少 ID");
   const parsedId = toBigIntId(id);
   if (!parsedId) return apiError("ID 格式无效");
@@ -42,6 +47,7 @@ export async function PUT(req: NextRequest) {
   if (api_key !== undefined) data.api_key = api_key;
   if (api_base_url !== undefined) data.api_base_url = api_base_url || null;
   if (status !== undefined) data.status = status;
+  if (protocol !== undefined) data.protocol = protocol === "anthropic" ? "anthropic" : "openai";
 
   await prisma.ai_providers.update({ where: { id: parsedId }, data });
   return apiSuccess(null, "更新成功");

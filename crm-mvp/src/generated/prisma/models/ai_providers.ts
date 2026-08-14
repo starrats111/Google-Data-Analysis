@@ -41,6 +41,7 @@ export type Ai_providersMinAggregateOutputType = {
   provider_name: string | null
   api_key: string | null
   api_base_url: string | null
+  protocol: string | null
   status: string | null
   is_deleted: number | null
   created_at: Date | null
@@ -52,6 +53,7 @@ export type Ai_providersMaxAggregateOutputType = {
   provider_name: string | null
   api_key: string | null
   api_base_url: string | null
+  protocol: string | null
   status: string | null
   is_deleted: number | null
   created_at: Date | null
@@ -63,6 +65,7 @@ export type Ai_providersCountAggregateOutputType = {
   provider_name: number
   api_key: number
   api_base_url: number
+  protocol: number
   status: number
   is_deleted: number
   created_at: number
@@ -86,6 +89,7 @@ export type Ai_providersMinAggregateInputType = {
   provider_name?: true
   api_key?: true
   api_base_url?: true
+  protocol?: true
   status?: true
   is_deleted?: true
   created_at?: true
@@ -97,6 +101,7 @@ export type Ai_providersMaxAggregateInputType = {
   provider_name?: true
   api_key?: true
   api_base_url?: true
+  protocol?: true
   status?: true
   is_deleted?: true
   created_at?: true
@@ -108,6 +113,7 @@ export type Ai_providersCountAggregateInputType = {
   provider_name?: true
   api_key?: true
   api_base_url?: true
+  protocol?: true
   status?: true
   is_deleted?: true
   created_at?: true
@@ -206,6 +212,7 @@ export type Ai_providersGroupByOutputType = {
   provider_name: string
   api_key: string
   api_base_url: string | null
+  protocol: string
   status: string
   is_deleted: number
   created_at: Date
@@ -240,6 +247,7 @@ export type ai_providersWhereInput = {
   provider_name?: Prisma.StringFilter<"ai_providers"> | string
   api_key?: Prisma.StringFilter<"ai_providers"> | string
   api_base_url?: Prisma.StringNullableFilter<"ai_providers"> | string | null
+  protocol?: Prisma.StringFilter<"ai_providers"> | string
   status?: Prisma.StringFilter<"ai_providers"> | string
   is_deleted?: Prisma.IntFilter<"ai_providers"> | number
   created_at?: Prisma.DateTimeFilter<"ai_providers"> | Date | string
@@ -251,6 +259,7 @@ export type ai_providersOrderByWithRelationInput = {
   provider_name?: Prisma.SortOrder
   api_key?: Prisma.SortOrder
   api_base_url?: Prisma.SortOrderInput | Prisma.SortOrder
+  protocol?: Prisma.SortOrder
   status?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
@@ -266,6 +275,7 @@ export type ai_providersWhereUniqueInput = Prisma.AtLeast<{
   provider_name?: Prisma.StringFilter<"ai_providers"> | string
   api_key?: Prisma.StringFilter<"ai_providers"> | string
   api_base_url?: Prisma.StringNullableFilter<"ai_providers"> | string | null
+  protocol?: Prisma.StringFilter<"ai_providers"> | string
   status?: Prisma.StringFilter<"ai_providers"> | string
   is_deleted?: Prisma.IntFilter<"ai_providers"> | number
   created_at?: Prisma.DateTimeFilter<"ai_providers"> | Date | string
@@ -277,6 +287,7 @@ export type ai_providersOrderByWithAggregationInput = {
   provider_name?: Prisma.SortOrder
   api_key?: Prisma.SortOrder
   api_base_url?: Prisma.SortOrderInput | Prisma.SortOrder
+  protocol?: Prisma.SortOrder
   status?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
@@ -296,6 +307,7 @@ export type ai_providersScalarWhereWithAggregatesInput = {
   provider_name?: Prisma.StringWithAggregatesFilter<"ai_providers"> | string
   api_key?: Prisma.StringWithAggregatesFilter<"ai_providers"> | string
   api_base_url?: Prisma.StringNullableWithAggregatesFilter<"ai_providers"> | string | null
+  protocol?: Prisma.StringWithAggregatesFilter<"ai_providers"> | string
   status?: Prisma.StringWithAggregatesFilter<"ai_providers"> | string
   is_deleted?: Prisma.IntWithAggregatesFilter<"ai_providers"> | number
   created_at?: Prisma.DateTimeWithAggregatesFilter<"ai_providers"> | Date | string
@@ -307,6 +319,7 @@ export type ai_providersCreateInput = {
   provider_name: string
   api_key: string
   api_base_url?: string | null
+  protocol?: string
   status?: string
   is_deleted?: number
   created_at?: Date | string
@@ -318,6 +331,7 @@ export type ai_providersUncheckedCreateInput = {
   provider_name: string
   api_key: string
   api_base_url?: string | null
+  protocol?: string
   status?: string
   is_deleted?: number
   created_at?: Date | string
@@ -329,6 +343,7 @@ export type ai_providersUpdateInput = {
   provider_name?: Prisma.StringFieldUpdateOperationsInput | string
   api_key?: Prisma.StringFieldUpdateOperationsInput | string
   api_base_url?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  protocol?: Prisma.StringFieldUpdateOperationsInput | string
   status?: Prisma.StringFieldUpdateOperationsInput | string
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -340,6 +355,7 @@ export type ai_providersUncheckedUpdateInput = {
   provider_name?: Prisma.StringFieldUpdateOperationsInput | string
   api_key?: Prisma.StringFieldUpdateOperationsInput | string
   api_base_url?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  protocol?: Prisma.StringFieldUpdateOperationsInput | string
   status?: Prisma.StringFieldUpdateOperationsInput | string
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -351,6 +367,7 @@ export type ai_providersCreateManyInput = {
   provider_name: string
   api_key: string
   api_base_url?: string | null
+  protocol?: string
   status?: string
   is_deleted?: number
   created_at?: Date | string
@@ -362,6 +379,7 @@ export type ai_providersUpdateManyMutationInput = {
   provider_name?: Prisma.StringFieldUpdateOperationsInput | string
   api_key?: Prisma.StringFieldUpdateOperationsInput | string
   api_base_url?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  protocol?: Prisma.StringFieldUpdateOperationsInput | string
   status?: Prisma.StringFieldUpdateOperationsInput | string
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -373,6 +391,7 @@ export type ai_providersUncheckedUpdateManyInput = {
   provider_name?: Prisma.StringFieldUpdateOperationsInput | string
   api_key?: Prisma.StringFieldUpdateOperationsInput | string
   api_base_url?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  protocol?: Prisma.StringFieldUpdateOperationsInput | string
   status?: Prisma.StringFieldUpdateOperationsInput | string
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -390,6 +409,7 @@ export type ai_providersCountOrderByAggregateInput = {
   provider_name?: Prisma.SortOrder
   api_key?: Prisma.SortOrder
   api_base_url?: Prisma.SortOrder
+  protocol?: Prisma.SortOrder
   status?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
@@ -406,6 +426,7 @@ export type ai_providersMaxOrderByAggregateInput = {
   provider_name?: Prisma.SortOrder
   api_key?: Prisma.SortOrder
   api_base_url?: Prisma.SortOrder
+  protocol?: Prisma.SortOrder
   status?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
@@ -417,6 +438,7 @@ export type ai_providersMinOrderByAggregateInput = {
   provider_name?: Prisma.SortOrder
   api_key?: Prisma.SortOrder
   api_base_url?: Prisma.SortOrder
+  protocol?: Prisma.SortOrder
   status?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
@@ -435,6 +457,7 @@ export type ai_providersSelect<ExtArgs extends runtime.Types.Extensions.Internal
   provider_name?: boolean
   api_key?: boolean
   api_base_url?: boolean
+  protocol?: boolean
   status?: boolean
   is_deleted?: boolean
   created_at?: boolean
@@ -448,13 +471,14 @@ export type ai_providersSelectScalar = {
   provider_name?: boolean
   api_key?: boolean
   api_base_url?: boolean
+  protocol?: boolean
   status?: boolean
   is_deleted?: boolean
   created_at?: boolean
   updated_at?: boolean
 }
 
-export type ai_providersOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "provider_name" | "api_key" | "api_base_url" | "status" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["ai_providers"]>
+export type ai_providersOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "provider_name" | "api_key" | "api_base_url" | "protocol" | "status" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["ai_providers"]>
 
 export type $ai_providersPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "ai_providers"
@@ -464,6 +488,7 @@ export type $ai_providersPayload<ExtArgs extends runtime.Types.Extensions.Intern
     provider_name: string
     api_key: string
     api_base_url: string | null
+    protocol: string
     status: string
     is_deleted: number
     created_at: Date
@@ -841,6 +866,7 @@ export interface ai_providersFieldRefs {
   readonly provider_name: Prisma.FieldRef<"ai_providers", 'String'>
   readonly api_key: Prisma.FieldRef<"ai_providers", 'String'>
   readonly api_base_url: Prisma.FieldRef<"ai_providers", 'String'>
+  readonly protocol: Prisma.FieldRef<"ai_providers", 'String'>
   readonly status: Prisma.FieldRef<"ai_providers", 'String'>
   readonly is_deleted: Prisma.FieldRef<"ai_providers", 'Int'>
   readonly created_at: Prisma.FieldRef<"ai_providers", 'DateTime'>
