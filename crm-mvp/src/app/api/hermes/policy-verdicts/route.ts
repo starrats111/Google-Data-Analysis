@@ -61,6 +61,16 @@ const STATUS_OF: Record<string, string> = {
   review: "restricted",
 };
 
+// D-235（2026-08-14）：域名/品牌扩散只允许这四类「整站生意」硬禁品类。
+//
+// 教训：Hermes 把 LH 的子项目「Klook Global - Klook Insurance」按关键词判成 financial/blocked，
+// 判定携带的域名是主站 klook.com——精确域名扩散当时不限品类，把全平台 887 行 klook.com 商家
+// （Klook Hotels / Tours / Car Rentals 这些纯旅游项目）全标成了 prohibited，07 指出误伤。
+// 金融/保险类经常是大平台域名下的一个子产品（旅行平台卖旅行险、商城卖联名信用卡），
+// 域名相同不代表主营业务相同；而 adult/gambling/cannabis/tobacco 基本是整站一种生意，
+// 扩散才安全。financial 等品类只按 (platform, merchant_id) 精确写，不扩散。
+const EXPAND_CODES = new Set(["adult", "gambling", "cannabis", "tobacco"]);
+
 export async function POST(req: NextRequest) {
   const authErr = verifyHermesToken(req);
   if (authErr) return authErr;
@@ -101,14 +111,18 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // verdict 索引：平台+MID → verdict；域名 → verdict（域名传播用）
+    // verdict 索引：平台+MID → verdict；域名 → verdict（域名传播用）。
+    // 域名传播只收 blocked + 四类整站品类（EXPAND_CODES，理由见其定义处的 Klook 案例），
+    // review 未定性、financial 等子产品型品类都不进传播索引。
     const byKey = new Map<string, Verdict>();
     const byDomain = new Map<string, Verdict>();
     for (const v of list) {
       const k = `${String(v.network || "").toUpperCase()}|${String(v.merchant_id || "")}`;
       byKey.set(k, v);
       const d = String(v.domain || "").trim().toLowerCase();
-      if (d) byDomain.set(d, v);
+      if (d && v.verdict === "blocked" && EXPAND_CODES.has(String(v.policy_code || ""))) {
+        byDomain.set(d, v);
+      }
     }
 
     // 每一行要写什么：id → { category?, policy_status?, policy_category_code?, verdict }
@@ -167,6 +181,8 @@ export async function POST(req: NextRequest) {
     // 这一步不是可选的锦上添花：实测 Acmejoy（就是让账号被判 SEXUALLY_EXPLICIT 的那个）
     // 在 MUI 之外还挂在 BSH 平台上、另一个 MID、12 行，只按 MID 写的话那 12 行仍是
     // `Others>Others` + `clean`，别人照样能领取去投。
+    // 品类限制见 EXPAND_CODES：精确域名传播原先不限品类，被 Klook Insurance 拖死整个
+    // klook.com（D-235），现在与品牌扩展一样只认 blocked + 四类整站品类。
     //
     // 写法上刻意不用 343 个 `contains`（那是 343 遍全表 LIKE）。`merchant_url` 没有索引、
     // 模糊匹配注定要全扫，那就只扫一遍：库侧把 URL 规范成裸域名，与传入域名做等值 JOIN。
@@ -177,13 +193,12 @@ export async function POST(req: NextRequest) {
     // 品类不限的话，金融/保险里 `travel`、`shop` 这种通用首段会把无关商家一起判死；
     // 长度不限的话 `cbd.com` 的首段 `cbd` 会命中一切以 cbd 开头的域名。
     // 只认 `blocked`——`review` 是待复核，还没定性，没有理由让它扩散到别的域名去。
-    const BRAND_EXPAND_CODES = new Set(["adult", "gambling", "cannabis", "tobacco"]);
     const byBrand = new Map<string, Verdict>();
     if (expandDomain) {
       for (const v of list) {
         if (v.verdict !== "blocked") continue;
         const code = String(v.policy_code || "");
-        if (!BRAND_EXPAND_CODES.has(code)) continue;
+        if (!EXPAND_CODES.has(code)) continue;
         const brand = String(v.domain || "").trim().toLowerCase().split(".")[0];
         if (brand.length < 6) continue;
         if (!byBrand.has(brand)) byBrand.set(brand, v);
