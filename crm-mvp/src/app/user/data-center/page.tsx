@@ -30,12 +30,12 @@ dayjs.extend(timezone);
 const TZ = "Asia/Shanghai";
 
 /** 各列 width 之和，scroll.x 须 ≥ 此值否则固定列（CID）会与表体错位
- *  顺序（D-238：删「展示」「净利润」，加 IS_Bgt / IS_Rnk / 操作建议 / 分析）：
+ *  顺序（D-238：删「展示」，加 IS_Bgt / IS_Rnk / 操作建议 / 分析；净利润按 07 要求于 2026-08-14 加回）：
  *  CID 110 | 广告系列 280 | 状态 100 | 预算 70 | 最高出价 90 | IS_Bgt 80 | IS_Rnk 80
- *  | 点击 85 | 订单 75 | 平均CPC 80 | EPC 80 | 花费 85 | 佣金 70 | 拒付佣金 95 | ROI 75 | 操作建议 170 | 分析 55
+ *  | 点击 85 | 订单 75 | 平均CPC 80 | EPC 80 | 花费 85 | 佣金 70 | 拒付佣金 95 | 净利润 85 | ROI 75 | 操作建议 170 | 分析 55
  */
 const DATA_CENTER_TABLE_SCROLL_X =
-  110 + 280 + 100 + 70 + 90 + 80 + 80 + 85 + 75 + 80 + 80 + 85 + 70 + 95 + 75 + 170 + 55;
+  110 + 280 + 100 + 70 + 90 + 80 + 80 + 85 + 75 + 80 + 80 + 85 + 70 + 95 + 85 + 75 + 170 + 55;
 
 const { Text } = Typography;
 const { RangePicker } = DatePicker;
@@ -89,6 +89,10 @@ interface Summary {
 
 function formatInt(value: number | null | undefined): string {
   return (value ?? 0).toLocaleString("en-US");
+}
+
+function calcNetProfit(commission: number, rejectedCommission: number, cost: number): number {
+  return (commission || 0) - (rejectedCommission || 0) - (cost || 0);
 }
 
 /** EPC = 佣金 / 点击，与「平均CPC」同量纲，可直接比较。无点击时返回 null（不是 0） */
@@ -806,6 +810,19 @@ export default function DataCenterPage() {
     },
     {
       title: (
+        <Tooltip title="净利润 = 佣金 - 拒付佣金 - 花费">
+          <span>净利润</span>
+        </Tooltip>
+      ),
+      key: "net_profit", width: 85, align: "right",
+      sorter: (a, b) => calcNetProfit(a.commission, a.rejected_commission, a.cost) - calcNetProfit(b.commission, b.rejected_commission, b.cost),
+      render: (_: unknown, r: IndexedRow) => {
+        const value = calcNetProfit(r.commission, r.rejected_commission, r.cost);
+        return <Text style={{ fontSize: 12, color: value >= 0 ? "#389e0d" : "#cf1322" }}>${value.toFixed(2)}</Text>;
+      },
+    },
+    {
+      title: (
         <Tooltip title="（佣金 - 花费）/ 花费，倍数口径，不扣拒付佣金">
           <span>ROI</span>
         </Tooltip>
@@ -1064,9 +1081,10 @@ export default function DataCenterPage() {
                   <Table.Summary.Cell index={11} align="right"><Text strong style={{ color: "#cf1322" }}>${summary.totalCost.toFixed(2)}</Text></Table.Summary.Cell>
                   <Table.Summary.Cell index={12} align="right"><Text strong style={{ color: "#389e0d" }}>${summary.totalCommission.toFixed(2)}</Text></Table.Summary.Cell>
                   <Table.Summary.Cell index={13} align="right"><Text strong type="danger">${summary.totalRejectedCommission.toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={14} align="right"><Text strong style={{ color: summary.roi >= 0 ? "#389e0d" : "#cf1322" }}>{summary.roi.toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={15} />
+                  <Table.Summary.Cell index={14} align="right"><Text strong style={{ color: calcNetProfit(summary.totalCommission, summary.totalRejectedCommission, summary.totalCost) >= 0 ? "#389e0d" : "#cf1322" }}>${calcNetProfit(summary.totalCommission, summary.totalRejectedCommission, summary.totalCost).toFixed(2)}</Text></Table.Summary.Cell>
+                  <Table.Summary.Cell index={15} align="right"><Text strong style={{ color: summary.roi >= 0 ? "#389e0d" : "#cf1322" }}>{summary.roi.toFixed(2)}</Text></Table.Summary.Cell>
                   <Table.Summary.Cell index={16} />
+                  <Table.Summary.Cell index={17} />
                 </Table.Summary.Row>
               </Table.Summary>
             );
