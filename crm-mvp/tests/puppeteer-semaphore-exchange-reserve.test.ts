@@ -18,6 +18,10 @@ import {
   puppeteerSemaphoreStats,
 } from "../src/lib/puppeteer-semaphore";
 
+// SLOT-ISO-01：本文件钉的是「非工作时间」的共享池行为（快车道/弹性/借预留），
+// 显式关闭工作时间剥离，否则测试结果随 CI 跑在几点而变（北京白天必挂）。
+process.env.PUPPETEER_EXCHANGE_ISOLATION_OFF = "1";
+
 /** 每个用例结束后归零，模块级状态是跨用例共享的。 */
 const held: Array<() => void> = [];
 function track(release: () => void): () => void {

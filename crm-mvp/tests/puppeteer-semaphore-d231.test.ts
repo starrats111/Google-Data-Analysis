@@ -28,6 +28,10 @@ function track(r: SlotRelease): SlotRelease {
   return r;
 }
 
+// SLOT-ISO-01：本文件钉的是共享池语义下的内存反压时机，显式关闭工作时间剥离，
+// 保证结果不随 CI 跑在几点而变。
+process.env.PUPPETEER_EXCHANGE_ISOLATION_OFF = "1";
+
 beforeEach(() => {
   delete process.env.PUPPETEER_MIN_AVAILABLE_MB;
   delete process.env.PUPPETEER_FAKE_AVAILABLE_MB;
