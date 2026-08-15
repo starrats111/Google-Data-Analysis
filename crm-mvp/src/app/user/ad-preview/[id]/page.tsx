@@ -1579,6 +1579,24 @@ export default function AdPreviewPage() {
         });
         return;
       }
+
+      // QUOTA-01（2026-08-15）：AI 账户余额不足——明确告知员工原因，避免看到文案全空后反复重试白等
+      if (type === "ai_quota_exhausted") {
+        const d = data as { message?: string };
+        setCoreGenerating(false);
+        modal.error({
+          title: "AI 账户余额不足，文案未能生成",
+          content: (
+            <div>
+              <p style={{ marginBottom: 8 }}>{d?.message || "AI 账户余额不足，本次文案未能生成。"}</p>
+              <p style={{ marginBottom: 0 }}>请联系管理员充值后再重新生成，充值前重复点击生成不会成功。</p>
+            </div>
+          ),
+          okText: "我知道了",
+          width: 520,
+        });
+        return;
+      }
     };
 
     let genAbortForCleanup: AbortController | null = null;
@@ -1662,7 +1680,7 @@ export default function AdPreviewPage() {
       // 2026-07-13（第七轮）：补全 affiliate_resolved / rejection_feedback_loaded /
       // alignment_rewrite / language_rewrite——不在序表的事件会被排到最末（999），
       // 改写类提示晚于 compliance 事件应用，顺序错乱。
-      const APPLY_ORDER = ["queued", "crawl_pending", "affiliate_resolved", "crawl_status", "detected_language", "rejection_feedback_loaded", "keywords_pending", "keywords", "keywords_failed", "policy_blocked", "merchant_url_parked", "context_insufficient", "headlines", "descriptions", "alignment_rewrite", "language_rewrite", "core_done", "callouts", "structured_snippet", "promotion", "price_items", "call", "negative_keywords", "sitelinks", "images", "compliance_auto_fix", "compliance_warnings", "compliance_policy_fix"];
+      const APPLY_ORDER = ["queued", "crawl_pending", "affiliate_resolved", "crawl_status", "detected_language", "rejection_feedback_loaded", "keywords_pending", "keywords", "keywords_failed", "policy_blocked", "merchant_url_parked", "context_insufficient", "headlines", "descriptions", "alignment_rewrite", "language_rewrite", "core_done", "callouts", "structured_snippet", "promotion", "price_items", "call", "negative_keywords", "sitelinks", "images", "compliance_auto_fix", "compliance_warnings", "compliance_policy_fix", "ai_quota_exhausted"];
       const pollJob = async (jobId: string) => {
         const applied: Record<string, string> = {};
         const startedAt = Date.now();

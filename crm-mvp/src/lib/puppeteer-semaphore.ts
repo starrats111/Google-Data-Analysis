@@ -81,9 +81,23 @@
  *     队列唤醒路径刻意不再查内存——唤醒恰好发生在一个 Chrome 刚释放之后，是内存最宽裕的时刻。
  *   - D-220 要防的「再 launch 一个就把整机打进 swap」保护完全保留，只是不再误伤排队者。
  *
+ * SLOT-ISO-01 工作时间车道剥离（2026-08-15，07 指令）：
+ *   - 背景：2026-08-15 上午换链接（AffiliateResolver exchange 车道）批量任务把 3 个槽位
+ *     长时间占满（active=3/3、exchangeQ 一度积压 70+），广告生成的 sitelinks 验证/主爬
+ *     跟着排队，员工感知生成极慢；同期 Chrome 常驻风暴还是内存打穿事故的推手。
+ *   - 07 决策：工作时间换链接和上广告**不共用**槽位，单独剥离。
+ *   - 规则（仅工作时间生效，默认北京时间 9-19 点）：
+ *       换链接：只允许独占 1 个专属槽（并发 1），禁止再借 normal 池余量与主爬预留；
+ *       广告链路（main+normal）：独享其余 2 槽（1 主爬预留 + 1 normal），不碰换链接专属槽。
+ *     非工作时间：完全维持 D-172/D-199 现状（快车道+弹性+借预留）。
+ *   - 换链接在工作时间抢不到槽只会拿到 no_puppeteer_slot（BROWSER_BLOCKED_REASONS 之一，
+ *     D-231 语义：属我方资源问题，调用方不得据此判链接失效），任务推迟不误杀。
+ *
  * 环境变量 PUPPETEER_SEMAPHORE_OFF=1 可一键 bypass（用于快速回滚定位）。
  * 环境变量 PUPPETEER_EXCHANGE_RESERVE_OFF=1 可单独回滚 D-199 借预留（无需重新部署）。
  * 环境变量 PUPPETEER_MIN_AVAILABLE_MB 调内存水位（默认 500，设 0 关闭 D-220 反压）。
+ * 环境变量 PUPPETEER_EXCHANGE_ISOLATION_OFF=1 可单独回滚 SLOT-ISO-01 工作时间剥离。
+ * 环境变量 EXCHANGE_ISOLATION_WORK_HOURS 调工作时间段（北京时间，格式 "9-19"，默认 9-19）。
  */
 
 import fs from "fs";
@@ -134,12 +148,55 @@ type GrantKind = "main" | "exchangeFast" | "exchangeElastic" | "exchangeReserve"
 
 let _active = 0;
 let _activeExchangeFast = 0;
+// SLOT-ISO-01：换链接三种授予（fast/elastic/reserve）合计并发，工作时间剥离按它封顶
+let _activeExchangeTotal = 0;
 const _waitersMain: Array<(released: SlotRelease) => void> = [];
 const _waitersExchange: Array<(released: SlotRelease) => void> = [];
 const _waitersNormal: Array<(released: SlotRelease) => void> = [];
 
 function isDisabled(): boolean {
   return process.env.PUPPETEER_SEMAPHORE_OFF === "1";
+}
+
+function isExchangeKind(kind: GrantKind): boolean {
+  return kind === "exchangeFast" || kind === "exchangeElastic" || kind === "exchangeReserve";
+}
+
+// ── SLOT-ISO-01 工作时间车道剥离 ──
+
+const EXCHANGE_ISOLATION_DEFAULT = { start: 9, end: 19 };
+/** 换链接工作时间专属并发上限（剥离生效时换链接只允许这么多并发） */
+const EXCHANGE_ISOLATED_SLOTS = 1;
+/** 剥离生效时广告链路（main+normal）可用槽位 = 总池 - 换链接专属 */
+const ADS_ISOLATED_SLOTS = MAX_PUPPETEER_SLOTS - EXCHANGE_ISOLATED_SLOTS; // 2
+
+function isolationWorkHours(): { start: number; end: number } {
+  const raw = process.env.EXCHANGE_ISOLATION_WORK_HOURS;
+  const m = raw?.match(/^(\d{1,2})-(\d{1,2})$/);
+  if (!m) return EXCHANGE_ISOLATION_DEFAULT;
+  const start = Math.min(23, parseInt(m[1], 10));
+  const end = Math.min(24, parseInt(m[2], 10));
+  return { start, end };
+}
+
+/**
+ * 是否处于「工作时间车道剥离」时段。用北京时间（UTC+8）判定，不依赖服务器时区设置。
+ * 支持跨零点区间（如 "22-6"）。
+ */
+function exchangeIsolationActive(): boolean {
+  if (isDisabled()) return false;
+  if (process.env.PUPPETEER_EXCHANGE_ISOLATION_OFF === "1") return false;
+  const { start, end } = isolationWorkHours();
+  const now = new Date();
+  const hourBeijing = (now.getUTCHours() + 8) % 24;
+  return start <= end
+    ? hourBeijing >= start && hourBeijing < end
+    : hourBeijing >= start || hourBeijing < end;
+}
+
+/** 剥离时段广告链路（main+normal）当前占用 */
+function adsActive(): number {
+  return Math.max(0, _active - _activeExchangeTotal);
 }
 
 // ── D-220 内存反压 ──
@@ -227,6 +284,23 @@ function canGrantExchangeReserve(): boolean {
 
 /** 请求到达时的授予判定；exchange 返回实际授予的种类，不可授予返回 null */
 function tryClassifyGrant(lane: SlotLane): GrantKind | null {
+  // SLOT-ISO-01：工作时间硬分区——换链接专属 1 槽、广告链路专属 2 槽，双向不借用。
+  // 换链接授予种类固定记 exchangeFast（享有仅次于 main 的唤醒优先级，且释放计数正确）。
+  if (exchangeIsolationActive()) {
+    if (lane === "main") {
+      return adsActive() < ADS_ISOLATED_SLOTS && _active < MAX_PUPPETEER_SLOTS ? "main" : null;
+    }
+    if (lane === "exchange") {
+      return _activeExchangeTotal < EXCHANGE_ISOLATED_SLOTS && _active < MAX_PUPPETEER_SLOTS
+        ? "exchangeFast"
+        : null;
+    }
+    // normal：广告池内仍给主爬留 1 个预留（沿用 D-027 语义）
+    return adsActive() < ADS_ISOLATED_SLOTS - RESERVED_MAIN_CRAWL_SLOTS && _active < MAX_PUPPETEER_SLOTS
+      ? "normal"
+      : null;
+  }
+
   if (lane === "main") return _active < MAX_PUPPETEER_SLOTS ? "main" : null;
   if (lane === "exchange") {
     if (canGrantExchangeFast()) return "exchangeFast";
@@ -274,6 +348,7 @@ export async function acquireExchangeSlot(timeoutMs = 30000): Promise<SlotReleas
 function grant(kind: GrantKind): SlotRelease {
   _active++;
   if (kind === "exchangeFast") _activeExchangeFast++;
+  if (isExchangeKind(kind)) _activeExchangeTotal++;
   return makeReleaser(kind);
 }
 
@@ -356,6 +431,32 @@ function makeReleaser(kind: GrantKind): SlotRelease {
     if (isDisabled()) return;
     _active = Math.max(0, _active - 1);
     if (kind === "exchangeFast") _activeExchangeFast = Math.max(0, _activeExchangeFast - 1);
+    if (isExchangeKind(kind)) _activeExchangeTotal = Math.max(0, _activeExchangeTotal - 1);
+
+    // SLOT-ISO-01：工作时间硬分区唤醒——各车道只在自己的配额内被唤醒，不借用。
+    // 剥离开始前授予的越额会话（如换链接弹性/借预留占了 2-3 槽）随自然释放收敛回配额。
+    if (exchangeIsolationActive()) {
+      if (_waitersMain.length > 0 && adsActive() < ADS_ISOLATED_SLOTS && _active < MAX_PUPPETEER_SLOTS) {
+        const next = _waitersMain.shift()!;
+        next(grant("main"));
+        return;
+      }
+      if (_waitersExchange.length > 0 && _activeExchangeTotal < EXCHANGE_ISOLATED_SLOTS && _active < MAX_PUPPETEER_SLOTS) {
+        const next = _waitersExchange.shift()!;
+        next(grant("exchangeFast"));
+        return;
+      }
+      if (
+        _waitersNormal.length > 0 &&
+        adsActive() < ADS_ISOLATED_SLOTS - RESERVED_MAIN_CRAWL_SLOTS &&
+        _active < MAX_PUPPETEER_SLOTS
+      ) {
+        const next = _waitersNormal.shift()!;
+        next(grant("normal"));
+        return;
+      }
+      return;
+    }
 
     // 唤醒优先级：main > exchange 快车道 > normal > exchange 弹性 > exchange 借预留
     if (_waitersMain.length > 0 && _active < MAX_PUPPETEER_SLOTS) {
@@ -425,6 +526,7 @@ function makeReleaser(kind: GrantKind): SlotRelease {
 export function puppeteerSemaphoreStats(): {
   active: number;
   activeExchangeFast: number;
+  activeExchangeTotal: number;
   queuedMain: number;
   queuedExchange: number;
   queuedNormal: number;
@@ -435,10 +537,14 @@ export function puppeteerSemaphoreStats(): {
   disabled: boolean;
   availableMb: number;
   minAvailableMb: number;
+  exchangeIsolationActive: boolean;
+  exchangeIsolationWorkHours: string;
 } {
+  const wh = isolationWorkHours();
   return {
     active: _active,
     activeExchangeFast: _activeExchangeFast,
+    activeExchangeTotal: _activeExchangeTotal,
     queuedMain: _waitersMain.length,
     queuedExchange: _waitersExchange.length,
     queuedNormal: _waitersNormal.length,
@@ -449,5 +555,7 @@ export function puppeteerSemaphoreStats(): {
     disabled: isDisabled(),
     availableMb: availableMemoryMb(),
     minAvailableMb: minAvailableMb(),
+    exchangeIsolationActive: exchangeIsolationActive(),
+    exchangeIsolationWorkHours: `${wh.start}-${wh.end}`,
   };
 }

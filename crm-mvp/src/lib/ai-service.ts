@@ -926,6 +926,26 @@ async function callAi(
   throw new Error(`AI API 限流 (${config.modelName}): 重试 ${MAX_RETRIES} 次后仍被限流`);
 }
 
+// ─── QUOTA-01（2026-08-15 hajimi 余额耗尽事故）：余额不足熔断 ───
+// 账户余额低于网关预扣费门槛时所有调用都 403 insufficient_user_quota，但一次广告生成
+// 会发起 10+ 次 AI 调用、多轮返工再乘上多任务并发——当日实测 2 小时内空打网关 202 次。
+// 熔断：命中余额不足后 60s 内的后续调用直接本地抛错（不出网），充值后最多 60s 自动恢复。
+// 任何一次调用成功即立刻清零（充值到账无需重启）。
+const QUOTA_BREAKER_COOLDOWN_MS = 60_000;
+let _quotaExhaustedAt = 0;
+let _quotaExhaustedMsg = "";
+
+/** 最近一次「余额不足」的时间戳（0=正常）。路由层用它决定是否向前端推送充值提示。 */
+export function aiQuotaExhaustedAt(): number {
+  return _quotaExhaustedAt;
+}
+
+/** 判断一个错误是否为 AI 账户余额不足（含熔断期本地抛出的错误）。 */
+export function isAiQuotaError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.includes("insufficient_user_quota");
+}
+
 /**
  * 带 fallback 的 AI 调用：按场景配置的 priority 依次尝试，全部失败即报错。
  * COST-01（07 决策）：移除 deepseek-chat / gpt-4o-mini 紧急兜底——只允许调用
@@ -936,6 +956,14 @@ export async function callAiWithFallback(
   messages: { role: string; content: string }[],
   maxTokens?: number,
 ): Promise<string> {
+  // QUOTA-01：熔断期内直接快速失败，不再逐模型打网关（错误信息保留
+  // insufficient_user_quota 标记，调用方既有的余额不足分支全部继续生效）
+  if (_quotaExhaustedAt > 0 && Date.now() - _quotaExhaustedAt < QUOTA_BREAKER_COOLDOWN_MS) {
+    throw new Error(
+      `AI 账户余额不足（insufficient_user_quota，熔断中）：${_quotaExhaustedMsg.slice(0, 200)}`,
+    );
+  }
+
   const allModels = await getSceneModels(scene);
   if (allModels.length === 0) throw new Error(`场景 ${scene} 无可用 AI 模型`);
 
@@ -944,11 +972,15 @@ export async function callAiWithFallback(
   let lastError: Error | null = null;
   for (const model of models) {
     try {
-      return await callAi(model, messages, maxTokens);
+      const out = await callAi(model, messages, maxTokens);
+      _quotaExhaustedAt = 0; // 调用成功 = 余额已恢复，解除熔断
+      return out;
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
       console.warn(`[AI] ${model.modelName} 失败，尝试下一个:`, lastError.message);
       if (lastError.message.includes("insufficient_user_quota")) {
+        _quotaExhaustedAt = Date.now();
+        _quotaExhaustedMsg = lastError.message;
         throw lastError;
       }
     }

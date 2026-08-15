@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
-import { callAiWithFallback, suggestDisplayPaths } from "@/lib/ai-service";
+import { callAiWithFallback, suggestDisplayPaths, aiQuotaExhaustedAt } from "@/lib/ai-service";
 import { getAdMarketConfig, resolveLanguageName } from "@/lib/ad-market";
 import { buildAiRulePrompt, checkItemViolations, resolveForbiddenTerms, autoRewriteForbiddenTerms } from "@/lib/ai-rule-profile";
 import { isLowValueSitelink } from "@/lib/sitelink-filter";
@@ -1380,6 +1380,13 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
         }
 
         await Promise.all(tasks);
+        // QUOTA-01：本轮生成期间命中过「AI 账户余额不足」→ 明确告知员工原因与出路，
+        // 避免看到文案全空后反复点重新生成白等（余额不足时重试只会同样失败）。
+        if (aiQuotaExhaustedAt() > 0) {
+          send("ai_quota_exhausted", {
+            message: "AI 账户余额不足，本次文案未能生成。请联系管理员充值后再重新生成，重复点击不会成功。",
+          });
+        }
         if (!isClosed) {
           try { controller.enqueue(encoder.encode("data: [DONE]\n\n")); } catch { isClosed = true; }
         }

@@ -19,7 +19,7 @@
  * 仅 Step 4 政策阻断会硬阻断（07 X4=阻断 + X3 仅警告）。
  */
 
-import { callAiWithFallback } from "@/lib/ai-service";
+import { callAiWithFallback, isAiQuotaError } from "@/lib/ai-service";
 import { parseAiJsonLoose, smartTruncate } from "@/lib/crawl-pipeline";
 import type { CrawlCache } from "@/lib/crawl-pipeline";
 import type { IndustryProfile } from "@/lib/industry-profile";
@@ -619,6 +619,9 @@ async function generateAndScoreBatch(
       console.warn(
         `[Orchestrator] ${opts.task} attempt ${attempt + 1} parse/AI failed: ${err instanceof Error ? err.message : err}`,
       );
+      // QUOTA-01：余额不足是账户级故障，换 prompt 重试毫无意义——立即终止返工循环，
+      // 让整体尽快结束，由路由层向前端推送「余额不足请充值」提示。
+      if (isAiQuotaError(err)) break;
       // 解析失败：给下一轮明确「只返回合法 JSON」的纠正提示，否则重发同一 prompt 会同样失败
       // （2026-07-02 oglmove：3 轮同样的 JSON 语法错 → headlines 全空 → 提交按钮置灰）。
       retryHint = `Your previous reply could not be parsed as JSON (${err instanceof Error ? err.message : "parse error"}). Return ONLY one valid JSON object of the form {"${opts.fieldName}": ["item 1", "item 2", ...]}. Escape every inner double quote as \\", put a comma between every array element, and output no prose or markdown.`;
