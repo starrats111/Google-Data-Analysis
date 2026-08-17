@@ -103,6 +103,7 @@ export const PATCH = withUser(async (req: NextRequest, { user, params }) => {
     descriptions: patch.descriptions,
     sitelinks: patch.sitelinks,
     gap_report: patch.gapReport,
+    negative_keywords: patch.negativeKeywords,
     preview_payload: patch.previewPayload,
   });
 

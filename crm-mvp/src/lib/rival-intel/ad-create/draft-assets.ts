@@ -52,6 +52,7 @@ export function buildDraftAssetPatch(input: {
   descriptions: DescriptionItem[];
   sitelinks: DraftSitelink[];
   gapReport: GapReport | null;
+  negativeKeywords: string[];
   previewPayload: ReturnType<typeof buildPreviewPayload>;
 } {
   const body = input.body && typeof input.body === "object" ? input.body as Record<string, unknown> : {};
@@ -60,6 +61,8 @@ export function buildDraftAssetPatch(input: {
     : [];
 
   const coreBrandKeywords = uniqueNonEmptyStrings(body.coreBrandKeywords, existingKeywords);
+  // RIVAL-PUB-02 顺带修复：此前 body.negativeKeywords 被忽略、PATCH 不落库，员工改否定词等于白改
+  const negativeKeywords = uniqueNonEmptyStrings(body.negativeKeywords, input.negativeKeywords ?? []);
   const headlines = normalizeHeadlines(Array.isArray(body.headlines) ? body.headlines : input.existingHeadlines);
   const descriptions = normalizeDescriptions(
     Array.isArray(body.descriptions) ? body.descriptions : input.existingDescriptions,
@@ -79,8 +82,8 @@ export function buildDraftAssetPatch(input: {
     brandKeywords: coreBrandKeywords,
     sitelinks,
     gapReport,
-    negativeKeywords: input.negativeKeywords,
+    negativeKeywords,
   });
 
-  return { coreBrandKeywords, headlines, descriptions, sitelinks, gapReport, previewPayload };
+  return { coreBrandKeywords, headlines, descriptions, sitelinks, gapReport, negativeKeywords, previewPayload };
 }

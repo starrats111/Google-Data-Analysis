@@ -270,15 +270,18 @@ function checkOne(
     return out;
   }
 
+  // TRADEMARK-02（07 拍板 2026-08-17）：品牌词由 critical 降为 minor——不含品牌词的标题
+  // Ad Strength 评分偏低，员工手动加品牌词提升评分的做法不再被生成端删除 / H4 自动重写，
+  // 仅在编辑期给风险警告，商标拒登由人工处理。
   if (!options.allowBrand && brandToken && lower.includes(brandToken)) {
     out.push({
       field,
       index: idx,
       text,
       rule: "trademark_leak",
-      severity: "critical",
+      severity: "minor",
       matchedTerm: brandToken,
-      hint: `Remove the merchant brand name "${options.merchantName ?? brandToken}". This system runs in an affiliate marketing context — using the merchant's trademark violates Google Ads trademark policy. Use functional/category language instead.`,
+      hint: `Contains the merchant brand name "${options.merchantName ?? brandToken}". In an affiliate context this may trigger a Google Ads trademark disapproval — keep it only if the risk is acceptable.`,
     });
     return out;
   }
@@ -342,7 +345,7 @@ export function buildRewritePrompt(
     "  · NO phone numbers anywhere in headlines/descriptions",
     "  · NO unfair-advantage claims (Trusted by Millions, Award-Winning, Best-in-Class, Guaranteed, #1, Stops All)",
     "  · NO inappropriate content (Spooky, Scary, Demon, Hacked, Sick of, Tired of, Violence)",
-    "  · NO brand name leakage — describe what the merchant SELLS, not its name",
+    "  · KEEP any merchant brand name that already appears in the original line — do NOT remove or replace it",
     "  · NO excessive ALL CAPS (>30% of words). Only ≤4-letter acronyms (USA, VPN, MXN) can stay ALL CAPS",
     "  · USE specific, verifiable facts (real review counts, real prices on site, real product features)",
     "",

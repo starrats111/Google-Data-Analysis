@@ -502,11 +502,14 @@ export default function AdPreviewPage() {
       if (json.code !== 0) return;
       const next: Record<string, string> = {};
       for (const v of (json.data?.violations || []) as Array<{ field: string; index: number; rule: string; severity: string; matchedTerm?: string | null }>) {
-        if (v.severity !== "critical") continue;
         const ruleKey = v.rule.split(":")[0];
+        // TRADEMARK-02：品牌词已降为 minor（不再自动重写），但仍要给员工风险提示；其余 minor 不打扰
+        if (v.severity !== "critical" && ruleKey !== "trademark_leak") continue;
         const label = LINT_RULE_LABELS[ruleKey] || "触发合规规则";
         const term = v.matchedTerm ? `「${v.matchedTerm}」` : "";
-        next[`${v.field}#${v.index}`] = `${label}${term}，提交时会被系统自动重写，建议现在改掉`;
+        next[`${v.field}#${v.index}`] = ruleKey === "trademark_leak"
+          ? `${label}${term}，有商标拒登风险，系统不会自动改写，请自行判断是否保留`
+          : `${label}${term}，提交时会被系统自动重写，建议现在改掉`;
       }
       setLintWarnings(next);
     } catch { /* 快检失败不打扰编辑 */ }

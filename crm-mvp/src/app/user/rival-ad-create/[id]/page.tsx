@@ -22,6 +22,7 @@ import {
   Col,
   Descriptions,
   Input,
+  Modal,
   Row,
   Space,
   Spin,
@@ -101,8 +102,11 @@ export default function RivalAdCreatePage() {
   const [headlines, setHeadlines] = useState<string[]>([]);
   const [descriptions, setDescriptions] = useState<string[]>([]);
   const [negatives, setNegatives] = useState("");
+  const [brandKeywords, setBrandKeywords] = useState("");
   const [customerId, setCustomerId] = useState("");
   const [dirty, setDirty] = useState(false);
+  // RIVAL-PUB-02：点「确认发布」先进入可编辑最终确认层，再次确认才真正发布
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const load = useCallback(async () => {
     if (!draftId) return;
@@ -120,6 +124,7 @@ export default function RivalAdCreatePage() {
         setHeadlines(r.data.headlines.map((h) => h.text));
         setDescriptions(r.data.descriptions.map((d) => d.text));
         setNegatives((r.data.negative_keywords || []).join("\n"));
+        setBrandKeywords((r.data.core_brand_keywords || []).join("\n"));
       }
       return isDirty;
     });
@@ -167,8 +172,9 @@ export default function RivalAdCreatePage() {
     });
   }, [draft]);
 
-  const saveAssets = useCallback(async () => {
-    if (!draftId) return;
+  // 把编辑区当前内容整体落库（标题/描述/品牌核心词/否定词）；确认发布前也走这里自动保存
+  const saveAssets = useCallback(async (opts?: { silent?: boolean }): Promise<boolean> => {
+    if (!draftId) return false;
     setSaving(true);
     try {
       const r = await callApi<DraftDto>(`/api/user/rival-intel/drafts/${draftId}`, {
@@ -176,6 +182,10 @@ export default function RivalAdCreatePage() {
         body: {
           headlines: headlines.map((t) => t.trim()).filter(Boolean),
           descriptions: descriptions.map((t) => t.trim()).filter(Boolean),
+          coreBrandKeywords: brandKeywords
+            .split("\n")
+            .map((s) => s.trim())
+            .filter(Boolean),
           negativeKeywords: negatives
             .split("\n")
             .map((s) => s.trim())
@@ -184,15 +194,16 @@ export default function RivalAdCreatePage() {
       });
       if (r.code !== 0) {
         message.error(r.message || "保存失败");
-        return;
+        return false;
       }
       setDirty(false);
       setDraft(r.data);
-      message.success("已保存");
+      if (!opts?.silent) message.success("已保存");
+      return true;
     } finally {
       setSaving(false);
     }
-  }, [draftId, headlines, descriptions, negatives]);
+  }, [draftId, headlines, descriptions, brandKeywords, negatives]);
 
   const retry = useCallback(async () => {
     if (!draftId) return;
@@ -209,14 +220,13 @@ export default function RivalAdCreatePage() {
     }
   }, [draftId, load]);
 
-  const publish = useCallback(async () => {
+  // RIVAL-PUB-02：确认层里点最终确认——先把全部修改自动落库，成功后才真正发布
+  const confirmPublish = useCallback(async () => {
     if (!draftId) return;
-    if (dirty) {
-      message.warning("请先保存文案修改");
-      return;
-    }
     setPublishing(true);
     try {
+      const saved = await saveAssets({ silent: true });
+      if (!saved) return;
       const r = await callApi<{ campaign_id: string }>(
         `/api/user/rival-intel/drafts/${draftId}/publish`,
         { method: "POST", body: customerId.trim() ? { customer_id: customerId.trim() } : {} },
@@ -225,13 +235,14 @@ export default function RivalAdCreatePage() {
         message.error(r.message || "发布失败");
         return;
       }
+      setConfirmOpen(false);
       message.success("已提交，正在后台发布到 Google Ads");
       // 发布进度、命名、CID 都在 CRM 的广告预览页看，不在这里重复实现一套
       setTimeout(() => router.push(`/user/ad-preview/${r.data.campaign_id}`), 800);
     } finally {
       setPublishing(false);
     }
-  }, [draftId, customerId, dirty, router]);
+  }, [draftId, customerId, router, saveAssets]);
 
   if (loading) {
     return (
@@ -247,6 +258,7 @@ export default function RivalAdCreatePage() {
 
   const ready = draft.status === "draft_ready";
   const failed = draft.status === "draft_failed" || !!draft.failed_stage;
+  const brandKeywordList = brandKeywords.split("\n").map((s) => s.trim()).filter(Boolean);
 
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
@@ -319,7 +331,7 @@ export default function RivalAdCreatePage() {
             size="small"
             title="文案预览与编辑"
             extra={
-              <Button size="small" type="primary" loading={saving} disabled={!dirty} onClick={saveAssets}>
+              <Button size="small" type="primary" loading={saving} disabled={!dirty} onClick={() => void saveAssets()}>
                 保存修改
               </Button>
             }
@@ -374,12 +386,12 @@ export default function RivalAdCreatePage() {
             <Row gutter={16} style={{ marginTop: 16 }}>
               <Col xs={24} md={12}>
                 <Text strong style={{ fontSize: 13 }}>
-                  品牌核心词（发布时按 PHRASE 匹配投放）
+                  品牌核心词（发布时按 PHRASE 匹配投放，可在发布确认步骤修改）
                 </Text>
                 <div style={{ marginTop: 8 }}>
-                  {(draft.core_brand_keywords || []).length > 0 ? (
+                  {brandKeywordList.length > 0 ? (
                     <Space size={4} wrap>
-                      {(draft.core_brand_keywords || []).map((kw) => (
+                      {brandKeywordList.map((kw) => (
                         <Tag key={kw} color="blue">
                           {kw}
                         </Tag>
@@ -415,27 +427,146 @@ export default function RivalAdCreatePage() {
                 type="info"
                 showIcon
                 message="广告系列名、序号、CID 由 CRM 统一分配"
-                description="两个引擎共用同一套六段命名与序号池，发布进度和拒登信息在广告预览页查看。"
+                description="点「确认发布」先进入最终确认步骤：标题、描述、投放关键词、否定关键词都可以再修改，再次确认才会真正发布到 Google Ads。"
               />
-              <Space>
-                <Input
-                  placeholder="指定 CID（可留空，由系统按可用性挑）"
-                  value={customerId}
-                  onChange={(e) => setCustomerId(e.target.value)}
-                  style={{ width: 280 }}
-                  size="small"
-                />
-                <Button
-                  type="primary"
-                  icon={<RocketOutlined />}
-                  loading={publishing}
-                  onClick={publish}
-                >
-                  确认发布
-                </Button>
-              </Space>
+              <Button
+                type="primary"
+                icon={<RocketOutlined />}
+                onClick={() => setConfirmOpen(true)}
+              >
+                确认发布
+              </Button>
             </Space>
           </Card>
+
+          <Modal
+            title="发布前最终确认"
+            open={confirmOpen}
+            width={960}
+            style={{ top: 24 }}
+            onCancel={() => setConfirmOpen(false)}
+            maskClosable={false}
+            footer={[
+              <Button key="back" disabled={publishing} onClick={() => setConfirmOpen(false)}>
+                返回修改
+              </Button>,
+              <Button
+                key="publish"
+                type="primary"
+                icon={<RocketOutlined />}
+                loading={publishing}
+                disabled={brandKeywordList.length === 0}
+                onClick={() => void confirmPublish()}
+              >
+                确认发布到 Google Ads
+              </Button>,
+            ]}
+          >
+            <Space direction="vertical" size={16} style={{ width: "100%" }}>
+              <Alert
+                type="warning"
+                showIcon
+                message="这是发布前的最后一步"
+                description="下面的内容都可以直接修改，点「确认发布到 Google Ads」时会自动保存全部修改并真正发布；点「返回修改」不会发布。"
+              />
+              <Row gutter={16}>
+                <Col xs={24} md={12}>
+                  <Text strong style={{ fontSize: 13 }}>
+                    标题（{headlines.length} 条 · 每条 ≤ {HEADLINE_MAX} 字符）
+                  </Text>
+                  <Space direction="vertical" size={6} style={{ width: "100%", marginTop: 8 }}>
+                    {headlines.map((text, idx) => (
+                      <Input
+                        key={idx}
+                        value={text}
+                        maxLength={HEADLINE_MAX}
+                        showCount
+                        size="small"
+                        onChange={(e) => {
+                          const next = [...headlines];
+                          next[idx] = e.target.value;
+                          setHeadlines(next);
+                          setDirty(true);
+                        }}
+                      />
+                    ))}
+                  </Space>
+                </Col>
+                <Col xs={24} md={12}>
+                  <Text strong style={{ fontSize: 13 }}>
+                    描述（{descriptions.length} 条 · 每条 ≤ {DESCRIPTION_MAX} 字符）
+                  </Text>
+                  <Space direction="vertical" size={6} style={{ width: "100%", marginTop: 8 }}>
+                    {descriptions.map((text, idx) => (
+                      <TextArea
+                        key={idx}
+                        value={text}
+                        maxLength={DESCRIPTION_MAX}
+                        showCount
+                        autoSize={{ minRows: 2, maxRows: 3 }}
+                        onChange={(e) => {
+                          const next = [...descriptions];
+                          next[idx] = e.target.value;
+                          setDescriptions(next);
+                          setDirty(true);
+                        }}
+                      />
+                    ))}
+                  </Space>
+                </Col>
+              </Row>
+              <Row gutter={16}>
+                <Col xs={24} md={12}>
+                  <Text strong style={{ fontSize: 13 }}>
+                    投放关键词 · 品牌核心词（一行一个，按 PHRASE 匹配投放）
+                  </Text>
+                  <TextArea
+                    value={brandKeywords}
+                    autoSize={{ minRows: 3, maxRows: 8 }}
+                    style={{ marginTop: 8 }}
+                    placeholder="至少填一个，否则无法发布"
+                    onChange={(e) => {
+                      setBrandKeywords(e.target.value);
+                      setDirty(true);
+                    }}
+                  />
+                  {brandKeywordList.length === 0 && (
+                    <Text type="danger" style={{ fontSize: 12 }}>
+                      没有投放关键词无法发布，请至少填一个
+                    </Text>
+                  )}
+                </Col>
+                <Col xs={24} md={12}>
+                  <Text strong style={{ fontSize: 13 }}>
+                    否定关键词（一行一个）
+                  </Text>
+                  <TextArea
+                    value={negatives}
+                    autoSize={{ minRows: 3, maxRows: 8 }}
+                    style={{ marginTop: 8 }}
+                    onChange={(e) => {
+                      setNegatives(e.target.value);
+                      setDirty(true);
+                    }}
+                  />
+                </Col>
+              </Row>
+              <div>
+                <Text strong style={{ fontSize: 13 }}>
+                  发布账号
+                </Text>
+                <div style={{ marginTop: 8 }}>
+                  <Input
+                    placeholder="指定 CID（可留空，由系统按可用性挑）"
+                    value={customerId}
+                    onChange={(e) => setCustomerId(e.target.value)}
+                    style={{ width: 320 }}
+                    size="small"
+                  />
+                </div>
+              </div>
+            </Space>
+          </Modal>
         </>
       )}
     </Space>
