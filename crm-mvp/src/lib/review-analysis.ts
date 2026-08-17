@@ -28,9 +28,13 @@ export const PAUSE_SOURCE_LABELS: Record<string, string> = {
   manual: "手动暂停",
   spend_guard: "哨兵止损",
   ai_apply: "AI建议执行",
-  sync: "同步发现",
+  sync: "同步发现(近似)",
+  change_history: "谷歌记录(精确)",
   backfill: "历史回填(近似)",
 };
+
+/** 暂停时间为近似值的来源（UI 标 ≈）：sync=发现时刻（最多晚一天）、backfill=按最后消费日推算 */
+export const APPROX_PAUSE_SOURCES = new Set(["sync", "backfill"]);
 
 export interface PauseWindow {
   /** 暂停日（CST，YYYY-MM-DD） */

@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+﻿import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { normalizePlatformCode } from "@/lib/constants";
 import { parseCampaignNameFull } from "@/lib/campaign-merchant-link";
@@ -73,6 +73,17 @@ async function doDailySync() {
 
     log("Step 2.6: Syncing merchant statuses from campaign statuses...");
     await syncAllMerchantStatuses();
+
+    // D-245：Sheet 状态同步记录的是「发现时刻」（员工在 Google 界面直接暂停的最多晚一天），
+    // 用 change_event 变更历史把近几天 sync 来源的暂停时间精确化（非致命，失败不阻断同步）
+    log("Step 2.7: Refining pause times from Google change history...");
+    try {
+      const { refinePauseTimesFromChangeHistory } = await import("@/lib/google-ads/change-history");
+      const r = await refinePauseTimesFromChangeHistory({ sources: ["sync"], recentDays: 3, lookbackDays: 7, log });
+      log(`  Pause time refine: scanned=${r.scanned} cids=${r.cidsQueried} updated=${r.updated} errors=${r.errors}`);
+    } catch (e) {
+      log(`Pause time refine failed (non-fatal): ${e instanceof Error ? e.message : e}`);
+    }
 
     log("Step 3: Syncing transaction data for all users...");
     await syncAllUsersTransactions();

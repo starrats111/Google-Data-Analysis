@@ -89,8 +89,12 @@ const EMPTY_SUMMARY: Summary = {
 const statusLabels: Record<string, string> = { PAUSED: "暂停", REMOVED: "移除" };
 const statusColors: Record<string, string> = { PAUSED: "orange", REMOVED: "red" };
 const sourceColors: Record<string, string> = {
-  manual: "blue", spend_guard: "volcano", ai_apply: "purple", sync: "default", backfill: "default",
+  manual: "blue", spend_guard: "volcano", ai_apply: "purple", sync: "default",
+  change_history: "green", backfill: "default",
 };
+// 暂停时间为近似值的来源（标 ≈）：sync=同步发现时刻（最多晚一天）、backfill=按最后消费日推算；
+// 每日同步会用 Google 变更历史把近几天的近似值修正为精确时间（→ change_history）
+const APPROX_SOURCES = new Set(["sync", "backfill"]);
 
 // CID 格式化: 1234567890 → 123-456-7890（与数据中心一致）
 function formatCid(cid: string | number): string {
@@ -214,9 +218,9 @@ export default function ReviewAnalysisPage() {
       sorter: (a, b) => a.paused_at.localeCompare(b.paused_at),
       defaultSortOrder: "descend" as const,
       render: (v: string, r: ReviewRow) => (
-        <Tooltip title={`${dayjs(r.paused_at).tz(TZ).format("YYYY-MM-DD HH:mm")}${r.pause_source === "backfill" ? "（历史回填，近似值）" : ""}`}>
+        <Tooltip title={`${dayjs(r.paused_at).tz(TZ).format("YYYY-MM-DD HH:mm")}${APPROX_SOURCES.has(r.pause_source || "") ? "（近似值，每日同步会以 Google 变更记录自动修正）" : ""}`}>
           <Text style={{ fontSize: 12 }}>
-            {v}{r.pause_source === "backfill" && <Text type="secondary" style={{ fontSize: 11 }}>≈</Text>}
+            {v}{APPROX_SOURCES.has(r.pause_source || "") && <Text type="secondary" style={{ fontSize: 11 }}>≈</Text>}
           </Text>
         </Tooltip>
       ),
@@ -237,7 +241,7 @@ export default function ReviewAnalysisPage() {
     },
     pause_source: {
       key: "pause_source",
-      title: <Tooltip title="暂停由谁触发：手动 / 花费哨兵止损 / AI 建议执行 / 同步发现 / 历史回填(近似)"><span>暂停原因</span></Tooltip>,
+      title: <Tooltip title="暂停由谁触发：手动 / 花费哨兵止损 / AI 建议执行 / 同步发现(≈近似) / 谷歌记录(精确) / 历史回填(≈近似)"><span>暂停原因</span></Tooltip>,
       width: 110, align: "center",
       render: (_: unknown, r: ReviewRow) => (
         <Tag color={sourceColors[r.pause_source || ""] || "default"} style={{ fontSize: 11, margin: 0 }}>
