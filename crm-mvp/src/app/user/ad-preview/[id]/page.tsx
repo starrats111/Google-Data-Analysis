@@ -844,11 +844,40 @@ export default function AdPreviewPage() {
 
   // ─── 关键词操作 ───
   const [newKwMatchType, setNewKwMatchType] = useState<string>("PHRASE");
-  const addKeyword = () => {
-    if (newKeyword.trim()) {
-      setKwList((prev) => [...prev, { text: newKeyword.trim(), matchType: newKwMatchType }]);
-      setNewKeyword("");
+  // 按 Google Ads 官方语法解析单行关键词：[x]=完全、"x"=词组、+x=已废弃的 BMM 按词组处理、无符号=默认类型
+  const parseKeywordLine = (line: string, defaultMatchType: string): { text: string; matchType: string } | null => {
+    const raw = line.trim();
+    if (!raw) return null;
+    let m = raw.match(/^\[(.+)\]$/);
+    if (m) return { text: m[1].trim(), matchType: "EXACT" };
+    m = raw.match(/^["“”](.+)["“”]$/);
+    if (m) return { text: m[1].trim(), matchType: "PHRASE" };
+    if (/(^|\s)\+\S/.test(raw)) {
+      return { text: raw.replace(/(^|\s)\+/g, "$1").trim(), matchType: "PHRASE" };
     }
+    return { text: raw, matchType: defaultMatchType };
+  };
+  const addKeyword = () => {
+    const parsed = newKeyword
+      .split(/\r?\n/)
+      .map((line) => parseKeywordLine(line, newKwMatchType))
+      .filter((kw): kw is { text: string; matchType: string } => kw !== null && kw.text.length > 0);
+    if (parsed.length === 0) return;
+    const seen = new Set(kwList.map((k) => `${k.text.toLowerCase()}|${k.matchType}`));
+    const fresh: KeywordItem[] = [];
+    let skipped = 0;
+    for (const kw of parsed) {
+      const key = `${kw.text.toLowerCase()}|${kw.matchType}`;
+      if (seen.has(key)) { skipped++; continue; }
+      seen.add(key);
+      fresh.push(kw);
+    }
+    if (fresh.length > 0) setKwList((prev) => [...prev, ...fresh]);
+    if (parsed.length > 1 || skipped > 0) {
+      const parts = [fresh.length > 0 ? `已添加 ${fresh.length} 个关键词` : "", skipped > 0 ? `跳过重复 ${skipped} 个` : ""].filter(Boolean);
+      message.info(parts.join("，"));
+    }
+    setNewKeyword("");
   };
   const removeKeyword = (idx: number) => setKwList((prev) => prev.filter((_, i) => i !== idx));
   const updateKeywordMatchType = (idx: number, matchType: string) => {
@@ -2718,12 +2747,17 @@ export default function AdPreviewPage() {
                   { value: "EXACT", label: "完全" },
                 ]}
               />
-              <Input
+              <Input.TextArea
                 value={newKeyword} onChange={(e) => setNewKeyword(e.target.value)}
-                placeholder="输入关键词" onPressEnter={addKeyword}
+                placeholder={'可批量粘贴，一行一个，支持谷歌语法：[完全匹配]、"词组匹配"、无符号按左侧类型'}
+                autoSize={{ minRows: 1, maxRows: 8 }}
+                onPressEnter={(e) => { if (!e.shiftKey) { e.preventDefault(); addKeyword(); } }}
               />
               <Button type="primary" onClick={addKeyword} icon={<PlusOutlined />}>添加</Button>
             </Space.Compact>
+            <Text type="secondary" style={{ fontSize: 11, display: "block", marginTop: 4 }}>
+              {'Enter 添加，Shift+Enter 换行；带 [ ] 或 " " 的行自动识别匹配类型，其余按左侧下拉的类型添加'}
+            </Text>
           </Card>
 
           {/* ─── 否定关键词（Adrian 自动生成） ─── */}
