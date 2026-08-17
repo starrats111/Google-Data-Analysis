@@ -93,12 +93,21 @@ export async function POST(req: NextRequest) {
     // 旧逻辑只写 google_status，cron status-sync 也不刷 status，导致 9810 条历史 status!=google_status 漂移
     const confirmedStatusStr = String(confirmedStatus);
     const newInternalStatus = confirmedStatusStr === "PAUSED" || confirmedStatusStr === "REMOVED" ? "paused" : "active";
+    // D-245 复盘分析：置 PAUSED 时记录暂停时间与来源（仅状态发生翻转时写，避免覆盖更早的暂停时间）；
+    // 重新启用时清空 → 系列自然移出复盘列表
+    const pauseFields =
+      confirmedStatusStr === "ENABLED"
+        ? { paused_at: null, pause_source: null }
+        : confirmedStatusStr === "PAUSED" && campaign.google_status !== "PAUSED"
+          ? { paused_at: new Date(), pause_source: "manual" }
+          : {};
     await prisma.campaigns.update({
       where: { id: campaign.id },
       data: {
         status: newInternalStatus,
         google_status: confirmedStatus,
         last_google_sync_at: new Date(),
+        ...pauseFields,
       },
     });
 

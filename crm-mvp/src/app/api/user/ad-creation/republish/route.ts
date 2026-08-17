@@ -84,6 +84,9 @@ export async function POST(req: NextRequest) {
       customer_id: null,
       google_status: "ENABLED",
       campaign_name: newCampaignName,
+      // D-245：重发即重新开始投放，清掉历史暂停记录
+      paused_at: null,
+      pause_source: null,
     },
   });
 

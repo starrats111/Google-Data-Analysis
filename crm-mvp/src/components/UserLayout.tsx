@@ -20,6 +20,7 @@ import {
   EyeOutlined,
   StarOutlined,
   SwapOutlined,
+  HistoryOutlined,
 } from "@ant-design/icons";
 import { useRouter, usePathname } from "next/navigation";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
@@ -90,6 +91,7 @@ const leaderMenuItems: MenuItem[] = [
     type: "group" as const,
     children: [
       { key: "/user/team-overview", icon: <FundOutlined />, label: "小组总览" },
+      { key: "/user/review-analysis", icon: <HistoryOutlined />, label: "复盘分析" },
       { key: "/user/team-members", icon: <TeamOutlined />, label: "员工管理" },
       { key: "/user/team-merchants", icon: <ShopOutlined />, label: "组下商家" },
       { key: "/user/team-report", icon: <BarChartOutlined />, label: "收支报表" },

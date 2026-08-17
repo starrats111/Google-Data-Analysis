@@ -406,6 +406,10 @@ model campaigns {
   status                     String    @default("active") @db.VarChar(16)
   google_status              String    @default("ENABLED") @db.VarChar(16) // Google Ads 侧真实状态: ENABLED / PAUSED / REMOVED
   last_google_sync_at        DateTime? @db.DateTime(0) // 最后一次从 Google 同步状态的时间
+  // D-245 复盘分析：暂停时间与来源。所有置 PAUSED 的写点统一写入；→ENABLED 时清空（自然移出复盘列表）；
+  // REMOVED 保留（曾暂停过的进复盘）。backfill = 上线时用 last_google_sync_at 近似回填的存量值
+  paused_at                  DateTime? @db.DateTime(0)
+  pause_source               String?   @db.VarChar(20) // manual / spend_guard / ai_apply / sync / backfill
   // D-040 v2: 重发广告历史 gcid 列表（含旧 gcid 数组），用于 cost 合并 + GAds REMOVED 数据补救
   // 格式: ["23663238670", "23864905107"] — 不含 current google_campaign_id
   // 用途: status-sync / daily-sync 拉 GAds REMOVED 广告时按 previous_gcids 匹配回原 campaign，cost 合并不丢

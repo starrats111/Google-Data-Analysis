@@ -91,7 +91,11 @@ export async function POST(req: NextRequest) {
         if (r.success) {
           await prisma.campaigns.update({
             where: { id: campaign.id },
-            data: { google_status: "PAUSED", status: "paused", last_google_sync_at: new Date() },
+            data: {
+              google_status: "PAUSED", status: "paused", last_google_sync_at: new Date(),
+              // D-245 复盘分析：记录暂停时间与来源（已是 PAUSED 时不覆盖更早的暂停时间）
+              ...(campaign.google_status !== "PAUSED" ? { paused_at: new Date(), pause_source: "ai_apply" } : {}),
+            },
           });
         }
         results.push({ type: action.type, ...r });

@@ -240,7 +240,8 @@ export async function GET(req: NextRequest) {
     if (r.success) {
       await prisma.campaigns.update({
         where: { id: t.c.id },
-        data: { google_status: "PAUSED", last_google_sync_at: new Date() },
+        // D-245 复盘分析：哨兵止损也记录暂停时间与来源（候选必为 ENABLED，无覆盖风险）
+        data: { google_status: "PAUSED", last_google_sync_at: new Date(), paused_at: new Date(), pause_source: "spend_guard" },
       });
       await prisma.spend_guard_actions.upsert({
         where: { campaign_id: t.c.id },

@@ -326,6 +326,15 @@ async function syncAdsData(
             const updateData: Record<string, unknown> = {
               daily_budget: cd.budget_dollars, google_status: cd.campaign_status, last_google_sync_at: new Date(),
             };
+            // D-245 复盘分析：同步发现 →PAUSED 翻转记录暂停时间；→ENABLED 清空；REMOVED 保留原值
+            if (cd.campaign_status === "PAUSED" && campaign.google_status !== "PAUSED") {
+              updateData.paused_at = new Date();
+              updateData.pause_source = "sync";
+            } else if (cd.campaign_status === "ENABLED") {
+              updateData.paused_at = null;
+              updateData.pause_source = null;
+            }
+            campaign.google_status = cd.campaign_status;
             if (!campaign.customer_id && cd.customer_id) {
               updateData.customer_id = cd.customer_id;
               campaign.customer_id = cd.customer_id;
@@ -401,6 +410,14 @@ async function syncAdsData(
                   status: expectedInternalStatus,
                   last_google_sync_at: new Date(),
                 };
+                // D-245 复盘分析：同步发现 →PAUSED 翻转记录暂停时间（近似=发现时刻）；→ENABLED 清空；REMOVED 保留原值
+                if (cs.status === "PAUSED" && existing.google_status !== "PAUSED") {
+                  updateData.paused_at = new Date();
+                  updateData.pause_source = "sync";
+                } else if (cs.status === "ENABLED") {
+                  updateData.paused_at = null;
+                  updateData.pause_source = null;
+                }
                 if (cs.name) updateData.campaign_name = cs.name;
                 if (!existing.customer_id && cs.customerId) {
                   updateData.customer_id = cs.customerId;

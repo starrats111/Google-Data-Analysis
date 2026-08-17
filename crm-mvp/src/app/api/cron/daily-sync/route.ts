@@ -1,4 +1,4 @@
-﻿import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { normalizePlatformCode } from "@/lib/constants";
 import { parseCampaignNameFull } from "@/lib/campaign-merchant-link";
@@ -556,9 +556,10 @@ async function syncAllCampaignStatuses(): Promise<unknown> {
             });
           } else {
             // 重新暂停失败：同步真实状态（ENABLED），并立即发系统通知
+            // D-245：既然实际在跑，清掉暂停记录（移出复盘列表；后续再被暂停会记新时间）
             await prisma.campaigns.update({
               where: { id: existing.id },
-              data: { google_status: "ENABLED", last_google_sync_at: new Date() },
+              data: { google_status: "ENABLED", last_google_sync_at: new Date(), paused_at: null, pause_source: null },
             });
             updated++;
 
@@ -605,17 +606,33 @@ async function syncAllCampaignStatuses(): Promise<unknown> {
           }
         } else {
           // 正常情况：直接同步状态
-          const result = await prisma.campaigns.updateMany({
-            where: {
-              user_id: mcc.user_id,
-              google_campaign_id: s.campaign_id,
-              is_deleted: 0,
-            },
-            data: {
-              google_status: s.status,
-              last_google_sync_at: new Date(),
-            },
-          });
+          // D-245 复盘分析：同步发现 →PAUSED 的翻转记录暂停时间（近似=发现时刻）；→ENABLED 清空；REMOVED 保留原值
+          const syncNow = new Date();
+          let result: { count: number };
+          if (s.status === "PAUSED") {
+            const flipped = await prisma.campaigns.updateMany({
+              where: { user_id: mcc.user_id, google_campaign_id: s.campaign_id, is_deleted: 0, google_status: { not: "PAUSED" } },
+              data: { google_status: "PAUSED", last_google_sync_at: syncNow, paused_at: syncNow, pause_source: "sync" },
+            });
+            const kept = await prisma.campaigns.updateMany({
+              where: { user_id: mcc.user_id, google_campaign_id: s.campaign_id, is_deleted: 0, google_status: "PAUSED" },
+              data: { last_google_sync_at: syncNow },
+            });
+            result = { count: flipped.count + kept.count };
+          } else {
+            result = await prisma.campaigns.updateMany({
+              where: {
+                user_id: mcc.user_id,
+                google_campaign_id: s.campaign_id,
+                is_deleted: 0,
+              },
+              data: {
+                google_status: s.status,
+                last_google_sync_at: syncNow,
+                ...(s.status === "ENABLED" ? { paused_at: null, pause_source: null } : {}),
+              },
+            });
+          }
           updated += result.count;
 
           // 复活闸门：Google 实时 ENABLED 但 CRM 无活跃行（被误删/迁移遗漏的活广告）→ 复活。
@@ -637,6 +654,9 @@ async function syncAllCampaignStatuses(): Promise<unknown> {
                   status: "active",
                   customer_id: s.customer_id || undefined,
                   last_google_sync_at: new Date(),
+                  // D-245：复活即在跑，清掉历史暂停记录
+                  paused_at: null,
+                  pause_source: null,
                 },
               });
               // D-196：系列复活时把随它软删的历史花费一并恢复，否则复活出来的是一条零花费空壳
