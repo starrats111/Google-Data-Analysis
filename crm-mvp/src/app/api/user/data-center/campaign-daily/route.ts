@@ -12,10 +12,13 @@ import {
 
 export const dynamic = "force-dynamic";
 
+import { resolveCampaignReadScopes } from "@/lib/campaign-read-access";
+
 /**
  * D-238 眼睛弹窗数据：单系列最近 7 天逐日明细 + 最新 AI 分析报告
  *
  * GET ?campaignId=123&strategy=balanced
+ * D-241：组长可只读本组组员的系列（逐日明细与缓存建议按归属人查询）
  */
 export async function GET(req: NextRequest) {
   const user = getUserFromRequest(req);
@@ -32,17 +35,21 @@ export async function GET(req: NextRequest) {
   const strategyParam = req.nextUrl.searchParams.get("strategy");
   const strategy: AnalysisStrategy = isValidAnalysisStrategy(strategyParam) ? strategyParam : "balanced";
 
-  const userId = BigInt(user.userId);
+  // D-241：本人或组长（本组组员）可读；越域按不存在处理，不泄露系列归属
+  const scopes = await resolveCampaignReadScopes(user, [campaignId]);
+  if (!scopes || scopes.size === 0) return apiError("广告系列不存在", 404);
+  const ownerId = BigInt([...scopes.keys()][0]);
+
   const campaign = await prisma.campaigns.findFirst({
-    where: { id: campaignId, user_id: userId, is_deleted: 0 },
+    where: { id: campaignId, user_id: ownerId, is_deleted: 0 },
     select: { id: true, campaign_name: true, daily_budget: true, max_cpc_limit: true, google_status: true },
   });
   if (!campaign) return apiError("广告系列不存在", 404);
 
   const range = getAnalysisRange(7);
   const [dailyStats, recommendations] = await Promise.all([
-    fetchCampaignDailyStats(userId, [campaignId], range),
-    getCachedRecommendations(userId, [campaignId], strategy),
+    fetchCampaignDailyStats(ownerId, [campaignId], range),
+    getCachedRecommendations(ownerId, [campaignId], strategy),
   ]);
 
   const daily = dailyStats.map((d) => ({

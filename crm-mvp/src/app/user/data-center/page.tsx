@@ -52,8 +52,8 @@ const COLUMNS_META: ColumnMetaItem[] = [
   { key: "customer_id", label: "CID" },
   { key: "daily_budget", label: "预算" },
   { key: "max_cpc", label: "最高出价" },
-  { key: "is_budget", label: "IS_Bgt（预算错失份额）" },
-  { key: "is_rank", label: "IS_Rnk（评级错失份额）" },
+  { key: "is_budget", label: METRIC_COLUMN_LABELS.is_budget },
+  { key: "is_rank", label: METRIC_COLUMN_LABELS.is_rank },
   { key: "impressions", label: METRIC_COLUMN_LABELS.impressions },
   { key: "clicks", label: METRIC_COLUMN_LABELS.clicks },
   { key: "orders", label: METRIC_COLUMN_LABELS.orders },
@@ -757,35 +757,7 @@ export default function DataCenterPage() {
         </Button>
       ),
     },
-    is_budget: {
-      key: "is_budget",
-      title: (
-        <Tooltip title="IS_Bgt = 因预算不足错失的展示份额（区间内最新一日）。偏高说明预算钳制了曝光">
-          <span>IS_Bgt</span>
-        </Tooltip>
-      ),
-      dataIndex: "is_budget", width: 80, align: "right",
-      sorter: (a, b) => (a.is_budget ?? -1) - (b.is_budget ?? -1),
-      render: (v: number | null | undefined) => {
-        if (v == null) return <Text type="secondary" style={{ fontSize: 12 }}>—</Text>;
-        return <Text style={{ fontSize: 12, color: v >= 0.1 ? "#cf1322" : undefined }}>{(v * 100).toFixed(1)}%</Text>;
-      },
-    },
-    is_rank: {
-      key: "is_rank",
-      title: (
-        <Tooltip title="IS_Rnk = 因广告评级错失的展示份额（区间内最新一日）。偏高说明出价/质量得分不足">
-          <span>IS_Rnk</span>
-        </Tooltip>
-      ),
-      dataIndex: "is_rank", width: 80, align: "right",
-      sorter: (a, b) => (a.is_rank ?? -1) - (b.is_rank ?? -1),
-      render: (v: number | null | undefined) => {
-        if (v == null) return <Text type="secondary" style={{ fontSize: 12 }}>—</Text>;
-        return <Text style={{ fontSize: 12, color: v >= 0.3 ? "#cf1322" : undefined }}>{(v * 100).toFixed(1)}%</Text>;
-      },
-    },
-    // 展示/点击/订单/平均CPC/EPC/每百次点击费用/花费/CPA/佣金/AOV/拒付佣金/净利润/利润率/ROI/CVR
+    // 展示/点击/订单/平均CPC/EPC/每百次点击费用/花费/CPA/佣金/AOV/拒付佣金/净利润/利润率/ROI/CVR/IS_Bgt/IS_Rnk
     // 由 metricColumns 提供（tableColumnPrefs 共享定义，与组员弹窗同一份，防漂移）
     ai_suggestion: {
       title: (

@@ -98,10 +98,12 @@ interface Props {
   onApplied?: () => void;
   /** 重新分析成功后回调（父页刷新建议列） */
   onReanalyzed?: () => void;
+  /** D-241 只读模式（组长看组员）：隐藏「重新分析」「一键执行」，仅查看明细与缓存报告 */
+  readOnly?: boolean;
 }
 
 export default function CampaignAnalysisModal({
-  open, campaignId, campaignName, strategy: initialStrategy, onClose, onApplied, onReanalyzed,
+  open, campaignId, campaignName, strategy: initialStrategy, onClose, onApplied, onReanalyzed, readOnly = false,
 }: Props) {
   const { message } = App.useApp();
   const [loading, setLoading] = useState(false);
@@ -245,17 +247,23 @@ export default function CampaignAnalysisModal({
               ? analysis.actionItems.slice(0, 2).map((a, i) => (
                   <Tag key={i} color={actionColor(a.type)} style={{ fontSize: 12 }}>{formatActionItem(a)}</Tag>
                 ))
-              : <Text type="secondary" style={{ fontSize: 12 }}>暂无分析结果，点击右侧「重新分析」生成</Text>}
+              : (
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  {readOnly ? "暂无分析结果（组员尚未对该系列跑过 AI 分析）" : "暂无分析结果，点击右侧「重新分析」生成"}
+                </Text>
+              )}
             {analysis?.updatedAt && (
               <Text type="secondary" style={{ fontSize: 11 }}>更新于 {analysis.updatedAt.slice(0, 16).replace("T", " ")}</Text>
             )}
           </Space>
           <Space>
             <Select size="small" value={strategy} onChange={setStrategy} options={STRATEGY_OPTIONS} style={{ width: 90 }} />
-            <Button size="small" icon={<RobotOutlined />} loading={reanalyzing} onClick={handleReanalyze}>
-              重新分析
-            </Button>
-            {canApply && (
+            {!readOnly && (
+              <Button size="small" icon={<RobotOutlined />} loading={reanalyzing} onClick={handleReanalyze}>
+                重新分析
+              </Button>
+            )}
+            {!readOnly && canApply && (
               <Popconfirm
                 title={`确认执行「${formatActionItem(firstAction!)}」？`}
                 description="将通过 Google Ads API 实际修改广告系列"

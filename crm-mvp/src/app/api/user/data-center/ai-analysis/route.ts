@@ -8,6 +8,7 @@ import {
   isValidAnalysisStrategy,
   type AnalysisStrategy,
 } from "@/lib/campaign-analysis";
+import { resolveCampaignReadScopes } from "@/lib/campaign-read-access";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -16,6 +17,7 @@ export const maxDuration = 300;
  * D-238 数据中心广告 AI 分析
  *
  * GET  ?ids=1,2,3&strategy=balanced  只读缓存（页面加载展示操作建议列，不触发 AI）
+ *      D-241：组长可读本组组员系列的缓存建议（按归属人查询）；POST 仍仅限本人
  * POST { campaignIds, strategy?, forceRefresh?, detailed? }
  *   - 一键分析：campaignIds 多个 + detailed=false（快速批量，命中缓存不重跑）
  *   - 重新分析：campaignIds 单个 + detailed=true + forceRefresh=true（双层详细分析）
@@ -54,7 +56,14 @@ export async function GET(req: NextRequest) {
   const strategyParam = req.nextUrl.searchParams.get("strategy");
   const strategy: AnalysisStrategy = isValidAnalysisStrategy(strategyParam) ? strategyParam : "balanced";
 
-  const items = await getCachedRecommendations(BigInt(user.userId), ids, strategy);
+  // D-241：按归属人分组查缓存——本人直接放行，组长可只读本组组员，越域整体 403
+  const scopes = await resolveCampaignReadScopes(user, ids);
+  if (!scopes) return apiError("无权查看该广告系列的分析建议", 403);
+
+  const items = [];
+  for (const [ownerId, ownerIds] of scopes) {
+    items.push(...await getCachedRecommendations(BigInt(ownerId), ownerIds, strategy));
+  }
   return apiSuccess({ items });
 }
 

@@ -86,12 +86,16 @@ export interface MetricRow {
   orders: number;
   roi: number;
   mcc_currency?: string;
+  /** D-238 展示份额（0-1 分数，未采集为 null）；D-241 起为共享列 */
+  is_budget?: number | null;
+  is_rank?: number | null;
 }
 
 export type MetricColumnKey =
   | "impressions" | "clicks" | "orders" | "cpc" | "epc" | "cost_per_100_clicks"
   | "cost" | "cpa" | "commission" | "aov" | "rejected_commission"
-  | "net_profit" | "profit_rate" | "roi" | "cvr";
+  | "net_profit" | "profit_rate" | "roi" | "cvr"
+  | "is_budget" | "is_rank";
 
 /** 列设置面板里展示的名称（表头可能是缩写，这里写全称便于员工理解） */
 export const METRIC_COLUMN_LABELS: Record<MetricColumnKey, string> = {
@@ -110,6 +114,8 @@ export const METRIC_COLUMN_LABELS: Record<MetricColumnKey, string> = {
   profit_rate: "利润率",
   roi: "ROI",
   cvr: "转化率 CVR",
+  is_budget: "IS_Bgt（预算错失份额）",
+  is_rank: "IS_Rnk（评级错失份额）",
 };
 
 const dash = <Text type="secondary" style={{ fontSize: 12 }}>—</Text>;
@@ -258,6 +264,34 @@ export function buildMetricColumns<T extends MetricRow>(): Record<MetricColumnKe
         const value = calcCvr(r.orders, r.clicks);
         if (value === null) return dash;
         return <Text style={{ fontSize: 12 }}>{(value * 100).toFixed(2)}%</Text>;
+      },
+    },
+    is_budget: {
+      key: "is_budget",
+      title: (
+        <Tooltip title="IS_Bgt = 因预算不足错失的展示份额（区间内最新一日）。偏高说明预算钳制了曝光">
+          <span>IS_Bgt</span>
+        </Tooltip>
+      ),
+      dataIndex: "is_budget", width: 80, align: "right",
+      sorter: (a, b) => (a.is_budget ?? -1) - (b.is_budget ?? -1),
+      render: (v: number | null | undefined) => {
+        if (v == null) return dash;
+        return <Text style={{ fontSize: 12, color: v >= 0.1 ? "#cf1322" : undefined }}>{(v * 100).toFixed(1)}%</Text>;
+      },
+    },
+    is_rank: {
+      key: "is_rank",
+      title: (
+        <Tooltip title="IS_Rnk = 因广告评级错失的展示份额（区间内最新一日）。偏高说明出价/质量得分不足">
+          <span>IS_Rnk</span>
+        </Tooltip>
+      ),
+      dataIndex: "is_rank", width: 80, align: "right",
+      sorter: (a, b) => (a.is_rank ?? -1) - (b.is_rank ?? -1),
+      render: (v: number | null | undefined) => {
+        if (v == null) return dash;
+        return <Text style={{ fontSize: 12, color: v >= 0.3 ? "#cf1322" : undefined }}>{(v * 100).toFixed(1)}%</Text>;
       },
     },
   };
