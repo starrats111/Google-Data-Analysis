@@ -55,10 +55,18 @@ export async function raiseAlert(userId: bigint, input: RaiseAlertInput): Promis
         status: 'open',
         is_deleted: 0,
       },
-      select: { id: true, occur_count: true },
+      select: { id: true, occur_count: true, context: true },
     })
 
     if (existing) {
+      // D-242：context 合并而非整体覆盖。link-heal 把自愈尝试计数/冷却时间存在告警 context 里
+      // （heal* 前缀键），若这里仍整体覆盖，每 30 分钟一次的重报会把自愈状态清零，
+      // 尝试上限（3 次）形同虚设，坏链接会被无限重拉。
+      const prevCtx =
+        existing.context && typeof existing.context === 'object' && !Array.isArray(existing.context)
+          ? (existing.context as Record<string, unknown>)
+          : null
+      const mergedCtx = context ? { ...(prevCtx ?? {}), ...context } : undefined
       await prisma.suffix_alerts.update({
         where: { id: existing.id },
         data: {
@@ -66,7 +74,7 @@ export async function raiseAlert(userId: bigint, input: RaiseAlertInput): Promis
           last_seen_at: new Date(),
           level,
           message: message.slice(0, 500),
-          context: (context ?? undefined) as Prisma.InputJsonValue | undefined,
+          context: mergedCtx as Prisma.InputJsonValue | undefined,
         },
       })
       return

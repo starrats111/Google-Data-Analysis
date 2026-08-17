@@ -16,6 +16,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { replenishLowStock, recycleSuffixes, purgeTerminalSuffixes } from '@/lib/suffix-engine/stock-producer'
 import { cleanupExpiredExitIps } from '@/lib/suffix-engine/exit-ip'
 import { resolveAlertsForInactiveCampaigns } from '@/lib/suffix-engine/alerts'
+import { healForbiddenLinks } from '@/lib/suffix-engine/link-heal'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
@@ -25,6 +26,10 @@ let isRunning = false
 // 有积压时多个整点逐步清空，之后每天稳态只删当天到期量）。
 let lastPurgeAt = 0
 const PURGE_INTERVAL_MS = 3_600_000
+// D-242：link_forbidden 自愈节流——全量拉一个联盟账号的商家列表要数分钟，每小时一轮足够
+//（token 失效是天级事件），fire-and-forget 不阻塞本路由响应，模块内部另有并发锁。
+let lastHealAt = 0
+const HEAL_INTERVAL_MS = 3_600_000
 
 function verifyCron(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET
@@ -52,6 +57,22 @@ export async function GET(req: NextRequest) {
   if (Date.now() - lastPurgeAt >= PURGE_INTERVAL_MS) {
     lastPurgeAt = Date.now()
     purged = await purgeTerminalSuffixes()
+  }
+
+  // D-242 link_forbidden 自愈：后台跑，不 await——一个联盟账号的全量商家拉取要数分钟，
+  // 压在本路由里会把 5 分钟一轮的补货心跳拖死。结果只进 pm2 日志。
+  if (Date.now() - lastHealAt >= HEAL_INTERVAL_MS) {
+    lastHealAt = Date.now()
+    healForbiddenLinks()
+      .then((r) => {
+        if (r.scanned > 0) {
+          console.log(
+            `[link-heal] 本轮扫描 ${r.scanned} 条 link_forbidden，符合条件 ${r.eligible}，处理账号 ${r.connsProcessed} 个，换链成功 ${r.replaced}` +
+              (r.skipped.length > 0 ? `，跳过：${r.skipped.join('；')}` : ''),
+          )
+        }
+      })
+      .catch((e) => console.error('[link-heal] 自愈轮次失败:', e instanceof Error ? e.message : e))
   }
 
   if (isRunning) {
