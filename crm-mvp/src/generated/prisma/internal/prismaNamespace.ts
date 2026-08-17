@@ -416,6 +416,7 @@ export const ModelName = {
   affiliate_payments: 'affiliate_payments',
   notifications: 'notifications',
   notification_preferences: 'notification_preferences',
+  user_table_preferences: 'user_table_preferences',
   ai_insights: 'ai_insights',
   operation_logs: 'operation_logs',
   exchange_rate_snapshots: 'exchange_rate_snapshots',
@@ -471,7 +472,7 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
     omit: GlobalOmitOptions
   }
   meta: {
-    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "parent_networks" | "platform_blacklist" | "ad_rejection_feedback" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "ad_generation_jobs" | "ad_submit_jobs" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "ai_recommendations" | "spend_guard_actions" | "google_mcc_accounts" | "affiliate_transactions" | "affiliate_click_daily" | "affiliate_payments" | "notifications" | "notification_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "kyads_click_task_items" | "proxy_exit_ip_usage" | "suffix_alerts" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "user_serpapi_keys" | "user_semrush_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log" | "semrush_keyword_cache" | "semrush_health_logs" | "payment_methods" | "report_overrides" | "payment_binding_snapshots" | "bank_flow_entries" | "policy_violations" | "team_developer_tokens" | "token_usage_daily" | "google_ads_api_usage" | "ad_decision_journal" | "ad_creation_drafts" | "brand_assessment_jobs" | "brand_assessment_results" | "brand_intel_cost_ledger" | "dataforseo_brand_keyword_cache"
+    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "parent_networks" | "platform_blacklist" | "ad_rejection_feedback" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "ad_generation_jobs" | "ad_submit_jobs" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "ai_recommendations" | "spend_guard_actions" | "google_mcc_accounts" | "affiliate_transactions" | "affiliate_click_daily" | "affiliate_payments" | "notifications" | "notification_preferences" | "user_table_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "kyads_click_task_items" | "proxy_exit_ip_usage" | "suffix_alerts" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "user_serpapi_keys" | "user_semrush_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log" | "semrush_keyword_cache" | "semrush_health_logs" | "payment_methods" | "report_overrides" | "payment_binding_snapshots" | "bank_flow_entries" | "policy_violations" | "team_developer_tokens" | "token_usage_daily" | "google_ads_api_usage" | "ad_decision_journal" | "ad_creation_drafts" | "brand_assessment_jobs" | "brand_assessment_results" | "brand_intel_cost_ledger" | "dataforseo_brand_keyword_cache"
     txIsolationLevel: TransactionIsolationLevel
   }
   model: {
@@ -2584,6 +2585,72 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         count: {
           args: Prisma.notification_preferencesCountArgs<ExtArgs>
           result: runtime.Types.Utils.Optional<Prisma.Notification_preferencesCountAggregateOutputType> | number
+        }
+      }
+    }
+    user_table_preferences: {
+      payload: Prisma.$user_table_preferencesPayload<ExtArgs>
+      fields: Prisma.user_table_preferencesFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.user_table_preferencesFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_table_preferencesPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.user_table_preferencesFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_table_preferencesPayload>
+        }
+        findFirst: {
+          args: Prisma.user_table_preferencesFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_table_preferencesPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.user_table_preferencesFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_table_preferencesPayload>
+        }
+        findMany: {
+          args: Prisma.user_table_preferencesFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_table_preferencesPayload>[]
+        }
+        create: {
+          args: Prisma.user_table_preferencesCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_table_preferencesPayload>
+        }
+        createMany: {
+          args: Prisma.user_table_preferencesCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.user_table_preferencesDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_table_preferencesPayload>
+        }
+        update: {
+          args: Prisma.user_table_preferencesUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_table_preferencesPayload>
+        }
+        deleteMany: {
+          args: Prisma.user_table_preferencesDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.user_table_preferencesUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.user_table_preferencesUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$user_table_preferencesPayload>
+        }
+        aggregate: {
+          args: Prisma.User_table_preferencesAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateUser_table_preferences>
+        }
+        groupBy: {
+          args: Prisma.user_table_preferencesGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.User_table_preferencesGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.user_table_preferencesCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.User_table_preferencesCountAggregateOutputType> | number
         }
       }
     }
@@ -5958,6 +6025,19 @@ export const Notification_preferencesScalarFieldEnum = {
 export type Notification_preferencesScalarFieldEnum = (typeof Notification_preferencesScalarFieldEnum)[keyof typeof Notification_preferencesScalarFieldEnum]
 
 
+export const User_table_preferencesScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  table_key: 'table_key',
+  config: 'config',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type User_table_preferencesScalarFieldEnum = (typeof User_table_preferencesScalarFieldEnum)[keyof typeof User_table_preferencesScalarFieldEnum]
+
+
 export const Ai_insightsScalarFieldEnum = {
   id: 'id',
   user_id: 'user_id',
@@ -7124,6 +7204,13 @@ export const notificationsOrderByRelevanceFieldEnum = {
 export type notificationsOrderByRelevanceFieldEnum = (typeof notificationsOrderByRelevanceFieldEnum)[keyof typeof notificationsOrderByRelevanceFieldEnum]
 
 
+export const user_table_preferencesOrderByRelevanceFieldEnum = {
+  table_key: 'table_key'
+} as const
+
+export type user_table_preferencesOrderByRelevanceFieldEnum = (typeof user_table_preferencesOrderByRelevanceFieldEnum)[keyof typeof user_table_preferencesOrderByRelevanceFieldEnum]
+
+
 export const ai_insightsOrderByRelevanceFieldEnum = {
   insight_type: 'insight_type',
   content: 'content'
@@ -7727,6 +7814,7 @@ export type GlobalOmitConfig = {
   affiliate_payments?: Prisma.affiliate_paymentsOmit
   notifications?: Prisma.notificationsOmit
   notification_preferences?: Prisma.notification_preferencesOmit
+  user_table_preferences?: Prisma.user_table_preferencesOmit
   ai_insights?: Prisma.ai_insightsOmit
   operation_logs?: Prisma.operation_logsOmit
   exchange_rate_snapshots?: Prisma.exchange_rate_snapshotsOmit

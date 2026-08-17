@@ -7,9 +7,15 @@ import {
 import {
   RiseOutlined, FallOutlined, UserOutlined,
 } from "@ant-design/icons";
+import type { ColumnsType } from "antd/es/table";
 import dayjs, { Dayjs } from "dayjs";
 import utc from "dayjs/plugin/utc";
 import timezone from "dayjs/plugin/timezone";
+import {
+  buildMetricColumns, useTableColumnPrefs, ColumnSettingsButton, renderColumnSummary,
+  METRIC_COLUMN_LABELS, calcNetProfit,
+  type ColumnMetaItem, type TableSummaryTotals,
+} from "@/components/data-center/tableColumnPrefs";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -74,19 +80,34 @@ const EMPTY_SUMMARY: Summary = {
 const statusLabels: Record<string, string> = { ENABLED: "启用", PAUSED: "暂停", REMOVED: "移除", active: "启用", paused: "暂停" };
 const statusColors: Record<string, string> = { ENABLED: "green", PAUSED: "orange", REMOVED: "red", active: "green", paused: "orange" };
 
-function formatInt(value: number | null | undefined): string {
-  return (value ?? 0).toLocaleString("en-US");
-}
-
-function calcNetProfit(commission: number, rejectedCommission: number, cost: number): number {
-  return (commission || 0) - (rejectedCommission || 0) - (cost || 0);
-}
-
-/** EPC = 佣金 / 点击，与「平均CPC」同量纲。无点击时返回 null（不是 0） */
-function calcEpc(commission: number | null | undefined, clicks: number | null | undefined): number | null {
-  if (!clicks) return null;
-  return (commission || 0) / clicks;
-}
+// ========== D-239 自定义列展示（列偏好跟随组长本人账号，与数据中心主表共用指标列定义） ==========
+const COLUMN_PREFS_TABLE_KEY = "team-member-modal";
+const LOCKED_COLUMN_KEYS = ["campaign_name", "status"];
+/** 默认列 = 改造前弹窗原有列，组长未配置时零变化 */
+const DEFAULT_COLUMN_KEYS = [
+  "campaign_name", "status", "impressions", "clicks", "cpc", "epc",
+  "cost", "commission", "rejected_commission", "net_profit", "roi",
+];
+const COLUMNS_META: ColumnMetaItem[] = [
+  { key: "campaign_name", label: "广告系列" },
+  { key: "status", label: "状态" },
+  { key: "impressions", label: METRIC_COLUMN_LABELS.impressions },
+  { key: "clicks", label: METRIC_COLUMN_LABELS.clicks },
+  { key: "orders", label: METRIC_COLUMN_LABELS.orders },
+  { key: "cpc", label: METRIC_COLUMN_LABELS.cpc },
+  { key: "epc", label: METRIC_COLUMN_LABELS.epc },
+  { key: "cost_per_100_clicks", label: METRIC_COLUMN_LABELS.cost_per_100_clicks },
+  { key: "cost", label: METRIC_COLUMN_LABELS.cost },
+  { key: "cpa", label: METRIC_COLUMN_LABELS.cpa },
+  { key: "commission", label: METRIC_COLUMN_LABELS.commission },
+  { key: "aov", label: METRIC_COLUMN_LABELS.aov },
+  { key: "rejected_commission", label: METRIC_COLUMN_LABELS.rejected_commission },
+  { key: "net_profit", label: METRIC_COLUMN_LABELS.net_profit },
+  { key: "profit_rate", label: METRIC_COLUMN_LABELS.profit_rate },
+  { key: "roi", label: METRIC_COLUMN_LABELS.roi },
+  { key: "cvr", label: METRIC_COLUMN_LABELS.cvr },
+];
+const ALL_COLUMN_KEYS = COLUMNS_META.map((m) => m.key);
 
 export default function MemberDataModal({ open, userId, username, displayName, onClose }: MemberDataModalProps) {
   const [loading, setLoading] = useState(false);
@@ -136,14 +157,24 @@ export default function MemberDataModal({ open, userId, username, displayName, o
     return () => { cancelled = true; };
   }, [open, userId, dateRange, selectedMcc, statusFilter]);
 
-  // 列定义与数据中心（组员视角）逐列对齐，仅去掉组长不应操作的预算/出价/操作列
-  const columns = useMemo(() => [
-    {
-      title: "广告系列", dataIndex: "campaign_name", width: 240,
+  // D-239：列偏好跟随组长本人账号；指标列与数据中心主表共用同一份定义（防两处漂移）
+  const { visibleKeys, save: saveColumnPrefs, reset: resetColumnPrefs } = useTableColumnPrefs({
+    tableKey: COLUMN_PREFS_TABLE_KEY,
+    allKeys: ALL_COLUMN_KEYS,
+    lockedKeys: LOCKED_COLUMN_KEYS,
+    defaultKeys: DEFAULT_COLUMN_KEYS,
+  });
+
+  const columnRegistry: Record<string, ColumnsType<CampaignRow>[number]> = useMemo(() => ({
+    ...buildMetricColumns<CampaignRow>(),
+    campaign_name: {
+      key: "campaign_name",
+      title: "广告系列", dataIndex: "campaign_name", width: 240, fixed: "left",
       render: (v: string) => <Text style={{ fontSize: 12, wordBreak: "break-all" as const, whiteSpace: "normal" as const }}>{v}</Text>,
     },
-    {
-      title: "状态", dataIndex: "status", width: 100, align: "center" as const,
+    status: {
+      key: "status",
+      title: "状态", dataIndex: "status", width: 100, align: "center",
       render: (v: string, r: CampaignRow) => (
         <Space size={4}>
           <Tag color={statusColors[v] || "default"} style={{ fontSize: 11, margin: 0 }}>{statusLabels[v] || v}</Tag>
@@ -155,83 +186,13 @@ export default function MemberDataModal({ open, userId, username, displayName, o
         </Space>
       ),
     },
-    {
-      title: "展示", dataIndex: "impressions", width: 85, align: "right" as const,
-      sorter: (a: CampaignRow, b: CampaignRow) => (a.impressions ?? 0) - (b.impressions ?? 0),
-      render: (v: number) => <Text style={{ fontSize: 12 }}>{formatInt(v)}</Text>,
-    },
-    {
-      title: "点击", dataIndex: "clicks", width: 75, align: "right" as const,
-      sorter: (a: CampaignRow, b: CampaignRow) => (a.clicks ?? 0) - (b.clicks ?? 0),
-      render: (v: number) => <Text style={{ fontSize: 12 }}>{formatInt(v)}</Text>,
-    },
-    {
-      title: (
-        <Tooltip title="平均CPC = 花费 / 点击，即每个点击花了多少">
-          <span>平均CPC</span>
-        </Tooltip>
-      ),
-      dataIndex: "cpc", width: 80, align: "right" as const,
-      sorter: (a: CampaignRow, b: CampaignRow) => (a.cpc ?? 0) - (b.cpc ?? 0),
-      render: (v: number) => <Text style={{ fontSize: 12 }}>${(v ?? 0).toFixed(4)}</Text>,
-    },
-    {
-      title: (
-        <Tooltip title="EPC = 佣金 / 点击，即每个点击赚回多少。与左侧「平均CPC」同量纲，EPC > 平均CPC 即为赚。无点击显示「—」">
-          <span>EPC</span>
-        </Tooltip>
-      ),
-      key: "epc", width: 80, align: "right" as const,
-      sorter: (a: CampaignRow, b: CampaignRow) =>
-        (calcEpc(a.commission, a.clicks) ?? -1) - (calcEpc(b.commission, b.clicks) ?? -1),
-      render: (_: unknown, r: CampaignRow) => {
-        const value = calcEpc(r.commission, r.clicks);
-        if (value === null) return <Text type="secondary" style={{ fontSize: 12 }}>—</Text>;
-        return <Text style={{ fontSize: 12, color: value > 0 ? "#389e0d" : undefined }}>${value.toFixed(4)}</Text>;
-      },
-    },
-    {
-      title: "花费", dataIndex: "cost", width: 85, align: "right" as const,
-      sorter: (a: CampaignRow, b: CampaignRow) => a.cost - b.cost,
-      render: (v: number, r: CampaignRow) => (
-        <span>
-          <Text style={{ fontSize: 12, color: v > 0 ? "#cf1322" : undefined }}>${(v ?? 0).toFixed(2)}</Text>
-          {r.mcc_currency === "CNY" && <Tag color="orange" style={{ fontSize: 9, marginLeft: 2, padding: "0 3px", lineHeight: "14px" }}>CNY</Tag>}
-        </span>
-      ),
-    },
-    {
-      title: "佣金", dataIndex: "commission", width: 75, align: "right" as const,
-      sorter: (a: CampaignRow, b: CampaignRow) => a.commission - b.commission,
-      render: (v: number) => <Text style={{ fontSize: 12, color: v > 0 ? "#389e0d" : undefined }}>${(v ?? 0).toFixed(2)}</Text>,
-    },
-    {
-      title: "拒付佣金", dataIndex: "rejected_commission", width: 80, align: "right" as const,
-      render: (v: number) => <Text type={v > 0 ? "danger" : "secondary"} style={{ fontSize: 12 }}>${(v || 0).toFixed(2)}</Text>,
-    },
-    {
-      title: "净利润", key: "net_profit", width: 85, align: "right" as const,
-      sorter: (a: CampaignRow, b: CampaignRow) =>
-        calcNetProfit(a.commission, a.rejected_commission, a.cost) - calcNetProfit(b.commission, b.rejected_commission, b.cost),
-      render: (_: unknown, r: CampaignRow) => {
-        const value = calcNetProfit(r.commission, r.rejected_commission, r.cost);
-        return <Text style={{ fontSize: 12, color: value >= 0 ? "#389e0d" : "#cf1322" }}>${value.toFixed(2)}</Text>;
-      },
-    },
-    {
-      title: "ROI", dataIndex: "roi", width: 80, align: "right" as const,
-      sorter: (a: CampaignRow, b: CampaignRow) => a.roi - b.roi,
-      // 无花费时 ROI 无意义（后端给 0），标成「—」避免误读成打平
-      render: (v: number, r: CampaignRow) => {
-        if (!r.cost) return <Text type="secondary" style={{ fontSize: 12 }}>—</Text>;
-        return (
-          <Tag color={v >= 0.2 ? "success" : v >= 0 ? "processing" : "error"} style={{ fontSize: 12 }}>
-            {v.toFixed(2)}
-          </Tag>
-        );
-      },
-    },
-  ], []);
+  }), []);
+
+  const columns = useMemo(
+    () => visibleKeys.map((k) => columnRegistry[k]).filter((c): c is ColumnsType<CampaignRow>[number] => Boolean(c)),
+    [visibleKeys, columnRegistry],
+  );
+  const tableScrollX = columns.reduce((sum, c) => sum + (typeof c.width === "number" ? c.width : 100), 0);
 
   const title = displayName ? `${displayName} (${username})` : username || "组员";
   const netProfit = calcNetProfit(summary.totalCommission, summary.totalRejectedCommission, summary.totalCost);
@@ -267,6 +228,13 @@ export default function MemberDataModal({ open, userId, username, displayName, o
             { value: "PAUSED", label: "暂停" },
             { value: "REMOVED", label: "移除" },
           ]}
+        />
+        <ColumnSettingsButton
+          columnsMeta={COLUMNS_META}
+          lockedKeys={LOCKED_COLUMN_KEYS}
+          visibleKeys={visibleKeys}
+          onSave={saveColumnPrefs}
+          onReset={resetColumnPrefs}
         />
       </Space>
 
@@ -312,31 +280,37 @@ export default function MemberDataModal({ open, userId, username, displayName, o
           dataSource={rows}
           columns={columns}
           size="small"
-          scroll={{ y: 400, x: 980 }}
+          scroll={{ y: 400, x: tableScrollX }}
           pagination={{ defaultPageSize: 50, showTotal: (t) => `共 ${t} 条`, showSizeChanger: true, pageSizeOptions: ["20", "50", "100"] }}
           // 合计行取后端 summary（与数据中心同源），不做逐行累加——
           // 逐行加总会漏掉「商家在 CRM 无广告系列」那部分无法归行的佣金。
+          // D-239：合计行按可见列 key 对齐，列怎么排合计就怎么对齐
           summary={() => {
             if (rows.length === 0) return null;
+            const totals: TableSummaryTotals = {
+              totalImpressions: summary.totalImpressions,
+              totalClicks: summary.totalClicks,
+              totalOrders: summary.totalOrders,
+              avgCpc: summary.avgCpc,
+              totalCost: summary.totalCost,
+              totalCommission: summary.totalCommission,
+              totalRejectedCommission: summary.totalRejectedCommission,
+              roi: summary.roi,
+            };
             return (
               <Table.Summary fixed>
                 <Table.Summary.Row>
-                  <Table.Summary.Cell index={0} colSpan={2}><Text strong>合计</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={2} align="right"><Text strong>{formatInt(summary.totalImpressions)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={3} align="right"><Text strong>{formatInt(summary.totalClicks)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={4} align="right"><Text strong>${summary.avgCpc.toFixed(4)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={5} align="right">
-                    {calcEpc(summary.totalCommission, summary.totalClicks) === null
-                      ? <Text strong type="secondary">—</Text>
-                      : <Text strong style={{ color: "#389e0d" }}>${calcEpc(summary.totalCommission, summary.totalClicks)!.toFixed(4)}</Text>}
-                  </Table.Summary.Cell>
-                  <Table.Summary.Cell index={6} align="right"><Text strong style={{ color: "#cf1322" }}>${summary.totalCost.toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={7} align="right"><Text strong style={{ color: "#389e0d" }}>${summary.totalCommission.toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={8} align="right"><Text strong type="danger">${summary.totalRejectedCommission.toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={9} align="right">
-                    <Text strong style={{ color: netProfit >= 0 ? "#389e0d" : "#cf1322" }}>${netProfit.toFixed(2)}</Text>
-                  </Table.Summary.Cell>
-                  <Table.Summary.Cell index={10} />
+                  {columns.map((col, i) => {
+                    const key = String(col.key);
+                    if (i === 0) {
+                      return <Table.Summary.Cell key={key} index={0}><Text strong>合计</Text></Table.Summary.Cell>;
+                    }
+                    return (
+                      <Table.Summary.Cell key={key} index={i} align="right">
+                        {renderColumnSummary(key, totals)}
+                      </Table.Summary.Cell>
+                    );
+                  })}
                 </Table.Summary.Row>
               </Table.Summary>
             );

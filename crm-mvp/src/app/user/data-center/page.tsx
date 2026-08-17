@@ -23,21 +23,56 @@ import EditCampaignModal from "@/components/data-center/EditCampaignModal";
 import CampaignAnalysisModal, {
   STRATEGY_OPTIONS, formatActionItem, actionColor, type AnalysisItem,
 } from "@/components/data-center/CampaignAnalysisModal";
+import {
+  buildMetricColumns, useTableColumnPrefs, ColumnSettingsButton, renderColumnSummary,
+  METRIC_COLUMN_LABELS, type ColumnMetaItem, type TableSummaryTotals,
+} from "@/components/data-center/tableColumnPrefs";
 import { useStaleApi, useApiWithParams, refreshApi } from "@/lib/swr";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
 const TZ = "Asia/Shanghai";
 
-/** 各列 width 之和，scroll.x 须 ≥ 此值否则固定列（CID）会与表体错位
- *  顺序（D-238：删「展示」，加 IS_Bgt / IS_Rnk / 操作建议 / 分析；净利润按 07 要求于 2026-08-14 加回）：
- *  CID 110 | 广告系列 280 | 状态 100 | 预算 70 | 最高出价 90 | IS_Bgt 80 | IS_Rnk 80
- *  | 点击 85 | 订单 75 | 平均CPC 80 | EPC 80 | 花费 85 | 佣金 70 | 拒付佣金 95 | 净利润 85 | ROI 75 | 操作建议 170 | 分析 55
- */
-const DATA_CENTER_TABLE_SCROLL_X =
-  110 + 280 + 100 + 70 + 90 + 80 + 80 + 85 + 75 + 80 + 80 + 85 + 70 + 95 + 85 + 75 + 170 + 55;
+// D-239：scroll.x 不再是常量，按当前可见列宽度动态求和（见组件内 tableScrollX），
+// 否则隐藏列后固定列（广告系列）会与表体错位。
 
 const { Text } = Typography;
+
+// ========== D-239 自定义列展示：列注册表 ==========
+/** 后端 user_table_preferences 的 table_key */
+const COLUMN_PREFS_TABLE_KEY = "data-center-campaigns";
+/** 固定列：不可隐藏，始终排最前（07 于 2026-08-17 确认） */
+const LOCKED_COLUMN_KEYS = ["campaign_name", "status"];
+/** 员工未配置时的默认精简列（07 于 2026-08-17 确认） */
+const DEFAULT_COLUMN_KEYS = ["campaign_name", "status", "cost", "commission", "net_profit", "roi"];
+/** 全部可用列（列设置面板顺序 = 未勾选列的排列顺序） */
+const COLUMNS_META: ColumnMetaItem[] = [
+  { key: "campaign_name", label: "广告系列" },
+  { key: "status", label: "状态" },
+  { key: "customer_id", label: "CID" },
+  { key: "daily_budget", label: "预算" },
+  { key: "max_cpc", label: "最高出价" },
+  { key: "is_budget", label: "IS_Bgt（预算错失份额）" },
+  { key: "is_rank", label: "IS_Rnk（评级错失份额）" },
+  { key: "impressions", label: METRIC_COLUMN_LABELS.impressions },
+  { key: "clicks", label: METRIC_COLUMN_LABELS.clicks },
+  { key: "orders", label: METRIC_COLUMN_LABELS.orders },
+  { key: "cpc", label: METRIC_COLUMN_LABELS.cpc },
+  { key: "epc", label: METRIC_COLUMN_LABELS.epc },
+  { key: "cost_per_100_clicks", label: METRIC_COLUMN_LABELS.cost_per_100_clicks },
+  { key: "cost", label: METRIC_COLUMN_LABELS.cost },
+  { key: "cpa", label: METRIC_COLUMN_LABELS.cpa },
+  { key: "commission", label: METRIC_COLUMN_LABELS.commission },
+  { key: "aov", label: METRIC_COLUMN_LABELS.aov },
+  { key: "rejected_commission", label: METRIC_COLUMN_LABELS.rejected_commission },
+  { key: "net_profit", label: METRIC_COLUMN_LABELS.net_profit },
+  { key: "profit_rate", label: METRIC_COLUMN_LABELS.profit_rate },
+  { key: "roi", label: METRIC_COLUMN_LABELS.roi },
+  { key: "cvr", label: METRIC_COLUMN_LABELS.cvr },
+  { key: "ai_suggestion", label: "操作建议" },
+  { key: "ai_detail", label: "分析" },
+];
+const ALL_COLUMN_KEYS = COLUMNS_META.map((m) => m.key);
 const { RangePicker } = DatePicker;
 
 interface MccAccount { id: string; mcc_id: string; mcc_name: string; currency: string; }
@@ -87,19 +122,7 @@ interface Summary {
   commissionScope?: "filtered" | "mcc" | "all";
 }
 
-function formatInt(value: number | null | undefined): string {
-  return (value ?? 0).toLocaleString("en-US");
-}
-
-function calcNetProfit(commission: number, rejectedCommission: number, cost: number): number {
-  return (commission || 0) - (rejectedCommission || 0) - (cost || 0);
-}
-
-/** EPC = 佣金 / 点击，与「平均CPC」同量纲，可直接比较。无点击时返回 null（不是 0） */
-function calcEpc(commission: number | null | undefined, clicks: number | null | undefined): number | null {
-  if (!clicks) return null;
-  return (commission || 0) / clicks;
-}
+// formatInt / calcNetProfit / calcEpc 已抽到 tableColumnPrefs（D-239 与组员弹窗共用）
 
 // CID 格式化: 1234567890 → 123-456-7890
 function formatCid(cid: string | number): string {
@@ -639,9 +662,22 @@ export default function DataCenterPage() {
   const statusLabels: Record<string, string> = { ENABLED: "已启用", PAUSED: "已暂停", REMOVED: "已移除" };
 
   type IndexedRow = CampaignRow;
-  const columns: ColumnsType<IndexedRow> = [
-    {
-      title: "CID", dataIndex: "customer_id", width: 110, fixed: "left",
+
+  // ========== D-239 自定义列展示 ==========
+  const { visibleKeys, save: saveColumnPrefs, reset: resetColumnPrefs } = useTableColumnPrefs({
+    tableKey: COLUMN_PREFS_TABLE_KEY,
+    allKeys: ALL_COLUMN_KEYS,
+    lockedKeys: LOCKED_COLUMN_KEYS,
+    defaultKeys: DEFAULT_COLUMN_KEYS,
+  });
+  const metricColumns = useMemo(() => buildMetricColumns<IndexedRow>(), []);
+
+  // 页面专属列（依赖本页闭包：编辑弹窗/状态切换/AI 分析）+ 共享指标列 = 完整注册表
+  const columnRegistry: Record<string, ColumnsType<IndexedRow>[number]> = {
+    ...metricColumns,
+    customer_id: {
+      key: "customer_id",
+      title: "CID", dataIndex: "customer_id", width: 110,
       render: (v: string, r: IndexedRow) => {
         const removed = r.is_removed || r.cid_removed;
         return (
@@ -661,8 +697,10 @@ export default function DataCenterPage() {
         );
       },
     },
-    {
-      title: "广告系列", dataIndex: "campaign_name", width: 280,
+    campaign_name: {
+      key: "campaign_name",
+      // 固定列（不可隐藏）始终排第一，同时固定在左侧，横向滚动时可对照行
+      title: "广告系列", dataIndex: "campaign_name", width: 280, fixed: "left",
       sorter: (a, b) => {
         const seqA = parseInt(a.campaign_name?.split("-")[0] || "0", 10) || 0;
         const seqB = parseInt(b.campaign_name?.split("-")[0] || "0", 10) || 0;
@@ -674,7 +712,8 @@ export default function DataCenterPage() {
         </Text>
       ),
     },
-    {
+    status: {
+      key: "status",
       title: "状态", dataIndex: "status", width: 100, align: "center",
       render: (v: string, r: IndexedRow) => (
         <Space size={4}>
@@ -698,7 +737,8 @@ export default function DataCenterPage() {
         </Space>
       ),
     },
-    {
+    daily_budget: {
+      key: "daily_budget",
       title: "预算", dataIndex: "daily_budget", width: 70, align: "right",
       render: (v: number, r: IndexedRow) => (
         <Button type="link" size="small" style={{ padding: 0, fontSize: 12 }}
@@ -707,7 +747,8 @@ export default function DataCenterPage() {
         </Button>
       ),
     },
-    {
+    max_cpc: {
+      key: "max_cpc",
       title: "最高出价", dataIndex: "max_cpc", width: 90, align: "right",
       render: (v: number | null, r: IndexedRow) => (
         <Button type="link" size="small" style={{ padding: 0, fontSize: 12 }}
@@ -716,7 +757,8 @@ export default function DataCenterPage() {
         </Button>
       ),
     },
-    {
+    is_budget: {
+      key: "is_budget",
       title: (
         <Tooltip title="IS_Bgt = 因预算不足错失的展示份额（区间内最新一日）。偏高说明预算钳制了曝光">
           <span>IS_Bgt</span>
@@ -729,7 +771,8 @@ export default function DataCenterPage() {
         return <Text style={{ fontSize: 12, color: v >= 0.1 ? "#cf1322" : undefined }}>{(v * 100).toFixed(1)}%</Text>;
       },
     },
-    {
+    is_rank: {
+      key: "is_rank",
       title: (
         <Tooltip title="IS_Rnk = 因广告评级错失的展示份额（区间内最新一日）。偏高说明出价/质量得分不足">
           <span>IS_Rnk</span>
@@ -742,99 +785,9 @@ export default function DataCenterPage() {
         return <Text style={{ fontSize: 12, color: v >= 0.3 ? "#cf1322" : undefined }}>{(v * 100).toFixed(1)}%</Text>;
       },
     },
-    {
-      title: (
-        <Tooltip title="来自 Google Ads，与「花费」同源">
-          <span>点击</span>
-        </Tooltip>
-      ),
-      dataIndex: "clicks", width: 85, align: "right",
-      sorter: (a, b) => (a.clicks ?? 0) - (b.clicks ?? 0),
-      render: (v: number | null | undefined) => <Text style={{ fontSize: 12 }}>{formatInt(v)}</Text>,
-    },
-    {
-      title: (
-        <Tooltip title="来自联盟平台交易，与「佣金」同源，按商家归到代表行">
-          <span>订单</span>
-        </Tooltip>
-      ),
-      dataIndex: "orders", width: 75, align: "right",
-      sorter: (a, b) => (a.orders ?? 0) - (b.orders ?? 0),
-      render: (v: number | null | undefined) => <Text style={{ fontSize: 12 }}>{formatInt(v)}</Text>,
-    },
-    {
-      title: (
-        <Tooltip title="平均CPC = 花费 / 点击，即每个点击花了多少">
-          <span>平均CPC</span>
-        </Tooltip>
-      ),
-      dataIndex: "cpc", width: 80, align: "right",
-      sorter: (a, b) => (a.cpc ?? 0) - (b.cpc ?? 0),
-      render: (v: number) => <Text style={{ fontSize: 12 }}>${v?.toFixed(4)}</Text>,
-    },
-    {
-      title: (
-        <Tooltip title="EPC = 佣金 / 点击，即每个点击赚回多少。与左侧「平均CPC」同量纲，EPC > 平均CPC 即为赚。无点击显示「—」">
-          <span>EPC</span>
-        </Tooltip>
-      ),
-      key: "epc", width: 80, align: "right",
-      sorter: (a, b) => (calcEpc(a.commission, a.clicks) ?? -1) - (calcEpc(b.commission, b.clicks) ?? -1),
-      render: (_: unknown, r: IndexedRow) => {
-        const value = calcEpc(r.commission, r.clicks);
-        if (value === null) return <Text type="secondary" style={{ fontSize: 12 }}>—</Text>;
-        return <Text style={{ fontSize: 12, color: value > 0 ? "#389e0d" : undefined }}>${value.toFixed(4)}</Text>;
-      },
-    },
-    {
-      title: "花费", dataIndex: "cost", width: 85, align: "right",
-      sorter: (a, b) => a.cost - b.cost,
-      render: (v: number, r: IndexedRow) => (
-        <span>
-          <Text style={{ fontSize: 12, color: v > 0 ? "#cf1322" : undefined }}>${v?.toFixed(2)}</Text>
-          {r.mcc_currency === "CNY" && <Tag color="orange" style={{ fontSize: 9, marginLeft: 2, padding: "0 3px", lineHeight: "14px" }}>CNY</Tag>}
-        </span>
-      ),
-    },
-    {
-      title: "佣金", dataIndex: "commission", width: 70, align: "right",
-      sorter: (a, b) => a.commission - b.commission,
-      render: (v: number) => (
-        <Text style={{ fontSize: 12, color: v > 0 ? "#389e0d" : undefined }}>${v?.toFixed(2)}</Text>
-      ),
-    },
-    {
-      title: "拒付佣金", dataIndex: "rejected_commission", width: 95, align: "right",
-      sorter: (a, b) => (a.rejected_commission || 0) - (b.rejected_commission || 0),
-      render: (v: number) => <Text type={v > 0 ? "danger" : "secondary"} style={{ fontSize: 12 }}>${(v || 0).toFixed(2)}</Text>,
-    },
-    {
-      title: (
-        <Tooltip title="净利润 = 佣金 - 拒付佣金 - 花费">
-          <span>净利润</span>
-        </Tooltip>
-      ),
-      key: "net_profit", width: 85, align: "right",
-      sorter: (a, b) => calcNetProfit(a.commission, a.rejected_commission, a.cost) - calcNetProfit(b.commission, b.rejected_commission, b.cost),
-      render: (_: unknown, r: IndexedRow) => {
-        const value = calcNetProfit(r.commission, r.rejected_commission, r.cost);
-        return <Text style={{ fontSize: 12, color: value >= 0 ? "#389e0d" : "#cf1322" }}>${value.toFixed(2)}</Text>;
-      },
-    },
-    {
-      title: (
-        <Tooltip title="（佣金 - 花费）/ 花费，倍数口径，不扣拒付佣金">
-          <span>ROI</span>
-        </Tooltip>
-      ),
-      dataIndex: "roi", width: 75, align: "right",
-      sorter: (a, b) => (a.roi ?? 0) - (b.roi ?? 0),
-      render: (v: number | null | undefined) => {
-        const value = v ?? 0;
-        return <Text style={{ fontSize: 12, color: value >= 0 ? "#389e0d" : "#cf1322" }}>{value.toFixed(2)}</Text>;
-      },
-    },
-    {
+    // 展示/点击/订单/平均CPC/EPC/每百次点击费用/花费/CPA/佣金/AOV/拒付佣金/净利润/利润率/ROI/CVR
+    // 由 metricColumns 提供（tableColumnPrefs 共享定义，与组员弹窗同一份，防漂移）
+    ai_suggestion: {
       title: (
         <Tooltip title="AI 分析建议（每日 06:40 自动分析 + 手动一键分析），点击「执行」按第 1 条建议实际调整">
           <span>操作建议</span>
@@ -871,7 +824,7 @@ export default function DataCenterPage() {
         );
       },
     },
-    {
+    ai_detail: {
       title: "分析", key: "ai_detail", width: 55, align: "center",
       render: (_: unknown, r: IndexedRow) => (
         <Tooltip title="查看逐日明细与 AI 分析报告">
@@ -883,7 +836,14 @@ export default function DataCenterPage() {
         </Tooltip>
       ),
     },
-  ];
+  };
+
+  // 按员工偏好过滤 + 排序出最终列
+  const columns: ColumnsType<IndexedRow> = visibleKeys
+    .map((k) => columnRegistry[k])
+    .filter((c): c is ColumnsType<IndexedRow>[number] => Boolean(c));
+  /** scroll.x 须 ≥ 可见列宽之和，否则固定列（广告系列）会与表体错位 */
+  const tableScrollX = columns.reduce((sum, c) => sum + (typeof c.width === "number" ? c.width : 100), 0);
 
   return (
     <div>
@@ -973,6 +933,15 @@ export default function DataCenterPage() {
               </Tooltip>
             </Space>
           </Col>
+          <Col>
+            <ColumnSettingsButton
+              columnsMeta={COLUMNS_META}
+              lockedKeys={LOCKED_COLUMN_KEYS}
+              visibleKeys={visibleKeys}
+              onSave={saveColumnPrefs}
+              onReset={resetColumnPrefs}
+            />
+          </Col>
         </Row>
       </Card>
 
@@ -1057,34 +1026,36 @@ export default function DataCenterPage() {
       <Card size="small" styles={{ body: { padding: "8px 8px 8px" } }}>
         <Table<IndexedRow>
           rowKey="id" loading={isLoading} dataSource={rows} columns={columns}
-          size="small" scroll={{ x: DATA_CENTER_TABLE_SCROLL_X }}
+          size="small" scroll={{ x: tableScrollX }}
           className="data-center-campaigns-table"
           pagination={{ defaultPageSize: 50, showTotal: (t) => `共 ${t} 条`, showSizeChanger: true, pageSizeOptions: ["20", "50", "100"] }}
           summary={() => {
             if (rows.length === 0) return null;
+            // D-239：合计行按可见列 key 对齐（此前是硬编码列序号，隐藏列会错位）
+            const totals: TableSummaryTotals = {
+              totalImpressions: summary.totalImpressions,
+              totalClicks: summary.totalClicks,
+              totalOrders: summary.totalOrders,
+              avgCpc: summary.avgCpc,
+              totalCost: summary.totalCost,
+              totalCommission: summary.totalCommission,
+              totalRejectedCommission: summary.totalRejectedCommission,
+              roi: summary.roi,
+            };
             return (
               <Table.Summary fixed>
                 <Table.Summary.Row>
-                  <Table.Summary.Cell index={0} colSpan={3}><Text strong>合计</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={3} />
-                  <Table.Summary.Cell index={4} />
-                  <Table.Summary.Cell index={5} />
-                  <Table.Summary.Cell index={6} />
-                  <Table.Summary.Cell index={7} align="right"><Text strong>{formatInt(summary.totalClicks)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={8} align="right"><Text strong>{formatInt(summary.totalOrders)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={9} align="right"><Text strong>${summary.avgCpc.toFixed(4)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={10} align="right">
-                    {calcEpc(summary.totalCommission, summary.totalClicks) === null
-                      ? <Text strong type="secondary">—</Text>
-                      : <Text strong style={{ color: "#389e0d" }}>${calcEpc(summary.totalCommission, summary.totalClicks)!.toFixed(4)}</Text>}
-                  </Table.Summary.Cell>
-                  <Table.Summary.Cell index={11} align="right"><Text strong style={{ color: "#cf1322" }}>${summary.totalCost.toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={12} align="right"><Text strong style={{ color: "#389e0d" }}>${summary.totalCommission.toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={13} align="right"><Text strong type="danger">${summary.totalRejectedCommission.toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={14} align="right"><Text strong style={{ color: calcNetProfit(summary.totalCommission, summary.totalRejectedCommission, summary.totalCost) >= 0 ? "#389e0d" : "#cf1322" }}>${calcNetProfit(summary.totalCommission, summary.totalRejectedCommission, summary.totalCost).toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={15} align="right"><Text strong style={{ color: summary.roi >= 0 ? "#389e0d" : "#cf1322" }}>{summary.roi.toFixed(2)}</Text></Table.Summary.Cell>
-                  <Table.Summary.Cell index={16} />
-                  <Table.Summary.Cell index={17} />
+                  {columns.map((col, i) => {
+                    const key = String(col.key);
+                    if (i === 0) {
+                      return <Table.Summary.Cell key={key} index={0}><Text strong>合计</Text></Table.Summary.Cell>;
+                    }
+                    return (
+                      <Table.Summary.Cell key={key} index={i} align="right">
+                        {renderColumnSummary(key, totals)}
+                      </Table.Summary.Cell>
+                    );
+                  })}
                 </Table.Summary.Row>
               </Table.Summary>
             );

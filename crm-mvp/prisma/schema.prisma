@@ -863,6 +863,23 @@ model notification_preferences {
   updated_at      DateTime @default(now()) @updatedAt @db.DateTime(0)
 }
 
+// -----------------------------------------------------------
+// 19b. 表格列展示偏好表（D-239）
+// 每用户 × 每表格一条；config 存可见列 key 的有序数组 { columns: string[] }。
+// table_key 区分页面表格（如 data-center-campaigns / team-member-modal），后续其他表格可复用。
+// -----------------------------------------------------------
+model user_table_preferences {
+  id         BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id    BigInt   @db.UnsignedBigInt
+  table_key  String   @db.VarChar(64)
+  config     Json?
+  is_deleted Int      @default(0) @db.TinyInt
+  created_at DateTime @default(now()) @db.DateTime(0)
+  updated_at DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@unique([user_id, table_key], map: "uk_user_table")
+}
+
 // （prompt_preferences 表已删除 — AI 风格偏好 MVP 阶段使用默认值）
 
 // -----------------------------------------------------------

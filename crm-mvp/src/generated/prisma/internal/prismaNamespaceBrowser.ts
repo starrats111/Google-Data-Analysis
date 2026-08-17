@@ -83,6 +83,7 @@ export const ModelName = {
   affiliate_payments: 'affiliate_payments',
   notifications: 'notifications',
   notification_preferences: 'notification_preferences',
+  user_table_preferences: 'user_table_preferences',
   ai_insights: 'ai_insights',
   operation_logs: 'operation_logs',
   exchange_rate_snapshots: 'exchange_rate_snapshots',
@@ -831,6 +832,19 @@ export const Notification_preferencesScalarFieldEnum = {
 } as const
 
 export type Notification_preferencesScalarFieldEnum = (typeof Notification_preferencesScalarFieldEnum)[keyof typeof Notification_preferencesScalarFieldEnum]
+
+
+export const User_table_preferencesScalarFieldEnum = {
+  id: 'id',
+  user_id: 'user_id',
+  table_key: 'table_key',
+  config: 'config',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type User_table_preferencesScalarFieldEnum = (typeof User_table_preferencesScalarFieldEnum)[keyof typeof User_table_preferencesScalarFieldEnum]
 
 
 export const Ai_insightsScalarFieldEnum = {
@@ -1997,6 +2011,13 @@ export const notificationsOrderByRelevanceFieldEnum = {
 } as const
 
 export type notificationsOrderByRelevanceFieldEnum = (typeof notificationsOrderByRelevanceFieldEnum)[keyof typeof notificationsOrderByRelevanceFieldEnum]
+
+
+export const user_table_preferencesOrderByRelevanceFieldEnum = {
+  table_key: 'table_key'
+} as const
+
+export type user_table_preferencesOrderByRelevanceFieldEnum = (typeof user_table_preferencesOrderByRelevanceFieldEnum)[keyof typeof user_table_preferencesOrderByRelevanceFieldEnum]
 
 
 export const ai_insightsOrderByRelevanceFieldEnum = {

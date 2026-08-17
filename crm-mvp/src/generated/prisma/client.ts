@@ -202,6 +202,11 @@ export type notifications = Prisma.notificationsModel
  */
 export type notification_preferences = Prisma.notification_preferencesModel
 /**
+ * Model user_table_preferences
+ * 
+ */
+export type user_table_preferences = Prisma.user_table_preferencesModel
+/**
  * Model ai_insights
  * 
  */
