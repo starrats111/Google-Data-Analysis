@@ -283,6 +283,12 @@ export default function ReviewAnalysisPage() {
       .filter((col): col is ColumnsType<ReviewRow>[number] => Boolean(col));
     return [...cols, reviewColumn];
   }, [visibleKeys, columnRegistry, reviewColumn]);
+
+  // D-250：眼睛弹窗的逐日表跟随本页列设置——把当前可见的指标列（按用户排序）传进去
+  const modalMetricKeys = useMemo(
+    () => visibleKeys.filter((k) => k in METRIC_COLUMN_LABELS),
+    [visibleKeys],
+  );
   const tableScrollX = columns.reduce((sum, col) => sum + (typeof col.width === "number" ? col.width : 100), 0);
 
   const netProfit = calcNetProfit(summary.totalCommission, summary.totalRejectedCommission, summary.totalCost);
@@ -409,6 +415,7 @@ export default function ReviewAnalysisPage() {
         open={modal.open}
         campaignId={modal.campaignId}
         campaignName={modal.campaignName}
+        metricKeys={modalMetricKeys}
         onClose={() => setModal({ open: false, campaignId: null, campaignName: "" })}
       />
     </div>

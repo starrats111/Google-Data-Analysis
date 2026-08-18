@@ -4,9 +4,11 @@
  * D-245 复盘分析眼睛弹窗：单系列「暂停前 7 天」逐日明细 + 趋势图 + AI 复盘点评
  * 数据源：GET  /api/user/team/review-daily（逐日 + 缓存点评）
  *        POST /api/user/team/review-ai（按需生成 / 重新分析，缓存入库）
+ * D-250：逐日表指标列不再写死，跟随外层「复盘分析」列设置（metricKeys 由外层传入，
+ *        复用 tableColumnPrefs 共享列定义与合计渲染，列序一致）
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Modal, Table, Typography, Tag, Button, Space, Spin, Empty, App } from "antd";
 import { RobotOutlined, HistoryOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
@@ -14,6 +16,10 @@ import {
   ComposedChart, Bar, Line, XAxis, YAxis, Tooltip as ChartTooltip,
   Legend, CartesianGrid, ResponsiveContainer,
 } from "recharts";
+import {
+  buildMetricColumns, renderColumnSummary,
+  type MetricColumnKey, type MetricRow, type TableSummaryTotals,
+} from "@/components/data-center/tableColumnPrefs";
 
 const { Text } = Typography;
 
@@ -59,13 +65,18 @@ interface Props {
   open: boolean;
   campaignId: string | null;
   campaignName?: string;
+  /** 外层「复盘分析」列设置里当前可见的指标列 key（按用户排序），逐日表跟随展示 */
+  metricKeys: string[];
   onClose: () => void;
 }
+
+/** 逐日行适配成共享指标列需要的字段形状（is_budget/is_rank 无逐日数据，显示「—」） */
+type DailyMetricRow = MetricRow & { date: string };
 
 const statusLabels: Record<string, string> = { PAUSED: "暂停", REMOVED: "移除" };
 const statusColors: Record<string, string> = { PAUSED: "orange", REMOVED: "red" };
 
-export default function ReviewAnalysisModal({ open, campaignId, campaignName, onClose }: Props) {
+export default function ReviewAnalysisModal({ open, campaignId, campaignName, metricKeys, onClose }: Props) {
   const { message } = App.useApp();
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<ModalData | null>(null);
@@ -113,17 +124,32 @@ export default function ReviewAnalysisModal({ open, campaignId, campaignName, on
     }
   }, [campaignId, message]);
 
-  const dailyColumns: ColumnsType<DailyRow> = [
-    { title: "日期", dataIndex: "date", width: 90, fixed: "left", render: (v: string) => <Text style={{ fontSize: 12 }}>{v.slice(5)}</Text> },
-    { title: "展示", dataIndex: "impressions", width: 70, align: "right", render: (v: number) => <Text style={{ fontSize: 12 }}>{v.toLocaleString()}</Text> },
-    { title: "点击", dataIndex: "clicks", width: 55, align: "right", render: (v: number) => <Text style={{ fontSize: 12 }}>{v}</Text> },
-    { title: "花费", dataIndex: "spend", width: 75, align: "right", render: (v: number) => <Text style={{ fontSize: 12, color: v > 0 ? "#cf1322" : undefined }}>${v.toFixed(2)}</Text> },
-    { title: "订单", dataIndex: "orders", width: 50, align: "right", render: (v: number) => <Text style={{ fontSize: 12 }}>{v}</Text> },
-    { title: "佣金", dataIndex: "commission", width: 75, align: "right", render: (v: number) => <Text style={{ fontSize: 12, color: v > 0 ? "#389e0d" : undefined }}>${v.toFixed(2)}</Text> },
-    { title: "拒付", dataIndex: "rejectedCommission", width: 70, align: "right", render: (v: number) => <Text type={v > 0 ? "danger" : "secondary"} style={{ fontSize: 12 }}>${v.toFixed(2)}</Text> },
-    { title: "ROI", dataIndex: "roi", width: 60, align: "right", render: (v: number | null) => (v == null ? <Text type="secondary" style={{ fontSize: 12 }}>—</Text> : <Text style={{ fontSize: 12, color: v >= 0 ? "#389e0d" : "#cf1322" }}>{v.toFixed(2)}</Text>) },
-    { title: "AvgCPC", dataIndex: "avgCpc", width: 75, align: "right", render: (v: number) => <Text style={{ fontSize: 12 }}>{v > 0 ? `$${v.toFixed(4)}` : "—"}</Text> },
-  ];
+  // 逐日行 → 共享指标列的字段形状（字段名对齐 MetricRow：spend→cost 等）
+  const dailyRows: DailyMetricRow[] = useMemo(() => (data?.daily || []).map((d) => ({
+    date: d.date,
+    impressions: d.impressions,
+    clicks: d.clicks,
+    cost: d.spend,
+    orders: d.orders,
+    commission: d.commission,
+    rejected_commission: d.rejectedCommission,
+    cpc: d.avgCpc,
+    roi: d.roi ?? 0,
+    is_budget: null,
+    is_rank: null,
+  })), [data]);
+
+  const metricRegistry = useMemo(() => buildMetricColumns<DailyMetricRow>(), []);
+  const dailyColumns: ColumnsType<DailyMetricRow> = useMemo(() => [
+    {
+      title: "日期", key: "date", dataIndex: "date", width: 90, fixed: "left" as const,
+      render: (v: string) => <Text style={{ fontSize: 12 }}>{v.slice(5)}</Text>,
+    },
+    ...metricKeys
+      .map((k) => metricRegistry[k as MetricColumnKey])
+      .filter((col): col is ColumnsType<DailyMetricRow>[number] => Boolean(col)),
+  ], [metricKeys, metricRegistry]);
+  const tableScrollX = dailyColumns.reduce((sum, col) => sum + (typeof col.width === "number" ? col.width : 90), 0);
 
   const chartData = (data?.daily || []).map((d) => ({
     date: d.date.slice(5),
@@ -162,37 +188,37 @@ export default function ReviewAnalysisModal({ open, campaignId, campaignName, on
       destroyOnHidden
     >
       <Spin spinning={loading}>
-        {/* 暂停前 7 天逐日明细 */}
-        <Table<DailyRow>
+        {/* 暂停前 7 天逐日明细（指标列跟随外层列设置，D-250） */}
+        <Table<DailyMetricRow>
           rowKey="date"
-          dataSource={data?.daily || []}
+          dataSource={dailyRows}
           columns={dailyColumns}
           size="small"
           pagination={false}
-          scroll={{ x: 720 }}
+          scroll={{ x: tableScrollX }}
           locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="窗口内无投放数据" /> }}
           style={{ marginBottom: 16 }}
           summary={() => {
             const t = data?.totals;
             if (!t) return null;
-            const roi = t.cost > 0 ? (t.commission - t.cost) / t.cost : null;
+            const totals: TableSummaryTotals = {
+              totalImpressions: t.impressions,
+              totalClicks: t.clicks,
+              totalOrders: t.orders,
+              avgCpc: t.clicks > 0 ? t.cost / t.clicks : 0,
+              totalCost: t.cost,
+              totalCommission: t.commission,
+              totalRejectedCommission: t.rejected_commission,
+              roi: t.cost > 0 ? (t.commission - t.cost) / t.cost : 0,
+            };
             return (
               <Table.Summary.Row>
                 <Table.Summary.Cell index={0}><Text strong style={{ fontSize: 12 }}>合计</Text></Table.Summary.Cell>
-                <Table.Summary.Cell index={1} align="right"><Text strong style={{ fontSize: 12 }}>{t.impressions.toLocaleString()}</Text></Table.Summary.Cell>
-                <Table.Summary.Cell index={2} align="right"><Text strong style={{ fontSize: 12 }}>{t.clicks}</Text></Table.Summary.Cell>
-                <Table.Summary.Cell index={3} align="right"><Text strong style={{ fontSize: 12, color: "#cf1322" }}>${t.cost.toFixed(2)}</Text></Table.Summary.Cell>
-                <Table.Summary.Cell index={4} align="right"><Text strong style={{ fontSize: 12 }}>{t.orders}</Text></Table.Summary.Cell>
-                <Table.Summary.Cell index={5} align="right"><Text strong style={{ fontSize: 12, color: "#389e0d" }}>${t.commission.toFixed(2)}</Text></Table.Summary.Cell>
-                <Table.Summary.Cell index={6} align="right"><Text strong type={t.rejected_commission > 0 ? "danger" : "secondary"} style={{ fontSize: 12 }}>${t.rejected_commission.toFixed(2)}</Text></Table.Summary.Cell>
-                <Table.Summary.Cell index={7} align="right">
-                  {roi == null
-                    ? <Text strong type="secondary" style={{ fontSize: 12 }}>—</Text>
-                    : <Text strong style={{ fontSize: 12, color: roi >= 0 ? "#389e0d" : "#cf1322" }}>{roi.toFixed(2)}</Text>}
-                </Table.Summary.Cell>
-                <Table.Summary.Cell index={8} align="right">
-                  <Text strong style={{ fontSize: 12 }}>{t.clicks > 0 ? `$${(t.cost / t.clicks).toFixed(4)}` : "—"}</Text>
-                </Table.Summary.Cell>
+                {metricKeys.map((k, i) => (
+                  <Table.Summary.Cell key={k} index={i + 1} align="right">
+                    {renderColumnSummary(k, totals)}
+                  </Table.Summary.Cell>
+                ))}
               </Table.Summary.Row>
             );
           }}
