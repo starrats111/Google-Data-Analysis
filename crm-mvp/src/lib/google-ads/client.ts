@@ -14,6 +14,7 @@ import {
   recordTokenUse,
   recordTokenRateLimitHit,
   maskToken,
+  earliestQuotaRecoveryForMcc,
   type TokenCredential,
 } from "./token-pool";
 
@@ -266,6 +267,32 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/**
+ * D-249：凭证池对某 MCC 耗尽时的定性报错——区分「有权限凭证全在配额冷却」与「确实全无权限」。
+ * 历史事故（2026-08-18 wj11）：有权限的凭证全部触顶日配额被冷却，池子兜底拿无权限凭证去调，
+ * 报「均无访问权限」，把用户误导去反复检查 Google 侧授权。
+ */
+async function buildPoolExhaustedError(own: TokenCredential, mccId: string): Promise<Error> {
+  const recoverAt = await earliestQuotaRecoveryForMcc(own, mccId).catch(() => null);
+  if (recoverAt) {
+    const beijing = recoverAt.toLocaleString("zh-CN", {
+      timeZone: "Asia/Shanghai",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+    return new Error(
+      `Google Ads API 配额受限：对 MCC ${mccId} 有权限的凭证当前全部处于每日配额冷却中，`
+      + `预计 ${beijing}（北京时间）恢复后自动可用，请稍后重试。本次失败并非服务账号授权失效，无需调整 MCC 授权。`,
+    );
+  }
+  return new Error(
+    `Google Ads API 权限错误：池中凭证对 MCC ${mccId} 均无访问权限。请确认服务账号已被加入该 MCC（USER_PERMISSION_DENIED）。`,
+  );
+}
+
 export interface MccCredentials {
   mcc_id: string;
   developer_token: string;
@@ -426,7 +453,7 @@ export async function queryGoogleAds(
         console.warn(`[GoogleAds] 凭证 ${maskToken(devToken)} 对 MCC ${credentials.mcc_id} 无权限，换池中下一个凭证重试`);
         continue;
       }
-      throw new Error(`Google Ads API 权限错误：池中凭证对 MCC ${credentials.mcc_id} 均无访问权限。请确认服务账号已被加入该 MCC（USER_PERMISSION_DENIED）。`);
+      throw await buildPoolExhaustedError(own, credentials.mcc_id);
     }
     if (resp.status === 401 || errBody.includes("UNAUTHENTICATED")) {
       throw new Error("Google Ads API 认证失败：Service Account 凭证无效或已过期，请检查 MCC 配置中的服务账号 JSON。");
@@ -561,7 +588,7 @@ export async function mutateGoogleAds(
         console.warn(`[GoogleAds] 凭证 ${maskToken(devToken)} 对 MCC ${credentials.mcc_id} 无权限，换池中下一个凭证重试`);
         continue;
       }
-      throw new Error(`Google Ads API 权限错误：池中凭证对 MCC ${credentials.mcc_id} 均无访问权限。请确认服务账号已被加入该 MCC（USER_PERMISSION_DENIED）。`);
+      throw await buildPoolExhaustedError(own, credentials.mcc_id);
     }
     if (resp.status === 401 || errBody.includes("UNAUTHENTICATED")) {
       throw new Error("Google Ads API 认证失败：Service Account 凭证无效或已过期，请检查 MCC 配置中的服务账号 JSON。");

@@ -74,9 +74,14 @@ describe("isDailyQuotaExhausted", () => {
     assert.equal(isDailyQuotaExhausted(86400, "RESOURCE_EXHAUSTED"), true);
   });
 
-  it("RESOURCE_EXHAUSTED + 错误体提到 daily/quota 也判为每日耗尽", () => {
+  it("RESOURCE_EXHAUSTED + 错误体明确提到每日限额也判为每日耗尽", () => {
     assert.equal(isDailyQuotaExhausted(30, "RESOURCE_EXHAUSTED: daily limit reached"), true);
-    assert.equal(isDailyQuotaExhausted(undefined, "RESOURCE_EXHAUSTED quota exceeded"), true);
+    assert.equal(isDailyQuotaExhausted(30, "RESOURCE_EXHAUSTED: limit of 15000 operations per day"), true);
+  });
+
+  it("D-249：裸 quota 字样不再算每日耗尽（短时 QPS 限流错误体也带 Quota exceeded）", () => {
+    assert.equal(isDailyQuotaExhausted(undefined, "RESOURCE_EXHAUSTED quota exceeded"), false);
+    assert.equal(isDailyQuotaExhausted(30, "RESOURCE_EXHAUSTED: Quota exceeded for quota metric"), false);
   });
 
   it("RESOURCE_TEMPORARILY_EXHAUSTED（短时 QPS 限流）不算每日耗尽", () => {

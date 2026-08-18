@@ -46,13 +46,17 @@ export function isTokenUsableForMcc(
 
 /**
  * 判定一次 429 是否属于「每日额度耗尽」（区别于短时 QPS 限流）：
- * RESOURCE_EXHAUSTED（非 TEMPORARILY）且 retryDelay 很长或错误体提到每日配额。
+ * RESOURCE_EXHAUSTED（非 TEMPORARILY）且 retryDelay 很长，或错误体明确提到「每日」。
+ *
+ * D-249：不再匹配裸的 "quota"——Google 短时 QPS 限流的错误体也带 "Quota exceeded"，
+ * 曾把一次瞬时限流误判成日额度耗尽，给 token 写入假 detected_quota（如 48/天）并自锁：
+ * 池子每天用满假额度就跳过该 token，它永远没机会自证真实额度。
  */
 export function isDailyQuotaExhausted(retryDelaySec: number | undefined, errBody: string | undefined): boolean {
   return (
     !!errBody
     && errBody.includes("RESOURCE_EXHAUSTED")
     && !errBody.includes("RESOURCE_TEMPORARILY_EXHAUSTED")
-    && ((retryDelaySec ?? 0) > 600 || /daily|per day|quota/i.test(errBody))
+    && ((retryDelaySec ?? 0) > 600 || /daily|per[\s_-]?day/i.test(errBody))
   );
 }

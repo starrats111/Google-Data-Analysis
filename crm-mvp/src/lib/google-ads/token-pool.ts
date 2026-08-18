@@ -234,6 +234,36 @@ export async function hasAlternativeToken(
   );
 }
 
+/**
+ * D-249：池耗尽抛错前的定性判断——候选凭证中是否还有「未被判无权限、只是被冷却/额度触顶排除」的，
+ * 返回其中最早的恢复时间；返回 null 表示剩下的凭证确实全部对该 MCC 无权限。
+ * 用途：把「配额冷却中」和「真的没授权」区分开，避免误导用户去反复检查 MCC 授权。
+ */
+export async function earliestQuotaRecoveryForMcc(
+  preferred: TokenCredential | null,
+  mccId: string,
+): Promise<Date | null> {
+  const candidates = await getCandidates(preferred, mccId);
+  const mccKey = mccId.replace(/-/g, "");
+  const now = Date.now();
+  let earliest: number | null = null;
+  for (const c of candidates) {
+    if (deniedPairs.has(`${c.token}|${mccKey}`)) continue;
+    const meta = tokenMetaCache.get(c.token);
+    if (meta && (meta.healthStatus === "invalid" || meta.mccAccess[mccKey] === "denied")) continue;
+    const cooldown = cooldownUntil.get(c.token) ?? 0;
+    const quotaCapped = !!meta && meta.detectedQuota != null && meta.todayRequests >= meta.detectedQuota;
+    if (cooldown > now) {
+      earliest = earliest == null ? cooldown : Math.min(earliest, cooldown);
+    } else if (quotaCapped) {
+      // 额度触顶无显式冷却时间，恢复点是太平洋时区次日 0 点（Google 配额重置口径）
+      const resetAt = now + msUntilPacificMidnight();
+      earliest = earliest == null ? resetAt : Math.min(earliest, resetAt);
+    }
+  }
+  return earliest == null ? null : new Date(earliest);
+}
+
 /** 团队池中是否存在带配对 JSON 的可用凭证（用于放宽「MCC 未配置服务账号」的硬拦截） */
 export async function poolHasCredentialFor(mccId: string): Promise<boolean> {
   const creds = await loadTeamCredentials(mccId);
