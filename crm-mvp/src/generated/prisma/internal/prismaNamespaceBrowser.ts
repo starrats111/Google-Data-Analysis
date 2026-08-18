@@ -460,6 +460,7 @@ export const CampaignsScalarFieldEnum = {
   last_google_sync_at: 'last_google_sync_at',
   paused_at: 'paused_at',
   pause_source: 'pause_source',
+  status_verified_at: 'status_verified_at',
   previous_gcids: 'previous_gcids',
   final_url_suffix: 'final_url_suffix',
   suffix_exchange_enabled: 'suffix_exchange_enabled',

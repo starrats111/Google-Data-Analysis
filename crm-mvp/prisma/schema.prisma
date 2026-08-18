@@ -410,6 +410,10 @@ model campaigns {
   // REMOVED 保留（曾暂停过的进复盘）。backfill = 上线时用 last_google_sync_at 近似回填的存量值
   paused_at                  DateTime? @db.DateTime(0)
   pause_source               String?   @db.VarChar(20) // manual / spend_guard / ai_apply / sync(近似) / change_history(精确) / backfill(近似)
+  // D-246：CRM 实时操作确认时间 — toggle/apply-actions 直连 Google mutate 成功后写入。
+  // Sheet 快照类状态同步在信任窗口（默认 90 分钟，SHEET_STATUS_TRUST_MIN 可调）内不得覆盖状态，
+  // 防止过期快照把刚暂停/启用的系列翻回去（2026-08-18 wj02 暂停 425-Hiccapop 后被 sync 刷回 active 实证）
+  status_verified_at         DateTime? @db.DateTime(0)
   // D-040 v2: 重发广告历史 gcid 列表（含旧 gcid 数组），用于 cost 合并 + GAds REMOVED 数据补救
   // 格式: ["23663238670", "23864905107"] — 不含 current google_campaign_id
   // 用途: status-sync / daily-sync 拉 GAds REMOVED 广告时按 previous_gcids 匹配回原 campaign，cost 合并不丢

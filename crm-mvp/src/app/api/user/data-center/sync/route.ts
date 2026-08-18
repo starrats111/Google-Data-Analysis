@@ -386,7 +386,7 @@ async function syncAdsData(
       // 旧版此处用 fetchAllCampaignStatuses 对全部 CID 逐个发 GAQL，是共享 Developer Token
       // 配额被打爆的主因之一；状态统一从统一脚本维护的 Sheet 读取。
       try {
-        const { readCampaignInfoStatuses } = await import("@/lib/sheet-status-sync");
+        const { readCampaignInfoStatuses, isStatusRecentlyVerified } = await import("@/lib/sheet-status-sync");
         const sheetStatusMap = await readCampaignInfoStatuses(mcc.sheet_url);
         if (!sheetStatusMap) {
           console.warn(`[Sync] MCC ${mcc.mcc_id} 无可用 CampaignInfo Sheet，跳过全量状态同步`);
@@ -399,24 +399,29 @@ async function syncAdsData(
             const existing = campaignMap.get(gcid);
             if (existing) {
               // D-040 BUG-1：反向同步内部 status 字段，避免 CRM 暂停后被 cron 覆盖
+              // D-246：信任窗口内（刚被 toggle/apply-actions 实时确认）不允许过期 Sheet 快照翻状态、清 paused_at
+              const trusted = isStatusRecentlyVerified(existing.status_verified_at);
               const expectedInternalStatus = cs.status === "PAUSED" || cs.status === "REMOVED" ? "paused" : "active";
-              const needsUpdate = existing.google_status !== cs.status
+              const statusNeedsSync = !trusted
+                && (existing.google_status !== cs.status || existing.status !== expectedInternalStatus);
+              const needsUpdate = statusNeedsSync
                 || (cs.name && existing.campaign_name !== cs.name)
-                || (!existing.customer_id && cs.customerId)
-                || existing.status !== expectedInternalStatus;
+                || (!existing.customer_id && cs.customerId);
               if (needsUpdate) {
                 const updateData: Record<string, unknown> = {
-                  google_status: cs.status,
-                  status: expectedInternalStatus,
                   last_google_sync_at: new Date(),
                 };
-                // D-245 复盘分析：同步发现 →PAUSED 翻转记录暂停时间（近似=发现时刻）；→ENABLED 清空；REMOVED 保留原值
-                if (cs.status === "PAUSED" && existing.google_status !== "PAUSED") {
-                  updateData.paused_at = new Date();
-                  updateData.pause_source = "sync";
-                } else if (cs.status === "ENABLED") {
-                  updateData.paused_at = null;
-                  updateData.pause_source = null;
+                if (statusNeedsSync) {
+                  updateData.google_status = cs.status;
+                  updateData.status = expectedInternalStatus;
+                  // D-245 复盘分析：同步发现 →PAUSED 翻转记录暂停时间（近似=发现时刻）；→ENABLED 清空；REMOVED 保留原值
+                  if (cs.status === "PAUSED" && existing.google_status !== "PAUSED") {
+                    updateData.paused_at = new Date();
+                    updateData.pause_source = "sync";
+                  } else if (cs.status === "ENABLED") {
+                    updateData.paused_at = null;
+                    updateData.pause_source = null;
+                  }
                 }
                 if (cs.name) updateData.campaign_name = cs.name;
                 if (!existing.customer_id && cs.customerId) {

@@ -93,6 +93,8 @@ export async function POST(req: NextRequest) {
             where: { id: campaign.id },
             data: {
               google_status: "PAUSED", status: "paused", last_google_sync_at: new Date(),
+              // D-246：实时 mutate 成功的状态，Sheet 快照同步在信任窗口内不得覆盖
+              status_verified_at: new Date(),
               // D-245 复盘分析：记录暂停时间与来源（已是 PAUSED 时不覆盖更早的暂停时间）
               ...(campaign.google_status !== "PAUSED" ? { paused_at: new Date(), pause_source: "ai_apply" } : {}),
             },

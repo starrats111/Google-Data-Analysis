@@ -34,6 +34,27 @@ export interface SheetCampaignStatus {
 
 const VALID_STATUSES = new Set(["ENABLED", "PAUSED", "REMOVED"]);
 
+// ─────────────────────────────────────────────────────────────
+// D-246：CRM 实时操作信任窗口
+// Sheet 的 CampaignInfo 由 07 侧统一脚本约每 30-60 分钟刷一次，是过期快照。
+// toggle / apply-actions 刚 mutate Google 成功（写 status_verified_at）的系列，
+// 在窗口内不允许被 Sheet 快照把状态翻回去（2026-08-18 wj02 暂停 425-Hiccapop
+// 后 20 分钟内被 data-center/sync 用旧快照刷回 active、paused_at 被清空的实证修复）。
+// 窗口默认 90 分钟（覆盖快照最大滞后 + 余量），SHEET_STATUS_TRUST_MIN 可调。
+// ─────────────────────────────────────────────────────────────
+const STATUS_VERIFY_TRUST_MS =
+  Number(process.env.SHEET_STATUS_TRUST_MIN || 90) * 60 * 1000;
+
+/** 该系列的状态是否在信任窗口内被 CRM 实时确认过（Sheet 快照不得覆盖） */
+export function isStatusRecentlyVerified(verifiedAt: Date | null | undefined): boolean {
+  return !!verifiedAt && Date.now() - verifiedAt.getTime() < STATUS_VERIFY_TRUST_MS;
+}
+
+/** 信任窗口起点（用于 updateMany 的 where 过滤：status_verified_at < cutoff 才允许覆盖） */
+export function statusVerifyCutoff(): Date {
+  return new Date(Date.now() - STATUS_VERIFY_TRUST_MS);
+}
+
 /** 解析 CampaignInfo 全部行：gcid → { status, name, customerId } */
 function parseAllCampaignInfoRows(rows: string[][]): Map<string, SheetCampaignStatus> {
   const map = new Map<string, SheetCampaignStatus>();
@@ -106,7 +127,7 @@ export async function syncUserCampaignStatusesFromSheet(userId: bigint): Promise
 
       const existing = await prisma.campaigns.findMany({
         where: { user_id: userId, mcc_id: mcc.id, is_deleted: 0, google_campaign_id: { not: null } },
-        select: { id: true, google_campaign_id: true, google_status: true, status: true, customer_id: true },
+        select: { id: true, google_campaign_id: true, google_status: true, status: true, customer_id: true, status_verified_at: true },
       });
 
       let updated = 0;
@@ -114,9 +135,11 @@ export async function syncUserCampaignStatusesFromSheet(userId: bigint): Promise
         const sheetRow = sheetMap.get(c.google_campaign_id!);
         if (!sheetRow) continue; // Sheet 里没有的系列不动
 
+        // D-246：信任窗口内（刚被 toggle/apply-actions 实时确认）不允许 Sheet 快照翻状态
+        const trusted = isStatusRecentlyVerified(c.status_verified_at);
         const expectedInternal = sheetRow.status === "PAUSED" || sheetRow.status === "REMOVED" ? "paused" : "active";
-        const statusChanged = c.google_status !== sheetRow.status;
-        const internalDrifted = c.status !== expectedInternal;
+        const statusChanged = !trusted && c.google_status !== sheetRow.status;
+        const internalDrifted = !trusted && c.status !== expectedInternal;
         const cidFilling = !c.customer_id && sheetRow.customerId;
         if (!statusChanged && !internalDrifted && !cidFilling) continue;
 

@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
   const customerIds = cids.map((c) => c.customer_id);
 
   try {
-    const { readCampaignInfoStatuses } = await import("@/lib/sheet-status-sync");
+    const { readCampaignInfoStatuses, isStatusRecentlyVerified } = await import("@/lib/sheet-status-sync");
     const sheetMap = await readCampaignInfoStatuses(mcc.sheet_url);
     if (!sheetMap) {
       return apiError(
@@ -62,7 +62,7 @@ export async function POST(req: NextRequest) {
     // 1. Sheet 状态 → 更新已有 campaigns.google_status（不创建新行，避免联动）
     const existingCampaigns = await prisma.campaigns.findMany({
       where: { mcc_id: BigInt(mccAccountId), is_deleted: 0 },
-      select: { id: true, google_campaign_id: true, google_status: true, customer_id: true },
+      select: { id: true, google_campaign_id: true, google_status: true, customer_id: true, status_verified_at: true },
     });
     const existingMap = new Map(existingCampaigns.map((c) => [c.google_campaign_id, c]));
 
@@ -71,7 +71,8 @@ export async function POST(req: NextRequest) {
       liveCampaignIds.add(gcid);
       const existing = existingMap.get(gcid);
       if (!existing) continue;
-      const statusChanged = existing.google_status !== s.status;
+      // D-246：信任窗口内不允许过期 Sheet 快照翻状态
+      const statusChanged = !isStatusRecentlyVerified(existing.status_verified_at) && existing.google_status !== s.status;
       const cidFilling = !existing.customer_id && s.customerId;
       if (!statusChanged && !cidFilling) {
         await prisma.campaigns.update({
@@ -98,7 +99,9 @@ export async function POST(req: NextRequest) {
           cidsCoveredByStatuses.has(c.customer_id) &&
           c.google_status === "ENABLED" &&
           c.google_campaign_id &&
-          !liveCampaignIds.has(c.google_campaign_id),
+          !liveCampaignIds.has(c.google_campaign_id) &&
+          // D-246：刚被实时确认的系列（如刚创建/刚启用）可能还没进 Sheet 快照，不标 REMOVED
+          !isStatusRecentlyVerified(c.status_verified_at),
       );
       if (ghosts.length > 0) {
         const r = await prisma.campaigns.updateMany({

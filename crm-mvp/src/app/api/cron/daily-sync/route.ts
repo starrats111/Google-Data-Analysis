@@ -496,7 +496,7 @@ async function syncAllCampaignStatuses(): Promise<unknown> {
     where: { is_deleted: 0, is_active: 1 },
   });
 
-  const { readCampaignInfoStatuses } = await import("@/lib/sheet-status-sync");
+  const { readCampaignInfoStatuses, isStatusRecentlyVerified, statusVerifyCutoff } = await import("@/lib/sheet-status-sync");
   const results: Record<string, unknown> = {};
 
   for (const mcc of allMcc) {
@@ -530,7 +530,7 @@ async function syncAllCampaignStatuses(): Promise<unknown> {
       //        失败时立即通知用户（而不是悄无声息地把 DB 改回 ENABLED）
       const pausedCampaigns = await prisma.campaigns.findMany({
         where: { user_id: mcc.user_id, mcc_id: mcc.id, is_deleted: 0, google_status: "PAUSED" },
-        select: { id: true, google_campaign_id: true, customer_id: true, campaign_name: true },
+        select: { id: true, google_campaign_id: true, customer_id: true, campaign_name: true, status_verified_at: true },
       });
       const pausedByGcid = new Map(pausedCampaigns.map((c) => [c.google_campaign_id, c]));
 
@@ -538,6 +538,17 @@ async function syncAllCampaignStatuses(): Promise<unknown> {
         // D-034：检测 PAUSED→ENABLED 漂移
         if (s.status === "ENABLED" && pausedByGcid.has(s.campaign_id)) {
           const existing = pausedByGcid.get(s.campaign_id)!;
+
+          // D-246：刚被 toggle/apply-actions 实时确认为 PAUSED 的系列，Sheet 的 ENABLED
+          // 只是过期快照，不是真漂移——跳过重暂停 mutate，等快照追上即可
+          if (isStatusRecentlyVerified(existing.status_verified_at)) {
+            await prisma.campaigns.update({
+              where: { id: existing.id },
+              data: { last_google_sync_at: new Date() },
+            });
+            continue;
+          }
+
           log(`  [D-034] 检测到 PAUSED→ENABLED 漂移 campaign_id=${existing.id} gcid=${s.campaign_id}，尝试自动重新暂停...`);
 
           let rePauseOk = false;
@@ -622,7 +633,11 @@ async function syncAllCampaignStatuses(): Promise<unknown> {
           let result: { count: number };
           if (s.status === "PAUSED") {
             const flipped = await prisma.campaigns.updateMany({
-              where: { user_id: mcc.user_id, google_campaign_id: s.campaign_id, is_deleted: 0, google_status: { not: "PAUSED" } },
+              where: {
+                user_id: mcc.user_id, google_campaign_id: s.campaign_id, is_deleted: 0, google_status: { not: "PAUSED" },
+                // D-246：刚被实时确认为 ENABLED 的系列不被过期 Sheet 快照翻回 PAUSED
+                OR: [{ status_verified_at: null }, { status_verified_at: { lt: statusVerifyCutoff() } }],
+              },
               data: { google_status: "PAUSED", last_google_sync_at: syncNow, paused_at: syncNow, pause_source: "sync" },
             });
             const kept = await prisma.campaigns.updateMany({

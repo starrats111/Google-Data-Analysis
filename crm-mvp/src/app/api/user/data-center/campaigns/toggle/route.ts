@@ -107,6 +107,8 @@ export async function POST(req: NextRequest) {
         status: newInternalStatus,
         google_status: confirmedStatus,
         last_google_sync_at: new Date(),
+        // D-246：实时 mutate（+反查）确认过的状态，Sheet 快照同步在信任窗口内不得覆盖
+        status_verified_at: new Date(),
         ...pauseFields,
       },
     });
