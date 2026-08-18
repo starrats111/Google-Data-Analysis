@@ -87,6 +87,11 @@ export async function POST(req: NextRequest) {
         continue;
       }
       if (action.type === "pause") {
+        // D-247：Hermes 在管系列状态主权归 Hermes，CRM 不写状态（预算/CPC 类动作不受限）
+        if (campaign.hermes_managed_at) {
+          results.push({ type: action.type, success: false, message: "该系列由 Hermes 托管，状态主权归 Hermes：CRM 不执行暂停，请通过飞书让 Hermes 处理" });
+          continue;
+        }
         const r = await updateCampaignStatus(credentials, campaign.customer_id || "", campaign.google_campaign_id, "PAUSED");
         if (r.success) {
           await prisma.campaigns.update({

@@ -21,6 +21,10 @@ export async function POST(req: NextRequest) {
   if (!campaign) return apiError("广告系列不存在", 404);
   if (!campaign.google_campaign_id) return apiError("该广告系列尚未提交到 Google Ads");
   if (!campaign.mcc_id) return apiError("该广告系列未关联 MCC 账户");
+  // D-247：Hermes 在管系列状态主权归 Hermes，CRM 一律只读不写状态（07 2026-08-18 拍板）
+  if (campaign.hermes_managed_at) {
+    return apiError("该系列由 Hermes 智能投放体托管，状态主权归 Hermes：CRM 不能启用/暂停它，请通过飞书让 Hermes 处理（它的止损与复活会自动管理投放状态）", 403);
+  }
 
   const mcc = await prisma.google_mcc_accounts.findFirst({
     where: { id: campaign.mcc_id, is_deleted: 0 },

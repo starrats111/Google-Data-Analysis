@@ -530,7 +530,7 @@ async function syncAllCampaignStatuses(): Promise<unknown> {
       //        失败时立即通知用户（而不是悄无声息地把 DB 改回 ENABLED）
       const pausedCampaigns = await prisma.campaigns.findMany({
         where: { user_id: mcc.user_id, mcc_id: mcc.id, is_deleted: 0, google_status: "PAUSED" },
-        select: { id: true, google_campaign_id: true, customer_id: true, campaign_name: true, status_verified_at: true },
+        select: { id: true, google_campaign_id: true, customer_id: true, campaign_name: true, status_verified_at: true, hermes_managed_at: true },
       });
       const pausedByGcid = new Map(pausedCampaigns.map((c) => [c.google_campaign_id, c]));
 
@@ -538,6 +538,23 @@ async function syncAllCampaignStatuses(): Promise<unknown> {
         // D-034：检测 PAUSED→ENABLED 漂移
         if (s.status === "ENABLED" && pausedByGcid.has(s.campaign_id)) {
           const existing = pausedByGcid.get(s.campaign_id)!;
+
+          // D-247：Hermes 在管系列状态主权归 Hermes——它的止损/复活是合法操作，不是漂移。
+          // 不回停 mutate，CRM 跟随 Google 侧状态（2026-08-18 caledoniantravel 被 Hermes
+          // 复活后又被本分支 06:24 回停的拉锯实证，07 拍板 CRM 只读）
+          if (existing.hermes_managed_at) {
+            await prisma.campaigns.update({
+              where: { id: existing.id },
+              data: {
+                google_status: "ENABLED", status: "active", last_google_sync_at: new Date(),
+                // D-245：重新在跑，清掉暂停记录（移出复盘列表）
+                paused_at: null, pause_source: null,
+              },
+            });
+            updated++;
+            log(`  [D-247] Hermes 主权系列跟随 Google：campaign_id=${existing.id} gcid=${s.campaign_id} PAUSED→ENABLED（不回停）`);
+            continue;
+          }
 
           // D-246：刚被 toggle/apply-actions 实时确认为 PAUSED 的系列，Sheet 的 ENABLED
           // 只是过期快照，不是真漂移——跳过重暂停 mutate，等快照追上即可

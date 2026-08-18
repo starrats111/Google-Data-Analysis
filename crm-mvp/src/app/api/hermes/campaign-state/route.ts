@@ -50,6 +50,7 @@ export async function POST(req: NextRequest) {
       select: {
         id: true, google_campaign_id: true, campaign_name: true,
         daily_budget: true, max_cpc_limit: true, customer_id: true,
+        hermes_managed_at: true,
       },
     });
     const byGcid = new Map(existing.map((c) => [c.google_campaign_id, c]));
@@ -86,6 +87,10 @@ export async function POST(req: NextRequest) {
       }
       // Hermes 发布时 CID 是它自己占的，CRM 那边可能还空着
       if (inc.customer_id && !cur.customer_id) data.customer_id = inc.customer_id;
+
+      // D-247：被 Hermes 推送触达过 = Hermes 在管（永久标记，只写一次）。
+      // 状态主权归 Hermes：CRM 的 D-034 不回停、toggle/apply-actions 的 pause 拒绝
+      if (!cur.hermes_managed_at) data.hermes_managed_at = new Date();
 
       if (!Object.keys(data).length) continue;
       data.last_google_sync_at = new Date();

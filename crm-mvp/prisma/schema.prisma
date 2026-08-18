@@ -414,6 +414,10 @@ model campaigns {
   // Sheet 快照类状态同步在信任窗口（默认 90 分钟，SHEET_STATUS_TRUST_MIN 可调）内不得覆盖状态，
   // 防止过期快照把刚暂停/启用的系列翻回去（2026-08-18 wj02 暂停 425-Hiccapop 后被 sync 刷回 active 实证）
   status_verified_at         DateTime? @db.DateTime(0)
+  // D-247：Hermes 在管标记（永久）— 首次被 Hermes push-crm-state 推送触达时写入，另有存量一次性回填。
+  // 非空 = 状态主权归 Hermes：D-034 不回停（跟随 Google），toggle/apply-actions 的 pause 拒绝执行
+  // （2026-08-18 实证：caledoniantravel 被 Hermes 复活后又被 D-034 回停，两系统拉锯，07 拍板 CRM 只读）
+  hermes_managed_at          DateTime? @db.DateTime(0)
   // D-040 v2: 重发广告历史 gcid 列表（含旧 gcid 数组），用于 cost 合并 + GAds REMOVED 数据补救
   // 格式: ["23663238670", "23864905107"] — 不含 current google_campaign_id
   // 用途: status-sync / daily-sync 拉 GAds REMOVED 广告时按 previous_gcids 匹配回原 campaign，cost 合并不丢
