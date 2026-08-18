@@ -298,7 +298,7 @@ export default function ReviewAnalysisPage() {
       <AppPageHeader
         icon={<HistoryOutlined />}
         title="复盘分析"
-        subtitle="已暂停广告系列的「暂停前 7 个完整投放日」数据（不含暂停当天，实时口径）；重新启用的系列自动移出"
+        subtitle="已暂停广告系列的「暂停前 7 个完整投放日」数据（不含暂停当天，实时口径）；重新启用的系列自动移出，窗口内 0 点击的系列不参与复盘"
         extra={<Button icon={<ReloadOutlined />} size="small" loading={loading} onClick={fetchData}>刷新</Button>}
       />
 

@@ -19,6 +19,8 @@ const MAX_ROWS = 500;
  * 范围：本组组员名下、曾被暂停（paused_at 非空）且当前 PAUSED / REMOVED 的系列；
  *       重新启用的系列 paused_at 已被清空，自然不在列表。
  * 指标：每系列聚合「暂停日前 7 个完整投放日」（不含暂停当天）的 ads_daily_stats，实时口径。
+ * D-252：7 天窗口内点击合计为 0 的系列不参与复盘（没有投放行为可复盘，纯噪声行），
+ *        不进列表也不计入汇总。
  */
 export const GET = withLeader(async (req: NextRequest, { user }) => {
   if (!user.teamId) return apiError("未关联小组");
@@ -129,14 +131,16 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
 
   // ─── 聚合成行 ───
   let totImpressions = 0, totClicks = 0, totOrders = 0, totCost = 0, totCommission = 0, totRejected = 0;
-  const rows = campaigns.map((c) => {
+  const rows = campaigns.flatMap((c) => {
     const key = c.id.toString();
     const w = windows.get(key)!;
     const inWindow = (statsByCampaign.get(key) || []).filter(
       (s) => s.date >= w.dateStart && s.date < w.dateEndExclusive,
     );
-    const cost = inWindow.reduce((s, d) => s + Number(d.cost || 0), 0);
     const clicks = inWindow.reduce((s, d) => s + Number(d.clicks || 0), 0);
+    // D-252：窗口内 0 点击 = 没有可复盘的投放行为，整行剔除（也不计入汇总）
+    if (clicks === 0) return [];
+    const cost = inWindow.reduce((s, d) => s + Number(d.cost || 0), 0);
     const impressions = inWindow.reduce((s, d) => s + Number(d.impressions || 0), 0);
     const orders = inWindow.reduce((s, d) => s + Number(d.orders || 0), 0);
     const commission = inWindow.reduce((s, d) => s + Number(d.commission || 0), 0);
@@ -154,7 +158,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     totCost += cost; totCommission += commission; totRejected += rejected;
 
     const owner = memberById.get(c.user_id.toString());
-    return {
+    return [{
       id: key,
       campaign_name: c.campaign_name,
       customer_id: c.customer_id,
@@ -181,7 +185,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       roi: cost > 0 ? Number(((commission - cost) / cost).toFixed(4)) : 0,
       is_budget: isBudget,
       is_rank: isRank,
-    };
+    }];
   });
 
   return apiSuccess(serializeData({
