@@ -15,6 +15,13 @@
  *   3. 同一天有多条系列都花了钱时，整笔归给当日花费最多的那条（佣金与订单都不拆小数）。
  *   4. 交易早于该商家所有花费记录时，回退到旧的代表行规则。
  *
+ * D-251 同日交接特例（徐克提出、07 2026-08-18 拍板，覆盖第 3 条）：
+ *   CID 被中止后换新 CID 续跑同一商家时，若「老系列的最后花费日」与「新系列的首个花费日」
+ *   是同一天（同天停老上新），当天的佣金一律归老系列（当天的单大概率是老广告 cookie 期转化），
+ *   新系列从次日起自然接管。判定完全基于花费日历：
+ *   老 = 当天是其最后花费日、且此前投放过（first < 当天）；新 = 当天是其首个花费日。
+ *   仅在「老、新同日都有花费」时触发；其余同日多系列花费仍按「当日花费最高者整拿」。
+ *
  * 影响面（2026-08-04 生产实测）：12,006 个商家里 87% 只有一条系列，完全无变化；
  * 有多条系列且花过钱的分组 674 个，其中 87% 花费窗口不重叠、靠时间就唯一确定；
  * 需要「同日花费最多」兜底的只有 499 个日行，占全部 48,963 个「日×商家×账号」的 1.0%。
@@ -71,8 +78,11 @@ export interface AttributionIndex {
   loose: Map<string, TimelineEntry[]>;
 }
 
+/** 组内某天的花费方：campaignId → 当日花费（同系列多行取最大，与旧口径一致，防 gcid 去重后的重复行翻倍） */
+type DaySpenders = Map<string, number>;
+
 function pushSpend(
-  buckets: Map<string, Map<string, { campaignId: string; cost: number }>>,
+  buckets: Map<string, Map<string, DaySpenders>>,
   key: string,
   day: AttributionSpendDay,
 ) {
@@ -81,20 +91,62 @@ function pushSpend(
     byDate = new Map();
     buckets.set(key, byDate);
   }
-  const prev = byDate.get(day.date);
-  // 同一天多条系列都花了钱 → 只保留花费最多的那条（07 拍板：整笔归它，不拆小数）
-  if (!prev || day.cost > prev.cost) {
-    byDate.set(day.date, { campaignId: day.campaignId, cost: day.cost });
+  let spenders = byDate.get(day.date);
+  if (!spenders) {
+    spenders = new Map();
+    byDate.set(day.date, spenders);
   }
+  const prev = spenders.get(day.campaignId);
+  if (prev === undefined || day.cost > prev) spenders.set(day.campaignId, day.cost);
+}
+
+/**
+ * 同日多系列花费时选出当天的归属系列。
+ * D-251：当天既是「老」的最后花费日（且老此前投过）、又是「新」的首个花费日 → 归老；
+ * 其余情况维持「当日花费最高者整拿」（07 2026-08-04 拍板）。
+ */
+function pickDayWinner(
+  date: string,
+  spenders: DaySpenders,
+  range: Map<string, { first: string; last: string }>,
+) {
+  const maxBySpend = (ids: string[]): string =>
+    ids.reduce((best, id) => ((spenders.get(id) ?? 0) > (spenders.get(best) ?? 0) ? id : best));
+
+  const ids = [...spenders.keys()];
+  if (ids.length === 1) return ids[0];
+
+  const enders = ids.filter((id) => {
+    const r = range.get(id)!;
+    return r.last === date && r.first < date;
+  });
+  const hasStarter = ids.some((id) => range.get(id)!.first === date);
+  if (enders.length > 0 && hasStarter) return maxBySpend(enders);
+
+  return maxBySpend(ids);
 }
 
 function toSortedTimeline(
-  buckets: Map<string, Map<string, { campaignId: string; cost: number }>>,
+  buckets: Map<string, Map<string, DaySpenders>>,
 ): Map<string, TimelineEntry[]> {
   const out = new Map<string, TimelineEntry[]>();
   for (const [key, byDate] of buckets) {
+    // 组内每条系列的首个/最后花费日（D-251 交接判定依据）
+    const range = new Map<string, { first: string; last: string }>();
+    for (const [date, spenders] of byDate) {
+      for (const id of spenders.keys()) {
+        const r = range.get(id);
+        if (!r) range.set(id, { first: date, last: date });
+        else {
+          if (date < r.first) r.first = date;
+          if (date > r.last) r.last = date;
+        }
+      }
+    }
     const list: TimelineEntry[] = [];
-    for (const [date, v] of byDate) list.push({ date, campaignId: v.campaignId });
+    for (const [date, spenders] of byDate) {
+      list.push({ date, campaignId: pickDayWinner(date, spenders, range) });
+    }
     list.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
     out.set(key, list);
   }
@@ -115,8 +167,8 @@ export function buildAttributionIndex(
     if (c.userMerchantId && c.userMerchantId !== "0") metaById.set(c.id, c);
   }
 
-  const strictBuckets = new Map<string, Map<string, { campaignId: string; cost: number }>>();
-  const looseBuckets = new Map<string, Map<string, { campaignId: string; cost: number }>>();
+  const strictBuckets = new Map<string, Map<string, DaySpenders>>();
+  const looseBuckets = new Map<string, Map<string, DaySpenders>>();
 
   for (const day of spendDays) {
     if (!(day.cost > 0)) continue;
