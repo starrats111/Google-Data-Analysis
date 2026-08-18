@@ -30,6 +30,22 @@ export const CID_AVAILABILITY = {
 export const CID_WRITE_GUARD = { is_available: { not: "D" } } as const;
 
 /**
+ * D-248「被中止 CID」判定（07 拍板 2026-08-18）：只看 Google 侧真值。
+ *
+ * mcc_cid_accounts.status 由同步维护：listMccChildAccounts 只返回 Google 侧
+ * ENABLED 的子账户，被 Google 中止（suspended/cancelled）的账户从列表消失后
+ * 会被标 status=cancelled——所以 status ∈ {suspended, cancelled} 就是 Google 真值信号。
+ *
+ * 管理员手动标 is_available=D（status 仍 active）不算「被中止」：D 只保留
+ * 「禁止选号建新广告」语义，不影响旗下广告的状态展示与操作。
+ */
+export const CID_SUSPENDED_STATUSES = ["suspended", "cancelled"] as const;
+
+export function isCidSuspendedStatus(status: string | null | undefined): boolean {
+  return status === "suspended" || status === "cancelled";
+}
+
+/**
  * 对外展示/选择用的可用性：结合行状态、存量标记与实时 ENABLED 计数。
  * - 行状态非 active 或已标 D → "D"
  * - 有 ENABLED 广告 → "N"

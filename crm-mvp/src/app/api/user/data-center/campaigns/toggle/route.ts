@@ -25,6 +25,12 @@ export async function POST(req: NextRequest) {
   if (campaign.hermes_managed_at) {
     return apiError("该系列由 Hermes 智能投放体托管，状态主权归 Hermes：CRM 不能启用/暂停它，请通过飞书让 Hermes 处理（它的止损与复活会自动管理投放状态）", 403);
   }
+  // D-248：被中止 CID 旗下广告禁止一切操作（前端灰化 + 服务端拦截双层）
+  {
+    const { getCidSuspendedError } = await import("@/lib/google-ads/cid-suspension");
+    const suspendedMsg = await getCidSuspendedError(campaign.customer_id, campaign.mcc_id);
+    if (suspendedMsg) return apiError(suspendedMsg, 403);
+  }
 
   const mcc = await prisma.google_mcc_accounts.findFirst({
     where: { id: campaign.mcc_id, is_deleted: 0 },

@@ -84,7 +84,8 @@ interface CampaignRow {
   commission: number; rejected_commission: number; approved_commission: number; orders: number; roi: number;
   target_country: string; last_synced: string | null;
   mcc_currency?: string;
-  is_removed?: boolean; cid_removed?: boolean;
+  /** D-248：所属 CID 被 Google 中止——ENABLED 显示「被中止」，全部锁操作 */
+  is_removed?: boolean; cid_suspended?: boolean;
   /** D-238：IS 因预算/评级错失的展示份额（区间内最新一日，0-1 分数；未采集为 null） */
   is_budget?: number | null; is_rank?: number | null;
 }
@@ -552,7 +553,7 @@ export default function DataCenterPage() {
 
   // 一键分析：对当前筛选后的 ENABLED 行跑快速批量分析（命中当日缓存的不重跑）
   const handleBulkAnalyze = useCallback(async () => {
-    const targets = rows.filter((r) => r.status === "ENABLED" && !r.cid_removed).map((r) => r.id).slice(0, 200);
+    const targets = rows.filter((r) => r.status === "ENABLED" && !r.cid_suspended).map((r) => r.id).slice(0, 200);
     if (targets.length === 0) { message.warning("当前列表没有已启用的广告系列"); return; }
     setBulkAnalyzing(true);
     try {
@@ -615,7 +616,7 @@ export default function DataCenterPage() {
   const handleBulkApply = useCallback(() => {
     const targets = rows.filter((r) => {
       const first = analysisMap[r.id]?.actionItems?.[0];
-      return first && first.type !== "keep" && r.status === "ENABLED" && !r.cid_removed;
+      return first && first.type !== "keep" && r.status === "ENABLED" && !r.cid_suspended;
     });
     if (targets.length === 0) { message.warning("没有可执行的操作建议（keep 不执行）"); return; }
     modal.confirm({
@@ -679,7 +680,7 @@ export default function DataCenterPage() {
       key: "customer_id",
       title: "CID", dataIndex: "customer_id", width: 110,
       render: (v: string, r: IndexedRow) => {
-        const removed = r.is_removed || r.cid_removed;
+        const removed = r.is_removed || r.cid_suspended;
         return (
           <span style={{ display: "inline-flex", alignItems: "center" }}>
             <Text
@@ -688,8 +689,8 @@ export default function DataCenterPage() {
             >
               {formatCid(v)}
             </Text>
-            {r.cid_removed && (
-              <Tooltip title="该 CID 已移除/停用">
+            {r.cid_suspended && (
+              <Tooltip title="该 CID 已被 Google 中止/停用">
                 <span style={{ color: "#cf1322", marginLeft: 4, fontSize: 11 }}>●</span>
               </Tooltip>
             )}
@@ -715,46 +716,63 @@ export default function DataCenterPage() {
     status: {
       key: "status",
       title: "状态", dataIndex: "status", width: 100, align: "center",
-      render: (v: string, r: IndexedRow) => (
-        <Space size={4}>
-          <Tag color={statusColors[v] || "default"} style={{ fontSize: 11, margin: 0 }}>{statusLabels[v] || v}</Tag>
-          {r.cid_removed && v !== "REMOVED" && (
-            <Tooltip title="所属 CID 已移除/停用">
-              <Tag color="red" style={{ fontSize: 10, margin: 0 }}>CID已移除</Tag>
-            </Tooltip>
-          )}
-          {v !== "REMOVED" && !r.cid_removed && r.google_campaign_id && (
-            <Tooltip title={v === "ENABLED" ? "暂停广告" : "启用广告"}>
-              <Button
-                type="text" size="small"
-                loading={togglingId === r.id}
-                icon={v === "ENABLED" ? <PauseCircleOutlined style={{ color: "#faad14" }} /> : <PlayCircleOutlined style={{ color: "#52c41a" }} />}
-                onClick={() => handleToggleStatus(r)}
-                style={{ padding: 0, height: 20, width: 20 }}
-              />
-            </Tooltip>
-          )}
-        </Space>
-      ),
+      render: (v: string, r: IndexedRow) => {
+        // D-248：被中止 CID 旗下——ENABLED 显示「被中止」，PAUSED 保持「已暂停」，操作图标一律灰化
+        const suspended = !!r.cid_suspended && v !== "REMOVED";
+        const label = suspended && v === "ENABLED" ? "被中止" : statusLabels[v] || v;
+        const color = suspended && v === "ENABLED" ? "red" : statusColors[v] || "default";
+        return (
+          <Space size={4}>
+            <Tag color={color} style={{ fontSize: 11, margin: 0 }}>{label}</Tag>
+            {v !== "REMOVED" && r.google_campaign_id && (
+              suspended ? (
+                <Tooltip title="所属 CID 已被 Google 中止，无法操作">
+                  <Button
+                    type="text" size="small" disabled
+                    icon={v === "ENABLED" ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
+                    style={{ padding: 0, height: 20, width: 20 }}
+                  />
+                </Tooltip>
+              ) : (
+                <Tooltip title={v === "ENABLED" ? "暂停广告" : "启用广告"}>
+                  <Button
+                    type="text" size="small"
+                    loading={togglingId === r.id}
+                    icon={v === "ENABLED" ? <PauseCircleOutlined style={{ color: "#faad14" }} /> : <PlayCircleOutlined style={{ color: "#52c41a" }} />}
+                    onClick={() => handleToggleStatus(r)}
+                    style={{ padding: 0, height: 20, width: 20 }}
+                  />
+                </Tooltip>
+              )
+            )}
+          </Space>
+        );
+      },
     },
     daily_budget: {
       key: "daily_budget",
       title: "预算", dataIndex: "daily_budget", width: 70, align: "right",
       render: (v: number, r: IndexedRow) => (
-        <Button type="link" size="small" style={{ padding: 0, fontSize: 12 }}
-          onClick={() => setEditModal({ open: true, campaign: r, field: "budget" })}>
-          ${v?.toFixed(2)} <EditOutlined style={{ fontSize: 10 }} />
-        </Button>
+        // D-248：被中止 CID 旗下禁改预算，编辑图标灰化
+        <Tooltip title={r.cid_suspended ? "所属 CID 已被 Google 中止，无法操作" : undefined}>
+          <Button type="link" size="small" disabled={!!r.cid_suspended} style={{ padding: 0, fontSize: 12 }}
+            onClick={() => setEditModal({ open: true, campaign: r, field: "budget" })}>
+            ${v?.toFixed(2)} <EditOutlined style={{ fontSize: 10 }} />
+          </Button>
+        </Tooltip>
       ),
     },
     max_cpc: {
       key: "max_cpc",
       title: "最高出价", dataIndex: "max_cpc", width: 90, align: "right",
       render: (v: number | null, r: IndexedRow) => (
-        <Button type="link" size="small" style={{ padding: 0, fontSize: 12 }}
-          onClick={() => setEditModal({ open: true, campaign: r, field: "max_cpc" })}>
-          ${(v ?? 0).toFixed(4)} <EditOutlined style={{ fontSize: 10 }} />
-        </Button>
+        // D-248：被中止 CID 旗下禁改出价，编辑图标灰化
+        <Tooltip title={r.cid_suspended ? "所属 CID 已被 Google 中止，无法操作" : undefined}>
+          <Button type="link" size="small" disabled={!!r.cid_suspended} style={{ padding: 0, fontSize: 12 }}
+            onClick={() => setEditModal({ open: true, campaign: r, field: "max_cpc" })}>
+            ${(v ?? 0).toFixed(4)} <EditOutlined style={{ fontSize: 10 }} />
+          </Button>
+        </Tooltip>
       ),
     },
     // 展示/点击/订单/平均CPC/EPC/每百次点击费用/花费/CPA/佣金/AOV/拒付佣金/净利润/利润率/ROI/CVR/IS_Bgt/IS_Rnk
@@ -778,7 +796,7 @@ export default function DataCenterPage() {
                 <Tag color={actionColor(a.type)} style={{ fontSize: 11, margin: 0 }}>{formatActionItem(a)}</Tag>
               </Tooltip>
             ))}
-            {first.type !== "keep" && r.status === "ENABLED" && !r.cid_removed && (
+            {first.type !== "keep" && r.status === "ENABLED" && !r.cid_suspended && (
               <Button
                 type="link" size="small" loading={applyingId === r.id}
                 style={{ padding: 0, fontSize: 11, height: 18 }}

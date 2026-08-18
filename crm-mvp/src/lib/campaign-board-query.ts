@@ -26,6 +26,7 @@ import {
   type AttributionCampaign, type AttributionSpendDay, type AttributionTxnGroup,
 } from "@/lib/commission-attribution";
 import { countEnabledCampaigns, healEnabledUnderSoftDeletedMcc } from "@/lib/active-running";
+import { loadSuspendedCidSet, normalizeCid } from "@/lib/google-ads/cid-suspension";
 
 /** 调用方可直接把 status 映射成 HTTP 状态码返回 */
 export class CampaignBoardError extends Error {
@@ -68,7 +69,8 @@ export interface CampaignBoardRow {
   last_synced: Date | null;
   mcc_currency: string;
   is_removed: boolean;
-  cid_removed: boolean;
+  /** D-248：所属 CID 被 Google 中止（suspended/cancelled）——ENABLED 显示「被中止」，全部锁操作 */
+  cid_suspended: boolean;
   /** D-238 IS_Bgt/IS_Rnk：区间内最新一日值（0-1 分数，前端 ×100 展示；未采集为 null） */
   is_budget: number | null;
   is_rank: number | null;
@@ -170,42 +172,11 @@ export async function queryCampaignBoard(
     mccIds = (activeMcc || []).map((m) => m.id);
   }
 
-  // D-040 v3：收集「已移除/已停用 CID」集合（status=cancelled 或 is_available=D），
-  // 这些 CID 下所有广告在前端标红
-  const removedCidSet = new Set<string>();
-  if (mccIds.length > 0) {
-    const removedCidRows = await prisma.mcc_cid_accounts.findMany({
-      where: {
-        mcc_account_id: { in: mccIds },
-        OR: [{ status: "cancelled" }, { is_available: "D" }],
-      },
-      select: { customer_id: true },
-    });
-    for (const r of removedCidRows) {
-      if (r.customer_id) removedCidSet.add(r.customer_id.replace(/-/g, ""));
-    }
-  }
-
-  // CID 已移除/停用 → 其下系列不可能真在投，本地却可能残留 ENABLED（历史同步路径只标
-  // CID 不动系列）。这里自愈改判 PAUSED，前端不再出现「已启用 + CID已移除」的矛盾状态。
-  if (removedCidSet.size > 0) {
-    try {
-      const healed = await prisma.campaigns.updateMany({
-        where: {
-          user_id: userId,
-          customer_id: { in: [...removedCidSet] },
-          is_deleted: 0,
-          google_status: "ENABLED",
-        },
-        data: { google_status: "PAUSED", status: "paused", last_google_sync_at: new Date() },
-      });
-      if (healed.count > 0) {
-        console.log(`[CampaignBoard] 自愈：已移除/停用 CID 下 ${healed.count} 条 ENABLED 系列改判 PAUSED（user=${userId}）`);
-      }
-    } catch (e) {
-      console.warn(`[CampaignBoard] 已移除 CID 系列自愈失败（忽略）: ${e instanceof Error ? e.message : e}`);
-    }
-  }
+  // D-248：收集「被中止 CID」集合（只看 Google 真值 status=suspended/cancelled，
+  // 管理员手动标 D 不算）。旗下 ENABLED 系列前端派生显示「被中止」并锁操作。
+  // 旧 D-040 v3 的「自愈改判 PAUSED」已删除：它抹掉「中止时正在投」的信息，
+  // 与 D-248「以 Google 侧真实状态为准」冲突——库里保留 Google 真值，展示层派生。
+  const suspendedCidSet = await loadSuspendedCidSet(mccIds);
 
   // D-183：软删 MCC 下残留 ENABLED 同步自愈（与小组总览口径一致，避免换链等链路误当成在跑）
   await healEnabledUnderSoftDeletedMcc([userId]);
@@ -727,7 +698,10 @@ export async function queryCampaignBoard(
     roi: totalCost > 0 ? Number(((summaryCommission - totalCost) / totalCost).toFixed(2)) : 0,
     campaignCount: dedupedCampaigns.length,
     // D-195：在跑广告数 = ENABLED 系列条数，与下面的 pausedCount 同量纲
-    enabledCount: countEnabledCampaigns(dedupedCampaigns),
+    // D-248：被中止 CID 旗下的 ENABLED（展示为「被中止」）不算在跑
+    enabledCount: countEnabledCampaigns(
+      dedupedCampaigns.filter((c) => !(c.customer_id && suspendedCidSet.has(normalizeCid(c.customer_id)))),
+    ),
     pausedCount,
     todayAdsCount,
     scriptConfigured,
@@ -797,9 +771,10 @@ export async function queryCampaignBoard(
       target_country: c.target_country,
       last_synced: c.last_google_sync_at,
       mcc_currency: mccInfo?.currency || "USD",
-      // D-040 v3 Q-G2=b：前端据此标红——REMOVED 状态 或 属于已移除/停用 CID
+      // D-040 v3 Q-G2=b：前端据此标红——REMOVED 状态 或 属于被中止 CID
       is_removed: c.google_status === "REMOVED",
-      cid_removed: c.customer_id ? removedCidSet.has(c.customer_id.replace(/-/g, "")) : false,
+      // D-248：被中止 CID（Google 真值）→ 旗下 ENABLED 前端显示「被中止」，全部锁操作
+      cid_suspended: c.customer_id ? suspendedCidSet.has(normalizeCid(c.customer_id)) : false,
       is_budget: latestIsMap.get(String(c.id))?.is_budget ?? null,
       is_rank: latestIsMap.get(String(c.id))?.is_rank ?? null,
     };

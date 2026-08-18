@@ -1,4 +1,5 @@
 import prisma from "@/lib/prisma";
+import { loadSuspendedCidSet, normalizeCid } from "@/lib/google-ads/cid-suspension";
 
 /**
  * 「在跑」统一口径（D-195，推翻 D-183 的商家去重口径）：
@@ -9,7 +10,7 @@ import prisma from "@/lib/prisma";
  * - campaigns.is_deleted=0、google_status=ENABLED
  * - 有 google_campaign_id、有 customer_id
  * - mcc_id 属于该用户未删除的 MCC；**软删 MCC 一律不计**
- * - 不计入已移除/停用 CID（cancelled / is_available=D）下的系列
+ * - 不计入被中止 CID（D-248：Google 真值 status=suspended/cancelled）下的系列
  */
 
 /** 软删 MCC 下残留 ENABLED → 本地改判 PAUSED（与已移除 CID 自愈同级） */
@@ -78,19 +79,8 @@ export async function countActiveRunningCampaigns(
   }
 
   const allActiveMccIds = allMccs.filter((m) => Number(m.is_deleted) === 0).map((m) => m.id);
-  const removedCidSet = new Set<string>();
-  if (allActiveMccIds.length > 0) {
-    const removedCidRows = await prisma.mcc_cid_accounts.findMany({
-      where: {
-        mcc_account_id: { in: allActiveMccIds },
-        OR: [{ status: "cancelled" }, { is_available: "D" }],
-      },
-      select: { customer_id: true },
-    });
-    for (const r of removedCidRows) {
-      if (r.customer_id) removedCidSet.add(r.customer_id.replace(/-/g, ""));
-    }
-  }
+  // D-248：只排除 Google 真值被中止的 CID（手动标 D 不影响在跑统计）
+  const suspendedCidSet = await loadSuspendedCidSet(allActiveMccIds);
 
   // D-195：不再经 user_merchants 收窄。旧写法要求系列挂在 claimed/paused 商家上，
   // 会漏掉没挂商家的系列，而数据中心那侧把它们计入，两边规则本就不一致。
@@ -125,7 +115,7 @@ export async function countActiveRunningCampaigns(
     } else if (c.mcc_id !== null) {
       continue;
     }
-    if (c.customer_id && removedCidSet.has(c.customer_id.replace(/-/g, ""))) continue;
+    if (c.customer_id && suspendedCidSet.has(normalizeCid(c.customer_id))) continue;
 
     byUser.set(uid, (byUser.get(uid) || 0) + 1);
     teamTotal += 1;

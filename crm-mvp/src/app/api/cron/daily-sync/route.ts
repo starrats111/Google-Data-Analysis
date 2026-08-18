@@ -534,6 +534,11 @@ async function syncAllCampaignStatuses(): Promise<unknown> {
       });
       const pausedByGcid = new Map(pausedCampaigns.map((c) => [c.google_campaign_id, c]));
 
+      // D-248：被中止 CID（Google 真值 suspended/cancelled）旗下系列不做回停 mutate——
+      // 账号已死，mutate 必失败且白耗配额；直接跟随 Google 状态，展示层派生「被中止」
+      const { loadSuspendedCidSet, normalizeCid } = await import("@/lib/google-ads/cid-suspension");
+      const suspendedCids = await loadSuspendedCidSet([mcc.id]);
+
       for (const s of statuses) {
         // D-034：检测 PAUSED→ENABLED 漂移
         if (s.status === "ENABLED" && pausedByGcid.has(s.campaign_id)) {
@@ -553,6 +558,20 @@ async function syncAllCampaignStatuses(): Promise<unknown> {
             });
             updated++;
             log(`  [D-247] Hermes 主权系列跟随 Google：campaign_id=${existing.id} gcid=${s.campaign_id} PAUSED→ENABLED（不回停）`);
+            continue;
+          }
+
+          // D-248：被中止 CID 旗下不回停，跟随 Google 状态（展示层会派生「被中止」）
+          if (existing.customer_id && suspendedCids.has(normalizeCid(existing.customer_id))) {
+            await prisma.campaigns.update({
+              where: { id: existing.id },
+              data: {
+                google_status: "ENABLED", status: "active", last_google_sync_at: new Date(),
+                paused_at: null, pause_source: null,
+              },
+            });
+            updated++;
+            log(`  [D-248] 被中止 CID 旗下系列跟随 Google：campaign_id=${existing.id} gcid=${s.campaign_id} PAUSED→ENABLED（不回停 mutate）`);
             continue;
           }
 

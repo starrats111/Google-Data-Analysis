@@ -68,7 +68,8 @@ interface CampaignRow {
   roi: number;
   mcc_currency: string;
   is_removed: boolean;
-  cid_removed: boolean;
+  /** D-248：所属 CID 被 Google 中止——ENABLED 显示「被中止」 */
+  cid_suspended: boolean;
   is_budget: number | null;
   is_rank: number | null;
 }
@@ -228,30 +229,33 @@ export default function MemberDataModal({ open, userId, username, displayName, o
     status: {
       key: "status",
       title: "状态", dataIndex: "status", width: 100, align: "center",
-      render: (v: string, r: CampaignRow) => (
-        <Space size={4}>
-          <Tag color={statusColors[v] || "default"} style={{ fontSize: 11, margin: 0 }}>{statusLabels[v] || v}</Tag>
-          {r.cid_removed && v !== "REMOVED" && (
-            <Tooltip title="所属 CID 已移除/停用">
-              <Tag color="red" style={{ fontSize: 10, margin: 0 }}>CID已移除</Tag>
+      render: (v: string, r: CampaignRow) => {
+        // D-248：被中止 CID 旗下——ENABLED 显示「被中止」，PAUSED 保持「已暂停」（与数据中心同口径）
+        const suspended = !!r.cid_suspended && v !== "REMOVED";
+        const label = suspended && v === "ENABLED" ? "被中止" : statusLabels[v] || v;
+        const color = suspended && v === "ENABLED" ? "red" : statusColors[v] || "default";
+        return (
+          <Space size={4}>
+            <Tooltip title={suspended ? "所属 CID 已被 Google 中止，无法操作" : undefined}>
+              <Tag color={color} style={{ fontSize: 11, margin: 0 }}>{label}</Tag>
             </Tooltip>
-          )}
-        </Space>
-      ),
+          </Space>
+        );
+      },
     },
     // ===== D-241 与数据中心对齐的补充列（本弹窗为只读，不提供改预算/改出价/执行建议） =====
     customer_id: {
       key: "customer_id",
       title: "CID", dataIndex: "customer_id", width: 110,
       render: (v: string, r: CampaignRow) => {
-        const removed = r.is_removed || r.cid_removed;
+        const removed = r.is_removed || r.cid_suspended;
         return (
           <span style={{ display: "inline-flex", alignItems: "center" }}>
             <Text copyable={{ text: v }} style={{ fontSize: 12, margin: 0, color: removed ? "#cf1322" : undefined }}>
               {formatCid(v)}
             </Text>
-            {r.cid_removed && (
-              <Tooltip title="该 CID 已移除/停用">
+            {r.cid_suspended && (
+              <Tooltip title="该 CID 已被 Google 中止/停用">
                 <span style={{ color: "#cf1322", marginLeft: 4, fontSize: 11 }}>●</span>
               </Tooltip>
             )}
