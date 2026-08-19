@@ -109,6 +109,21 @@ jobs:
               echo "BUILD FAILED: .next.tmp/BUILD_ID not found, aborting deploy"
               exit 1
             fi
+
+            echo "===== 5c. Database migrations（D-254：构建验证后、.next 切换前）====="
+            # D-254 事故修复（2026-08-19）：原写法 `npx prisma migrate deploy 2>&1 | tail -5` 的
+            # 非零退出码被管道吞掉（pipeline 退出码 = tail 的 0，set -e 不触发），迁移失败照样
+            # 切换 .next + reload，新代码带着缺列上线（BOM 事故实证，管理页 500 约 5 分钟）。
+            # 现改为：① 显式捕获退出码，失败立即中止部署；② 挪到 .next 原子切换之前——
+            # 失败时旧 .next 与旧进程完全不受影响，线上无任何变更。
+            MIGRATE_OUT=$(npx prisma migrate deploy 2>&1) || {
+              echo "$MIGRATE_OUT" | tail -30
+              echo "MIGRATION FAILED: aborting deploy (old build & process untouched)"
+              exit 1
+            }
+            echo "$MIGRATE_OUT" | tail -5
+
+            echo "===== 5d. Atomic .next switch ====="
             rm -rf .next.old 2>/dev/null || true
             mv .next .next.old 2>/dev/null || true
             mv .next.tmp .next
@@ -127,8 +142,7 @@ jobs:
             fi
             echo "Build verified: BUILD_ID=$(cat $CRM_DIR/.next/BUILD_ID)"
 
-            echo "===== 7. Database migrations ====="
-            npx prisma migrate deploy 2>&1 | tail -5
+            # （原第 7 步 Database migrations 已前移至 5c——迁移失败必须发生在 .next 切换之前）
 
             echo "===== 8. Reload service (zero-downtime) ====="
             cd "$CRM_DIR"
