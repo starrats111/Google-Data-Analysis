@@ -4,6 +4,7 @@
  */
 
 import prisma from "./prisma";
+import { fetchDomainCreativesDirect } from "./atc-direct";
 import {
   MAX_KEY_ATTEMPTS,
   getPoolKeys,
@@ -659,7 +660,6 @@ export async function queryMerchantAtc(opts: {
   forceRefresh?: boolean;
 }): Promise<AtcMerchantResult> {
   const { merchantId, merchantName, domain, region = "US", serpApiKeys, forceRefresh = false } = opts;
-  const serpApiKey = pickApiKey(serpApiKeys);
 
   // 1. 检查团队共享缓存
   if (!forceRefresh) {
@@ -696,25 +696,41 @@ export async function queryMerchantAtc(opts: {
   });
 
   try {
-    // 3. 调用 SerpApi
+    // 3. 调用数据源（v2.0：直连 ATC RPC 优先，SerpApi 降级）
     // 用完整域名搜索（ATC 会返回所有指向该域名的广告）
     // 使用近 7 天窗口（与 Google ATC 网站默认"过去 7 天"一致），覆盖偶尔投放的广告主
     const serpRegion = toSerpApiRegion(region);
-    const params: Record<string, string> = {
-      engine: "google_ads_transparency_center",
-      text: domain,
-      platform: "SEARCH",
-      ...buildDateRangeParams(7),
-      num: "100",
-    };
-    if (serpRegion) params.region = serpRegion;
-    const data = await callSerpApi(params, serpApiKey);
+    let allAds: SerpApiAd[];
 
-    // "no results" 视为合法的 0 结果，而非错误
-    const NO_RESULTS_MSG = "hasn't returned any results";
-    if (data.error && !data.error.includes(NO_RESULTS_MSG)) throw new Error(data.error);
+    try {
+      // 3a. 直连 ATC 内部 RPC：免费、无需 Key，口径与原 SerpApi 查询完全一致
+      //     （text=域名 / platform=SEARCH / 近7天 / num=100；三方对比验证于 2026-08-19）
+      allAds = await fetchDomainCreativesDirect({
+        domain,
+        regionNum: serpRegion,
+        days: 7,
+        count: 100,
+        searchOnly: true,
+      });
+    } catch (directErr) {
+      // 3b. 直连失败（协议变更/限频/网络）→ 降级 SerpApi，保持原行为
+      console.warn(`[ATC-direct] 直连失败，降级 SerpApi（domain=${domain}）:`, directErr);
+      const serpApiKey = pickApiKey(serpApiKeys);
+      const params: Record<string, string> = {
+        engine: "google_ads_transparency_center",
+        text: domain,
+        platform: "SEARCH",
+        ...buildDateRangeParams(7),
+        num: "100",
+      };
+      if (serpRegion) params.region = serpRegion;
+      const data = await callSerpApi(params, serpApiKey);
 
-    const allAds: SerpApiAd[] = data.ad_creatives ?? [];
+      // "no results" 视为合法的 0 结果，而非错误
+      const NO_RESULTS_MSG = "hasn't returned any results";
+      if (data.error && !data.error.includes(NO_RESULTS_MSG)) throw new Error(data.error);
+      allAds = data.ad_creatives ?? [];
+    }
 
     // 4a. 只保留搜索/文字广告（format=text 或无 format）
     const searchAds = allAds.filter((ad) => isSearchAd(ad.format));
