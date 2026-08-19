@@ -26,6 +26,8 @@ interface Proxy {
   hasPassword: boolean;
   countryCodeMap: Record<string, string> | null;
   sessionMode: string;
+  usageScene: string;
+  trafficLeftGB: number | null;
   userCount: number;
   createdAt: string;
 }
@@ -116,6 +118,7 @@ export default function ProxiesPage() {
       password: values.password ?? "",
       countryCodeMap,
       sessionMode: values.sessionMode ?? "",
+      usageScene: values.usageScene ?? "",
     };
 
     try {
@@ -250,23 +253,17 @@ export default function ProxiesPage() {
       render: (name: string) => <Text strong>{name}</Text>,
     },
     {
-      title: "地址",
-      key: "address",
-      render: (_: unknown, row) => (
-        <Text style={{ fontFamily: "monospace", fontSize: 13 }}>
-          {row.host}:{row.port}
-        </Text>
-      ),
+      title: "剩余流量",
+      dataIndex: "trafficLeftGB",
+      render: (gb: number | null) =>
+        gb === null
+          ? <Text type="secondary">未接入</Text>
+          : <Text strong type={gb <= 20 ? "danger" : undefined}>{gb} GB</Text>,
     },
     {
-      title: "类型",
-      dataIndex: "proxyType",
-      render: (t: string) => <Tag>{t.toUpperCase()}</Tag>,
-    },
-    {
-      title: "优先级",
-      dataIndex: "priority",
-      sorter: (a, b) => a.priority - b.priority,
+      title: "应用场景",
+      dataIndex: "usageScene",
+      render: (scene: string) => (scene ? <Tag color="blue">{scene}</Tag> : <Text type="secondary">—</Text>),
     },
     {
       title: "状态",
@@ -280,11 +277,6 @@ export default function ProxiesPage() {
           onChange={() => handleToggleStatus(row)}
         />
       ),
-    },
-    {
-      title: "绑定用户",
-      dataIndex: "userCount",
-      render: (count: number) => <Tag icon={<TeamOutlined />}>{count} 人</Tag>,
     },
     {
       title: "操作",
@@ -317,6 +309,7 @@ export default function ProxiesPage() {
                 usernameTemplate: row.usernameTemplate, password: "",
                 countryCodeMap: row.countryCodeMap ? JSON.stringify(row.countryCodeMap) : "",
                 sessionMode: row.sessionMode,
+                usageScene: row.usageScene,
               });
               setModalOpen(true);
             }}
@@ -413,6 +406,9 @@ export default function ProxiesPage() {
             }]}
           >
             <Input placeholder='如 {"HK":"CN_HK"}' />
+          </Form.Item>
+          <Form.Item name="usageScene" label="应用场景" tooltip="列表展示用标签，如：换链接">
+            <Input placeholder="如 换链接" maxLength={64} />
           </Form.Item>
           <Form.Item name="priority" label="优先级（数字越小越优先）" initialValue={5}>
             <InputNumber min={1} max={10} style={{ width: "100%" }} />
