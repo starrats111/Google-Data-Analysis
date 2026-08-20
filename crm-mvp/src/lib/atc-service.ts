@@ -633,14 +633,15 @@ export async function getOrFetchAdvertiserDomainSnapshot(opts: {
   } catch (directErr) {
     console.warn(`[ATC-direct] 广告主查询直连失败，降级 SerpApi（advertiser=${advertiserId}）:`, directErr);
     const serpApiKey = pickApiKey(serpApiKeys);
-    const serpRegion = toSerpApiRegion(region);
+    // D-259.1：降级路径不再带 region 过滤——直连查的是全球（anywhere），降级带 region
+    // 会造成同一广告主两条传输路径计数不一致（实测 Vladyslav 直连 100+ vs SerpApi-US 27、
+    // FC-Moto 直连 100 vs SerpApi-US 0），在投数必须口径统一才谈得上精准。
     const params: Record<string, string> = {
       engine: "google_ads_transparency_center",
       advertiser_id: advertiserId,
       ...buildDateRangeParams(ADVERTISER_ACTIVE_WINDOW_DAYS),
       num: "100",
     };
-    if (serpRegion) params.region = serpRegion;
 
     const NO_RESULTS_MSG = "hasn't returned any results";
     ads = [];

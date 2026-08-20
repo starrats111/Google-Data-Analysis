@@ -281,8 +281,9 @@ export async function fetchAdvertiserCreativesDirect(opts: {
     ads.push(...batch.map(parseCreative));
     pageToken = body["2"];
     if (!pageToken || batch.length === 0) break;
-    // 页间小憩，降低触发 Google 限频的概率（精准计数需要多页连拉）
-    await new Promise((r) => setTimeout(r, 300));
+    // 页间小憩，降低触发 Google 限频的概率（精准计数需要多页连拉；
+    // 实测 300ms 在 77 个广告主连刷时仍会触发 302 sorry，放慢到 800ms）
+    await new Promise((r) => setTimeout(r, 800));
   }
 
   return ads;
