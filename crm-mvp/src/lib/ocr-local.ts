@@ -85,10 +85,11 @@ export function pickDomainFromOcrText(text: string): string | null {
     const token = rawToken.replace(/[,;:!?()[\]{}'"«»]+$/g, "").replace(/^[,;:!?()[\]{}'"«»]+/g, "");
     if (!DOMAIN_TOKEN_RE.test(token)) continue;
     let d = token.replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/^www\.?/, "");
-    if (OCR_BLOCK_DOMAINS.test(d)) continue;
     const tld = d.split(".").pop()!;
     if (!TLD_WHITELIST.has(tld)) continue;
     d = toRootDomain(d);
+    // 屏蔽检查必须放在根域归一化之后，否则 vm.tiktok.com 这类子域会漏网
+    if (OCR_BLOCK_DOMAINS.test(d)) continue;
     freq.set(d, (freq.get(d) ?? 0) + 1);
   }
   let best: string | null = null;
