@@ -83,6 +83,7 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
     select: {
       advertiser_id: true, region: true,
       qualifying_domain_count: true, unique_domain_count: true, ad_count: true,
+      classification: true,
     },
   });
   const snapMap = new Map(snapRows.map((s) => [`${s.advertiser_id}|${s.region}`, s]));
@@ -129,6 +130,7 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
       qualifying_domain_count: snap?.qualifying_domain_count ?? null,
       unique_domain_count: snap?.unique_domain_count ?? null,
       ad_count: snap?.ad_count ?? null,
+      classification: snap?.classification ?? null,
       watched_by_me: myWatchedSet.has(`${r.advertiser_id}|${r.region}`),
     };
   });

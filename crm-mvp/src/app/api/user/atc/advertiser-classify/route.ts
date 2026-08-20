@@ -57,14 +57,9 @@ export const POST = withUser(async (req: NextRequest) => {
   const region = (body.region ?? "US").toUpperCase();
   const forceRefresh = body.force_refresh === true;
 
-  // D-215：取全局共享 key 池，不再只看自己配的 key
+  // D-215：取全局共享 key 池，不再只看自己配的 key。
+  // v2.1：主路径为免费直连 ATC RPC，SerpApi 仅作降级备用——key 池为空不再拒绝请求。
   const serpApiKeys = await getPoolKeys();
-  if (serpApiKeys.length === 0) {
-    return NextResponse.json(
-      { code: -1, message: "系统内暂无可用 SerpApi Key，请在「个人设置 → 广告情报」中配置" },
-      { status: 400 }
-    );
-  }
 
   const uniqueIds = Array.from(new Set(ids.map((x) => x.trim()).filter((x) => x.length > 0)));
   const results = new Map<string, AdvertiserDomainSnapshot | { error: string }>();

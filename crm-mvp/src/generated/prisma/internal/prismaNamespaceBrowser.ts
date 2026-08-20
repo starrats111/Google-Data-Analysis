@@ -461,6 +461,7 @@ export const CampaignsScalarFieldEnum = {
   paused_at: 'paused_at',
   pause_source: 'pause_source',
   status_verified_at: 'status_verified_at',
+  hermes_managed_at: 'hermes_managed_at',
   previous_gcids: 'previous_gcids',
   final_url_suffix: 'final_url_suffix',
   suffix_exchange_enabled: 'suffix_exchange_enabled',
@@ -1002,6 +1003,7 @@ export const Kyads_proxiesScalarFieldEnum = {
   password: 'password',
   country_code_map: 'country_code_map',
   session_mode: 'session_mode',
+  usage_scene: 'usage_scene',
   status: 'status',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
@@ -1161,6 +1163,7 @@ export const Atc_advertiser_domain_snapshotScalarFieldEnum = {
   domains_json: 'domains_json',
   ocr_pending: 'ocr_pending',
   sampled_ads_json: 'sampled_ads_json',
+  classification: 'classification',
   fetched_at: 'fetched_at',
   created_at: 'created_at',
   updated_at: 'updated_at'
@@ -2109,6 +2112,7 @@ export const kyads_proxiesOrderByRelevanceFieldEnum = {
   username_template: 'username_template',
   password: 'password',
   session_mode: 'session_mode',
+  usage_scene: 'usage_scene',
   status: 'status'
 } as const
 
@@ -2185,7 +2189,8 @@ export type merchant_atc_snapshotsOrderByRelevanceFieldEnum = (typeof merchant_a
 export const atc_advertiser_domain_snapshotOrderByRelevanceFieldEnum = {
   advertiser_id: 'advertiser_id',
   region: 'region',
-  advertiser_name: 'advertiser_name'
+  advertiser_name: 'advertiser_name',
+  classification: 'classification'
 } as const
 
 export type atc_advertiser_domain_snapshotOrderByRelevanceFieldEnum = (typeof atc_advertiser_domain_snapshotOrderByRelevanceFieldEnum)[keyof typeof atc_advertiser_domain_snapshotOrderByRelevanceFieldEnum]

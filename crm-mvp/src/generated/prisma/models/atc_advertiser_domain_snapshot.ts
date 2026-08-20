@@ -51,6 +51,7 @@ export type Atc_advertiser_domain_snapshotMinAggregateOutputType = {
   qualifying_domain_count: number | null
   ad_count: number | null
   ocr_pending: number | null
+  classification: string | null
   fetched_at: Date | null
   created_at: Date | null
   updated_at: Date | null
@@ -65,6 +66,7 @@ export type Atc_advertiser_domain_snapshotMaxAggregateOutputType = {
   qualifying_domain_count: number | null
   ad_count: number | null
   ocr_pending: number | null
+  classification: string | null
   fetched_at: Date | null
   created_at: Date | null
   updated_at: Date | null
@@ -81,6 +83,7 @@ export type Atc_advertiser_domain_snapshotCountAggregateOutputType = {
   domains_json: number
   ocr_pending: number
   sampled_ads_json: number
+  classification: number
   fetched_at: number
   created_at: number
   updated_at: number
@@ -113,6 +116,7 @@ export type Atc_advertiser_domain_snapshotMinAggregateInputType = {
   qualifying_domain_count?: true
   ad_count?: true
   ocr_pending?: true
+  classification?: true
   fetched_at?: true
   created_at?: true
   updated_at?: true
@@ -127,6 +131,7 @@ export type Atc_advertiser_domain_snapshotMaxAggregateInputType = {
   qualifying_domain_count?: true
   ad_count?: true
   ocr_pending?: true
+  classification?: true
   fetched_at?: true
   created_at?: true
   updated_at?: true
@@ -143,6 +148,7 @@ export type Atc_advertiser_domain_snapshotCountAggregateInputType = {
   domains_json?: true
   ocr_pending?: true
   sampled_ads_json?: true
+  classification?: true
   fetched_at?: true
   created_at?: true
   updated_at?: true
@@ -246,6 +252,7 @@ export type Atc_advertiser_domain_snapshotGroupByOutputType = {
   domains_json: runtime.JsonValue | null
   ocr_pending: number
   sampled_ads_json: runtime.JsonValue | null
+  classification: string | null
   fetched_at: Date
   created_at: Date
   updated_at: Date
@@ -285,6 +292,7 @@ export type atc_advertiser_domain_snapshotWhereInput = {
   domains_json?: Prisma.JsonNullableFilter<"atc_advertiser_domain_snapshot">
   ocr_pending?: Prisma.IntFilter<"atc_advertiser_domain_snapshot"> | number
   sampled_ads_json?: Prisma.JsonNullableFilter<"atc_advertiser_domain_snapshot">
+  classification?: Prisma.StringNullableFilter<"atc_advertiser_domain_snapshot"> | string | null
   fetched_at?: Prisma.DateTimeFilter<"atc_advertiser_domain_snapshot"> | Date | string
   created_at?: Prisma.DateTimeFilter<"atc_advertiser_domain_snapshot"> | Date | string
   updated_at?: Prisma.DateTimeFilter<"atc_advertiser_domain_snapshot"> | Date | string
@@ -301,6 +309,7 @@ export type atc_advertiser_domain_snapshotOrderByWithRelationInput = {
   domains_json?: Prisma.SortOrderInput | Prisma.SortOrder
   ocr_pending?: Prisma.SortOrder
   sampled_ads_json?: Prisma.SortOrderInput | Prisma.SortOrder
+  classification?: Prisma.SortOrderInput | Prisma.SortOrder
   fetched_at?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -322,6 +331,7 @@ export type atc_advertiser_domain_snapshotWhereUniqueInput = Prisma.AtLeast<{
   domains_json?: Prisma.JsonNullableFilter<"atc_advertiser_domain_snapshot">
   ocr_pending?: Prisma.IntFilter<"atc_advertiser_domain_snapshot"> | number
   sampled_ads_json?: Prisma.JsonNullableFilter<"atc_advertiser_domain_snapshot">
+  classification?: Prisma.StringNullableFilter<"atc_advertiser_domain_snapshot"> | string | null
   fetched_at?: Prisma.DateTimeFilter<"atc_advertiser_domain_snapshot"> | Date | string
   created_at?: Prisma.DateTimeFilter<"atc_advertiser_domain_snapshot"> | Date | string
   updated_at?: Prisma.DateTimeFilter<"atc_advertiser_domain_snapshot"> | Date | string
@@ -338,6 +348,7 @@ export type atc_advertiser_domain_snapshotOrderByWithAggregationInput = {
   domains_json?: Prisma.SortOrderInput | Prisma.SortOrder
   ocr_pending?: Prisma.SortOrder
   sampled_ads_json?: Prisma.SortOrderInput | Prisma.SortOrder
+  classification?: Prisma.SortOrderInput | Prisma.SortOrder
   fetched_at?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -362,6 +373,7 @@ export type atc_advertiser_domain_snapshotScalarWhereWithAggregatesInput = {
   domains_json?: Prisma.JsonNullableWithAggregatesFilter<"atc_advertiser_domain_snapshot">
   ocr_pending?: Prisma.IntWithAggregatesFilter<"atc_advertiser_domain_snapshot"> | number
   sampled_ads_json?: Prisma.JsonNullableWithAggregatesFilter<"atc_advertiser_domain_snapshot">
+  classification?: Prisma.StringNullableWithAggregatesFilter<"atc_advertiser_domain_snapshot"> | string | null
   fetched_at?: Prisma.DateTimeWithAggregatesFilter<"atc_advertiser_domain_snapshot"> | Date | string
   created_at?: Prisma.DateTimeWithAggregatesFilter<"atc_advertiser_domain_snapshot"> | Date | string
   updated_at?: Prisma.DateTimeWithAggregatesFilter<"atc_advertiser_domain_snapshot"> | Date | string
@@ -378,6 +390,7 @@ export type atc_advertiser_domain_snapshotCreateInput = {
   domains_json?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   ocr_pending?: number
   sampled_ads_json?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  classification?: string | null
   fetched_at: Date | string
   created_at?: Date | string
   updated_at?: Date | string
@@ -394,6 +407,7 @@ export type atc_advertiser_domain_snapshotUncheckedCreateInput = {
   domains_json?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   ocr_pending?: number
   sampled_ads_json?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  classification?: string | null
   fetched_at: Date | string
   created_at?: Date | string
   updated_at?: Date | string
@@ -410,6 +424,7 @@ export type atc_advertiser_domain_snapshotUpdateInput = {
   domains_json?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   ocr_pending?: Prisma.IntFieldUpdateOperationsInput | number
   sampled_ads_json?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  classification?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   fetched_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -426,6 +441,7 @@ export type atc_advertiser_domain_snapshotUncheckedUpdateInput = {
   domains_json?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   ocr_pending?: Prisma.IntFieldUpdateOperationsInput | number
   sampled_ads_json?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  classification?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   fetched_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -442,6 +458,7 @@ export type atc_advertiser_domain_snapshotCreateManyInput = {
   domains_json?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   ocr_pending?: number
   sampled_ads_json?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  classification?: string | null
   fetched_at: Date | string
   created_at?: Date | string
   updated_at?: Date | string
@@ -458,6 +475,7 @@ export type atc_advertiser_domain_snapshotUpdateManyMutationInput = {
   domains_json?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   ocr_pending?: Prisma.IntFieldUpdateOperationsInput | number
   sampled_ads_json?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  classification?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   fetched_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -474,6 +492,7 @@ export type atc_advertiser_domain_snapshotUncheckedUpdateManyInput = {
   domains_json?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
   ocr_pending?: Prisma.IntFieldUpdateOperationsInput | number
   sampled_ads_json?: Prisma.NullableJsonNullValueInput | runtime.InputJsonValue
+  classification?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   fetched_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -501,6 +520,7 @@ export type atc_advertiser_domain_snapshotCountOrderByAggregateInput = {
   domains_json?: Prisma.SortOrder
   ocr_pending?: Prisma.SortOrder
   sampled_ads_json?: Prisma.SortOrder
+  classification?: Prisma.SortOrder
   fetched_at?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -523,6 +543,7 @@ export type atc_advertiser_domain_snapshotMaxOrderByAggregateInput = {
   qualifying_domain_count?: Prisma.SortOrder
   ad_count?: Prisma.SortOrder
   ocr_pending?: Prisma.SortOrder
+  classification?: Prisma.SortOrder
   fetched_at?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -537,6 +558,7 @@ export type atc_advertiser_domain_snapshotMinOrderByAggregateInput = {
   qualifying_domain_count?: Prisma.SortOrder
   ad_count?: Prisma.SortOrder
   ocr_pending?: Prisma.SortOrder
+  classification?: Prisma.SortOrder
   fetched_at?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
@@ -563,6 +585,7 @@ export type atc_advertiser_domain_snapshotSelect<ExtArgs extends runtime.Types.E
   domains_json?: boolean
   ocr_pending?: boolean
   sampled_ads_json?: boolean
+  classification?: boolean
   fetched_at?: boolean
   created_at?: boolean
   updated_at?: boolean
@@ -581,12 +604,13 @@ export type atc_advertiser_domain_snapshotSelectScalar = {
   domains_json?: boolean
   ocr_pending?: boolean
   sampled_ads_json?: boolean
+  classification?: boolean
   fetched_at?: boolean
   created_at?: boolean
   updated_at?: boolean
 }
 
-export type atc_advertiser_domain_snapshotOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "advertiser_id" | "region" | "advertiser_name" | "unique_domain_count" | "qualifying_domain_count" | "ad_count" | "domains_json" | "ocr_pending" | "sampled_ads_json" | "fetched_at" | "created_at" | "updated_at", ExtArgs["result"]["atc_advertiser_domain_snapshot"]>
+export type atc_advertiser_domain_snapshotOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "advertiser_id" | "region" | "advertiser_name" | "unique_domain_count" | "qualifying_domain_count" | "ad_count" | "domains_json" | "ocr_pending" | "sampled_ads_json" | "classification" | "fetched_at" | "created_at" | "updated_at", ExtArgs["result"]["atc_advertiser_domain_snapshot"]>
 
 export type $atc_advertiser_domain_snapshotPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "atc_advertiser_domain_snapshot"
@@ -618,6 +642,12 @@ export type $atc_advertiser_domain_snapshotPayload<ExtArgs extends runtime.Types
      *    * C-094.3：本次 SerpApi 采样的图片 URL + first_shown/last_shown，OCR 跑完后供 cache 命中时重算分类，避免重复调 SerpApi
      */
     sampled_ads_json: runtime.JsonValue | null
+    /**
+     * *
+     *    * v2.1（2026-08-20）：快照写入时的判定结果 peer/brand_self/pending/unknown，
+     *    * 供「可关注广告主」等 SQL 级筛选；NULL = v2.1 之前的旧规则快照（口径已废弃，读取时强制重查）
+     */
+    classification: string | null
     fetched_at: Date
     created_at: Date
     updated_at: Date
@@ -1000,6 +1030,7 @@ export interface atc_advertiser_domain_snapshotFieldRefs {
   readonly domains_json: Prisma.FieldRef<"atc_advertiser_domain_snapshot", 'Json'>
   readonly ocr_pending: Prisma.FieldRef<"atc_advertiser_domain_snapshot", 'Int'>
   readonly sampled_ads_json: Prisma.FieldRef<"atc_advertiser_domain_snapshot", 'Json'>
+  readonly classification: Prisma.FieldRef<"atc_advertiser_domain_snapshot", 'String'>
   readonly fetched_at: Prisma.FieldRef<"atc_advertiser_domain_snapshot", 'DateTime'>
   readonly created_at: Prisma.FieldRef<"atc_advertiser_domain_snapshot", 'DateTime'>
   readonly updated_at: Prisma.FieldRef<"atc_advertiser_domain_snapshot", 'DateTime'>

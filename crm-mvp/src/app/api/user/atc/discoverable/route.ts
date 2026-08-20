@@ -1,14 +1,15 @@
 /**
  * C-094.6 可关注广告主：所有员工查过的同行广告主（持久化去重）
  *
- * GET /api/user/atc/discoverable?page=&page_size=&q=&min_qualifying=3
+ * GET /api/user/atc/discoverable?page=&page_size=&q=
  *
- * 数据源：atc_advertiser_domain_snapshot WHERE qualifying_domain_count >= min_qualifying
+ * 数据源（v2.1，2026-08-20）：atc_advertiser_domain_snapshot WHERE classification = 'peer'
  *   （这张表本身就是团队级共享缓存，按 (advertiser_id, region) 唯一约束去重）
- *   - 默认 min_qualifying=3 → 只展示同行（peer）
- *   - 排序：合格域名数 desc → ad_count desc
+ *   - peer = 有效同行：近 7 天在投广告 >10 条且域名重复率 ≤5%（07 规则）
+ *   - 旧规则快照 classification 为 NULL，自然被排除（重查后会补上）
+ *   - 排序：唯一域名数 desc → ad_count desc
  *   - 自动剔除当前用户已关注的 (advertiser_id, region)（剩下的才是"可关注"）
- *   - 附带前 5 个合格域名（按 max_creative_days desc）供 UI 显示
+ *   - 附带前 5 个域名（按 creative_count desc）供 UI 显示
  */
 import { NextRequest, NextResponse } from "next/server";
 import { withUser } from "@/lib/api-handler";
@@ -28,7 +29,6 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
   const page = Math.max(1, parseInt(url.searchParams.get("page") || "1", 10) || 1);
   const pageSize = Math.min(200, Math.max(10, parseInt(url.searchParams.get("page_size") || "50", 10) || 50));
   const q = (url.searchParams.get("q") ?? "").trim();
-  const minQualifying = Math.max(1, parseInt(url.searchParams.get("min_qualifying") || "3", 10) || 3);
 
   // 先取当前用户所有已关注的 (advertiser_id, region)，从结果集排除
   const myWatchedAll = await prisma.user_atc_watchlist.findMany({
@@ -37,7 +37,7 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
   });
 
   const where: Prisma.atc_advertiser_domain_snapshotWhereInput = {
-    qualifying_domain_count: { gte: minQualifying },
+    classification: "peer",
   };
   if (myWatchedAll.length > 0) {
     where.NOT = {
@@ -56,7 +56,7 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
     prisma.atc_advertiser_domain_snapshot.findMany({
       where,
       orderBy: [
-        { qualifying_domain_count: "desc" },
+        { unique_domain_count: "desc" },
         { ad_count: "desc" },
       ],
       skip: (page - 1) * pageSize,
@@ -77,12 +77,11 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
   }
 
   const items = rows.map((r) => {
-    // 取前 5 个合格域名（按 max_creative_days desc）
+    // 取前 5 个域名（v2.1：不再要求 30 天合格条件，按创意数 desc）
     let topQualifying: Array<{ domain: string; max_creative_days: number }> = [];
     if (Array.isArray(r.domains_json)) {
       topQualifying = (r.domains_json as unknown as DomainCreativeStat[])
-        .filter((d) => d.has_long_running_creative)
-        .sort((a, b) => b.max_creative_days - a.max_creative_days)
+        .sort((a, b) => b.creative_count - a.creative_count)
         .slice(0, 5)
         .map((d) => ({ domain: d.domain, max_creative_days: d.max_creative_days }));
     }

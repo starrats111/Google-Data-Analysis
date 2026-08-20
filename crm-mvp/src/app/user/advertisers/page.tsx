@@ -34,6 +34,7 @@ interface WatchlistItem {
   is_shared: boolean;
   qualifying_domain_count: number | null;
   ad_count: number | null;
+  classification: string | null;
   created_at: string;
 }
 
@@ -47,6 +48,7 @@ interface RecommendedItem {
   qualifying_domain_count: number | null;
   ad_count: number | null;
   unique_domain_count: number | null;
+  classification: string | null;
   watched_by_me: boolean;
 }
 
@@ -147,11 +149,15 @@ const AtcAdvertiserLink = ({ id, name }: { id: string; name: string | null }) =>
   </a>
 );
 
-const QualifyingTag = ({ q }: { q: number | null | undefined }) => {
-  if (q === null || q === undefined) return <Tag>未识别</Tag>;
-  if (q >= 3) return <Tag color="green">同行 · {q} 合格域名</Tag>;
-  if (q >= 1) return <Tag color="orange">品牌自投 · {q} 域名</Tag>;
-  return <Tag>无合格域名</Tag>;
+// v2.1 有效同行规则（2026-08-20）：分类以快照 classification 列为准；
+// null = 旧规则快照，下次在商家弹窗里反查时会自动按新规则重判
+const ClassificationTag = ({ row }: { row: { classification?: string | null; unique_domain_count?: number | null; ad_count?: number | null } }) => {
+  const { classification, unique_domain_count: u, ad_count: n } = row;
+  if (classification === "peer") return <Tag color="green">同行 · 投{n ?? "?"}条 · {u ?? "?"}域名</Tag>;
+  if (classification === "brand_self") return <Tag color="orange">品牌自投</Tag>;
+  if (classification === "pending") return <Tag color="blue">判定中</Tag>;
+  if (classification === "unknown") return <Tag>未知</Tag>;
+  return <Tag>待重判（旧规则）</Tag>;
 };
 
 export default function AdvertisersPage() {
@@ -506,7 +512,7 @@ export default function AdvertisersPage() {
     { title: "广告主", dataIndex: "advertiser_name", render: (_: string, row) => <AtcAdvertiserLink id={row.advertiser_id} name={row.advertiser_name} /> },
     { title: "Advertiser ID", dataIndex: "advertiser_id", width: 240, render: (v: string) => <Text copyable={{ text: v }} style={{ fontFamily: "monospace", fontSize: 12 }}>{v}</Text> },
     { title: "区域", dataIndex: "region", width: 60 },
-    { title: "分类", width: 180, render: (_: unknown, row) => <QualifyingTag q={row.qualifying_domain_count} /> },
+    { title: "分类", width: 180, render: (_: unknown, row) => <ClassificationTag row={row} /> },
     {
       title: <Tooltip title="开启后会出现在同事的「推荐广告主」中">分享</Tooltip>,
       dataIndex: "is_shared", width: 80, align: "center" as const,
@@ -540,7 +546,7 @@ export default function AdvertisersPage() {
     { title: "广告主", dataIndex: "advertiser_name", render: (_: string, row) => <AtcAdvertiserLink id={row.advertiser_id} name={row.advertiser_name} /> },
     { title: "Advertiser ID", dataIndex: "advertiser_id", width: 240, render: (v: string) => <Text copyable={{ text: v }} style={{ fontFamily: "monospace", fontSize: 12 }}>{v}</Text> },
     { title: "区域", dataIndex: "region", width: 60 },
-    { title: "分类", width: 180, render: (_: unknown, row) => <QualifyingTag q={row.qualifying_domain_count} /> },
+    { title: "分类", width: 180, render: (_: unknown, row) => <ClassificationTag row={row} /> },
     {
       title: "分享人", dataIndex: "shared_by", width: 220,
       render: (_: unknown, row) => (
@@ -705,8 +711,8 @@ export default function AdvertisersPage() {
     { title: "广告主", dataIndex: "advertiser_name", render: (_: string, row) => <AtcAdvertiserLink id={row.advertiser_id} name={row.advertiser_name} /> },
     { title: "Advertiser ID", dataIndex: "advertiser_id", width: 240, render: (v: string) => <Text copyable={{ text: v }} style={{ fontFamily: "monospace", fontSize: 12 }}>{v}</Text> },
     { title: "区域", dataIndex: "region", width: 60 },
-    { title: "合格域名", dataIndex: "qualifying_domain_count", width: 110, sorter: (a, b) => a.qualifying_domain_count - b.qualifying_domain_count, render: (v: number) => <Tag color="green">{v}</Tag> },
-    { title: "总域名/广告数", width: 130, render: (_: unknown, row) => <Text type="secondary" style={{ fontSize: 12 }}>{row.unique_domain_count} / {row.ad_count}</Text> },
+    { title: "唯一域名", dataIndex: "unique_domain_count", width: 110, sorter: (a, b) => a.unique_domain_count - b.unique_domain_count, render: (v: number) => <Tag color="green">{v}</Tag> },
+    { title: "在投广告数", width: 110, render: (_: unknown, row) => <Text type="secondary" style={{ fontSize: 12 }}>{row.ad_count}</Text> },
     {
       title: "热门域名", width: 220,
       render: (_: unknown, row) => (
@@ -864,7 +870,7 @@ export default function AdvertisersPage() {
                     <Button icon={<SearchOutlined />} onClick={() => { setDiscQ(discQInput); setDiscPage(1); }}>搜索</Button>
                     <Button icon={<ReloadOutlined />} onClick={() => loadDiscoverable()}>刷新</Button>
                     <Text type="secondary" style={{ alignSelf: "center", fontSize: 12 }}>
-                      所有员工查过的同行广告主 (合格域名 ≥ 3)
+                      所有员工查过的有效同行 (近7天投&gt;10条且域名重复率≤5%)
                     </Text>
                     <div style={{ flex: 1 }} />
                     {(discSelected.length > 0 || discSelectedMap.size > 0) && (

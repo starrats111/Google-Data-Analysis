@@ -29,7 +29,60 @@ const ATC_HEADERS: Record<string, string> = {
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
   "content-type": "application/x-www-form-urlencoded;charset=UTF-8",
   "accept-language": "en-US,en;q=0.9",
+  "sec-ch-ua": '"Chromium";v="131", "Not_A Brand";v="24", "Google Chrome";v="131"',
+  "sec-ch-ua-mobile": "?0",
+  "sec-ch-ua-platform": '"Windows"',
 };
+
+// ─── Cookie 引导 + 429 重试（2026-08-20 实测）───────────────────────────────
+// 无 Cookie 的裸请求在突发流量下会被 Google 429（同 IP 上带 Cookie 的请求正常）。
+// 参考 block-town 实现：先 GET 一次 ATC 首页拿 Set-Cookie，之后请求都带上。
+// 惰性策略：首次请求不取 Cookie（低频场景裸请求即可），遇到 429 才引导 + 重试一次。
+
+let atcCookieHeader: string | null = null;
+
+async function refreshAtcCookies(): Promise<void> {
+  try {
+    const res = await fetch(`${ATC_BASE_URL}/?region=anywhere`, {
+      headers: {
+        "user-agent": ATC_HEADERS["user-agent"],
+        "accept-language": ATC_HEADERS["accept-language"],
+      },
+      signal: AbortSignal.timeout(15000),
+    });
+    const raw =
+      (res.headers as unknown as { getSetCookie?: () => string[] }).getSetCookie?.() ?? [];
+    const jar = raw.map((c) => c.split(";")[0]).filter(Boolean);
+    atcCookieHeader = jar.length > 0 ? jar.join("; ") : null;
+  } catch {
+    atcCookieHeader = null;
+  }
+}
+
+/** SearchCreatives RPC 底层调用：带 Cookie（如有）、429 时引导 Cookie 后重试一次 */
+async function postSearchCreatives(
+  req: Record<string, unknown>
+): Promise<{ "1"?: RawCreative[]; "2"?: string }> {
+  for (let attempt = 0; ; attempt++) {
+    const headers: Record<string, string> = { ...ATC_HEADERS };
+    if (atcCookieHeader) headers["cookie"] = atcCookieHeader;
+
+    const res = await fetch(`${ATC_BASE_URL}/anji/_/rpc/SearchService/SearchCreatives?authuser=`, {
+      method: "POST",
+      headers,
+      body: new URLSearchParams({ "f.req": JSON.stringify(req) }),
+      signal: AbortSignal.timeout(15000),
+    });
+
+    if (res.ok) return (await res.json()) as { "1"?: RawCreative[]; "2"?: string };
+
+    if (res.status === 429 && attempt === 0) {
+      await refreshAtcCookies();
+      continue;
+    }
+    throw new Error(`ATC direct HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  }
+}
 
 /** 与 atc-service.ts 的 SerpApiAd 字段名对齐，方便下游零改动复用 */
 export interface AtcDirectAd {
@@ -116,18 +169,61 @@ export async function fetchDomainCreativesDirect(opts: {
 
   const req = { "2": Math.min(count, 100), "3": filter, "7": { "1": 1 } };
 
-  const res = await fetch(`${ATC_BASE_URL}/anji/_/rpc/SearchService/SearchCreatives?authuser=`, {
-    method: "POST",
-    headers: ATC_HEADERS,
-    body: new URLSearchParams({ "f.req": JSON.stringify(req) }),
-    signal: AbortSignal.timeout(15000),
-  });
-
-  if (!res.ok) {
-    throw new Error(`ATC direct HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  }
-
-  const body = (await res.json()) as { "1"?: RawCreative[] };
+  const body = await postSearchCreatives(req);
   // "1" 缺失 = 合法的 0 结果（与 SerpApi "no results" 同义）
   return (body["1"] ?? []).map(parseCreative);
+}
+
+/**
+ * 按广告主 AR ID 搜创意（v2.1 有效同行判定，2026-08-20）。
+ *
+ * 协议要点（实测验证，见《ATC广告情报系统并入方案》v2.1）：
+ *   - filter "13".1 = [AR ID]，需同时带 "12" 空文本占位；
+ *   - 日期过滤 "6"/"7"：语义是「投放期与区间有交集」，且 "7"（结束日）必须含今天，
+ *     否则返回空（单日区间 end<今天 实测恒为空）；
+ *   - 响应列表项**不含**投放域名（"14" 仅域名搜索时回显），域名需对广告图走 OCR；
+ *   - 分页：响应 "2" 为下一页 token，请求置于 "4"。
+ *
+ * 不带地区过滤（anywhere）：同行身份是全局属性，按地区过滤会漏掉只投其他国家的同行。
+ *
+ * @param opts.activeDays 近 N 天在投（start=今天-N，end=今天）；undefined = 不限时间
+ * @param opts.maxAds     跨页累计上限（默认 100，判定阈值仅 >10，一页已足够）
+ */
+export async function fetchAdvertiserCreativesDirect(opts: {
+  advertiserId: string;
+  activeDays?: number;
+  maxAds?: number;
+}): Promise<AtcDirectAd[]> {
+  const { advertiserId, activeDays, maxAds = 100 } = opts;
+
+  const filter: Record<string, unknown> = {
+    "12": { "1": "", "2": true },
+    "13": { "1": [advertiserId] },
+  };
+  if (activeDays && activeDays > 0) {
+    const start = new Date();
+    start.setDate(start.getDate() - activeDays);
+    filter["6"] = fmtDateNum(start);
+    filter["7"] = fmtDateNum(new Date());
+  }
+
+  const ads: AtcDirectAd[] = [];
+  let pageToken: string | undefined;
+
+  while (ads.length < maxAds) {
+    const req: Record<string, unknown> = {
+      "2": Math.min(maxAds - ads.length, 100),
+      "3": filter,
+      "7": { "1": 1 },
+    };
+    if (pageToken) req["4"] = pageToken;
+
+    const body = await postSearchCreatives(req);
+    const batch = body["1"] ?? [];
+    ads.push(...batch.map(parseCreative));
+    pageToken = body["2"];
+    if (!pageToken || batch.length === 0) break;
+  }
+
+  return ads;
 }

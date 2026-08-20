@@ -27,6 +27,7 @@ interface SnapshotInfo {
   qualifying_domain_count: number;
   unique_domain_count: number;
   ad_count: number;
+  classification: string | null;
 }
 
 /** 批量取 (advertiser_id, region) 对应的快照分类信息 */
@@ -44,6 +45,7 @@ async function fetchSnapshots(pairs: Array<{ advertiser_id: string; region: stri
       qualifying_domain_count: true,
       unique_domain_count: true,
       ad_count: true,
+      classification: true,
     },
   });
   for (const r of rows) {
@@ -123,6 +125,7 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
           qualifying_domain_count: snap?.qualifying_domain_count ?? null,
           unique_domain_count: snap?.unique_domain_count ?? null,
           ad_count: snap?.ad_count ?? null,
+          classification: snap?.classification ?? null,
           created_at: r.created_at,
         };
       }),

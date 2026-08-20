@@ -1288,12 +1288,18 @@ model atc_advertiser_domain_snapshot {
    * C-094.3：本次 SerpApi 采样的图片 URL + first_shown/last_shown，OCR 跑完后供 cache 命中时重算分类，避免重复调 SerpApi
    */
   sampled_ads_json        Json?
+  /**
+   * v2.1（2026-08-20）：快照写入时的判定结果 peer/brand_self/pending/unknown，
+   * 供「可关注广告主」等 SQL 级筛选；NULL = v2.1 之前的旧规则快照（口径已废弃，读取时强制重查）
+   */
+  classification          String?  @db.VarChar(16)
   fetched_at              DateTime @db.DateTime(0)
   created_at              DateTime @default(now()) @db.DateTime(0)
   updated_at              DateTime @default(now()) @updatedAt @db.DateTime(0)
 
   @@unique([advertiser_id, region], map: "uk_advertiser_region")
   @@index([fetched_at], map: "idx_fetched_at")
+  @@index([classification], map: "idx_classification")
 }
 
 // -----------------------------------------------------------

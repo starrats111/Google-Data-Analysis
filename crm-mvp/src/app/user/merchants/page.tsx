@@ -602,7 +602,7 @@ export default function MerchantsPage() {
       if (classified > 0) {
         message.success(
           peerCount > 0
-            ? `后台分类完成：识别出 ${peerCount} 个同行（合格域名 ≥ 3），已加入「可关注广告主」`
+            ? `后台分类完成：识别出 ${peerCount} 个有效同行（近7天投>10条且域名重复率≤5%），已加入「可关注广告主」`
             : `后台分类完成：${classified} 个广告主已建立快照，暂无新增同行`
         );
       }
@@ -1936,15 +1936,14 @@ export default function MerchantsPage() {
                 />
                 <Tooltip title={
                   <div style={{ fontSize: 12, lineHeight: 1.6 }}>
-                    <div><Text style={{ color: "#fff" }}>判定规则（C-094.1）：</Text></div>
-                    <div>• <Tag color="green">同行</Tag>合格域名 ≥ 3 个（联盟客）</div>
-                    <div>• <Tag color="orange">品牌自投</Tag>合格域名 1~2 个（小范围自投）</div>
-                    <div>• <Tag color="gold">投放中</Tag>OCR 识别出域名，但单条广告未投满 30 天</div>
-                    <div>• <Tag color="blue">判定中</Tag>OCR 还在跑，1 小时后重判</div>
+                    <div><Text style={{ color: "#fff" }}>判定规则（v2.1 有效同行）：</Text></div>
+                    <div>• <Tag color="green">同行</Tag>近 7 天在投广告 &gt; 10 条，且域名重复率 ≤ 5%（联盟客）</div>
+                    <div>• <Tag color="orange">品牌自投</Tag>在投 ≤ 10 条，或域名重复率 &gt; 5%（多为品牌反复投自己域名）</div>
+                    <div>• <Tag color="blue">判定中</Tag>OCR 还在识别广告图上的域名</div>
                     <div>• <Tag>无可识别域名</Tag>有广告但 OCR 全部失败</div>
-                    <div>• <Tag>无 ATC 数据</Tag>SerpApi 未返回该广告主任何广告</div>
-                    <div style={{ marginTop: 6, color: "#bbb" }}>合格域名 = 该域名上至少 1 个广告创意持续投放 ≥ 30 天。</div>
-                    <div style={{ color: "#bbb" }}>每个广告主消耗 1 次 SerpApi，OCR 异步补全；同行缓存 30 天复用。</div>
+                    <div>• <Tag>无 ATC 数据</Tag>ATC 未返回该广告主任何在投广告</div>
+                    <div style={{ marginTop: 6, color: "#bbb" }}>域名重复率 = (已识别广告数 − 唯一域名数) ÷ 已识别广告数。</div>
+                    <div style={{ color: "#bbb" }}>广告数走免费直连 ATC 查询，域名靠 OCR 异步补全；同行缓存 90 天复用。</div>
                   </div>
                 }>
                   <Text type="secondary" style={{ fontSize: 12, cursor: "help", textDecoration: "underline dotted" }}>只看同行广告主</Text>
@@ -1992,38 +1991,42 @@ export default function MerchantsPage() {
                       const c = classifyOf(id);
                       if (!c) return classifyLoading ? <Tag icon={<SyncOutlined spin />}>判定中</Tag> : <Tag>未判定</Tag>;
                       const details = c.domain_details ?? [];
-                      const qualifying = details.filter((d) => d.has_long_running_creative);
+                      const resolvedCount = details.reduce((s, d) => s + d.creative_count, 0);
+                      const dupPct = resolvedCount > 0
+                        ? Math.round(((resolvedCount - details.length) / resolvedCount) * 100)
+                        : null;
                       const tip = (() => {
-                        if (qualifying.length > 0) {
+                        if (details.length > 0) {
                           return (
                             <div style={{ fontSize: 12, lineHeight: 1.6 }}>
-                              <div>合格域名（投放 ≥ 30 天）：</div>
-                              {qualifying.slice(0, 5).map((d) => (
-                                <div key={d.domain}>• {d.domain} <Text style={{ color: "#bbb" }}>（最长 {d.max_creative_days} 天 / {d.creative_count} 创意）</Text></div>
+                              <div>近 7 天在投 {c.ad_count} 条；OCR 识别 {resolvedCount} 条 → {details.length} 个域名（重复率 {dupPct}%）：</div>
+                              {details.slice(0, 8).map((d) => (
+                                <div key={d.domain}>• {d.domain}{d.creative_count > 1 ? <Text style={{ color: "#bbb" }}> ×{d.creative_count}</Text> : null}</div>
                               ))}
-                              {qualifying.length > 5 && <div>... 共 {qualifying.length} 个</div>}
-                              {details.length > qualifying.length && (
-                                <div style={{ color: "#888", marginTop: 4 }}>另有 {details.length - qualifying.length} 个不合格域名（投放 &lt; 30 天）</div>
-                              )}
+                              {details.length > 8 && <div>... 共 {details.length} 个域名</div>}
                             </div>
                           );
                         }
-                        if (details.length > 0) {
-                          return `OCR 已识别 ${details.length} 个域名，均未达 30 天持续投放门槛`;
+                        if (c.ad_count > 0 && c.ad_count <= 10) {
+                          return `近 7 天在投 ${c.ad_count} 条（≤10），投放量不足，不算有效同行`;
                         }
-                        return "SerpApi 返回的广告暂未识别出域名";
+                        return "在投广告暂未识别出域名";
                       })();
                       if (c.classification === "peer") {
                         return (
                           <Tooltip title={tip}>
-                            <Tag color="green">同行 · {c.qualifying_domain_count} 合格域名</Tag>
+                            <Tag color="green">同行 · 投{c.ad_count}条 · {c.unique_domain_count}域名</Tag>
                           </Tooltip>
                         );
                       }
                       if (c.classification === "brand_self") {
                         return (
                           <Tooltip title={tip}>
-                            <Tag color="orange">品牌自投 · {c.qualifying_domain_count} 域名</Tag>
+                            <Tag color="orange">
+                              {c.ad_count <= 10
+                                ? `品牌自投 · 仅投${c.ad_count}条`
+                                : `品牌自投 · 域名重复${dupPct ?? "?"}%`}
+                            </Tag>
                           </Tooltip>
                         );
                       }
@@ -2035,19 +2038,11 @@ export default function MerchantsPage() {
                         );
                       }
                       // C-094.7：未知状态显示 Tag + 「重试」链接，便于失败重试。
-                      // C-094.14：若 OCR 已识别出 ≥1 个域名（只是未达 30 天合格），
-                      //   单独显示「投放中 · N 域名」让用户知道 OCR 成功只是未触发合格条件，
-                      //   而不是"完全无数据"。重试按钮在该状态下隐藏（OCR 已完成无需重试）。
-                      if (c.unique_domain_count >= 1) {
-                        return (
-                          <Tooltip title={tip}>
-                            <Tag color="gold">投放中 · {c.unique_domain_count} 域名（&lt; 30 天）</Tag>
-                          </Tooltip>
-                        );
-                      }
+                      // （v2.1 起 unknown 仅出现在「无广告」或「OCR 全部失败」两种情况，
+                      //   旧 C-094.14「投放中·<30天」子状态已随合格域名规则一并废弃。）
                       return (
                         <Space size={4} wrap>
-                          <Tooltip title={c.error ? `反查失败：${c.error}` : c.ad_count > 0 ? `已查 ${c.ad_count} 个广告，但 OCR 未识别出任何域名（多为图片/视频纯创意）` : "SerpApi 未返回该广告主的广告数据"}>
+                          <Tooltip title={c.error ? `反查失败：${c.error}` : c.ad_count > 0 ? `已查 ${c.ad_count} 个广告，但 OCR 未识别出任何域名（多为图片/视频纯创意）` : "ATC 未返回该广告主近 7 天的在投广告"}>
                             <Tag>{c.ad_count > 0 ? "无可识别域名" : "无 ATC 数据"}</Tag>
                           </Tooltip>
                           <Button size="small" type="link" style={{ padding: 0, fontSize: 12 }}
