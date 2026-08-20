@@ -213,6 +213,8 @@ function extractAdDomain(ad: SerpApiAd): string | undefined {
 interface SerpApiResponse {
   ad_creatives?: SerpApiAd[]; // SerpApi 实际字段名（非 ads）
   error?: string;
+  serpapi_pagination?: { next_page_token?: string };
+  next_page_token?: string;
 }
 
 // ─── 从 Key 池中随机选一个可用 Key ───
@@ -619,12 +621,14 @@ export async function getOrFetchAdvertiserDomainSnapshot(opts: {
 
   // 2. 查近 7 天在投创意（v2.1）：直连 ATC RPC 优先（免费、anywhere），
   //    失败降级 SerpApi 同时间窗查询（保留原 region 过滤，行为保守）
+  //    D-259（07 2026-08-20）：在投数必须绝对精准——直连翻页到底（上限 2000 兜底），
+  //    不再截断在 100；SerpApi 降级路径同样翻页（上限 10 页，每页 1 次配额）。
   let ads: Array<{ advertiser?: string; image?: string; first_shown?: number; last_shown?: number }>;
   try {
     ads = await fetchAdvertiserCreativesDirect({
       advertiserId,
       activeDays: ADVERTISER_ACTIVE_WINDOW_DAYS,
-      maxAds: 100,
+      maxAds: 2000,
     });
   } catch (directErr) {
     console.warn(`[ATC-direct] 广告主查询直连失败，降级 SerpApi（advertiser=${advertiserId}）:`, directErr);
@@ -639,11 +643,22 @@ export async function getOrFetchAdvertiserDomainSnapshot(opts: {
     if (serpRegion) params.region = serpRegion;
 
     const NO_RESULTS_MSG = "hasn't returned any results";
-    const data = await callSerpApi(params, serpApiKey);
-    if (data.error && !data.error.includes(NO_RESULTS_MSG)) {
-      throw new Error(data.error);
+    ads = [];
+    let nextPageToken: string | undefined;
+    for (let page = 0; page < 10; page++) {
+      const pageParams = nextPageToken ? { ...params, next_page_token: nextPageToken } : params;
+      const data = await callSerpApi(pageParams, serpApiKey);
+      if (data.error && !data.error.includes(NO_RESULTS_MSG)) {
+        // 首页失败整体报错；后续页失败保留已取数据（计数偏低好过整单作废）
+        if (page === 0) throw new Error(data.error);
+        console.warn(`[ATC-serpapi] 第 ${page + 1} 页失败，按已取 ${ads.length} 条继续:`, data.error);
+        break;
+      }
+      const batch = data.ad_creatives ?? [];
+      ads.push(...batch);
+      nextPageToken = data.serpapi_pagination?.next_page_token ?? data.next_page_token;
+      if (!nextPageToken || batch.length === 0) break;
     }
-    ads = data.ad_creatives ?? [];
   }
 
   const advertiserName = ads[0]?.advertiser ?? null;

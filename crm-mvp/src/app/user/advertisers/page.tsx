@@ -151,8 +151,8 @@ const AtcAdvertiserLink = ({ id, name }: { id: string; name: string | null }) =>
 
 // v2.1 有效同行规则（2026-08-20）：分类以快照 classification 列为准；
 // null = 旧规则快照，下次在商家弹窗里反查时会自动按新规则重判
-// 在投数按分页上限 100 截断（判定只需 >10，不值得翻页拿精确总数），=100 显示「≥100」
-const fmtAdCount = (n: number | null | undefined) => (n == null ? "?" : n >= 100 ? "≥100" : String(n));
+// D-259：在投数翻页到底、绝对精准；仅在撞到 2000 安全兜底上限时显示「≥2000」
+const fmtAdCount = (n: number | null | undefined) => (n == null ? "?" : n >= 2000 ? "≥2000" : String(n));
 
 const ClassificationTag = ({ row }: { row: { classification?: string | null; unique_domain_count?: number | null; ad_count?: number | null } }) => {
   const { classification, unique_domain_count: u, ad_count: n } = row;

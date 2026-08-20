@@ -243,14 +243,16 @@ export async function fetchDomainCreativesDirect(opts: {
  * 不带地区过滤（anywhere）：同行身份是全局属性，按地区过滤会漏掉只投其他国家的同行。
  *
  * @param opts.activeDays 近 N 天在投（start=今天-N，end=今天）；undefined = 不限时间
- * @param opts.maxAds     跨页累计上限（默认 100，判定阈值仅 >10，一页已足够）
+ * @param opts.maxAds     跨页累计上限（默认 2000 安全兜底）。D-259：07 要求在投数绝对精准，
+ *                        正常情况翻页到底（响应无下一页 token 即停）；响应 key4/key5 只是
+ *                        估算区间（实测 Hither AB 真实 276，返回 200~300），不可用作总数
  */
 export async function fetchAdvertiserCreativesDirect(opts: {
   advertiserId: string;
   activeDays?: number;
   maxAds?: number;
 }): Promise<AtcDirectAd[]> {
-  const { advertiserId, activeDays, maxAds = 100 } = opts;
+  const { advertiserId, activeDays, maxAds = 2000 } = opts;
 
   const filter: Record<string, unknown> = {
     "12": { "1": "", "2": true },
@@ -279,6 +281,8 @@ export async function fetchAdvertiserCreativesDirect(opts: {
     ads.push(...batch.map(parseCreative));
     pageToken = body["2"];
     if (!pageToken || batch.length === 0) break;
+    // 页间小憩，降低触发 Google 限频的概率（精准计数需要多页连拉）
+    await new Promise((r) => setTimeout(r, 300));
   }
 
   return ads;
