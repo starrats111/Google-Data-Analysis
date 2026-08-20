@@ -1999,7 +1999,7 @@ export default function MerchantsPage() {
                         if (details.length > 0) {
                           return (
                             <div style={{ fontSize: 12, lineHeight: 1.6 }}>
-                              <div>近 7 天在投 {c.ad_count} 条；OCR 识别 {resolvedCount} 条 → {details.length} 个域名（重复率 {dupPct}%）：</div>
+                              <div>近 7 天在投 {c.ad_count >= 100 ? "≥100" : c.ad_count} 条；OCR 识别 {resolvedCount} 条 → {details.length} 个域名（重复率 {dupPct}%）：</div>
                               {details.slice(0, 8).map((d) => (
                                 <div key={d.domain}>• {d.domain}{d.creative_count > 1 ? <Text style={{ color: "#bbb" }}> ×{d.creative_count}</Text> : null}</div>
                               ))}
@@ -2015,7 +2015,7 @@ export default function MerchantsPage() {
                       if (c.classification === "peer") {
                         return (
                           <Tooltip title={tip}>
-                            <Tag color="green">同行 · 投{c.ad_count}条 · {c.unique_domain_count}域名</Tag>
+                            <Tag color="green">同行 · 投{c.ad_count >= 100 ? "≥100" : c.ad_count}条 · {c.unique_domain_count}域名</Tag>
                           </Tooltip>
                         );
                       }

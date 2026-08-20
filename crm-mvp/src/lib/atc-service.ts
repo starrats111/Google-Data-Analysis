@@ -341,8 +341,11 @@ const ADVERTISER_OCR_SAMPLE_LIMIT = 50;
 /**
  * v2.1 规则上线分界线：早于此时间的快照按旧规则生成（5 张抽样 + 合格域名判定），
  * 数据口径不同，一律视为过期强制重查（重查走免费直连，无配额成本）。
+ * v2.3 校正：原设 00:00Z（北京 08:00），但 D-256 实际 01:15Z 才部署完成，
+ * 00:29~00:30Z 之间旧代码写入的 9 行（Mac Duggal 弹窗批次）钻了空子——
+ * 其 unique_domain_count 是旧 5 张抽样口径，被误当新数据放行。上调到 01:30Z 堵住。
  */
-const ADVERTISER_ACTIVITY_RULE_EPOCH = new Date("2026-08-20T00:00:00Z");
+const ADVERTISER_ACTIVITY_RULE_EPOCH = new Date("2026-08-20T01:30:00Z");
 
 // 广告主域名分布快照 TTL（按 classification 差异化）
 //   - peer       (有效同行)：  90 天 — 同行身份长期稳定（C-094.15 决策沿用）
@@ -537,7 +540,15 @@ export async function getOrFetchAdvertiserDomainSnapshot(opts: {
       const within = Date.now() - cached.fetched_at.getTime() < ttl;
 
       // 1a. 非 pending 状态 + TTL 内 → 直接命中，立即返回。
+      //     v2.3：内存算出的分类与库存列不一致时回写（规则升级/列为 NULL 的旧行），
+      //     否则「可关注广告主」等 SQL 级筛选会漏掉该行（温州诚惠案例）。
       if (within && !wasPending) {
+        if (cached.classification !== provisionalCls) {
+          await prisma.atc_advertiser_domain_snapshot.update({
+            where: { advertiser_id_region: { advertiser_id: advertiserId, region } },
+            data: { classification: provisionalCls },
+          }).catch(() => {});
+        }
         return {
           advertiserId, region,
           advertiserName: cached.advertiser_name,

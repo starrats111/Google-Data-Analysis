@@ -151,9 +151,12 @@ const AtcAdvertiserLink = ({ id, name }: { id: string; name: string | null }) =>
 
 // v2.1 有效同行规则（2026-08-20）：分类以快照 classification 列为准；
 // null = 旧规则快照，下次在商家弹窗里反查时会自动按新规则重判
+// 在投数按分页上限 100 截断（判定只需 >10，不值得翻页拿精确总数），=100 显示「≥100」
+const fmtAdCount = (n: number | null | undefined) => (n == null ? "?" : n >= 100 ? "≥100" : String(n));
+
 const ClassificationTag = ({ row }: { row: { classification?: string | null; unique_domain_count?: number | null; ad_count?: number | null } }) => {
   const { classification, unique_domain_count: u, ad_count: n } = row;
-  if (classification === "peer") return <Tag color="green">同行 · 投{n ?? "?"}条 · {u ?? "?"}域名</Tag>;
+  if (classification === "peer") return <Tag color="green">同行 · 投{fmtAdCount(n)}条 · {u ?? "?"}域名</Tag>;
   if (classification === "brand_self") return <Tag color="orange">品牌自投</Tag>;
   if (classification === "pending") return <Tag color="blue">判定中</Tag>;
   if (classification === "unknown") return <Tag>未知</Tag>;
@@ -712,7 +715,7 @@ export default function AdvertisersPage() {
     { title: "Advertiser ID", dataIndex: "advertiser_id", width: 240, render: (v: string) => <Text copyable={{ text: v }} style={{ fontFamily: "monospace", fontSize: 12 }}>{v}</Text> },
     { title: "区域", dataIndex: "region", width: 60 },
     { title: "唯一域名", dataIndex: "unique_domain_count", width: 110, sorter: (a, b) => a.unique_domain_count - b.unique_domain_count, render: (v: number) => <Tag color="green">{v}</Tag> },
-    { title: "在投广告数", width: 110, render: (_: unknown, row) => <Text type="secondary" style={{ fontSize: 12 }}>{row.ad_count}</Text> },
+    { title: "在投广告数", width: 110, render: (_: unknown, row) => <Text type="secondary" style={{ fontSize: 12 }}>{fmtAdCount(row.ad_count)}</Text> },
     {
       title: "热门域名", width: 220,
       render: (_: unknown, row) => (
