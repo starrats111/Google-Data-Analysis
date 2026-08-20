@@ -20,7 +20,17 @@
  *   "6.1"/"7.1" first/last_shown Unix 秒  "3.3.2" 预览 HTML（含缩略图 <img src>）
  *
  * ⚠️ 非官方接口，Google 可能改协议或限频。调用方必须保留 SerpApi 降级路径。
+ *
+ * 传输层（2026-08-20 实测，D-256）：
+ *   Google 会按 TLS 指纹（JA3）拉黑 Node 默认 TLS 栈——同一台服务器上
+ *   undici fetch / node:https 被 302 到 sorry 页或直接 429，而 curl、python 畅通。
+ *   故 fetch 被拦时自动改用 child_process 调 curl 兜底，成功后本进程内记住偏好。
  */
+
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 const ATC_BASE_URL = "https://adstransparency.google.com";
 
@@ -59,29 +69,75 @@ async function refreshAtcCookies(): Promise<void> {
   }
 }
 
-/** SearchCreatives RPC 底层调用：带 Cookie（如有）、429 时引导 Cookie 后重试一次 */
+/** 本进程内是否已确认 fetch 被指纹拦截、应直接走 curl */
+let preferCurl = false;
+
+/** curl 传输：TLS 指纹与 Node 不同，实测在 Node 被拦时仍畅通（服务器与 Win10+ 均自带 curl） */
+async function curlPostSearchCreatives(reqJson: string): Promise<{ "1"?: RawCreative[]; "2"?: string }> {
+  const { stdout } = await execFileAsync(
+    "curl",
+    [
+      "-s", "-S", "--max-time", "20",
+      "-A", ATC_HEADERS["user-agent"],
+      "-H", `accept-language: ${ATC_HEADERS["accept-language"]}`,
+      "-H", "content-type: application/x-www-form-urlencoded;charset=UTF-8",
+      "--data-urlencode", `f.req=${reqJson}`,
+      "-w", "\n%{http_code}",
+      `${ATC_BASE_URL}/anji/_/rpc/SearchService/SearchCreatives?authuser=`,
+    ],
+    { maxBuffer: 32 * 1024 * 1024 }
+  );
+  const idx = stdout.lastIndexOf("\n");
+  const status = Number(stdout.slice(idx + 1).trim());
+  const body = stdout.slice(0, idx);
+  if (status !== 200) {
+    throw new Error(`ATC curl HTTP ${status}: ${body.slice(0, 200)}`);
+  }
+  return JSON.parse(body) as { "1"?: RawCreative[]; "2"?: string };
+}
+
+/**
+ * SearchCreatives RPC 底层调用。
+ * 1. fetch（带 Cookie 如有）；429 时引导 Cookie 重试一次；
+ * 2. 仍被拦（429/302 sorry 页，即 Node TLS 指纹被拉黑）→ curl 兜底；
+ *    curl 成功则本进程内后续请求直接走 curl，省去每次先撞一次 fetch。
+ */
 async function postSearchCreatives(
   req: Record<string, unknown>
 ): Promise<{ "1"?: RawCreative[]; "2"?: string }> {
-  for (let attempt = 0; ; attempt++) {
-    const headers: Record<string, string> = { ...ATC_HEADERS };
-    if (atcCookieHeader) headers["cookie"] = atcCookieHeader;
+  const reqJson = JSON.stringify(req);
 
-    const res = await fetch(`${ATC_BASE_URL}/anji/_/rpc/SearchService/SearchCreatives?authuser=`, {
-      method: "POST",
-      headers,
-      body: new URLSearchParams({ "f.req": JSON.stringify(req) }),
-      signal: AbortSignal.timeout(15000),
-    });
+  if (!preferCurl) {
+    try {
+      for (let attempt = 0; ; attempt++) {
+        const headers: Record<string, string> = { ...ATC_HEADERS };
+        if (atcCookieHeader) headers["cookie"] = atcCookieHeader;
 
-    if (res.ok) return (await res.json()) as { "1"?: RawCreative[]; "2"?: string };
+        const res = await fetch(`${ATC_BASE_URL}/anji/_/rpc/SearchService/SearchCreatives?authuser=`, {
+          method: "POST",
+          headers,
+          body: new URLSearchParams({ "f.req": reqJson }),
+          signal: AbortSignal.timeout(15000),
+        });
 
-    if (res.status === 429 && attempt === 0) {
-      await refreshAtcCookies();
-      continue;
+        if (res.ok) return (await res.json()) as { "1"?: RawCreative[]; "2"?: string };
+
+        if (res.status === 429 && attempt === 0) {
+          await refreshAtcCookies();
+          continue;
+        }
+        throw new Error(`ATC direct HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      }
+    } catch (fetchErr) {
+      // fetch 失败（含指纹拦截/网络异常）→ 尝试 curl；curl 也失败则抛 curl 的错误
+      const result = await curlPostSearchCreatives(reqJson);
+      preferCurl = true;
+      console.warn("[ATC-direct] fetch 被拦，已切换 curl 传输:", String(fetchErr).slice(0, 120));
+      return result;
     }
-    throw new Error(`ATC direct HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
   }
+
+  return curlPostSearchCreatives(reqJson);
 }
 
 /** 与 atc-service.ts 的 SerpApiAd 字段名对齐，方便下游零改动复用 */
