@@ -602,7 +602,7 @@ export default function MerchantsPage() {
       if (classified > 0) {
         message.success(
           peerCount > 0
-            ? `后台分类完成：识别出 ${peerCount} 个有效同行（近7天投>10条且域名重复率≤5%），已加入「可关注广告主」`
+            ? `后台分类完成：识别出 ${peerCount} 个有效同行（近7天投>10条且唯一域名≥5或重复率≤5%），已加入「可关注广告主」`
             : `后台分类完成：${classified} 个广告主已建立快照，暂无新增同行`
         );
       }
@@ -1936,9 +1936,9 @@ export default function MerchantsPage() {
                 />
                 <Tooltip title={
                   <div style={{ fontSize: 12, lineHeight: 1.6 }}>
-                    <div><Text style={{ color: "#fff" }}>判定规则（v2.1 有效同行）：</Text></div>
-                    <div>• <Tag color="green">同行</Tag>近 7 天在投广告 &gt; 10 条，且域名重复率 ≤ 5%（联盟客）</div>
-                    <div>• <Tag color="orange">品牌自投</Tag>在投 ≤ 10 条，或域名重复率 &gt; 5%（多为品牌反复投自己域名）</div>
+                    <div><Text style={{ color: "#fff" }}>判定规则（v2.3 有效同行）：</Text></div>
+                    <div>• <Tag color="green">同行</Tag>近 7 天在投广告 &gt; 10 条，且（唯一域名 ≥ 5 或 域名重复率 ≤ 5%）</div>
+                    <div>• <Tag color="orange">品牌自投</Tag>在投 ≤ 10 条，或域名少且重复率 &gt; 5%（多为品牌反复投自己域名）</div>
                     <div>• <Tag color="blue">判定中</Tag>OCR 还在识别广告图上的域名</div>
                     <div>• <Tag>无可识别域名</Tag>有广告但 OCR 全部失败</div>
                     <div>• <Tag>无 ATC 数据</Tag>ATC 未返回该广告主任何在投广告</div>

@@ -5,7 +5,7 @@
  *
  * 数据源（v2.1，2026-08-20）：atc_advertiser_domain_snapshot WHERE classification = 'peer'
  *   （这张表本身就是团队级共享缓存，按 (advertiser_id, region) 唯一约束去重）
- *   - peer = 有效同行：近 7 天在投广告 >10 条且域名重复率 ≤5%（07 规则）
+ *   - peer = 有效同行：近 7 天在投广告 >10 条且（唯一域名 ≥5 或 域名重复率 ≤5%）（07 规则 v2.3）
  *   - 旧规则快照 classification 为 NULL，自然被排除（重查后会补上）
  *   - 排序：唯一域名数 desc → ad_count desc
  *   - 自动剔除当前用户已关注的 (advertiser_id, region)（剩下的才是"可关注"）

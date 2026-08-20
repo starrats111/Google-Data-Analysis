@@ -870,7 +870,7 @@ export default function AdvertisersPage() {
                     <Button icon={<SearchOutlined />} onClick={() => { setDiscQ(discQInput); setDiscPage(1); }}>搜索</Button>
                     <Button icon={<ReloadOutlined />} onClick={() => loadDiscoverable()}>刷新</Button>
                     <Text type="secondary" style={{ alignSelf: "center", fontSize: 12 }}>
-                      所有员工查过的有效同行 (近7天投&gt;10条且域名重复率≤5%)
+                      所有员工查过的有效同行 (近7天投&gt;10条，唯一域名≥5或重复率≤5%)
                     </Text>
                     <div style={{ flex: 1 }} />
                     {(discSelected.length > 0 || discSelectedMap.size > 0) && (

@@ -323,6 +323,10 @@ const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 小时
 const ADVERTISER_ACTIVE_WINDOW_DAYS = 7;
 const ADVERTISER_MIN_ACTIVE_ADS = 10;      // 严格大于
 const ADVERTISER_MAX_DOMAIN_DUP_RATE = 0.05; // (已识别数-唯一域名数)/已识别数
+// v2.3（07 2026-08-20 确认）：唯一域名 ≥5 直接判同行——品牌自投顶多 1~3 个域名（主站+地区站），
+// 给 5 个以上不同商家投广告的必然是联盟同行。重复率通道保留，兜住 OCR 覆盖率低
+// （识别出的域名少但零重复）的同行，如 WHATECH（100 条在投只 OCR 出 2 个域名）。
+const ADVERTISER_MIN_UNIQUE_DOMAINS = 5;
 
 // 域名最长投放天数 ≥30 天仍作为信息字段展示（不再参与判定）
 const ADVERTISER_MIN_DOMAIN_DAYS = 30;
@@ -364,7 +368,8 @@ function ttlForClassification(cls: AdvertiserClass): number {
  * v2.1「有效同行」判定：
  *   - 无广告 → unknown
  *   - 近 7 天在投 ≤10 条 → brand_self（在投量不足，OCR 结果不影响结论，可立即定论）
- *   - 在投 >10 条但 OCR 未跑完 → pending（重复率尚不可算，前端会轮询）
+ *   - 唯一域名 ≥5 → peer（v2.3：即使 OCR 未跑完也可提前定论，域名数只会更多不会变少）
+ *   - 在投 >10 条但 OCR 未跑完 → pending（前端会轮询）
  *   - OCR 跑完后一个域名都没识别出 → unknown
  *   - 域名重复率 = (已识别广告数 - 唯一域名数) / 已识别广告数，≤5% → peer，否则 brand_self
  */
@@ -377,6 +382,7 @@ function classifyByActivity(opts: {
   const { adCount, uniqueDomainCount, resolvedAdCount, hasPendingOcr } = opts;
   if (adCount === 0) return "unknown";
   if (adCount <= ADVERTISER_MIN_ACTIVE_ADS) return "brand_self";
+  if (uniqueDomainCount >= ADVERTISER_MIN_UNIQUE_DOMAINS) return "peer";
   if (hasPendingOcr) return "pending";
   if (resolvedAdCount === 0) return "unknown";
   const dupRate = (resolvedAdCount - uniqueDomainCount) / resolvedAdCount;
