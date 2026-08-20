@@ -13,6 +13,7 @@
  */
 
 import prisma from "@/lib/prisma";
+import { isLocalOcrAvailable, localOcrImageDomain, ImageGoneError } from "@/lib/ocr-local";
 
 // ─── 公开类型 ───
 
@@ -53,6 +54,31 @@ async function readSystemConfigInt(key: string, fallback: number): Promise<numbe
   } catch {
     return fallback;
   }
+}
+
+async function readSystemConfigStr(key: string, fallback: string): Promise<string> {
+  try {
+    const row = await prisma.system_configs.findUnique({
+      where: { config_key: key },
+      select: { config_value: true },
+    });
+    return row?.config_value?.trim() || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * D-257 OCR 引擎选择（system_configs.ocr_engine）：
+ *   - "tesseract"（默认）：只用本地免费 OCR，不产生任何 AI 费用
+ *   - "tesseract+ai"：本地优先，识别不出域名的图才走 AI 兜底
+ *   - "ai"：旧行为，纯 AI 视觉模型
+ */
+export type OcrEngine = "tesseract" | "tesseract+ai" | "ai";
+
+async function readOcrEngine(): Promise<OcrEngine> {
+  const v = await readSystemConfigStr("ocr_engine", "tesseract");
+  return v === "ai" || v === "tesseract+ai" ? v : "tesseract";
 }
 
 export async function isOcrEnabled(): Promise<boolean> {
@@ -270,8 +296,21 @@ export async function runOcrWorker(): Promise<OcrWorkerResult> {
     return res;
   }
 
-  const cfg = await loadVisionConfig();
-  if (!cfg) {
+  // ── D-257 引擎选择：默认 tesseract（免费），AI 仅显式配置时参与 ──
+  const engine = await readOcrEngine();
+  const localAvailable = engine !== "ai" ? await isLocalOcrAvailable() : false;
+  const cfg = engine !== "tesseract" ? await loadVisionConfig() : null;
+
+  const useLocal = engine !== "ai" && localAvailable;
+  const useAiFallback = engine === "tesseract+ai" && cfg !== null;
+  const useAiOnly = engine === "ai" || (engine === "tesseract+ai" && !localAvailable);
+
+  if (!useLocal && !useAiOnly) {
+    res.skipped = true;
+    res.reason = `engine=${engine} 但 tesseract/curl 不可用（本环境未装系统依赖）`;
+    return res;
+  }
+  if (useAiOnly && !cfg) {
     res.skipped = true;
     res.reason = "no active ai_model_configs scene='domain_ocr'";
     return res;
@@ -302,8 +341,34 @@ export async function runOcrWorker(): Promise<OcrWorkerResult> {
   async function processOne(row: { id: bigint; image_url: string; tries: number }) {
     const newTries = row.tries + 1;
     try {
-      const out = await callVisionForDomain(row.image_url, cfg!);
-      const domain = normalizeDomain(out.raw);
+      let domain: string | null = null;
+      let rawOutput = "";
+      let modelUsed = "";
+      let promptTokens: number | undefined;
+      let completionTokens: number | undefined;
+
+      if (useLocal) {
+        const out = await localOcrImageDomain(row.image_url);
+        domain = out.domain;
+        rawOutput = out.raw;
+        modelUsed = "tesseract";
+        // 本地没识别出域名且配置了 AI 兜底 → 只对这类图补一枪（省钱：绝大多数图本地就解决）
+        if (!domain && useAiFallback) {
+          const ai = await callVisionForDomain(row.image_url, cfg!);
+          domain = normalizeDomain(ai.raw);
+          rawOutput = ai.raw;
+          modelUsed = cfg!.modelName;
+          promptTokens = ai.promptTokens;
+          completionTokens = ai.completionTokens;
+        }
+      } else {
+        const ai = await callVisionForDomain(row.image_url, cfg!);
+        domain = normalizeDomain(ai.raw);
+        rawOutput = ai.raw;
+        modelUsed = cfg!.modelName;
+        promptTokens = ai.promptTokens;
+        completionTokens = ai.completionTokens;
+      }
 
       if (domain) {
         await prisma.ad_image_ocr_cache.update({
@@ -311,11 +376,11 @@ export async function runOcrWorker(): Promise<OcrWorkerResult> {
           data: {
             status: "success",
             extracted_domain: domain,
-            raw_output: out.raw.slice(0, 512),
+            raw_output: rawOutput.slice(0, 512),
             tries: newTries,
-            model_used: cfg!.modelName,
-            prompt_tokens: out.promptTokens,
-            completion_tokens: out.completionTokens,
+            model_used: modelUsed,
+            prompt_tokens: promptTokens,
+            completion_tokens: completionTokens,
             lock_at: null,
             last_error: null,
           },
@@ -326,11 +391,11 @@ export async function runOcrWorker(): Promise<OcrWorkerResult> {
           where: { id: row.id },
           data: {
             status: "failed",
-            raw_output: out.raw.slice(0, 512),
+            raw_output: rawOutput.slice(0, 512),
             tries: newTries,
-            model_used: cfg!.modelName,
-            prompt_tokens: out.promptTokens,
-            completion_tokens: out.completionTokens,
+            model_used: modelUsed,
+            prompt_tokens: promptTokens,
+            completion_tokens: completionTokens,
             lock_at: null,
             last_error: "domain not found in image",
           },
@@ -339,7 +404,7 @@ export async function runOcrWorker(): Promise<OcrWorkerResult> {
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      const isImgGone = /HTTP 4(?:0[34]|10)/.test(msg);
+      const isImgGone = err instanceof ImageGoneError || /HTTP 4(?:0[34]|10)/.test(msg);
       const isRateLimit = /rate[_ ]?limit|HTTP 429|too many requests|quota[_ ]?exceed/i.test(msg);
 
       // C-094.2：rate_limit 也累加 tries，避免上游一直限流时同一张图被无限重抢导致 worker 空转。
@@ -375,7 +440,7 @@ export async function runOcrWorker(): Promise<OcrWorkerResult> {
     }
   }
 
-  console.log(`[C-088 ocr-worker] start: batchSize=${batchSize} concurrent=${concurrent} maxBatches=${maxBatchesPerRun} pauseMs=${batchPauseMs} model=${cfg.modelName}`);
+  console.log(`[C-088 ocr-worker] start: batchSize=${batchSize} concurrent=${concurrent} maxBatches=${maxBatchesPerRun} pauseMs=${batchPauseMs} engine=${engine} local=${useLocal} aiFallback=${useAiFallback}${cfg ? ` model=${cfg.modelName}` : ""}`);
 
   // ── 2. 多批循环 ──
   for (let batchIdx = 0; batchIdx < maxBatchesPerRun; batchIdx++) {
