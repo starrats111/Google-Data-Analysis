@@ -18,9 +18,32 @@ export interface BroadcastInput {
   title: string;
   content: string;
   level?: AlertLevel;
+  /** 去重窗口小时数，默认 24 */
+  dedupeHours?: number;
 }
 
 const DEDUPE_HOURS = 24;
+
+/**
+ * 近期活跃闸门：该 MCC 最近 N 天内在 ads_daily_stats 有数据才算「活着的 MCC 突发危险」。
+ * 生产预演（2026-08-21）实测存量里有 14 个 DailyData 停在 4~8 月的废弃 MCC、4 个封了很久的
+ * Sheet——这些是陈年旧账不是突发事件，没有闸门会在上线首轮弹 20+ 条风暴且每天重复（狼来了）。
+ * 副作用即自愈机制：活跃 MCC 出事 → 连报 ~N 天后数据断流超窗 → 自动停报。
+ */
+async function mccRecentlyActive(mccInternalId: bigint, days = 7): Promise<boolean> {
+  try {
+    const rows = await prisma.$queryRaw<Array<{ d: Date | null }>>`
+      SELECT MAX(s.date) AS d
+      FROM ads_daily_stats s
+      JOIN campaigns c ON s.campaign_id = c.id
+      WHERE c.mcc_id = ${mccInternalId}`;
+    const d = rows[0]?.d;
+    if (!d) return false;
+    return Date.now() - new Date(d).getTime() < days * 86400_000;
+  } catch {
+    return false; // 查不到按不活跃处理，宁可漏报废弃 MCC 也不弹风暴
+  }
+}
 
 /**
  * 向全体在职用户广播一条弹窗级告警（同时推飞书群）。
@@ -29,7 +52,7 @@ const DEDUPE_HOURS = 24;
  */
 export async function broadcastCriticalAlert(input: BroadcastInput): Promise<boolean> {
   try {
-    const since = new Date(Date.now() - DEDUPE_HOURS * 3600_000);
+    const since = new Date(Date.now() - (input.dedupeHours ?? DEDUPE_HOURS) * 3600_000);
     const dup = await prisma.notifications.findFirst({
       where: {
         type: "alert",
@@ -77,10 +100,18 @@ export async function broadcastCriticalAlert(input: BroadcastInput): Promise<boo
  * 网络超时等瞬态失败不广播（质量闸：不确定 ≠ 危险，防狼来了）。
  */
 export async function broadcastSheetFailure(
+  mccInternalId: bigint,
   mccId: string,
   mccName: string | null,
   message: string,
 ): Promise<void> {
+  const isDanger = message.includes("权限不足") || message.includes("未识别的表格结构");
+  if (!isDanger) return;
+  // 近期活跃闸门：废弃/久封 MCC 的旧账不弹（详见 mccRecentlyActive 注释）
+  if (!(await mccRecentlyActive(mccInternalId))) {
+    console.log(`[SystemBroadcast] MCC ${mccId} 同步失败但近 7 天无数据（陈年旧账），不弹窗: ${message.slice(0, 60)}`);
+    return;
+  }
   const label = mccName ? `${mccName}（${mccId}）` : mccId;
   if (message.includes("权限不足")) {
     await broadcastCriticalAlert({
@@ -101,16 +132,20 @@ export async function broadcastSheetFailure(
  * 统一脚本停更检测（daily-sync 每日一次）：DailyData 最新日期落后于昨天
  * → 脚本超过一整天没跑（被停用/被更换/持续报错）。
  * Sheet 拉不到 / 无 DailyData tab 的不在这里报（被封与结构问题由 broadcastSheetFailure 负责）。
+ * 只报「近 7 天内死掉的」（maxDate ≥ 今天-8）——停更数月的废弃 MCC 是旧账不弹；
+ * 去重键带 maxDate + 8 天窗口 → 一次停更事件全程只广播一次。
  */
 export async function checkSheetScriptFreshness(log: (msg: string) => void): Promise<void> {
   const { extractSheetId, readSheetCsv } = await import("@/lib/sheet-sync");
   const { todayCST } = await import("@/lib/date-utils");
 
-  const yesterday = (() => {
+  const dayOffset = (n: number) => {
     const d = new Date(`${todayCST()}T00:00:00+08:00`);
-    d.setDate(d.getDate() - 1);
+    d.setDate(d.getDate() - n);
     return d.toISOString().slice(0, 10);
-  })();
+  };
+  const yesterday = dayOffset(1);
+  const recencyFloor = dayOffset(8);
 
   const mccs = await prisma.google_mcc_accounts.findMany({
     where: { is_deleted: 0, sheet_url: { not: null } },
@@ -137,11 +172,13 @@ export async function checkSheetScriptFreshness(log: (msg: string) => void): Pro
       if (/^\d{4}-\d{2}-\d{2}$/.test(d) && d > maxDate) maxDate = d;
     }
     if (!maxDate || maxDate >= yesterday) continue;
+    if (maxDate < recencyFloor) continue; // 停更超 8 天的旧账不弹
 
     stale++;
     const label = mcc.mcc_name ? `${mcc.mcc_name}（${mcc.mcc_id}）` : mcc.mcc_id;
     await broadcastCriticalAlert({
-      key: `sheet_stale_${mcc.mcc_id}`,
+      key: `sheet_stale_${mcc.mcc_id}_${maxDate}`,
+      dedupeHours: 8 * 24,
       title: `MCC ${label} 的统一脚本疑似停更`,
       content: `该 MCC 数据表 DailyData 的最新日期停在 ${maxDate}，已超过一整天没有更新。脚本可能被停用、被更换或持续报错，期间 CRM 看不到该 MCC 的花费与状态变化。请到 Google Ads Scripts 检查脚本运行记录；如脚本丢失请到设置页重新生成粘贴。`,
     });

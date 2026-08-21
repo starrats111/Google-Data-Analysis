@@ -59,7 +59,7 @@ export async function syncTodayCostFromSheets(): Promise<TodayCostResult> {
         // D-266 批四：被封/结构未识别属重大危险 → 全员弹窗（库级 24h 去重，瞬态失败不报）
         try {
           const { broadcastSheetFailure } = await import("@/lib/system-broadcast");
-          await broadcastSheetFailure(mcc.mcc_id, mcc.mcc_name, res.message || "");
+          await broadcastSheetFailure(mcc.id, mcc.mcc_id, mcc.mcc_name, res.message || "");
         } catch { /* 告警失败不影响同步主流程 */ }
         continue;
       }
