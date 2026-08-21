@@ -25,6 +25,10 @@ export async function POST(req: NextRequest) {
   if (campaign.hermes_managed_at) {
     return apiError("该系列由 Hermes 智能投放体托管，状态主权归 Hermes：CRM 不能启用/暂停它，请通过飞书让 Hermes 处理（它的止损与复活会自动管理投放状态）", 403);
   }
+  // D-261：Google 侧已 REMOVED 的系列任何启停 mutate 必被拒（旧报错文案「当前账户不支持此广告操作」严重误导），提前明确拦截
+  if (campaign.google_status === "REMOVED") {
+    return apiError("该广告系列在 Google Ads 端已被删除（REMOVED），无法启用或暂停。如需继续投放该商家，请重新提交广告。");
+  }
   // D-248：被中止 CID 旗下广告禁止一切操作（前端灰化 + 服务端拦截双层）
   {
     const { getCidSuspendedError } = await import("@/lib/google-ads/cid-suspension");

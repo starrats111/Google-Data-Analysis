@@ -68,10 +68,16 @@ function isMccPermissionError(errBody: string): boolean {
 
 /**
  * CID 级权限错误可能是「CID 已脱离 MCC」而非「凭证对 MCC 无权限」。
- * 用同一凭证对 MCC 本身发一次最小查询确认：MCC 也拒绝 → 真是凭证问题（可标记）；
- * MCC 通过 → 是 CID 自身的问题（换凭证也没用，不能标记，否则会毒化整个池）。
+ * 用同一凭证对 MCC 本身发一次最小查询确认：MCC 也拒绝（denied）→ 真是凭证问题（可标记）；
+ * MCC 通过（granted）→ 是 CID 自身的问题（换凭证也没用，不能标记，否则会毒化整个池）。
+ *
+ * D-261：探测本身失败（429 限流/超时/网络）时返回 unknown——既不能标记凭证，也**不能**断言
+ * 是 CID 的问题。旧版把 unknown 与 granted 混为一谈（返回 false），高峰限流期会把「池内凭证
+ * 对该 MCC 无权限」误报成「CID 已脱离 MCC」直接抛给用户（2026-08-21 yz01 数据中心暂停广告
+ * 实证：CID 实际 ENABLED 且权限正常）。
  */
-async function confirmMccLevelDenied(devToken: string, saJson: string, mccKey: string): Promise<boolean> {
+type MccProbeResult = "denied" | "granted" | "unknown";
+async function confirmMccLevelDenied(devToken: string, saJson: string, mccKey: string): Promise<MccProbeResult> {
   try {
     const accessToken = await getAccessToken(saJson);
     const resp = await fetch(`${ADS_BASE_URL}/customers/${mccKey}/googleAds:search`, {
@@ -80,11 +86,11 @@ async function confirmMccLevelDenied(devToken: string, saJson: string, mccKey: s
       body: JSON.stringify({ query: "SELECT customer.id FROM customer LIMIT 1" }),
       signal: AbortSignal.timeout(15_000),
     });
-    if (resp.ok) return false;
+    if (resp.ok) return "granted";
     const body = await resp.text().catch(() => "");
-    return isMccPermissionError(body);
+    return isMccPermissionError(body) ? "denied" : "unknown";
   } catch {
-    return false; // 确认失败（网络等）时不标记，宁可下次再学
+    return "unknown"; // 探测失败（限流/网络等）：不标记凭证，也不误判为 CID 问题
   }
 }
 
@@ -444,13 +450,15 @@ export async function queryGoogleAds(
     if (isMccPermissionError(errBody)) {
       const mccKey = credentials.mcc_id.replace(/-/g, "");
       // 先确认是凭证对 MCC 无权限，还是 CID 自身的问题（后者换凭证无解，且不能标记凭证）
-      if (cid !== mccKey && !(await confirmMccLevelDenied(devToken, resolveSaJson(cred, own), mccKey))) {
+      // D-261：只有探测**确认** MCC 级有权限（granted）才能断言是 CID 的问题；unknown（限流/网络）一律换凭证重试
+      const mccProbe = cid !== mccKey ? await confirmMccLevelDenied(devToken, resolveSaJson(cred, own), mccKey) : "denied";
+      if (mccProbe === "granted") {
         throw new Error(`CID ${customerId} 无访问权限（USER_PERMISSION_DENIED）：该 CID 可能已脱离 MCC 或未授权，请同步 CID 列表后重试。`);
       }
-      reportTokenDeniedForMcc(devToken, credentials.mcc_id);
+      if (mccProbe === "denied") reportTokenDeniedForMcc(devToken, credentials.mcc_id);
       triedTokens.add(devToken);
       if (await hasAlternativeToken(own, credentials.mcc_id, triedTokens)) {
-        console.warn(`[GoogleAds] 凭证 ${maskToken(devToken)} 对 MCC ${credentials.mcc_id} 无权限，换池中下一个凭证重试`);
+        console.warn(`[GoogleAds] 凭证 ${maskToken(devToken)} 对 MCC ${credentials.mcc_id} ${mccProbe === "denied" ? "无权限" : "权限探测未定（疑似限流）"}，换池中下一个凭证重试`);
         continue;
       }
       throw await buildPoolExhaustedError(own, credentials.mcc_id);
@@ -578,14 +586,16 @@ export async function mutateGoogleAds(
     }
     if (isMccPermissionError(errBody)) {
       const mccKey = credentials.mcc_id.replace(/-/g, "");
-      if (cid !== mccKey && !(await confirmMccLevelDenied(devToken, resolveSaJson(cred, own), mccKey))) {
+      // D-261：只有探测**确认** MCC 级有权限（granted）才能断言是 CID 的问题；unknown（限流/网络）一律换凭证重试
+      const mccProbe = cid !== mccKey ? await confirmMccLevelDenied(devToken, resolveSaJson(cred, own), mccKey) : "denied";
+      if (mccProbe === "granted") {
         throw new Error(`CID ${customerId} 无访问权限（USER_PERMISSION_DENIED）：该 CID 可能已脱离 MCC 或未授权，请同步 CID 列表后重试。`);
       }
-      reportTokenDeniedForMcc(devToken, credentials.mcc_id);
+      if (mccProbe === "denied") reportTokenDeniedForMcc(devToken, credentials.mcc_id);
       triedTokens.add(devToken);
       // mutate 在权限校验阶段被拒，Google 未执行任何变更，换凭证重试安全
       if (await hasAlternativeToken(own, credentials.mcc_id, triedTokens)) {
-        console.warn(`[GoogleAds] 凭证 ${maskToken(devToken)} 对 MCC ${credentials.mcc_id} 无权限，换池中下一个凭证重试`);
+        console.warn(`[GoogleAds] 凭证 ${maskToken(devToken)} 对 MCC ${credentials.mcc_id} ${mccProbe === "denied" ? "无权限" : "权限探测未定（疑似限流）"}，换池中下一个凭证重试`);
         continue;
       }
       throw await buildPoolExhaustedError(own, credentials.mcc_id);
