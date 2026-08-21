@@ -113,15 +113,20 @@ export async function broadcastSheetFailure(
     return;
   }
   const label = mccName ? `${mccName}（${mccId}）` : mccId;
+  // 去重 7 天：未解决的封禁/结构问题每周全员提醒一次即可——
+  // 24h 会变成每天轰炸（已封 MCC 走 API 应急补数期间数据一直在流，闸门永远放行）
+  const WEEKLY = 7 * 24;
   if (message.includes("权限不足")) {
     await broadcastCriticalAlert({
       key: `sheet_blocked_${mccId}`,
+      dedupeHours: WEEKLY,
       title: `MCC ${label} 的 Google Sheet 无法访问（疑似被封）`,
       content: `CRM 拉取该 MCC 的数据表时被拒绝（权限不足/403）。花费、点击、状态同步已中断，广告仍在 Google 侧继续投放烧钱。请立即：① 检查该 Sheet 是否被 Google 封禁或分享权限被改；② 若被封，参照 D-239/D-253 流程处理并评估是否止损。`,
     });
   } else if (message.includes("未识别的表格结构")) {
     await broadcastCriticalAlert({
       key: `sheet_structure_${mccId}`,
+      dedupeHours: WEEKLY,
       title: `MCC ${label} 的数据表结构未识别`,
       content: `该 MCC 的 Google Sheet 既不是 CRM 格式也不是 kyads 格式，可能是统一脚本被更换/未正确安装。该 MCC 的花费与状态同步已中断。请到设置页重新生成统一脚本并粘贴到该 MCC 的 Google Ads Scripts。`,
     });
