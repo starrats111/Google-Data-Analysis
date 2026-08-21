@@ -69,16 +69,25 @@ async function readSystemConfigStr(key: string, fallback: string): Promise<strin
 }
 
 /**
- * D-257 OCR 引擎选择（system_configs.ocr_engine）：
- *   - "tesseract"（默认）：只用本地免费 OCR，不产生任何 AI 费用
+ * D-257/D-270 OCR 引擎选择（system_configs.ocr_engine）：
+ *   - "ocrspace"（Q-01 推荐）：外部 OCR.space 免费接口，本机零图像处理零费用
+ *   - "tesseract"（默认）：本地免费 OCR（Q-01 后仅作回滚通道）
  *   - "tesseract+ai"：本地优先，识别不出域名的图才走 AI 兜底
  *   - "ai"：旧行为，纯 AI 视觉模型
  */
-export type OcrEngine = "tesseract" | "tesseract+ai" | "ai";
+export type OcrEngine = "tesseract" | "tesseract+ai" | "ai" | "ocrspace";
 
 async function readOcrEngine(): Promise<OcrEngine> {
   const v = await readSystemConfigStr("ocr_engine", "tesseract");
-  return v === "ai" || v === "tesseract+ai" ? v : "tesseract";
+  return v === "ai" || v === "tesseract+ai" || v === "ocrspace" ? v : "tesseract";
+}
+
+/** Q-01 每日配额闸：今天（UTC 日）已用 ocrspace 的调用数（按处理行数近似，预算留余量补偿） */
+async function countOcrSpaceCallsToday(): Promise<number> {
+  const rows = await prisma.$queryRawUnsafe<Array<{ n: bigint | number }>>(
+    `SELECT COUNT(*) n FROM ad_image_ocr_cache WHERE model_used='ocrspace' AND updated_at >= UTC_DATE()`,
+  );
+  return Number(rows[0]?.n ?? 0);
 }
 
 export async function isOcrEnabled(): Promise<boolean> {
@@ -296,24 +305,45 @@ export async function runOcrWorker(): Promise<OcrWorkerResult> {
     return res;
   }
 
-  // ── D-257 引擎选择：默认 tesseract（免费），AI 仅显式配置时参与 ──
+  // ── D-257/D-270 引擎选择：ocrspace = 外部识图（本机零处理）；默认 tesseract ──
   const engine = await readOcrEngine();
-  const localAvailable = engine !== "ai" ? await isLocalOcrAvailable() : false;
-  const cfg = engine !== "tesseract" ? await loadVisionConfig() : null;
+  const useOcrSpace = engine === "ocrspace";
+  const localAvailable = !useOcrSpace && engine !== "ai" ? await isLocalOcrAvailable() : false;
+  const cfg = !useOcrSpace && engine !== "tesseract" ? await loadVisionConfig() : null;
 
-  const useLocal = engine !== "ai" && localAvailable;
+  const useLocal = !useOcrSpace && engine !== "ai" && localAvailable;
   const useAiFallback = engine === "tesseract+ai" && cfg !== null;
   const useAiOnly = engine === "ai" || (engine === "tesseract+ai" && !localAvailable);
 
-  if (!useLocal && !useAiOnly) {
-    res.skipped = true;
-    res.reason = `engine=${engine} 但 tesseract/curl 不可用（本环境未装系统依赖）`;
-    return res;
-  }
-  if (useAiOnly && !cfg) {
-    res.skipped = true;
-    res.reason = "no active ai_model_configs scene='domain_ocr'";
-    return res;
+  let ocrSpaceKey = "";
+  let ocrSpaceRemaining = 0;
+  if (useOcrSpace) {
+    ocrSpaceKey = await readSystemConfigStr("ocrspace_api_key", "");
+    if (!ocrSpaceKey) {
+      res.skipped = true;
+      res.reason = "engine=ocrspace 但 system_configs 缺 ocrspace_api_key";
+      return res;
+    }
+    // Q-01 每日配额闸：免费档 500 次/天/key，默认预算 450 留余量（计数按 UTC 日近似滚动窗）
+    const dailyBudget = await readSystemConfigInt("ocrspace_daily_budget", 450);
+    const usedToday = await countOcrSpaceCallsToday();
+    ocrSpaceRemaining = dailyBudget - usedToday;
+    if (ocrSpaceRemaining <= 0) {
+      res.skipped = true;
+      res.reason = `ocrspace 今日配额已用 ${usedToday}/${dailyBudget}，明日自动恢复`;
+      return res;
+    }
+  } else {
+    if (!useLocal && !useAiOnly) {
+      res.skipped = true;
+      res.reason = `engine=${engine} 但 tesseract/curl 不可用（本环境未装系统依赖）`;
+      return res;
+    }
+    if (useAiOnly && !cfg) {
+      res.skipped = true;
+      res.reason = "no active ai_model_configs scene='domain_ocr'";
+      return res;
+    }
   }
 
   const batchSize = await readSystemConfigInt("ocr_worker_batch_size", DEFAULTS.batchSize);
@@ -351,7 +381,14 @@ export async function runOcrWorker(): Promise<OcrWorkerResult> {
       let promptTokens: number | undefined;
       let completionTokens: number | undefined;
 
-      if (useLocal) {
+      if (useOcrSpace) {
+        // Q-01：外部识图，图片 URL 直传 OCR.space，本机零图像处理
+        const { ocrSpaceImageDomain } = await import("@/lib/ocr-space");
+        const out = await ocrSpaceImageDomain(row.image_url, ocrSpaceKey);
+        domain = out.domain;
+        rawOutput = out.raw;
+        modelUsed = "ocrspace";
+      } else if (useLocal) {
         const out = await localOcrImageDomain(row.image_url);
         domain = out.domain;
         rawOutput = out.raw;
@@ -444,10 +481,17 @@ export async function runOcrWorker(): Promise<OcrWorkerResult> {
     }
   }
 
-  console.log(`[C-088 ocr-worker] start: batchSize=${batchSize} concurrent=${concurrent} maxBatches=${maxBatchesPerRun} pauseMs=${batchPauseMs} engine=${engine} local=${useLocal} aiFallback=${useAiFallback}${cfg ? ` model=${cfg.modelName}` : ""}`);
+  console.log(`[C-088 ocr-worker] start: batchSize=${batchSize} concurrent=${concurrent} maxBatches=${maxBatchesPerRun} pauseMs=${batchPauseMs} engine=${engine} local=${useLocal} aiFallback=${useAiFallback}${cfg ? ` model=${cfg.modelName}` : ""}${useOcrSpace ? ` ocrspaceRemaining=${ocrSpaceRemaining}` : ""}`);
 
   // ── 2. 多批循环 ──
   for (let batchIdx = 0; batchIdx < maxBatchesPerRun; batchIdx++) {
+    // Q-01：ocrspace 每日配额闸——本 run 内已消耗的算进去，不许超预算拉新行
+    const effBatchSize = useOcrSpace ? Math.min(batchSize, ocrSpaceRemaining - res.picked) : batchSize;
+    if (effBatchSize <= 0) {
+      console.log(`[C-088 ocr-worker] ocrspace daily budget exhausted mid-run, stop`);
+      break;
+    }
+
     // 2a. 拉一批 pending
     // 注意：$queryRawUnsafe 在 MySQL/MariaDB 上对 BIGINT/INT UNSIGNED 列返回 BigInt
     const pickedRowsRaw = await prisma.$queryRawUnsafe<Array<{ id: bigint; image_url: string; tries: bigint | number }>>(
@@ -458,7 +502,7 @@ export async function runOcrWorker(): Promise<OcrWorkerResult> {
         LIMIT ?
         FOR UPDATE SKIP LOCKED`,
       maxTries,
-      batchSize,
+      effBatchSize,
     );
 
     if (pickedRowsRaw.length === 0) {
