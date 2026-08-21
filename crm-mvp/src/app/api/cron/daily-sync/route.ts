@@ -68,6 +68,16 @@ async function doDailySync() {
     log("Step 2: Syncing MCC ad data for all users...");
     await syncAllUsersMcc();
 
+    // D-266 批二：CID 登记自动化——每日与 Sheet CID_List tab 比对（读走 Sheet 不烧 API），
+    // 新 CID 自动登记（根治 D-253 未登记盲区），消失的标 cancelled/D。失败/残表跳过不动库。
+    log("Step 2.4: Syncing CID list from sheets (CID_List tab diff)...");
+    try {
+      const { syncCidListFromSheets } = await import("@/lib/cid-list-sheet-sync");
+      await syncCidListFromSheets(log);
+    } catch (e) {
+      log(`CID_List sync failed (non-fatal): ${e instanceof Error ? e.message : e}`);
+    }
+
     log("Step 2.5: Syncing campaign statuses from Google Ads API...");
     await syncAllCampaignStatuses();
 
