@@ -78,6 +78,15 @@ async function doDailySync() {
       log(`CID_List sync failed (non-fatal): ${e instanceof Error ? e.message : e}`);
     }
 
+    // D-266 批四：统一脚本停更检测——DailyData 最新日期落后昨天即全员弹窗告警
+    log("Step 2.45: Checking sheet script freshness...");
+    try {
+      const { checkSheetScriptFreshness } = await import("@/lib/system-broadcast");
+      await checkSheetScriptFreshness(log);
+    } catch (e) {
+      log(`Sheet freshness check failed (non-fatal): ${e instanceof Error ? e.message : e}`);
+    }
+
     log("Step 2.5: Syncing campaign statuses from Google Ads API...");
     await syncAllCampaignStatuses();
 

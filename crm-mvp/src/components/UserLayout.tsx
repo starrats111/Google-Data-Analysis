@@ -28,6 +28,7 @@ import { COLORS } from "@/styles/themeConfig";
 import { useApi } from "@/lib/swr";
 import type { MenuProps } from "antd";
 import AccountIndexGate from "@/components/AccountIndexGate";
+import CriticalAlertGate from "@/components/CriticalAlertGate";
 
 const { Sider, Content, Header } = Layout;
 const { Text } = Typography;
@@ -380,6 +381,9 @@ export default function UserLayout({ children }: { children: React.ReactNode }) 
 
       {/* D-180：联盟序号未确认时全局强制弹窗 */}
       <AccountIndexGate />
+
+      {/* D-266 批四：MCC 级重大危险全员弹窗（建广告流程中延迟弹出） */}
+      <CriticalAlertGate />
 
       <Modal
         title={detailModal.title}

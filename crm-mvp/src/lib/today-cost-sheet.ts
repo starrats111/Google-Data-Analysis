@@ -45,7 +45,7 @@ export async function syncTodayCostFromSheets(): Promise<TodayCostResult> {
 
   const mccs = await prisma.google_mcc_accounts.findMany({
     where: { is_deleted: 0, sheet_url: { not: null } },
-    select: { id: true, mcc_id: true, user_id: true, currency: true, sheet_url: true },
+    select: { id: true, mcc_id: true, mcc_name: true, user_id: true, currency: true, sheet_url: true },
   });
   out.mccCount = mccs.length;
 
@@ -56,6 +56,11 @@ export async function syncTodayCostFromSheets(): Promise<TodayCostResult> {
       const res = await syncFromSheet(mcc.sheet_url, today, today);
       if (!res.success) {
         out.errors.push(`MCC ${mcc.mcc_id}: ${res.message || "读取失败"}`);
+        // D-266 批四：被封/结构未识别属重大危险 → 全员弹窗（库级 24h 去重，瞬态失败不报）
+        try {
+          const { broadcastSheetFailure } = await import("@/lib/system-broadcast");
+          await broadcastSheetFailure(mcc.mcc_id, mcc.mcc_name, res.message || "");
+        } catch { /* 告警失败不影响同步主流程 */ }
         continue;
       }
       const rows = res.rows.filter((r) => r.date === today && r.campaign_id);
