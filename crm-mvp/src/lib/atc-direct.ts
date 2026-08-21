@@ -132,12 +132,22 @@ async function proxyRescue(
 ): Promise<{ "1"?: RawCreative[]; "2"?: string }> {
   const msg = cause instanceof Error ? cause.message : String(cause);
   if (!/HTTP (302|429)/.test(msg)) throw cause;
-  const proxyUrl = await getAtcProxyUrl();
-  if (!proxyUrl) throw cause;
-  const result = await curlPostSearchCreatives(reqJson, proxyUrl);
-  proxyPreferredUntil = Date.now() + PROXY_PREFER_WINDOW_MS;
-  console.warn("[ATC-direct] 直连被限频，已切换代理出口（30 分钟后回探直连）");
-  return result;
+  // 轮换住宅代理单个会话偶发 TLS 握手失败（实测 kookeey curl exit 35），
+  // 每次重取 URL = 新会话 = 新出口 IP，最多试 2 个会话
+  let lastErr: unknown = cause;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const proxyUrl = await getAtcProxyUrl();
+    if (!proxyUrl) throw cause;
+    try {
+      const result = await curlPostSearchCreatives(reqJson, proxyUrl);
+      proxyPreferredUntil = Date.now() + PROXY_PREFER_WINDOW_MS;
+      console.warn("[ATC-direct] 直连被限频，已切换代理出口（30 分钟后回探直连）");
+      return result;
+    } catch (proxyErr) {
+      lastErr = proxyErr;
+    }
+  }
+  throw lastErr;
 }
 
 /**
