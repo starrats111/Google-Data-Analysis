@@ -1,20 +1,25 @@
 /**
- * D-266 批四：全员弹窗通知（07 批复 #6，2026-08-21）
+ * D-266 批四 + D-269 修订：MCC 级重大危险定向弹窗通知
  *
- * MCC 级重大危险事件（Sheet 被封 / 表格结构未识别 / 统一脚本停更疑似被更换等）
- * 必须让全员第一时间知道——只写飞书群没人看、只进铃铛没人点。
- * 本模块把事件广播成全员 notifications 行（metadata.popup=true），
- * 前端 UserLayout 轮询到即弹阻断式弹窗；正在建广告的用户延迟到离开创建流程后再弹。
+ * D-269（07 2026-08-21 拍板）：告警**只发给需要警告的人**（该 MCC 的归属人），
+ * 数据隔离——别人的 MCC 出事不弹给无关用户。归属人失效（离职/停用）时
+ * 兜底发管理员，保证危险不静默。飞书群通道（sendAlert）不变。
  *
- * 去重：同 key 24 小时内只广播一次（查库判定，跨进程/重启有效——
+ * 事件（Sheet 被封 / 表格结构未识别 / 统一脚本停更）写成 notifications 行
+ * （metadata.popup=true），前端 CriticalAlertGate 轮询到即弹阻断式弹窗；
+ * 正在建广告的用户延迟到离开创建流程后再弹。
+ *
+ * 去重：同 key 窗口内只发一次（查库判定，跨进程/重启有效——
  * today-cost 每 30 分钟一轮，进程内去重挡不住 PM2 重启）。
  */
 import prisma from "@/lib/prisma";
 import { sendAlert, type AlertLevel } from "@/lib/alert";
 
-export interface BroadcastInput {
+export interface CriticalAlertInput {
   /** 去重键，如 sheet_blocked_218-718-2682 */
   key: string;
+  /** 接收人（MCC 归属人）；空数组时自动兜底发管理员 */
+  userIds: bigint[];
   title: string;
   content: string;
   level?: AlertLevel;
@@ -46,11 +51,30 @@ async function mccRecentlyActive(mccInternalId: bigint, days = 7): Promise<boole
 }
 
 /**
- * 向全体在职用户广播一条弹窗级告警（同时推飞书群）。
- * 返回 true=本次真正广播了；false=去重窗口内已有同 key 广播，跳过。
+ * 解析实际接收人：归属人在职就发归属人；归属人失效或缺失则兜底发全体管理员
+ * （危险不能静默，但也绝不群发无关用户——D-269 数据隔离）。
+ */
+async function resolveRecipients(userIds: bigint[]): Promise<bigint[]> {
+  if (userIds.length > 0) {
+    const owners = await prisma.users.findMany({
+      where: { id: { in: userIds }, is_deleted: 0, status: "active" },
+      select: { id: true },
+    });
+    if (owners.length > 0) return owners.map((u) => u.id);
+  }
+  const admins = await prisma.users.findMany({
+    where: { role: "admin", is_deleted: 0, status: "active" },
+    select: { id: true },
+  });
+  return admins.map((u) => u.id);
+}
+
+/**
+ * 向指定用户发一条弹窗级告警（同时推飞书群）。
+ * 返回 true=本次真正发送了；false=去重窗口内已有同 key 发送，跳过。
  * 永不抛异常（告警系统不能反过来弄坏业务主流程）。
  */
-export async function broadcastCriticalAlert(input: BroadcastInput): Promise<boolean> {
+export async function sendCriticalAlert(input: CriticalAlertInput): Promise<boolean> {
   try {
     const since = new Date(Date.now() - (input.dedupeHours ?? DEDUPE_HOURS) * 3600_000);
     const dup = await prisma.notifications.findFirst({
@@ -63,16 +87,13 @@ export async function broadcastCriticalAlert(input: BroadcastInput): Promise<boo
     });
     if (dup) return false;
 
-    const users = await prisma.users.findMany({
-      where: { is_deleted: 0, status: "active" },
-      select: { id: true },
-    });
-    if (users.length === 0) return false;
+    const recipients = await resolveRecipients(input.userIds);
+    if (recipients.length === 0) return false;
 
     const metadata = JSON.stringify({ popup: true, key: input.key, level: input.level || "error" });
     await prisma.notifications.createMany({
-      data: users.map((u) => ({
-        user_id: u.id,
+      data: recipients.map((uid) => ({
+        user_id: uid,
         type: "alert",
         title: input.title,
         content: input.content,
@@ -86,18 +107,18 @@ export async function broadcastCriticalAlert(input: BroadcastInput): Promise<boo
       content: input.content,
       source: "system-broadcast",
     });
-    console.log(`[SystemBroadcast] 已广播 ${users.length} 人: ${input.key} ${input.title}`);
+    console.log(`[SystemBroadcast] 已定向通知 ${recipients.length} 人 (uid=${recipients.join(",")}): ${input.key} ${input.title}`);
     return true;
   } catch (e) {
-    console.error(`[SystemBroadcast] 广播失败（不影响主流程）: ${e instanceof Error ? e.message : e}`);
+    console.error(`[SystemBroadcast] 发送失败（不影响主流程）: ${e instanceof Error ? e.message : e}`);
     return false;
   }
 }
 
 /**
- * Sheet 同步失败消息分类 → 广播（today-cost 每 30 分钟接线调用）。
- * 只对「确定的危险态」广播：权限不足（被封）/ 结构未识别；
- * 网络超时等瞬态失败不广播（质量闸：不确定 ≠ 危险，防狼来了）。
+ * Sheet 同步失败消息分类 → 定向告警 MCC 归属人（today-cost 每 30 分钟接线调用）。
+ * 只对「确定的危险态」告警：权限不足（被封）/ 结构未识别；
+ * 网络超时等瞬态失败不告警（质量闸：不确定 ≠ 危险，防狼来了）。
  */
 export async function broadcastSheetFailure(
   mccInternalId: bigint,
@@ -112,22 +133,30 @@ export async function broadcastSheetFailure(
     console.log(`[SystemBroadcast] MCC ${mccId} 同步失败但近 7 天无数据（陈年旧账），不弹窗: ${message.slice(0, 60)}`);
     return;
   }
+  // D-269：只通知该 MCC 的归属人
+  const mcc = await prisma.google_mcc_accounts.findUnique({
+    where: { id: mccInternalId },
+    select: { user_id: true },
+  });
+  const targets = mcc ? [mcc.user_id] : [];
   const label = mccName ? `${mccName}（${mccId}）` : mccId;
-  // 去重 7 天：未解决的封禁/结构问题每周全员提醒一次即可——
+  // 去重 7 天：未解决的封禁/结构问题每周提醒一次即可——
   // 24h 会变成每天轰炸（已封 MCC 走 API 应急补数期间数据一直在流，闸门永远放行）
   const WEEKLY = 7 * 24;
   if (message.includes("权限不足")) {
-    await broadcastCriticalAlert({
+    await sendCriticalAlert({
       key: `sheet_blocked_${mccId}`,
+      userIds: targets,
       dedupeHours: WEEKLY,
-      title: `MCC ${label} 的 Google Sheet 无法访问（疑似被封）`,
+      title: `你的 MCC ${label} 的 Google Sheet 无法访问（疑似被封）`,
       content: `CRM 拉取该 MCC 的数据表时被拒绝（权限不足/403）。花费、点击、状态同步已中断，广告仍在 Google 侧继续投放烧钱。请立即：① 检查该 Sheet 是否被 Google 封禁或分享权限被改；② 若被封，参照 D-239/D-253 流程处理并评估是否止损。`,
     });
   } else if (message.includes("未识别的表格结构")) {
-    await broadcastCriticalAlert({
+    await sendCriticalAlert({
       key: `sheet_structure_${mccId}`,
+      userIds: targets,
       dedupeHours: WEEKLY,
-      title: `MCC ${label} 的数据表结构未识别`,
+      title: `你的 MCC ${label} 的数据表结构未识别`,
       content: `该 MCC 的 Google Sheet 既不是 CRM 格式也不是 kyads 格式，可能是统一脚本被更换/未正确安装。该 MCC 的花费与状态同步已中断。请到设置页重新生成统一脚本并粘贴到该 MCC 的 Google Ads Scripts。`,
     });
   }
@@ -138,7 +167,7 @@ export async function broadcastSheetFailure(
  * → 脚本超过一整天没跑（被停用/被更换/持续报错）。
  * Sheet 拉不到 / 无 DailyData tab 的不在这里报（被封与结构问题由 broadcastSheetFailure 负责）。
  * 只报「近 7 天内死掉的」（maxDate ≥ 今天-8）——停更数月的废弃 MCC 是旧账不弹；
- * 去重键带 maxDate + 8 天窗口 → 一次停更事件全程只广播一次。
+ * 去重键带 maxDate + 8 天窗口 → 一次停更事件全程只告警一次。只发 MCC 归属人（D-269）。
  */
 export async function checkSheetScriptFreshness(log: (msg: string) => void): Promise<void> {
   const { extractSheetId, readSheetCsv } = await import("@/lib/sheet-sync");
@@ -154,7 +183,7 @@ export async function checkSheetScriptFreshness(log: (msg: string) => void): Pro
 
   const mccs = await prisma.google_mcc_accounts.findMany({
     where: { is_deleted: 0, sheet_url: { not: null } },
-    select: { mcc_id: true, mcc_name: true, sheet_url: true },
+    select: { mcc_id: true, mcc_name: true, sheet_url: true, user_id: true },
   });
 
   let stale = 0;
@@ -181,13 +210,14 @@ export async function checkSheetScriptFreshness(log: (msg: string) => void): Pro
 
     stale++;
     const label = mcc.mcc_name ? `${mcc.mcc_name}（${mcc.mcc_id}）` : mcc.mcc_id;
-    await broadcastCriticalAlert({
+    await sendCriticalAlert({
       key: `sheet_stale_${mcc.mcc_id}_${maxDate}`,
+      userIds: [mcc.user_id],
       dedupeHours: 8 * 24,
-      title: `MCC ${label} 的统一脚本疑似停更`,
+      title: `你的 MCC ${label} 的统一脚本疑似停更`,
       content: `该 MCC 数据表 DailyData 的最新日期停在 ${maxDate}，已超过一整天没有更新。脚本可能被停用、被更换或持续报错，期间 CRM 看不到该 MCC 的花费与状态变化。请到 Google Ads Scripts 检查脚本运行记录；如脚本丢失请到设置页重新生成粘贴。`,
     });
-    log(`  [Freshness] ⚠️ ${label}: DailyData 最新 ${maxDate}，疑似脚本停更`);
+    log(`  [Freshness] ⚠️ ${label}: DailyData 最新 ${maxDate}，疑似脚本停更（已通知归属人）`);
   }
   log(`  [Freshness] 检查 ${mccs.length} 个 MCC，停更 ${stale} 个`);
 }
