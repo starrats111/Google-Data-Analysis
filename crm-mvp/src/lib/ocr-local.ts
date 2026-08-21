@@ -11,17 +11,59 @@
  * 系统依赖（仅生产服务器）：apt 包 tesseract-ocr + imagemagick。
  * 本机/环境缺依赖时 isLocalOcrAvailable() 返回 false，worker 按配置降级或跳过。
  *
- * 管线：curl 下载 → convert 预处理 → tesseract（psm 11，无候选再 psm 3）→
+ * 管线：curl 下载 → sharp 预处理（ImageMagick 限内存兜底）→ tesseract（psm 11，无候选再 psm 3）→
  *       TLD 白名单挑域名 → 根域名归一化（eTLD+1）→ 频次最高者胜出
+ *
+ * D-266 批五（2026-08-21，D-262 事故复盘落地）：
+ *   1. 预处理主通道换 sharp（libvips，进程内、内存峰值 ~几十 MB）——
+ *      原 convert 3x 放大单进程峰值 500M+，13-19 路并行直接把 2 核 3.7G 机打挂（502 事故）；
+ *   2. 全局并发闸下沉到本模块（进程内信号量，默认 2 路）——D-262 根因正是脚本路径
+ *      绕过了 ocr-worker 的「并发 1」配置；闸在 lib 层，同进程内任何调用路径都逃不掉。
+ *      ⚠️ 独立 node 进程跑的脚本仍约束不了，恢复类脚本必须自带节流（D-262 教训记档）；
+ *   3. convert 只做 sharp 失败的兜底，且强制 -limit memory/map（超限走磁盘变慢但不吃光内存）；
+ *   4. 放大上限 2400px 宽——盲目 3x 对大图是纯内存浪费，OCR 收益为零。
  */
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, readdir, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const execFileAsync = promisify(execFile);
+
+// ─── 全局并发闸（进程内信号量）───
+
+const MAX_CONCURRENT_OCR = 2;
+let ocrRunning = 0;
+const ocrWaiters: Array<() => void> = [];
+
+function acquireOcrSlot(): Promise<void> {
+  if (ocrRunning < MAX_CONCURRENT_OCR) {
+    ocrRunning++;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => ocrWaiters.push(resolve));
+}
+
+function releaseOcrSlot(): void {
+  const next = ocrWaiters.shift();
+  if (next) next(); // 名额直接移交下一个等待者，ocrRunning 不变
+  else ocrRunning--;
+}
+
+/**
+ * 在全局 OCR 并发闸内执行任务（导出供单测与其他重图像操作复用）。
+ * 同一进程内无论多少调用方并发，实际同时跑的 OCR 管线 ≤ MAX_CONCURRENT_OCR。
+ */
+export async function withOcrSlot<T>(fn: () => Promise<T>): Promise<T> {
+  await acquireOcrSlot();
+  try {
+    return await fn();
+  } finally {
+    releaseOcrSlot();
+  }
+}
 
 // ─── 依赖可用性探测（进程内缓存）───
 
@@ -116,6 +158,31 @@ export interface LocalOcrOutput {
 /** 图片已被 Google 删除（4xx）→ 调用方应标 permanent_failure */
 export class ImageGoneError extends Error {}
 
+/**
+ * 清理 /tmp 下超过 1 小时的 ocr-* 残留目录（进程被 OOM/重启打断时 finally 没跑到）。
+ * D-262 事故后 /tmp 曾堆积 243 个。runOcrWorker 每轮顺手调一次，失败静默。
+ */
+export async function cleanupStaleOcrTmp(): Promise<number> {
+  let removed = 0;
+  try {
+    const base = tmpdir();
+    const entries = await readdir(base);
+    const cutoff = Date.now() - 3600_000;
+    for (const name of entries) {
+      if (!name.startsWith("ocr-")) continue;
+      const full = join(base, name);
+      try {
+        const st = await stat(full);
+        if (st.mtimeMs < cutoff) {
+          await rm(full, { recursive: true, force: true });
+          removed++;
+        }
+      } catch { /* 单个失败不影响其余 */ }
+    }
+  } catch { /* 静默 */ }
+  return removed;
+}
+
 async function runTesseract(imagePath: string, psm: string): Promise<string> {
   const { stdout } = await execFileAsync(
     "tesseract",
@@ -126,10 +193,55 @@ async function runTesseract(imagePath: string, psm: string): Promise<string> {
 }
 
 /**
- * 下载 + 预处理 + 识别一张广告图。
+ * 预处理：放大（≤2400px 宽）+ 灰度 + 锐化（实测把小字误读从 4/40 降到 1/40）。
+ * 主通道 sharp（低内存）；失败退 convert（强制限内存）；再失败用原图（裸跑命中率仍有 90%）。
+ * 返回实际用于 OCR 的文件路径。
+ */
+async function preprocessImage(img: string, dir: string): Promise<string> {
+  const pp = join(dir, "pp.png");
+
+  try {
+    const sharp = (await import("sharp")).default;
+    sharp.cache(false); // 2 核低配机：不留 libvips 内存缓存
+    sharp.concurrency(1);
+    const meta = await sharp(img).metadata();
+    const width = meta.width ?? 800;
+    const targetWidth = Math.min(width * 3, 2400);
+    let pipeline = sharp(img, { limitInputPixels: 50_000_000 });
+    if (targetWidth > width) {
+      pipeline = pipeline.resize({ width: targetWidth, kernel: "lanczos3" });
+    }
+    await pipeline.grayscale().sharpen({ sigma: 1 }).png().toFile(pp);
+    return pp;
+  } catch {
+    /* sharp 失败（异常格式等）→ convert 兜底 */
+  }
+
+  try {
+    // -limit：内存超限自动走磁盘（变慢但不吃光内存）——D-262 单 convert 峰值 500M+ 的教训
+    await execFileAsync(
+      "convert",
+      [
+        "-limit", "memory", "128MiB", "-limit", "map", "256MiB", "-limit", "disk", "512MiB",
+        img, "-resize", "300%", "-resize", "2400x2400>", "-colorspace", "Gray", "-sharpen", "0x1", pp,
+      ],
+      { timeout: 60_000 },
+    );
+    return pp;
+  } catch {
+    return img; // 无 convert 或转换失败 → 用原图
+  }
+}
+
+/**
+ * 下载 + 预处理 + 识别一张广告图。整个管线在全局并发闸内（进程级 ≤2 路）。
  * 用 curl 下载（与 atc-direct 同理：Node fetch 的 TLS 指纹可能被 Google 拦，curl 实测畅通）。
  */
 export async function localOcrImageDomain(imageUrl: string): Promise<LocalOcrOutput> {
+  return withOcrSlot(() => localOcrImageDomainInner(imageUrl));
+}
+
+async function localOcrImageDomainInner(imageUrl: string): Promise<LocalOcrOutput> {
   const dir = await mkdtemp(join(tmpdir(), "ocr-"));
   try {
     const img = join(dir, "img");
@@ -145,20 +257,7 @@ export async function localOcrImageDomain(imageUrl: string): Promise<LocalOcrOut
       throw new Error(`image download HTTP ${httpCode.trim()}`);
     }
 
-    // 预处理：3x 放大 + 灰度 + 锐化（实测把小字误读从 4/40 降到 1/40）。
-    // imagemagick 缺失时退回原图（裸跑命中率仍有 90%）。
-    let target = img;
-    try {
-      const pp = join(dir, "pp.png");
-      await execFileAsync(
-        "convert",
-        [img, "-resize", "300%", "-colorspace", "Gray", "-sharpen", "0x1", pp],
-        { timeout: 60_000 },
-      );
-      target = pp;
-    } catch {
-      /* 无 convert 或转换失败 → 用原图 */
-    }
+    const target = await preprocessImage(img, dir);
 
     let text = await runTesseract(target, "11");
     let domain = pickDomainFromOcrText(text);

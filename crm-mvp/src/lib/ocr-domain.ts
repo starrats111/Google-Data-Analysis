@@ -13,7 +13,7 @@
  */
 
 import prisma from "@/lib/prisma";
-import { isLocalOcrAvailable, localOcrImageDomain, ImageGoneError } from "@/lib/ocr-local";
+import { isLocalOcrAvailable, localOcrImageDomain, ImageGoneError, cleanupStaleOcrTmp } from "@/lib/ocr-local";
 
 // ─── 公开类型 ───
 
@@ -325,6 +325,10 @@ export async function runOcrWorker(): Promise<OcrWorkerResult> {
   const timeoutSec = await readSystemConfigInt("ocr_processing_timeout_sec", DEFAULTS.processingTimeoutSec);
   const maxBatchesPerRun = Math.max(1, await readSystemConfigInt("ocr_worker_max_batches_per_run", DEFAULTS.maxBatchesPerRun));
   const batchPauseMs = Math.max(0, await readSystemConfigInt("ocr_worker_batch_pause_ms", DEFAULTS.batchPauseMs));
+
+  // ── 0. 清理被打断进程留下的陈旧 /tmp/ocr-* 目录（D-262 曾堆积 243 个）──
+  const staleRemoved = await cleanupStaleOcrTmp();
+  if (staleRemoved > 0) console.log(`[C-088 ocr-worker] cleaned ${staleRemoved} stale ocr tmp dirs`);
 
   // ── 1. 僵尸重置（整个 run 只做一次）：processing 超过 timeoutSec → pending ──
   const zombie = await prisma.$executeRawUnsafe(
