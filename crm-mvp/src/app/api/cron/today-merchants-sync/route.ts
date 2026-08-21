@@ -145,37 +145,56 @@ async function backfillNewCampaigns(
 }
 
 /**
- * D-225 改名回写：CampaignInfo 全量行的 CampaignName 与 DB campaign_name 比对，
- * 不一致（且 Sheet 名非空）即更新，并刷 last_google_sync_at。
- * 与 daily-sync 的 nameChanged 判断同口径（Google/Sheet 为真相），只在变化时写库。
- * 只改名字，不动归属/商家关联——那些仍走 D-200 检测告警 + D-223 手动纠正。
+ * D-225 改名回写 + D-264 预算回写：CampaignInfo 全量行与 DB 比对，变化才写库。
+ * - 名字：Sheet 名非空且不同即更新（Google/Sheet 为真相），口径同 daily-sync 的 nameChanged。
+ * - 预算：Sheet Budget 列（账户币种，脚本 D-264 新增）非空且不同即更新。
+ *   CampaignInfo 是全量清单，零花费/停投系列（DailyData 不落行）的预算也能半小时级刷新，
+ *   根治「建单初值 $2 永不更新」（老脚本无 Budget 列时 map 为空，自动不动）。
+ * 只改名字/预算，不动归属/商家关联——那些仍走 D-200 检测告警 + D-223 手动纠正。
  */
 async function syncCampaignNames(
   nameByUserGcid: Map<string, Map<string, string>>,
-): Promise<{ updated: number; errors: string[] }> {
-  const out = { updated: 0, errors: [] as string[] };
+  budgetByUserGcid: Map<string, Map<string, number>>,
+): Promise<{ updated: number; budgetUpdated: number; errors: string[] }> {
+  const out = { updated: 0, budgetUpdated: 0, errors: [] as string[] };
 
-  for (const [userId, nameByGcid] of nameByUserGcid) {
-    if (nameByGcid.size === 0) continue;
+  const userIds = new Set([...nameByUserGcid.keys(), ...budgetByUserGcid.keys()]);
+  for (const userId of userIds) {
+    const nameByGcid = nameByUserGcid.get(userId) || new Map<string, string>();
+    const budgetByGcid = budgetByUserGcid.get(userId) || new Map<string, number>();
+    if (nameByGcid.size === 0 && budgetByGcid.size === 0) continue;
     const uid = BigInt(userId);
-    const gcids = [...nameByGcid.keys()];
+    const gcids = [...new Set([...nameByGcid.keys(), ...budgetByGcid.keys()])];
     try {
       const BATCH = 500;
       for (let i = 0; i < gcids.length; i += BATCH) {
         const batch = gcids.slice(i, i + BATCH);
         const rows = await prisma.campaigns.findMany({
           where: { user_id: uid, is_deleted: 0, google_campaign_id: { in: batch } },
-          select: { id: true, google_campaign_id: true, campaign_name: true },
+          select: { id: true, google_campaign_id: true, campaign_name: true, daily_budget: true },
         });
         for (const c of rows) {
           const sheetName = nameByGcid.get(c.google_campaign_id!) || "";
-          if (!sheetName || sheetName === c.campaign_name) continue;
+          const nameChanged = !!sheetName && sheetName !== c.campaign_name;
+          const sheetBudget = budgetByGcid.get(c.google_campaign_id!);
+          const budgetChanged = sheetBudget != null && Number(c.daily_budget ?? 0) !== sheetBudget;
+          if (!nameChanged && !budgetChanged) continue;
           await prisma.campaigns.update({
             where: { id: c.id },
-            data: { campaign_name: sheetName, last_google_sync_at: new Date() },
+            data: {
+              ...(nameChanged ? { campaign_name: sheetName } : {}),
+              ...(budgetChanged ? { daily_budget: sheetBudget } : {}),
+              last_google_sync_at: new Date(),
+            },
           });
-          out.updated++;
-          log(`  [改名回写] campaign#${c.id}「${c.campaign_name}」→「${sheetName}」(user ${userId})`);
+          if (nameChanged) {
+            out.updated++;
+            log(`  [改名回写] campaign#${c.id}「${c.campaign_name}」→「${sheetName}」(user ${userId})`);
+          }
+          if (budgetChanged) {
+            out.budgetUpdated++;
+            log(`  [预算回写] campaign#${c.id} ${c.daily_budget} → ${sheetBudget}（账户币种，user ${userId}）`);
+          }
         }
       }
     } catch (e) {
@@ -312,10 +331,13 @@ export async function GET(req: NextRequest) {
       log(`回填错误 (${backfill.errors.length}): ${backfill.errors.join("; ")}`);
     }
 
-    // D-225 改名回写。放在回填之后：本轮新补录的行名字本就取自 Sheet，不会白比一轮。
-    const nameSync = await syncCampaignNames(result.nameByUserGcid);
+    // D-225 改名回写 + D-264 预算回写。放在回填之后：本轮新补录的行名字本就取自 Sheet，不会白比一轮。
+    const nameSync = await syncCampaignNames(result.nameByUserGcid, result.budgetByUserGcid);
     if (nameSync.updated > 0) {
       log(`改名回写：更新 ${nameSync.updated} 条系列名`);
+    }
+    if (nameSync.budgetUpdated > 0) {
+      log(`预算回写：更新 ${nameSync.budgetUpdated} 条系列预算（账户币种）`);
     }
     if (nameSync.errors.length > 0) {
       log(`改名回写错误 (${nameSync.errors.length}): ${nameSync.errors.join("; ")}`);

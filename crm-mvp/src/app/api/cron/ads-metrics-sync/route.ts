@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { queryGoogleAds, microsToDollars, type MccCredentials } from "@/lib/google-ads/client";
 import { getAnalysisRange } from "@/lib/campaign-analysis";
+import { extractSheetId } from "@/lib/sheet-sync";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -9,8 +10,11 @@ export const maxDuration = 300;
 /**
  * D-238 广告分析指标采集（每日 06:10）
  *
- * 为 ads_daily_stats 补齐 kyads 广告分析所需的四个指标，全部走 Google Ads API 直拉
- * （07 拍板：不改各 MCC 的统一 Ads Script，服务端一处改完全员生效）：
+ * ⚠️ D-264（07 2026-08-21 拍板）：IS/QS 属于读操作，必须走 Sheet。统一脚本已新增
+ * ISBudget/ISRank/QS 列，Sheet 已供数的 MCC 本 cron 自动跳过（见 sheetProvidesIs），
+ * 本 cron 仅作为老脚本 MCC 的过渡期兜底，全部脚本换发完毕后整体下线。
+ *
+ * 原设计：为 ads_daily_stats 补齐 kyads 广告分析所需的四个指标，走 Google Ads API 直拉：
  *
  *   1. is_budget / is_rank：campaign 报表 segments.date 逐日值
  *      （search_budget_lost_impression_share / search_rank_lost_impression_share，0-1 分数）
@@ -40,6 +44,28 @@ interface CampaignRef {
   id: bigint;
   google_campaign_id: string;
   customer_id: string;
+}
+
+/**
+ * D-264：探测该 MCC 的 Sheet DailyData 是否已带 ISBudget 列（新版统一脚本）。
+ * 只拉表头一行（range=A1:Z1），不下载整表。探测失败（网络/权限/缺 tab）返回 false，
+ * 保持 API 兜底路径——宁可多拉一轮 API，不能让指标断供。
+ */
+async function sheetProvidesIs(sheetUrl: string | null): Promise<boolean> {
+  if (!sheetUrl) return false;
+  const sid = extractSheetId(sheetUrl);
+  if (!sid) return false;
+  try {
+    const resp = await fetch(
+      `https://docs.google.com/spreadsheets/d/${sid}/gviz/tq?tqx=out:csv&sheet=DailyData&range=A1:Z1`,
+      { signal: AbortSignal.timeout(15_000) },
+    );
+    if (!resp.ok) return false;
+    const header = await resp.text();
+    return /isbudget/i.test(header);
+  } catch {
+    return false;
+  }
 }
 
 /** 单个 CID 下的一批系列：拉 IS 逐日 + QS 加权 + MaxCpc 快照 */
@@ -144,18 +170,24 @@ export async function GET(req: NextRequest) {
 
   const startedAt = Date.now();
   const range = getAnalysisRange(7);
-  const stats = { mccs: 0, cids: 0, updatedRows: 0, skippedMccs: 0, errors: [] as string[] };
+  const stats = { mccs: 0, cids: 0, updatedRows: 0, skippedMccs: 0, sheetCoveredMccs: 0, errors: [] as string[] };
 
   // 活跃 MCC（逐个串行，单个失败不阻塞）
   const mccs = await prisma.google_mcc_accounts.findMany({
     where: { is_deleted: 0 },
     select: {
       id: true, user_id: true, mcc_id: true, mcc_name: true,
-      developer_token: true, service_account_json: true,
+      developer_token: true, service_account_json: true, sheet_url: true,
     },
   });
 
   for (const mcc of mccs) {
+    // D-264：新版脚本的 Sheet 已自带 IS/QS 列，读操作走 Sheet，此处不再烧 API 配额
+    if (await sheetProvidesIs(mcc.sheet_url)) {
+      stats.sheetCoveredMccs++;
+      continue;
+    }
+
     const credentials: MccCredentials = {
       mcc_id: mcc.mcc_id,
       developer_token: mcc.developer_token || "",
@@ -248,6 +280,6 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  log(`完成：MCC ${stats.mccs}、CID ${stats.cids}、更新 ${stats.updatedRows} 行、跳过无凭据 MCC ${stats.skippedMccs}、错误 ${stats.errors.length}，耗时 ${((Date.now() - startedAt) / 1000).toFixed(1)}s`);
+  log(`完成：MCC ${stats.mccs}、CID ${stats.cids}、更新 ${stats.updatedRows} 行、Sheet 已供数跳过 ${stats.sheetCoveredMccs}、跳过无凭据 MCC ${stats.skippedMccs}、错误 ${stats.errors.length}，耗时 ${((Date.now() - startedAt) / 1000).toFixed(1)}s`);
   return NextResponse.json({ ok: true, ...stats, elapsedSec: (Date.now() - startedAt) / 1000 });
 }

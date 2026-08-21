@@ -535,7 +535,7 @@ async function syncAdsData(
  * Sheet 数据批量 upsert — 消除 N+1
  */
 async function upsertSheetRowsBatch(
-  rows: { date: string; campaign_id: string; campaign_name: string; customer_id: string; cost: number; budget: number; clicks: number; impressions: number; cpc: number; status: string }[],
+  rows: { date: string; campaign_id: string; campaign_name: string; customer_id: string; cost: number; budget: number; clicks: number; impressions: number; cpc: number; status: string; is_budget?: number | null; is_rank?: number | null; quality_score?: number | null }[],
   mccId: bigint,
   userId: bigint,
   currency: string = "USD",
@@ -616,19 +616,25 @@ async function upsertSheetRowsBatch(
       const convertedCost = row.cost * rate;
       const convertedBudget = row.budget * rate;
       const convertedCpc = row.cpc * rate;
+      // D-264：IS/QS 走 Sheet，只在有值时写（老脚本无列时不覆盖既有值）
+      const metricPatch = {
+        ...(row.is_budget != null ? { is_budget: row.is_budget } : {}),
+        ...(row.is_rank != null ? { is_rank: row.is_rank } : {}),
+        ...(row.quality_score != null ? { quality_score: row.quality_score } : {}),
+      };
 
       if (existingId) {
         updated++;
         await prisma.ads_daily_stats.update({
           where: { id: existingId },
-          data: { budget: convertedBudget, cost: convertedCost, clicks: row.clicks, impressions: row.impressions, cpc: convertedCpc, data_source: "sheet" },
+          data: { budget: convertedBudget, cost: convertedCost, clicks: row.clicks, impressions: row.impressions, cpc: convertedCpc, data_source: "sheet", ...metricPatch },
         });
       } else {
         inserted++;
         await prisma.ads_daily_stats.upsert({
           where: { campaign_id_date: { campaign_id: campaign.id, date: new Date(row.date) } },
-          update: { budget: convertedBudget, cost: convertedCost, clicks: row.clicks, impressions: row.impressions, cpc: convertedCpc, data_source: "sheet" },
-          create: { user_id: userId, user_merchant_id: BigInt(0), campaign_id: campaign.id, date: new Date(row.date), budget: convertedBudget, cost: convertedCost, clicks: row.clicks, impressions: row.impressions, cpc: convertedCpc, data_source: "sheet" },
+          update: { budget: convertedBudget, cost: convertedCost, clicks: row.clicks, impressions: row.impressions, cpc: convertedCpc, data_source: "sheet", ...metricPatch },
+          create: { user_id: userId, user_merchant_id: BigInt(0), campaign_id: campaign.id, date: new Date(row.date), budget: convertedBudget, cost: convertedCost, clicks: row.clicks, impressions: row.impressions, cpc: convertedCpc, data_source: "sheet", ...metricPatch },
         });
       }
     }));

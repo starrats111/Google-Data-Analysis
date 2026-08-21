@@ -65,7 +65,7 @@ export async function syncTodayCostFromSheets(): Promise<TodayCostResult> {
       // 同一 gcid 在 Sheet 里可能有多行（广告级明细已在 syncFromSheet 聚合，这里再兜一次底）
       // D-202：顺带保留 Budget / 明确出价列，用于回写 campaigns（回填系列的预算此前
       // 一直是表默认值 $2.00，要等次日 06:00 daily-sync 才对齐）
-      const byGcid = new Map<string, { cost: number; clicks: number; impressions: number; budget: number; cpcBid: number }>();
+      const byGcid = new Map<string, { cost: number; clicks: number; impressions: number; budget: number; cpcBid: number; isBudget: number | null; isRank: number | null; qs: number | null }>();
       for (const r of rows) {
         const prev = byGcid.get(r.campaign_id);
         if (prev) {
@@ -74,10 +74,14 @@ export async function syncTodayCostFromSheets(): Promise<TodayCostResult> {
           prev.impressions += r.impressions;
           if (r.budget > prev.budget) prev.budget = r.budget;
           if (r.cpc_bid > 0) prev.cpcBid = r.cpc_bid;
+          if (r.is_budget != null) prev.isBudget = r.is_budget;
+          if (r.is_rank != null) prev.isRank = r.is_rank;
+          if (r.quality_score != null) prev.qs = r.quality_score;
         } else {
           byGcid.set(r.campaign_id, {
             cost: r.cost, clicks: r.clicks, impressions: r.impressions,
             budget: r.budget, cpcBid: r.cpc_bid,
+            isBudget: r.is_budget, isRank: r.is_rank, qs: r.quality_score,
           });
         }
       }
@@ -131,13 +135,19 @@ export async function syncTodayCostFromSheets(): Promise<TodayCostResult> {
           }
         }
 
+        // D-264：IS/QS 走 Sheet，只在有值时写（null 不覆盖既有值）
+        const metricPatch = {
+          ...(agg.isBudget != null ? { is_budget: agg.isBudget } : {}),
+          ...(agg.isRank != null ? { is_rank: agg.isRank } : {}),
+          ...(agg.qs != null ? { quality_score: agg.qs } : {}),
+        };
         await prisma.ads_daily_stats.upsert({
           where: { campaign_id_date: { campaign_id: campaignId, date: dateObj } },
           // is_deleted 归零：campaign 已复活（上面只查 is_deleted=0 的系列）但花费行还停留在
           // 软删态时，唯一键会命中那一行；不清标记的话花费写进去了却依然不可见
           // data_source 必须显式写：API 路径会把标签改成 api 且从不改回，
           // 不在 update 里重置的话，Sheet 明明是本行的真实来源却永久显示为 api（D-198）
-          update: { cost: agg.cost * rate, clicks: agg.clicks, impressions: agg.impressions, is_deleted: 0, data_source: "sheet" },
+          update: { cost: agg.cost * rate, clicks: agg.clicks, impressions: agg.impressions, is_deleted: 0, data_source: "sheet", ...metricPatch },
           create: {
             user_id: mcc.user_id,
             campaign_id: campaignId,
@@ -147,6 +157,7 @@ export async function syncTodayCostFromSheets(): Promise<TodayCostResult> {
             impressions: agg.impressions,
             user_merchant_id: BigInt(0),
             data_source: "sheet",
+            ...metricPatch,
           },
         });
         out.upserted++;

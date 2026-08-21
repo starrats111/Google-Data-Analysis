@@ -448,13 +448,20 @@ async function syncAllUsersMcc(): Promise<unknown> {
 
                 // data_source 必须显式写：下面的 API 补数据会把标签改成 api 且从不改回，
                 // 不在 update 里重置的话，Sheet 明明是本行的真实来源却永久显示为 api（D-198）
+                // D-264：IS/QS 走 Sheet。只在 Sheet 给了值时写入（null 不覆盖），
+                // 老脚本没有这些列时保持原值，由 ads-metrics-sync API 过渡期兜底。
+                const metricPatch = {
+                  ...(row.is_budget != null ? { is_budget: row.is_budget } : {}),
+                  ...(row.is_rank != null ? { is_rank: row.is_rank } : {}),
+                  ...(row.quality_score != null ? { quality_score: row.quality_score } : {}),
+                };
                 await prisma.ads_daily_stats.upsert({
                   where: { campaign_id_date: { campaign_id: campaign.id, date: dateObj } },
-                  update: { cost: costUsd, clicks: row.clicks, impressions: row.impressions, data_source: "sheet" },
+                  update: { cost: costUsd, clicks: row.clicks, impressions: row.impressions, data_source: "sheet", ...metricPatch },
                   create: {
                     user_id: uid, campaign_id: campaign.id, date: dateObj,
                     cost: costUsd, clicks: row.clicks, impressions: row.impressions,
-                    user_merchant_id: BigInt(0), data_source: "sheet",
+                    user_merchant_id: BigInt(0), data_source: "sheet", ...metricPatch,
                   },
                 });
                 sheetUpserted++;

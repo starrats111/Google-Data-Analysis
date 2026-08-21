@@ -168,6 +168,24 @@ export interface SheetRow {
    */
   cpc_bid: number;
   status: string;         // ENABLED / PAUSED / REMOVED
+  /**
+   * D-264：IS/QS 走 Sheet（脚本新增 ISBudget/ISRank/QS 列）。
+   * 老脚本没有这些列、或 Google 未返回该指标时为 null——严禁用 0 顶替，
+   * IS=0（一点没损失）和 IS 缺失（没展示量，Google 不给）是两回事。
+   * IS 为 0-1 小数（Google 原值），QS 为 1-10（点击加权，脚本侧已算好）。
+   */
+  is_budget: number | null;
+  is_rank: number | null;
+  quality_score: number | null;
+}
+
+/** 指标列解析：缺列/空串/'--' → null，其余按数字（含合法的 0） */
+function metricOrNull(col: Record<string, number>, row: string[], key: string): number | null {
+  if (!(key in col)) return null;
+  const raw = (row[col[key]] ?? "").trim();
+  if (raw === "" || raw === "--") return null;
+  const v = parseFloat(raw.replace(/[%,]/g, ""));
+  return isNaN(v) ? null : v;
 }
 
 /** CRM 原生格式必备列（小写） */
@@ -314,6 +332,9 @@ function parseCrmDailyData(values: string[][], startDate: string, endDate: strin
         cpc,
         cpc_bid: cpcBid,
         status: normalizeStatus(row[col["status"]]),
+        is_budget: metricOrNull(col, row, "isbudget"),
+        is_rank: metricOrNull(col, row, "isrank"),
+        quality_score: metricOrNull(col, row, "qs"),
       });
     } catch {
       continue;
@@ -374,6 +395,9 @@ function parseKyadsReport(values: string[][], startDate: string, endDate: string
           cpc: 0,
           cpc_bid: 0, // kyads 表是广告级明细，无 campaign 出价列
           status,
+          is_budget: null, // kyads 格式无 IS/QS 列，保持 null 由 API 兜底补
+          is_rank: null,
+          quality_score: null,
         });
       }
     } catch {

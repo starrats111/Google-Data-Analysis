@@ -20,11 +20,13 @@ export interface CampaignInfoRow {
   status: string;
   creationDate: string; // YYYY-MM-DD (CST)
   customerId: string;
+  /** D-264：Budget 列（账户币种金额，已从 micros 换算）。老脚本无此列 / 空值 → null */
+  budget: number | null;
 }
 
 /**
  * 解析 CampaignInfo 表的全部行（不做日期过滤，日期筛选由调用方按需做）。
- * 列结构：CampaignId | CampaignName | Status | CreationDateCST | CustomerId
+ * 列结构：CampaignId | CampaignName | Status | CreationDateCST | CustomerId | Budget(可选)
  * CreationDateCST 由脚本将账户时区的 creation_time 转为 Asia/Shanghai 日期。
  */
 function parseCampaignInfoRows(rows: string[][]): CampaignInfoRow[] {
@@ -36,6 +38,7 @@ function parseCampaignInfoRows(rows: string[][]): CampaignInfoRow[] {
   const statusIdx = headers.indexOf("Status");
   const creationDateIdx = headers.indexOf("CreationDateCST");
   const customerIdx = headers.indexOf("CustomerId");
+  const budgetIdx = headers.indexOf("Budget");
 
   if (campaignIdIdx < 0 || creationDateIdx < 0) return [];
 
@@ -44,6 +47,14 @@ function parseCampaignInfoRows(rows: string[][]): CampaignInfoRow[] {
     const creationDate = (row[creationDateIdx] ?? "").trim();
     const campaignId = (row[campaignIdIdx] ?? "").trim();
     if (!campaignId) continue;
+
+    let budget: number | null = null;
+    if (budgetIdx >= 0) {
+      const raw = (row[budgetIdx] ?? "").trim();
+      const micros = raw === "" || raw === "--" ? NaN : parseFloat(raw.replace(/,/g, ""));
+      if (!isNaN(micros) && micros > 0) budget = micros / 1_000_000;
+    }
+
     result.push({
       campaignId,
       campaignName: nameIdx >= 0 ? (row[nameIdx] ?? "").trim() : "",
@@ -51,6 +62,7 @@ function parseCampaignInfoRows(rows: string[][]): CampaignInfoRow[] {
       creationDate,
       // 与 sheet-status-sync 口径一致：去横杠存纯数字，否则 CID 计数/换链按 customer_id 匹配会失效
       customerId: customerIdx >= 0 ? (row[customerIdx] ?? "").trim().replace(/-/g, "") : "",
+      budget,
     });
   }
   return result;
@@ -68,6 +80,12 @@ export interface TodayMerchantsResult {
    * （daily-sync 走 DailyData + 近 3 天闸门，看不到这类行）。
    */
   nameByUserGcid: Map<string, Map<string, string>>;
+  /**
+   * D-264：userId → (gcid → Sheet Budget，账户币种)，CampaignInfo 全量行。
+   * 供预算回写：DailyData 只有「有展示的天」才落行，零花费/停投系列的预算
+   * 只能靠这张全量清单刷新——否则永远停在建单初值（yz01 $2 案例的病根之一）。
+   */
+  budgetByUserGcid: Map<string, Map<string, number>>;
   /** 参与同步的 MCC 数量 */
   mccCount: number;
   /** 有数据的 MCC 数量 */
@@ -111,6 +129,7 @@ export async function fetchTodayMerchantsFromSheets(): Promise<TodayMerchantsRes
   const userCampaignIds = new Map<string, Set<string>>();
   const recentRows: TodayMerchantsResult["recentRows"] = [];
   const nameByUserGcid: TodayMerchantsResult["nameByUserGcid"] = new Map();
+  const budgetByUserGcid: TodayMerchantsResult["budgetByUserGcid"] = new Map();
 
   for (const mcc of mccs) {
     if (!mcc.sheet_url) continue;
@@ -145,8 +164,12 @@ export async function fetchTodayMerchantsFromSheets(): Promise<TodayMerchantsRes
       // D-225：全量行进名字映射（同 gcid 出现在多张 Sheet 时先到先得，与回填去重口径一致）
       if (!nameByUserGcid.has(userId)) nameByUserGcid.set(userId, new Map());
       const nameMap = nameByUserGcid.get(userId)!;
+      // D-264：全量行进预算映射（口径同上），零花费/停投系列的预算也能半小时级刷新
+      if (!budgetByUserGcid.has(userId)) budgetByUserGcid.set(userId, new Map());
+      const budgetMap = budgetByUserGcid.get(userId)!;
       for (const r of allRows) {
         if (r.campaignName && !nameMap.has(r.campaignId)) nameMap.set(r.campaignId, r.campaignName);
+        if (r.budget != null && !budgetMap.has(r.campaignId)) budgetMap.set(r.campaignId, r.budget);
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -182,5 +205,5 @@ export async function fetchTodayMerchantsFromSheets(): Promise<TodayMerchantsRes
     byUser.set(userId, merchantIds.size);
   }
 
-  return { byUser, recentRows, nameByUserGcid, mccCount, mccWithData, date: todayStr, errors };
+  return { byUser, recentRows, nameByUserGcid, budgetByUserGcid, mccCount, mccWithData, date: todayStr, errors };
 }

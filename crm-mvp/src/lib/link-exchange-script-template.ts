@@ -650,7 +650,15 @@ function writeToSheet(campaigns) {
 //   3. 同一 (日期, 子账号, 广告系列) 只保留一行，重复写入自动去重
 //   4. 日期一律用各子账号自己的时区换算，避免边界日错位
 // =====================================================================
-var DATA_HEADERS = ['Date', 'Account', 'AccountName', 'CampaignId', 'CampaignName', 'Status', 'Budget', 'Impressions', 'Clicks', 'Cost', 'Conversions', 'ConversionValue', 'Currency'];
+// D-264：末尾新增 ISBudget / ISRank / QS 三列（读操作全走 Sheet，替代服务端 API 拉取）。
+// 只允许「追加」列，不许改动/插入前 13 列——CRM 按表头名解析，老表头兼容，
+// 但归档表新旧行混存时靠固定列位对齐，改序会错位。
+var DATA_HEADERS = ['Date', 'Account', 'AccountName', 'CampaignId', 'CampaignName', 'Status', 'Budget', 'Impressions', 'Clicks', 'Cost', 'Conversions', 'ConversionValue', 'Currency', 'ISBudget', 'ISRank', 'QS'];
+
+/** 指标值透传：Google 没给的写空串，绝不写 0 冒充（CRM 侧空串按 NULL 处理） */
+function metricOrBlank(v) {
+  return (v === undefined || v === null || v === '' || v === '--') ? '' : v;
+}
 var BACKFILL_META_SHEET = '_BackfillMeta';
 var BACKFILL_META_HEADERS = ['Month', 'Status', 'Rows', 'UpdatedAt', 'Source'];
 var EARLIEST_META_KEY = '__EARLIEST__';
@@ -785,7 +793,11 @@ function mergeMonthArchive(spreadsheet, monthKey, freshRows, windowStart, window
 }
 
 // ===== 报表采集 =====
-/** 拉取指定日期区间内所有子账号的广告系列日报 */
+/**
+ * 拉取指定日期区间内所有子账号的广告系列日报。
+ * IS 两列是历史有效指标，回补/归档同样采集；QS 只有「当前值」没有历史维度，
+ * 历史回补行写空串（不臆造），近 7 天由 collectQsForAccount 在主采集时填充。
+ */
 function fetchRangeForAccounts(accounts, startDate, endDate, phaseLabel) {
   var rows = [];
   for (var i = 0; i < accounts.length; i++) {
@@ -793,18 +805,60 @@ function fetchRangeForAccounts(accounts, startDate, endDate, phaseLabel) {
     AdsManagerApp.select(accounts[i]);
     try {
       var report = AdsApp.report(
-        "SELECT segments.date, customer.id, customer.descriptive_name, campaign.id, campaign.name, campaign.status, campaign_budget.amount_micros, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions, metrics.conversions_value, customer.currency_code FROM campaign WHERE segments.date BETWEEN '" + startDate + "' AND '" + endDate + "'"
+        "SELECT segments.date, customer.id, customer.descriptive_name, campaign.id, campaign.name, campaign.status, campaign_budget.amount_micros, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions, metrics.conversions_value, customer.currency_code, metrics.search_budget_lost_impression_share, metrics.search_rank_lost_impression_share FROM campaign WHERE segments.date BETWEEN '" + startDate + "' AND '" + endDate + "'"
       );
       var it = report.rows();
       while (it.hasNext()) {
         var r = it.next();
-        rows.push([r['segments.date'], r['customer.id'], r['customer.descriptive_name'], r['campaign.id'], r['campaign.name'], r['campaign.status'], r['campaign_budget.amount_micros'], r['metrics.impressions'], r['metrics.clicks'], r['metrics.cost_micros'], r['metrics.conversions'], r['metrics.conversions_value'], r['customer.currency_code']]);
+        rows.push([r['segments.date'], r['customer.id'], r['customer.descriptive_name'], r['campaign.id'], r['campaign.name'], r['campaign.status'], r['campaign_budget.amount_micros'], r['metrics.impressions'], r['metrics.clicks'], r['metrics.cost_micros'], r['metrics.conversions'], r['metrics.conversions_value'], r['customer.currency_code'], metricOrBlank(r['metrics.search_budget_lost_impression_share']), metricOrBlank(r['metrics.search_rank_lost_impression_share']), '']);
       }
     } catch (e) {
       console.log('   数据采集错误 ' + accounts[i].getName() + ': ' + e.message);
     }
   }
   return rows;
+}
+
+/**
+ * 采集当前账号近 7 天的 campaign 级 QS（keyword_view 当前 QS 按当日点击加权，
+ * 无点击退化为简单平均，口径与原服务端 D-238 完全一致）。
+ * 返回 { 'yyyy-MM-dd|campaignId': qs }；采集失败返回空表（QS 列留空，不阻塞主采集）。
+ */
+function collectQsForAccount(tz) {
+  var map = {};
+  try {
+    var endD = new Date();
+    var startD = new Date();
+    startD.setDate(startD.getDate() - 7);
+    var qsStart = Utilities.formatDate(startD, tz, 'yyyy-MM-dd');
+    var qsEnd = Utilities.formatDate(endD, tz, 'yyyy-MM-dd');
+    var report = AdsApp.report(
+      "SELECT campaign.id, segments.date, metrics.clicks, ad_group_criterion.quality_info.quality_score FROM keyword_view WHERE segments.date BETWEEN '" + qsStart + "' AND '" + qsEnd + "' AND ad_group_criterion.status != 'REMOVED'"
+    );
+    var acc = {};
+    var it = report.rows();
+    while (it.hasNext()) {
+      var r = it.next();
+      var qs = parseFloat(r['ad_group_criterion.quality_info.quality_score']);
+      if (!qs || qs <= 0) continue;
+      var clicks = parseFloat(r['metrics.clicks']) || 0;
+      var key = r['segments.date'] + '|' + r['campaign.id'];
+      var a = acc[key] || { weighted: 0, clicks: 0, plain: 0, count: 0 };
+      a.weighted += qs * clicks;
+      a.clicks += clicks;
+      a.plain += qs;
+      a.count += 1;
+      acc[key] = a;
+    }
+    for (var k in acc) {
+      var a2 = acc[k];
+      var v = a2.clicks > 0 ? a2.weighted / a2.clicks : a2.plain / a2.count;
+      map[k] = Math.round(v * 10) / 10;
+    }
+  } catch (e) {
+    console.log('   QS 采集错误（该账号 QS 列留空）: ' + e.message);
+  }
+  return map;
 }
 
 function collectDataCenterSheets() {
@@ -840,20 +894,24 @@ function collectDataCenterSheets() {
     if (!windowStart || startDate < windowStart) windowStart = startDate;
     if (!windowEnd || endDate > windowEnd) windowEnd = endDate;
 
+    // 近 7 天 QS（当前值按当日点击加权），主报表逐行按 (日期|系列) 匹配填入
+    var qsMap = collectQsForAccount(tz);
+
     try {
       var report = AdsApp.report(
-        "SELECT segments.date, customer.id, customer.descriptive_name, campaign.id, campaign.name, campaign.status, campaign_budget.amount_micros, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions, metrics.conversions_value, customer.currency_code FROM campaign WHERE segments.date BETWEEN '" + startDate + "' AND '" + endDate + "'"
+        "SELECT segments.date, customer.id, customer.descriptive_name, campaign.id, campaign.name, campaign.status, campaign_budget.amount_micros, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions, metrics.conversions_value, customer.currency_code, metrics.search_budget_lost_impression_share, metrics.search_rank_lost_impression_share FROM campaign WHERE segments.date BETWEEN '" + startDate + "' AND '" + endDate + "'"
       );
       var rows = report.rows();
       while (rows.hasNext()) {
         var row = rows.next();
-        allRows.push([row['segments.date'], row['customer.id'], row['customer.descriptive_name'], row['campaign.id'], row['campaign.name'], row['campaign.status'], row['campaign_budget.amount_micros'], row['metrics.impressions'], row['metrics.clicks'], row['metrics.cost_micros'], row['metrics.conversions'], row['metrics.conversions_value'], row['customer.currency_code']]);
+        var qsKey = row['segments.date'] + '|' + row['campaign.id'];
+        allRows.push([row['segments.date'], row['customer.id'], row['customer.descriptive_name'], row['campaign.id'], row['campaign.name'], row['campaign.status'], row['campaign_budget.amount_micros'], row['metrics.impressions'], row['metrics.clicks'], row['metrics.cost_micros'], row['metrics.conversions'], row['metrics.conversions_value'], row['customer.currency_code'], metricOrBlank(row['metrics.search_budget_lost_impression_share']), metricOrBlank(row['metrics.search_rank_lost_impression_share']), qsMap.hasOwnProperty(qsKey) ? qsMap[qsKey] : '']);
       }
     } catch (e) { console.log('   数据采集错误 ' + account.getName() + ': ' + e.message); }
 
     try {
       var infoReport = AdsApp.report(
-        "SELECT campaign.id, campaign.name, campaign.status, campaign.start_date_time FROM campaign WHERE campaign.status != 'REMOVED'"
+        "SELECT campaign.id, campaign.name, campaign.status, campaign.start_date_time, campaign_budget.amount_micros FROM campaign WHERE campaign.status != 'REMOVED'"
       );
       var infoRows = infoReport.rows();
       while (infoRows.hasNext()) {
@@ -868,7 +926,7 @@ function collectDataCenterSheets() {
             creationDateCST = startDt.slice(0, 10);
           }
         }
-        campaignInfoRows.push([infoRow['campaign.id'], infoRow['campaign.name'], infoRow['campaign.status'], creationDateCST, account.getCustomerId()]);
+        campaignInfoRows.push([infoRow['campaign.id'], infoRow['campaign.name'], infoRow['campaign.status'], creationDateCST, account.getCustomerId(), metricOrBlank(infoRow['campaign_budget.amount_micros'])]);
       }
     } catch (e) { console.log('   CampaignInfo 采集错误 ' + account.getName() + ': ' + e.message); }
   }
@@ -891,7 +949,9 @@ function collectDataCenterSheets() {
   console.log('   CID_List: ' + cidRows.length + ' 账号');
 
   var infoSheet = spreadsheet.getSheetByName('CampaignInfo') || spreadsheet.insertSheet('CampaignInfo');
-  var infoHeaders = ['CampaignId', 'CampaignName', 'Status', 'CreationDateCST', 'CustomerId'];
+  // D-264：新增 Budget 列（micros，账户币种）。零花费/停投系列 DailyData 不落行，
+  // 预算回写全靠这张全量清单，缺了它这类系列的预算永远停在建单初值。
+  var infoHeaders = ['CampaignId', 'CampaignName', 'Status', 'CreationDateCST', 'CustomerId', 'Budget'];
   infoSheet.clearContents();
   infoSheet.getRange(1, 1, 1, infoHeaders.length).setValues([infoHeaders]);
   if (campaignInfoRows.length > 0) infoSheet.getRange(2, 1, campaignInfoRows.length, infoHeaders.length).setValues(campaignInfoRows);
