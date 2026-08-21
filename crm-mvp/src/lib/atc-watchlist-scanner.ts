@@ -341,12 +341,9 @@ export async function scanAllWatchlists(): Promise<WatchlistScanResult> {
 
   // D-215：key 改成全局共享池。以前按 user_id 取，某人额度打满他关注的广告主当天就全废，
   // 别人富余的额度也调不动；现在谁的 key 都能用，撞额度时 callSerpApi 内部自动换下一个。
+  // D-260：查询改直连 ATC 优先（免费），SerpApi 只做兜底——key 池为空不再整轮放弃。
+  // 教训：2026-08-21 晨 SerpApi 配额耗尽，旧逻辑 83 条 watchlist 全部失败，「今日广告」全 0。
   const serpApiKeys = await getPoolKeys();
-  if (serpApiKeys.length === 0) {
-    res.skippedNoKey += watchlists.length;
-    res.elapsedMs = Date.now() - startedAt;
-    return res;
-  }
 
   for (const [, userWatches] of byUser) {
     for (const w of userWatches) {

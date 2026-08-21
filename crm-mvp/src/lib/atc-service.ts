@@ -998,7 +998,7 @@ function mergeAdsIntoMap(
  */
 async function enrichDomainsFromSnapshots(
   arId: string,
-  serpApiKey: string,
+  serpApiKeys: string[],
   serpRegion: string | undefined,
   advertiserAdsMap: Map<string, { name: string; ads: AtcAd[] }>,
 ) {
@@ -1028,19 +1028,36 @@ async function enrichDomainsFromSnapshots(
   const NO_RESULTS_MSG = "hasn't returned any results";
 
   // 3. 对每个已知域名做 domain 搜索，匹配 creative_id 补全 domain
+  //    D-260：直连 ATC RPC 优先（域名过滤查询会回显 target_domain，免费），
+  //    直连失败再降级 SerpApi text 搜索（口径同旧版）。
   for (const domain of matchDomains.slice(0, 5)) {
-    const params: Record<string, string> = {
-      engine: "google_ads_transparency_center",
-      text: domain,
-      num: "100",
-    };
-    if (serpRegion) params.region = serpRegion;
+    let pageAds: SerpApiAd[] | null = null;
+    try {
+      pageAds = (await fetchDomainCreativesDirect({
+        domain,
+        regionNum: serpRegion,
+        count: 100,
+        searchOnly: false,
+      })) as SerpApiAd[];
+    } catch {
+      // 直连失败 → SerpApi 兜底；兜底也失败则跳过该域名，不影响主流程
+    }
 
     try {
-      const data = await callSerpApi(params, serpApiKey);
-      if (data.error && !data.error.includes(NO_RESULTS_MSG)) continue;
+      if (!pageAds) {
+        const params: Record<string, string> = {
+          engine: "google_ads_transparency_center",
+          text: domain,
+          num: "100",
+        };
+        if (serpRegion) params.region = serpRegion;
 
-      for (const ad of data.ad_creatives ?? []) {
+        const data = await callSerpApi(params, pickApiKey(serpApiKeys));
+        if (data.error && !data.error.includes(NO_RESULTS_MSG)) continue;
+        pageAds = data.ad_creatives ?? [];
+      }
+
+      for (const ad of pageAds) {
         if (ad.advertiser_id !== arId || !ad.ad_creative_id || !ad.target_domain) continue;
 
         const existing = creativeMap.get(ad.ad_creative_id);
@@ -1090,7 +1107,7 @@ export async function searchIntelligence(opts: {
   serpApiKeys: string[];
 }): Promise<AtcIntelligenceResult> {
   const { text, advertiser_id, region = "US", serpApiKeys } = opts;
-  const serpApiKey = pickApiKey(serpApiKeys);
+  // D-260：key 改为懒取——直连成功时全程可以不用 SerpApi，key 池为空也能跑
   const serpRegion = toSerpApiRegion(region);
   const NO_RESULTS_MSG = "hasn't returned any results";
 
@@ -1098,23 +1115,44 @@ export async function searchIntelligence(opts: {
 
   if (advertiser_id) {
     // ── 精确查询（AR ID）：不加日期限制，获取该广告主全量历史广告 ──
-    // 注：SerpApi advertiser_id 查询不返回 target_domain，通过后续域名反查补全
-    const params: Record<string, string> = {
-      engine: "google_ads_transparency_center",
-      advertiser_id,
-      num: "100",
-    };
-    if (serpRegion) params.region = serpRegion;
+    // D-260：直连 ATC RPC 优先（免费；anywhere 口径，比 SerpApi+region 只多不少），
+    // 失败降级 SerpApi。两条路径都不返回 target_domain，靠后续域名反查富化补全。
+    // 注意：直连返回空列表是合法结果（广告主被 Google 清退时连历史广告都查不到，
+    // 如 2026-08-21 实测刘荣 AR12750437245409820673 从 ATC 整体消失），不触发降级。
+    let directOk = false;
+    try {
+      const directAds = await fetchAdvertiserCreativesDirect({
+        advertiserId: advertiser_id,
+        maxAds: 500,
+      });
+      mergeAdsIntoMap(directAds as SerpApiAd[], advertiserAdsMap);
+      directOk = true;
+    } catch (directErr) {
+      console.warn(
+        `[ATC-direct] searchIntelligence 广告主直连失败，降级 SerpApi（${advertiser_id}）:`,
+        String(directErr).slice(0, 160)
+      );
+    }
 
-    const data = await callSerpApi(params, serpApiKey);
-    if (data.error && !data.error.includes(NO_RESULTS_MSG)) throw new Error(data.error);
-    mergeAdsIntoMap(data.ad_creatives ?? [], advertiserAdsMap);
+    if (!directOk) {
+      const params: Record<string, string> = {
+        engine: "google_ads_transparency_center",
+        advertiser_id,
+        num: "100",
+      };
+      if (serpRegion) params.region = serpRegion;
+
+      const data = await callSerpApi(params, pickApiKey(serpApiKeys));
+      if (data.error && !data.error.includes(NO_RESULTS_MSG)) throw new Error(data.error);
+      mergeAdsIntoMap(data.ad_creatives ?? [], advertiserAdsMap);
+    }
 
     // ── 域名反查富化：从本地快照找已知域名 → 补全 target_domain + 追加遗漏 creative ──
-    await enrichDomainsFromSnapshots(advertiser_id, serpApiKey, serpRegion, advertiserAdsMap);
+    await enrichDomainsFromSnapshots(advertiser_id, serpApiKeys, serpRegion, advertiserAdsMap);
 
   } else if (text) {
-    // ── 文字/域名搜索：不加日期，对齐 ATC 网站默认行为 ──
+    // ── 文字/域名搜索：不加日期，对齐 ATC 网站默认行为（暂保留 SerpApi，低频 UI 场景）──
+    const serpApiKey = pickApiKey(serpApiKeys);
     const params: Record<string, string> = {
       engine: "google_ads_transparency_center",
       text,

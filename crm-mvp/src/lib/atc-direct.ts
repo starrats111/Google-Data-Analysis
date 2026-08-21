@@ -25,6 +25,13 @@
  *   Google 会按 TLS 指纹（JA3）拉黑 Node 默认 TLS 栈——同一台服务器上
  *   undici fetch / node:https 被 302 到 sorry 页或直接 429，而 curl、python 畅通。
  *   故 fetch 被拦时自动改用 child_process 调 curl 兜底，成功后本进程内记住偏好。
+ *
+ * 代理兜底（2026-08-21，D-260）：
+ *   服务器 IP 连发请求会触发 Google 间歇性限频（302 sorry，单发能过、批量必挂，
+ *   08-20 晚被封 14+ 小时）。curl 直连被 302/429 拦时，自动从 CRM 代理池
+ *   （kyads_proxies，换链接同款轮换住宅代理）取 US SOCKS5 出口重试——
+ *   每次请求生成新会话=新出口 IP，限频极难触发。成功后 30 分钟内直接走代理，
+ *   之后回探直连（省代理流量；单页响应 ~150KB，扫描一天总消耗几十 MB，可忽略）。
  */
 
 import { execFile } from "node:child_process";
@@ -72,40 +79,90 @@ async function refreshAtcCookies(): Promise<void> {
 /** 本进程内是否已确认 fetch 被指纹拦截、应直接走 curl */
 let preferCurl = false;
 
+/** D-260：直连最近被限频时的代理偏好截止时间（其间请求直接走代理，之后回探直连） */
+let proxyPreferredUntil = 0;
+const PROXY_PREFER_WINDOW_MS = 30 * 60 * 1000;
+
+/**
+ * 从 CRM 代理池取一个 US 出口 SOCKS5 代理 URL（curl 用 socks5h，域名在代理端解析）。
+ * 动态 import 避免把 prisma 依赖带进纯协议层；无可用代理返回 null。
+ */
+async function getAtcProxyUrl(): Promise<string | null> {
+  try {
+    const { getProviderProxyUrl } = await import("./suffix-engine/proxy-provider");
+    const url = await getProviderProxyUrl("US");
+    return url ? url.replace(/^socks5:\/\//, "socks5h://") : null;
+  } catch {
+    return null;
+  }
+}
+
 /** curl 传输：TLS 指纹与 Node 不同，实测在 Node 被拦时仍畅通（服务器与 Win10+ 均自带 curl） */
-async function curlPostSearchCreatives(reqJson: string): Promise<{ "1"?: RawCreative[]; "2"?: string }> {
-  const { stdout } = await execFileAsync(
-    "curl",
-    [
-      "-s", "-S", "--max-time", "20",
-      "-A", ATC_HEADERS["user-agent"],
-      "-H", `accept-language: ${ATC_HEADERS["accept-language"]}`,
-      "-H", "content-type: application/x-www-form-urlencoded;charset=UTF-8",
-      "--data-urlencode", `f.req=${reqJson}`,
-      "-w", "\n%{http_code}",
-      `${ATC_BASE_URL}/anji/_/rpc/SearchService/SearchCreatives?authuser=`,
-    ],
-    { maxBuffer: 32 * 1024 * 1024 }
-  );
+async function curlPostSearchCreatives(
+  reqJson: string,
+  proxyUrl?: string
+): Promise<{ "1"?: RawCreative[]; "2"?: string }> {
+  const args = [
+    "-s", "-S", "--max-time", proxyUrl ? "40" : "20",
+    ...(proxyUrl ? ["-x", proxyUrl] : []),
+    "-A", ATC_HEADERS["user-agent"],
+    "-H", `accept-language: ${ATC_HEADERS["accept-language"]}`,
+    "-H", "content-type: application/x-www-form-urlencoded;charset=UTF-8",
+    "--data-urlencode", `f.req=${reqJson}`,
+    "-w", "\n%{http_code}",
+    `${ATC_BASE_URL}/anji/_/rpc/SearchService/SearchCreatives?authuser=`,
+  ];
+  const { stdout } = await execFileAsync("curl", args, { maxBuffer: 32 * 1024 * 1024 });
   const idx = stdout.lastIndexOf("\n");
   const status = Number(stdout.slice(idx + 1).trim());
   const body = stdout.slice(0, idx);
   if (status !== 200) {
-    throw new Error(`ATC curl HTTP ${status}: ${body.slice(0, 200)}`);
+    throw new Error(`ATC curl${proxyUrl ? "(proxy)" : ""} HTTP ${status}: ${body.slice(0, 200)}`);
   }
   return JSON.parse(body) as { "1"?: RawCreative[]; "2"?: string };
 }
 
 /**
+ * D-260：curl 直连被限频（302 sorry / 429）时走代理池重试。
+ * 非限频类错误（网络/解析等）原样抛出；无可用代理也原样抛出，由调用方降级 SerpApi。
+ */
+async function proxyRescue(
+  reqJson: string,
+  cause: unknown
+): Promise<{ "1"?: RawCreative[]; "2"?: string }> {
+  const msg = cause instanceof Error ? cause.message : String(cause);
+  if (!/HTTP (302|429)/.test(msg)) throw cause;
+  const proxyUrl = await getAtcProxyUrl();
+  if (!proxyUrl) throw cause;
+  const result = await curlPostSearchCreatives(reqJson, proxyUrl);
+  proxyPreferredUntil = Date.now() + PROXY_PREFER_WINDOW_MS;
+  console.warn("[ATC-direct] 直连被限频，已切换代理出口（30 分钟后回探直连）");
+  return result;
+}
+
+/**
  * SearchCreatives RPC 底层调用。
+ * 0. 代理偏好期内（直连刚被限频）直接走代理，代理失败再回落正常链路；
  * 1. fetch（带 Cookie 如有）；429 时引导 Cookie 重试一次；
  * 2. 仍被拦（429/302 sorry 页，即 Node TLS 指纹被拉黑）→ curl 兜底；
- *    curl 成功则本进程内后续请求直接走 curl，省去每次先撞一次 fetch。
+ *    curl 成功则本进程内后续请求直接走 curl，省去每次先撞一次 fetch；
+ * 3. curl 直连也被限频 → 代理池 US 出口重试（proxyRescue）。
  */
 async function postSearchCreatives(
   req: Record<string, unknown>
 ): Promise<{ "1"?: RawCreative[]; "2"?: string }> {
   const reqJson = JSON.stringify(req);
+
+  if (Date.now() < proxyPreferredUntil) {
+    const proxyUrl = await getAtcProxyUrl();
+    if (proxyUrl) {
+      try {
+        return await curlPostSearchCreatives(reqJson, proxyUrl);
+      } catch {
+        proxyPreferredUntil = 0; // 代理失效 → 回到正常链路（直连可能已解封）
+      }
+    }
+  }
 
   if (!preferCurl) {
     try {
@@ -129,15 +186,25 @@ async function postSearchCreatives(
         throw new Error(`ATC direct HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
       }
     } catch (fetchErr) {
-      // fetch 失败（含指纹拦截/网络异常）→ 尝试 curl；curl 也失败则抛 curl 的错误
-      const result = await curlPostSearchCreatives(reqJson);
-      preferCurl = true;
-      console.warn("[ATC-direct] fetch 被拦，已切换 curl 传输:", String(fetchErr).slice(0, 120));
-      return result;
+      // fetch 失败（含指纹拦截/网络异常）→ 尝试 curl 直连 → 限频再走代理
+      try {
+        const result = await curlPostSearchCreatives(reqJson);
+        preferCurl = true;
+        console.warn("[ATC-direct] fetch 被拦，已切换 curl 传输:", String(fetchErr).slice(0, 120));
+        return result;
+      } catch (curlErr) {
+        const result = await proxyRescue(reqJson, curlErr);
+        preferCurl = true;
+        return result;
+      }
     }
   }
 
-  return curlPostSearchCreatives(reqJson);
+  try {
+    return await curlPostSearchCreatives(reqJson);
+  } catch (curlErr) {
+    return await proxyRescue(reqJson, curlErr);
+  }
 }
 
 /** 与 atc-service.ts 的 SerpApiAd 字段名对齐，方便下游零改动复用 */

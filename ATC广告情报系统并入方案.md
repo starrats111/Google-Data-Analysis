@@ -37,6 +37,22 @@
 - 精确唯一路径 = 翻页到底：直连 maxAds 100→2000（页间 300ms 小憩防限频，正常翻到无下一页 token 即停，数值即精确总数）；SerpApi 降级路径同步实现 next_page_token 翻页（上限 10 页 = 每广告主最多 10 次配额，首页失败报错、后续页失败保留已取部分）。
 - 前端「≥100」改为仅撞 2000 兜底上限时显示「≥2000」；存量 ad_count=100 的截断行部署后全量强刷。
 
+### 【D-260】watchlist 扫描去 SerpApi 化 + 代理兜底传输（2026-08-21）
+
+**背景**：08-21 晨 07 报「今日广告数量不对」（全 0）。排查：08:00 的 atc-watchlist-scan cron 扫 83 条 watchlist **全部失败**——该链路当时仍 SerpApi-only，而配额已被 08-20 的 D-259 精准计数重刷烧光（83/83 返回 429 run out of searches）。同时服务器 IP 直连被 Google 间歇性限频（302 sorry，单发能过、连发必挂，08-20 晚封了 14+ 小时）。
+
+**排查中的重要事实（勿再误判）**：
+- 「HTTP 200 + 空响应 {}」是**合法的 0 结果**，不是软封禁——本机+服务器+ATC 官网三方核验：nike.com 正常返回数据（协议未变），而刘荣 AR12750437245409820673、caledoniantravel.com 是**真的从 ATC 整体消失**（连官网「任意时间」都查 0 条，疑似 Google 清退了一批联盟套利广告主）。抽查 11 个 watchlist 广告主 10 个仍有数据。
+- 广告主从 ATC 消失时直连返回空列表，属正常业务结果，不触发 SerpApi 降级。
+
+**改动**：
+1. **传输层第三级兜底（atc-direct.ts）**：fetch → curl 直连 → **curl 走代理池**。curl 直连被 302/429 拦时，从 CRM 代理池（kyads_proxies，换链接同款）取 US SOCKS5 出口（socks5h，kookeey/tnbproxy 均实测可绕过封禁）重试；成功后 30 分钟内直接走代理，之后回探直连。轮换住宅代理每请求换出口 IP，限频极难触发；流量消耗每天几十 MB 级，相对 kookeey 20GB 余量可忽略。
+2. **searchIntelligence 广告主查询直连优先（atc-service.ts）**：AR ID 精确查询改 fetchAdvertiserCreativesDirect（maxAds 500，anywhere 口径），失败才降级 SerpApi（region 口径不变）；SerpApi key 改懒取，key 池为空/配额烧光时直连照跑。
+3. **域名反查富化直连优先（enrichDomainsFromSnapshots）**：每域名先走 fetchDomainCreativesDirect（域名过滤查询回显 target_domain，免费），失败降级 SerpApi text 搜索。
+4. **扫描器不再因 key 池空整轮放弃（atc-watchlist-scanner.ts）**：删掉 getPoolKeys 空即 return 的旧逻辑。
+
+**效果**：watchlist 每日扫描（83 条 × 多页）从纯 SerpApi（日耗 200+ 配额）变为免费直连+代理，SerpApi 仅剩兜底与 text 搜索（低频 UI）两个用途。
+
 ### 【v2.2 / D-257】OCR 去 AI 化——Tesseract 免费识别（2026-08-20）
 
 **背景**：07 指出 AI 视觉 OCR 按图烧钱（存量已烧 1.1 万+ 次：按次 claude-haiku 3421 次、gemini-flash-lite 7399 次等），要求找免费/低成本方案，**最好完全不用 AI OCR**。
