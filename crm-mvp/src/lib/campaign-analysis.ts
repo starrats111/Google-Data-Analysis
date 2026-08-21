@@ -677,6 +677,40 @@ export function getAnalysisRange(days = 7): AnalysisDateRange {
   };
 }
 
+/**
+ * D-266 批一：campaigns 表的预算/出价存账户币种；给 AI 的表格与前端明细一律 USD，
+ * 这里按 MCC 币种把 campaign 兜底值折美元后再返回。
+ * 返回 userId 下这批系列的「账户币种 → USD」乘数（USD 恒 1；汇率不可用时 1 兜底并原样返回）。
+ */
+export async function getCampaignUsdRates(
+  campaignRows: Array<{ id: bigint; mcc_id: bigint | null }>,
+): Promise<Map<string, number>> {
+  const { getExchangeRate } = await import("@/lib/exchange-rate");
+  const { todayCST } = await import("@/lib/date-utils");
+  const mccIds = [...new Set(campaignRows.map((c) => c.mcc_id).filter((v): v is bigint => v != null))];
+  const rateByCampaign = new Map<string, number>();
+  if (mccIds.length === 0) {
+    for (const c of campaignRows) rateByCampaign.set(String(c.id), 1);
+    return rateByCampaign;
+  }
+  const mccs = await prisma.google_mcc_accounts.findMany({
+    where: { id: { in: mccIds } },
+    select: { id: true, currency: true },
+  });
+  const today = todayCST();
+  const rateByMcc = new Map<string, number>();
+  for (const m of mccs) {
+    const cur = (m.currency || "USD").toUpperCase();
+    if (cur === "USD") { rateByMcc.set(String(m.id), 1); continue; }
+    const r = await getExchangeRate(cur, today);
+    rateByMcc.set(String(m.id), r > 0 ? r : 1);
+  }
+  for (const c of campaignRows) {
+    rateByCampaign.set(String(c.id), c.mcc_id != null ? (rateByMcc.get(String(c.mcc_id)) ?? 1) : 1);
+  }
+  return rateByCampaign;
+}
+
 /** 从 ads_daily_stats + campaigns 读取分析输入（金额均 USD） */
 export async function fetchCampaignDailyStats(
   userId: bigint,
@@ -687,7 +721,7 @@ export async function fetchCampaignDailyStats(
   const [campaigns, stats] = await Promise.all([
     prisma.campaigns.findMany({
       where: { id: { in: campaignIds }, user_id: userId, is_deleted: 0 },
-      select: { id: true, campaign_name: true, daily_budget: true, max_cpc_limit: true },
+      select: { id: true, campaign_name: true, daily_budget: true, max_cpc_limit: true, mcc_id: true },
     }),
     prisma.ads_daily_stats.findMany({
       where: {
@@ -700,11 +734,15 @@ export async function fetchCampaignDailyStats(
     }),
   ]);
 
+  // D-266 批一：campaigns 兜底值是账户币种，折美元后再进 AI 表格（stats 侧金额本就是 USD）
+  const usdRate = await getCampaignUsdRates(campaigns);
+
   const campaignMap = new Map(campaigns.map((c) => [String(c.id), c]));
   const result: CampaignDailyStat[] = [];
   for (const s of stats) {
     const c = campaignMap.get(String(s.campaign_id));
     if (!c) continue;
+    const rate = usdRate.get(String(c.id)) ?? 1;
     const spend = Number(s.cost || 0);
     const clicks = Number(s.clicks || 0);
     result.push({
@@ -714,9 +752,9 @@ export async function fetchCampaignDailyStats(
       impressions: Number(s.impressions || 0),
       clicks,
       spend,
-      dailyBudget: Number(s.budget || 0) || Number(c.daily_budget || 0),
+      dailyBudget: Number(s.budget || 0) || Number(c.daily_budget || 0) * rate,
       avgCpc: clicks > 0 ? spend / clicks : Number(s.cpc || 0),
-      maxCpc: Number(s.max_cpc || 0) || Number(c.max_cpc_limit || 0),
+      maxCpc: Number(s.max_cpc || 0) || Number(c.max_cpc_limit || 0) * rate,
       isBudget: Number(s.is_budget || 0),
       isRank: Number(s.is_rank || 0),
       orders: Number(s.orders || 0),

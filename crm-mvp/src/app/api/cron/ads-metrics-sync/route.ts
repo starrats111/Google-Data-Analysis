@@ -177,9 +177,13 @@ export async function GET(req: NextRequest) {
     where: { is_deleted: 0 },
     select: {
       id: true, user_id: true, mcc_id: true, mcc_name: true,
-      developer_token: true, service_account_json: true, sheet_url: true,
+      developer_token: true, service_account_json: true, sheet_url: true, currency: true,
     },
   });
+
+  const { getExchangeRate } = await import("@/lib/exchange-rate");
+  const { todayCST } = await import("@/lib/date-utils");
+  const todayForRate = todayCST();
 
   for (const mcc of mccs) {
     // D-264：新版脚本的 Sheet 已自带 IS/QS 列，读操作走 Sheet，此处不再烧 API 配额
@@ -187,6 +191,11 @@ export async function GET(req: NextRequest) {
       stats.sheetCoveredMccs++;
       continue;
     }
+
+    // D-266 批一：API 返回的出价 micros 是账户币种，ads_daily_stats 金额口径是 USD，
+    // 写库前折美元；汇率不可用时跳过 max_cpc（IS/QS 是比率不受影响），不写错币种数值。
+    const mccCurrency = (mcc.currency || "USD").toUpperCase();
+    const usdRate = mccCurrency === "USD" ? 1 : await getExchangeRate(mccCurrency, todayForRate);
 
     const credentials: MccCredentials = {
       mcc_id: mcc.mcc_id,
@@ -266,7 +275,10 @@ export async function GET(req: NextRequest) {
           if (is) { data.is_budget = is.isBudget; data.is_rank = is.isRank; }
           if (qs != null) data.quality_score = qs;
           // MaxCpc 是当前快照：昨日行必写，历史空值行回填（不覆盖历史已写快照）
-          if (bid != null && (dateStr === yesterdayStr || row.max_cpc == null)) data.max_cpc = bid;
+          // D-266 批一：账户币种 → USD 折算后入库；汇率不可用（usdRate<=0）时不写
+          if (bid != null && usdRate > 0 && (dateStr === yesterdayStr || row.max_cpc == null)) {
+            data.max_cpc = Number((bid * usdRate).toFixed(4));
+          }
           if (Object.keys(data).length === 0) continue;
 
           await prisma.ads_daily_stats.update({ where: { id: row.id }, data });

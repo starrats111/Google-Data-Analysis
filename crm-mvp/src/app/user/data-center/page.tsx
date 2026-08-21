@@ -79,7 +79,10 @@ interface MccAccount { id: string; mcc_id: string; mcc_name: string; currency: s
 
 interface CampaignRow {
   id: string; google_campaign_id: string; customer_id: string; campaign_name: string;
-  status: string; daily_budget: number; max_cpc: number | null;
+  status: string;
+  /** D-266 批一：已折美元；账户币种原值在 *_account（非美元 MCC 标注用） */
+  daily_budget: number; max_cpc: number | null;
+  daily_budget_account?: number; max_cpc_account?: number | null;
   cost: number; clicks: number; impressions: number; cpc: number;
   commission: number; rejected_commission: number; approved_commission: number; orders: number; roi: number;
   target_country: string; last_synced: string | null;
@@ -754,7 +757,10 @@ export default function DataCenterPage() {
       title: "预算", dataIndex: "daily_budget", width: 70, align: "right",
       render: (v: number, r: IndexedRow) => (
         // D-248：被中止 CID 旗下禁改预算，编辑图标灰化
-        <Tooltip title={r.cid_suspended ? "所属 CID 已被 Google 中止，无法操作" : undefined}>
+        // D-266 批一：值已折美元；非美元 MCC 悬浮显示账户币种原值
+        <Tooltip title={r.cid_suspended
+          ? "所属 CID 已被 Google 中止，无法操作"
+          : (r.mcc_currency && r.mcc_currency !== "USD" ? `账户币种 ${r.daily_budget_account?.toFixed(2)} ${r.mcc_currency}，已按当日汇率折美元` : undefined)}>
           <Button type="link" size="small" disabled={!!r.cid_suspended} style={{ padding: 0, fontSize: 12 }}
             onClick={() => setEditModal({ open: true, campaign: r, field: "budget" })}>
             ${v?.toFixed(2)} <EditOutlined style={{ fontSize: 10 }} />
@@ -767,7 +773,10 @@ export default function DataCenterPage() {
       title: "最高出价", dataIndex: "max_cpc", width: 90, align: "right",
       render: (v: number | null, r: IndexedRow) => (
         // D-248：被中止 CID 旗下禁改出价，编辑图标灰化
-        <Tooltip title={r.cid_suspended ? "所属 CID 已被 Google 中止，无法操作" : undefined}>
+        // D-266 批一：值已折美元；非美元 MCC 悬浮显示账户币种原值
+        <Tooltip title={r.cid_suspended
+          ? "所属 CID 已被 Google 中止，无法操作"
+          : (r.mcc_currency && r.mcc_currency !== "USD" && r.max_cpc_account != null ? `账户币种 ${r.max_cpc_account.toFixed(4)} ${r.mcc_currency}，已按当日汇率折美元` : undefined)}>
           <Button type="link" size="small" disabled={!!r.cid_suspended} style={{ padding: 0, fontSize: 12 }}
             onClick={() => setEditModal({ open: true, campaign: r, field: "max_cpc" })}>
             ${(v ?? 0).toFixed(4)} <EditOutlined style={{ fontSize: 10 }} />

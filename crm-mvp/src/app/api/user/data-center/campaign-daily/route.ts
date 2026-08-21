@@ -42,9 +42,13 @@ export async function GET(req: NextRequest) {
 
   const campaign = await prisma.campaigns.findFirst({
     where: { id: campaignId, user_id: ownerId, is_deleted: 0 },
-    select: { id: true, campaign_name: true, daily_budget: true, max_cpc_limit: true, google_status: true },
+    select: { id: true, campaign_name: true, daily_budget: true, max_cpc_limit: true, google_status: true, mcc_id: true },
   });
   if (!campaign) return apiError("广告系列不存在", 404);
+
+  // D-266 批一：campaigns 存账户币种，弹窗展示折美元
+  const { getCampaignUsdRates } = await import("@/lib/campaign-analysis");
+  const usdRate = (await getCampaignUsdRates([campaign])).get(String(campaign.id)) ?? 1;
 
   const range = getAnalysisRange(7);
   const [dailyStats, recommendations] = await Promise.all([
@@ -71,8 +75,8 @@ export async function GET(req: NextRequest) {
     campaign: {
       id: String(campaign.id),
       name: campaign.campaign_name,
-      dailyBudget: Number(campaign.daily_budget || 0),
-      maxCpc: campaign.max_cpc_limit ? Number(campaign.max_cpc_limit) : null,
+      dailyBudget: Number((Number(campaign.daily_budget || 0) * usdRate).toFixed(2)),
+      maxCpc: campaign.max_cpc_limit ? Number((Number(campaign.max_cpc_limit) * usdRate).toFixed(4)) : null,
       status: campaign.google_status,
     },
     range: { start: range.startStr, end: range.endStr },

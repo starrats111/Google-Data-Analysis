@@ -84,6 +84,16 @@ export async function POST(req: NextRequest) {
   };
   const { updateCampaignBudget, updateCampaignMaxCpc, updateCampaignStatus } = await import("@/lib/google-ads");
 
+  // D-266 批一：AI 建议的目标值/钳制区间是美元语义，库存值与下发值是账户币种。
+  // 换算流程：现值(账户币种) → 美元 → 解析目标+钳制（美元空间）→ 换回账户币种下发/入库。
+  // 汇率不可用时整批拒绝，严禁美元数字直发（D-265① 病根）。
+  const { usdToAccountCurrency } = await import("@/lib/exchange-rate");
+  const { todayCST } = await import("@/lib/date-utils");
+  const currency = (mcc.currency || "USD").toUpperCase();
+  const convProbe = await usdToAccountCurrency(currency, 1, todayCST());
+  if (!convProbe) return apiError(`${currency} 汇率不可用，为避免金额语义错误已中止执行，请稍后重试`, 503);
+  const rate = convProbe.rate; // 账户币种 → USD 乘数（USD 账户恒为 1）
+
   const results: Array<{ type: string; success: boolean; message: string; appliedValue?: number }> = [];
 
   for (const action of actions) {
@@ -115,33 +125,35 @@ export async function POST(req: NextRequest) {
         continue;
       }
       if (action.type === "increase_budget" || action.type === "decrease_budget") {
-        const current = Number(campaign.daily_budget || 0);
-        const target = resolveTarget(action, current);
+        const currentUsd = Number(campaign.daily_budget || 0) * rate;
+        const target = resolveTarget(action, currentUsd);
         if (target == null) {
           results.push({ type: action.type, success: false, message: "建议缺少目标值/百分比，无法执行" });
           continue;
         }
-        const applied = Number(clamp(target, BUDGET_MIN, BUDGET_MAX).toFixed(2));
-        const r = await updateCampaignBudget(credentials, campaign.customer_id || "", campaign.google_campaign_id, applied);
+        const appliedUsd = Number(clamp(target, BUDGET_MIN, BUDGET_MAX).toFixed(2));
+        const appliedAccount = Number((appliedUsd / rate).toFixed(2));
+        const r = await updateCampaignBudget(credentials, campaign.customer_id || "", campaign.google_campaign_id, appliedAccount);
         if (r.success) {
-          await prisma.campaigns.update({ where: { id: campaign.id }, data: { daily_budget: applied } });
+          await prisma.campaigns.update({ where: { id: campaign.id }, data: { daily_budget: appliedAccount } });
         }
-        results.push({ type: action.type, ...r, appliedValue: applied });
+        results.push({ type: action.type, success: r.success, message: r.success ? `预算已更新为 $${appliedUsd}${currency === "USD" ? "" : `（${appliedAccount} ${currency}）`}` : r.message, appliedValue: appliedUsd });
         continue;
       }
       // increase_cpc / decrease_cpc
-      const current = Number(campaign.max_cpc_limit || 0);
-      const target = resolveTarget(action, current);
+      const currentUsd = Number(campaign.max_cpc_limit || 0) * rate;
+      const target = resolveTarget(action, currentUsd);
       if (target == null) {
         results.push({ type: action.type, success: false, message: "建议缺少目标值/百分比，无法执行" });
         continue;
       }
-      const applied = Number(clamp(target, CPC_MIN, CPC_MAX).toFixed(2));
-      const r = await updateCampaignMaxCpc(credentials, campaign.customer_id || "", campaign.google_campaign_id, applied);
+      const appliedUsd = Number(clamp(target, CPC_MIN, CPC_MAX).toFixed(2));
+      const appliedAccount = Number((appliedUsd / rate).toFixed(4));
+      const r = await updateCampaignMaxCpc(credentials, campaign.customer_id || "", campaign.google_campaign_id, appliedAccount);
       if (r.success) {
-        await prisma.campaigns.update({ where: { id: campaign.id }, data: { max_cpc_limit: applied } });
+        await prisma.campaigns.update({ where: { id: campaign.id }, data: { max_cpc_limit: appliedAccount } });
       }
-      results.push({ type: action.type, ...r, appliedValue: applied });
+      results.push({ type: action.type, success: r.success, message: r.success ? `CPC 已更新为 $${appliedUsd}${currency === "USD" ? "" : `（${appliedAccount} ${currency}）`}` : r.message, appliedValue: appliedUsd });
     } catch (err) {
       results.push({
         type: action.type,

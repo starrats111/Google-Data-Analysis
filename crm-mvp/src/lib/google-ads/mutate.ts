@@ -4,13 +4,15 @@
 import { MccCredentials, queryGoogleAds, mutateGoogleAds, dollarsToMicros } from "./client";
 
 /**
- * 修改广告系列预算
+ * 修改广告系列预算。
+ * ⚠️ D-266 批一口径：newBudgetAccount 是**账户币种**金额（micros = 数值×1e6，单位由账户币种决定）。
+ * 美元意图值必须先经 usdToAccountCurrency 换算，本函数不做任何汇率处理。
  */
 export async function updateCampaignBudget(
   credentials: MccCredentials,
   customerId: string,
   campaignId: string,
-  newBudgetDollars: number,
+  newBudgetAccount: number,
 ): Promise<{ success: boolean; message: string }> {
   try {
     const results = await queryGoogleAds(credentials, customerId, `
@@ -33,26 +35,27 @@ export async function updateCampaignBudget(
       campaign_budget_operation: {
         update: {
           resource_name: budgetResourceName,
-          amount_micros: String(dollarsToMicros(newBudgetDollars)),
+          amount_micros: String(dollarsToMicros(newBudgetAccount)),
         },
         update_mask: "amount_micros",
       },
     }]);
 
-    return { success: true, message: `预算已更新为 $${newBudgetDollars}` };
+    return { success: true, message: `预算已更新为 ${newBudgetAccount}（账户币种）` };
   } catch (err) {
     return { success: false, message: `预算修改失败: ${err instanceof Error ? err.message : String(err)}` };
   }
 }
 
 /**
- * 修改广告系列最高 CPC（通过更新广告组出价）
+ * 修改广告系列最高 CPC（通过更新广告组出价）。
+ * ⚠️ D-266 批一口径：newCpcAccount 是**账户币种**金额，同 updateCampaignBudget。
  */
 export async function updateCampaignMaxCpc(
   credentials: MccCredentials,
   customerId: string,
   campaignId: string,
-  newCpcDollars: number,
+  newCpcAccount: number,
 ): Promise<{ success: boolean; message: string }> {
   try {
     const cid = customerId.replace(/-/g, "");
@@ -72,7 +75,7 @@ export async function updateCampaignMaxCpc(
         ad_group_operation: {
           update: {
             resource_name: rn,
-            cpc_bid_micros: String(dollarsToMicros(newCpcDollars)),
+            cpc_bid_micros: String(dollarsToMicros(newCpcAccount)),
           },
           update_mask: "cpc_bid_micros",
         },
@@ -83,7 +86,7 @@ export async function updateCampaignMaxCpc(
       await mutateGoogleAds(credentials, customerId, ops);
     }
 
-    return { success: true, message: `CPC 已更新为 $${newCpcDollars}` };
+    return { success: true, message: `CPC 已更新为 ${newCpcAccount}（账户币种）` };
   } catch (err) {
     return { success: false, message: `CPC 修改失败: ${err instanceof Error ? err.message : String(err)}` };
   }

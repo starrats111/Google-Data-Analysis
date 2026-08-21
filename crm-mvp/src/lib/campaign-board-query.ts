@@ -54,8 +54,12 @@ export interface CampaignBoardRow {
   customer_id: string | null;
   campaign_name: string | null;
   status: string | null;
+  /** D-266 批一：已按当日汇率折美元（库存账户币种，见 daily_budget_account） */
   daily_budget: number;
   max_cpc: number | null;
+  /** 账户币种原值（mcc_currency 标注币种），非美元 MCC 前端悬浮标注用 */
+  daily_budget_account: number;
+  max_cpc_account: number | null;
   cost: number;
   clicks: number;
   impressions: number;
@@ -728,6 +732,24 @@ export async function queryCampaignBoard(
     return (s?.cost || 0) > 0 || commissionByRow.has(String(c.id));
   });
 
+  // D-266 批一：daily_budget / max_cpc_limit 库存账户币种，展示统一折美元。
+  // 每个非美元币种取一次当日汇率；取不到时折算失败，退回原值并由 currency 字段标注。
+  const { getExchangeRate } = await import("@/lib/exchange-rate");
+  const { todayCST } = await import("@/lib/date-utils");
+  const rateDateStr = todayCST();
+  const rateByCurrency = new Map<string, number>();
+  for (const info of mccInfoMap.values()) {
+    const cur = (info.currency || "USD").toUpperCase();
+    if (cur === "USD" || rateByCurrency.has(cur)) continue;
+    rateByCurrency.set(cur, await getExchangeRate(cur, rateDateStr));
+  }
+  const toUsd = (v: number, cur: string): number => {
+    const c = cur.toUpperCase();
+    if (c === "USD") return v;
+    const r = rateByCurrency.get(c) || 0;
+    return r > 0 ? v * r : v; // 汇率不可用退回原值（display-only，currency 字段仍标注真实币种）
+  };
+
   const rows: CampaignBoardRow[] = filteredForDisplay.map((c) => {
     // 花费/点击/展示逐条真实（D-197）：以前读 merge.displayStats，同商家多条会把花费全堆到
     // 代表行、其余行显示 0。07 实证 wavespasus 的 US 行显示 $15.00、GB 行显示 $0，而真值
@@ -751,14 +773,18 @@ export async function queryCampaignBoard(
       : 0;
 
     const mccInfo = mccInfoMap.get(String(c.mcc_id));
+    const rowCurrency = mccInfo?.currency || "USD";
     return {
       id: c.id,
       google_campaign_id: c.google_campaign_id,
       customer_id: c.customer_id,
       campaign_name: c.campaign_name,
       status: c.google_status,
-      daily_budget: Number(c.daily_budget),
-      max_cpc: c.max_cpc_limit ? Number(c.max_cpc_limit) : null,
+      // D-266 批一：折美元展示；原账户币种值放 *_account 供前端标注
+      daily_budget: Number(toUsd(Number(c.daily_budget), rowCurrency).toFixed(2)),
+      max_cpc: c.max_cpc_limit ? Number(toUsd(Number(c.max_cpc_limit), rowCurrency).toFixed(4)) : null,
+      daily_budget_account: Number(c.daily_budget),
+      max_cpc_account: c.max_cpc_limit ? Number(c.max_cpc_limit) : null,
       cost: Number(cost.toFixed(2)),
       clicks,
       impressions,

@@ -167,6 +167,20 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
   }
   if (!mccAccount) return apiError("未找到 MCC 账户，请先在设置中配置");
 
+  // D-266 批一：表单里的预算/出价是美元意图值（标签「日预算($)」），Google micros 是账户币种单位。
+  // 此前直接把美元数字当 micros 下发，人民币 MCC 上「$2」实际生效 ¥2（语义错约 7 倍）。
+  // 这里按当日汇率换算成账户币种；汇率不可用直接拒绝提交，不允许错币种上广告。
+  const { usdToAccountCurrency } = await import("@/lib/exchange-rate");
+  const { todayCST: todayCSTForRate } = await import("@/lib/date-utils");
+  const mccCurrency = (mccAccount.currency || "USD").toUpperCase();
+  const budgetConv = await usdToAccountCurrency(mccCurrency, Number(daily_budget), todayCSTForRate());
+  const cpcConv = await usdToAccountCurrency(mccCurrency, Number(max_cpc_limit), todayCSTForRate());
+  if (!budgetConv || !cpcConv) {
+    return apiError(`${mccCurrency} 汇率不可用，为避免预算/出价语义错误已中止提交，请稍后重试`, 503);
+  }
+  const budgetAccount = Number(budgetConv.value.toFixed(2));
+  const cpcAccount = Number(cpcConv.value.toFixed(4));
+
   const adGroup = await prisma.ad_groups.findFirst({
     where: { campaign_id: campaign.id, is_deleted: 0 },
   });
@@ -1187,7 +1201,7 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
         create: {
           resource_name: budgetTempRn,
           name: `Budget-${campaignNameToUse}-${Date.now()}`,
-          amount_micros: String(dollarsToMicros(daily_budget)),
+          amount_micros: String(dollarsToMicros(budgetAccount)),
           delivery_method: "STANDARD",
           explicitly_shared: false,
         },
@@ -1203,7 +1217,7 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
       ? { manual_cpc: { enhanced_cpc_enabled: true } }
       : bidding_strategy === "TARGET_CPA"
         ? { maximize_conversions: {} }
-        : { target_spend: { cpc_bid_ceiling_micros: String(dollarsToMicros(max_cpc_limit)) } };
+        : { target_spend: { cpc_bid_ceiling_micros: String(dollarsToMicros(cpcAccount)) } };
 
     const euPoliticalValue = eu_political_ad === 1
       ? "CONTAINS_EU_POLITICAL_ADVERTISING"
@@ -1293,7 +1307,7 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
           name: adGroup.ad_group_name || campaignNameToUse || `AdGroup-${Date.now()}`,
           campaign: campaignTempRn,
           type: "SEARCH_STANDARD",
-          cpc_bid_micros: String(dollarsToMicros(max_cpc_limit)),
+          cpc_bid_micros: String(dollarsToMicros(cpcAccount)),
           status: "ENABLED",
         },
       },
@@ -2222,9 +2236,10 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
           // 该广告归属的联盟账号 = 本次选链接/命名(CGx)所用的商家主连接。写死在广告行，
           // 后续换链/刷点击/订单归属都以此为准，不再随商家主连接漂移（wj02 CG1/CG2 串号根治点）。
           platform_connection_id: submitMerchant.platform_connection_id ?? null,
-          daily_budget: daily_budget,
+          // D-266 批一口径：库存账户币种值（与 Google 侧一致），展示层折美元
+          daily_budget: budgetAccount,
           bidding_strategy: bidding_strategy,
-          max_cpc_limit: max_cpc_limit,
+          max_cpc_limit: cpcAccount,
           language_id: ad_language || null,
           network_search: network_search ? 1 : 0,
           network_partners: network_partners ? 1 : 0,

@@ -9,8 +9,13 @@ const { Text } = Typography;
 interface CampaignInfo {
   id: string;
   campaign_name: string;
+  /** D-266 批一：这两个值后端已折美元 */
   daily_budget: number;
   max_cpc: number | null;
+  /** 非美元 MCC 标注：账户币种 + 原值 */
+  mcc_currency?: string;
+  daily_budget_account?: number;
+  max_cpc_account?: number | null;
   // 刻意不含平均 CPC（cost/clicks）：这里编辑的是「最高出价」，
   // 两者口径不同，D-217 前曾用平均 CPC 顶替未设置的出价当「当前值」显示。
 }
@@ -40,6 +45,9 @@ export default function EditCampaignModal({
   const currentValue = isBudget
     ? campaign?.daily_budget ?? 0
     : campaign?.max_cpc ?? null;
+  // D-266 批一：非美元 MCC 输入的是美元意图值，后端按当日汇率换算成账户币种下发
+  const nonUsdCurrency = campaign?.mcc_currency && campaign.mcc_currency !== "USD" ? campaign.mcc_currency : null;
+  const currentAccountValue = isBudget ? campaign?.daily_budget_account : campaign?.max_cpc_account;
 
   const handleOk = async () => {
     if (value === null || value === undefined) {
@@ -107,7 +115,20 @@ export default function EditCampaignModal({
             ) : (
               <Text strong style={{ fontSize: 16 }}>${currentValue.toFixed(decimals)}</Text>
             )}
+            {nonUsdCurrency && currentAccountValue != null && (
+              <Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+                （账户币种 {Number(currentAccountValue).toFixed(decimals)} {nonUsdCurrency}）
+              </Text>
+            )}
           </div>
+
+          {nonUsdCurrency && (
+            <div style={{ marginBottom: 12, padding: "6px 10px", background: "#fffbe6", border: "1px solid #ffe58f", borderRadius: 6 }}>
+              <Text style={{ fontSize: 12 }}>
+                该账户币种为 {nonUsdCurrency}：请输入<Text strong>美元</Text>金额，系统将按当日汇率换算成 {nonUsdCurrency} 下发到 Google。
+              </Text>
+            </div>
+          )}
 
           <Flex vertical style={{ width: "100%" }}>
             <Text>新的{fieldLabel}：</Text>

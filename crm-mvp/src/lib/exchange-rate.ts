@@ -57,6 +57,24 @@ export async function getExchangeRate(currency: string, dateStr: string): Promis
 }
 
 /**
+ * D-266 批一：美元 → 账户币种换算（下发 Google 前的唯一入口）。
+ * campaigns.daily_budget / max_cpc_limit 与 Google mutate micros 的口径都是账户币种；
+ * 用户/AI 的意图值是美元，必须经这里换算后再下发。
+ * 汇率不可用时返回 null——调用方必须中止下发，严禁把美元数值当账户币种数值发出去
+ * （那正是 D-265① 「$2 变 ¥2」的病根）。
+ */
+export async function usdToAccountCurrency(
+  currency: string,
+  usdValue: number,
+  dateStr: string,
+): Promise<{ value: number; rate: number } | null> {
+  if (!currency || currency.toUpperCase() === "USD") return { value: usdValue, rate: 1 };
+  const rate = await getExchangeRate(currency, dateStr);
+  if (rate <= 0) return null;
+  return { value: usdValue / rate, rate };
+}
+
+/**
  * 批量预加载一段日期范围内的汇率快照到内存缓存，减少数据库查询。
  */
 export async function preloadRates(currency: string, startDate: string, endDate: string): Promise<void> {
