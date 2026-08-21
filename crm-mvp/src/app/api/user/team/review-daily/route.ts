@@ -3,17 +3,19 @@ import { apiSuccess, apiError } from "@/lib/constants";
 import { withLeader } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import {
-  computePauseWindow, buildDailyRows, sumTotals, buildReviewScopeKey,
-  PAUSE_SOURCE_LABELS, REVIEW_RECOMMENDATION_TYPE,
+  computePauseWindow, computeCustomWindow, buildDailyRows, sumTotals, buildReviewScopeKey,
+  PAUSE_SOURCE_LABELS, REVIEW_RECOMMENDATION_TYPE, MAX_REVIEW_WINDOW_DAYS,
 } from "@/lib/review-analysis";
 
 export const dynamic = "force-dynamic";
 
 /**
- * D-245 复盘分析眼睛弹窗数据：单系列「暂停前 7 天」逐日明细 + AI 复盘点评缓存
+ * D-245 复盘分析眼睛弹窗数据：单系列逐日明细 + AI 复盘点评缓存
  *
- * GET /api/user/team/review-daily?campaignId=123
+ * GET /api/user/team/review-daily?campaignId=123[&start=YYYY-MM-DD&end=YYYY-MM-DD]
  * 仅组长可用，且系列必须归属本组成员（含组长本人）。
+ * D-268：start/end 可选自定义窗口（徐克需求），缺省 = 暂停前 7 个完整投放日；
+ *        AI 点评缓存始终按暂停日 scope 查询，不随自定义窗口变化。
  */
 export const GET = withLeader(async (req: NextRequest, { user }) => {
   if (!user.teamId) return apiError("未关联小组");
@@ -43,7 +45,18 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   if (!owner) return apiError("广告系列不存在", 404);
   if (!campaign.paused_at) return apiError("该系列没有暂停记录，无法复盘", 400);
 
-  const window = computePauseWindow(campaign.paused_at);
+  const defaultWindow = computePauseWindow(campaign.paused_at);
+  let window = defaultWindow;
+  const startRaw = req.nextUrl.searchParams.get("start");
+  const endRaw = req.nextUrl.searchParams.get("end");
+  if (startRaw || endRaw) {
+    if (!startRaw || !endRaw) return apiError("start 与 end 必须同时提供", 400);
+    const custom = computeCustomWindow(startRaw, endRaw, defaultWindow.pauseDateStr);
+    if (!custom) {
+      return apiError(`日期范围无效：格式需为 YYYY-MM-DD，开始不晚于结束，跨度不超过 ${MAX_REVIEW_WINDOW_DAYS} 天`, 400);
+    }
+    window = custom;
+  }
   const stats = await prisma.ads_daily_stats.findMany({
     where: {
       campaign_id: campaignId,
@@ -83,6 +96,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       owner: { username: owner.username, displayName: owner.display_name },
     },
     range: { start: window.startStr, end: window.endStr },
+    defaultRange: { start: defaultWindow.startStr, end: defaultWindow.endStr },
     daily,
     totals: sumTotals(daily),
     review: cached

@@ -1,15 +1,18 @@
 "use client";
 
 /**
- * D-245 复盘分析眼睛弹窗：单系列「暂停前 7 天」逐日明细 + 趋势图 + AI 复盘点评
+ * D-245 复盘分析眼睛弹窗：单系列逐日明细 + 趋势图 + AI 复盘点评
  * 数据源：GET  /api/user/team/review-daily（逐日 + 缓存点评）
  *        POST /api/user/team/review-ai（按需生成 / 重新分析，缓存入库）
  * D-250：逐日表指标列不再写死，跟随外层「复盘分析」列设置（metricKeys 由外层传入，
  *        复用 tableColumnPrefs 共享列定义与合计渲染，列序一致）
+ * D-268：日期窗口可自由选择（徐克需求），默认暂停前 7 个完整投放日，清空即恢复默认；
+ *        AI 点评口径不变，始终基于默认窗口。
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Modal, Table, Typography, Tag, Button, Space, Spin, Empty, App } from "antd";
+import { Modal, Table, Typography, Tag, Button, Space, Spin, Empty, App, DatePicker } from "antd";
+import dayjs, { type Dayjs } from "dayjs";
 import { RobotOutlined, HistoryOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import {
@@ -53,6 +56,7 @@ interface ModalData {
     owner: { username: string; displayName: string | null };
   };
   range: { start: string; end: string };
+  defaultRange: { start: string; end: string };
   daily: DailyRow[];
   totals: {
     impressions: number; clicks: number; cost: number;
@@ -81,11 +85,14 @@ export default function ReviewAnalysisModal({ open, campaignId, campaignName, me
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<ModalData | null>(null);
   const [generating, setGenerating] = useState(false);
+  // D-268 自定义日期窗口；null = 默认「暂停前 7 个完整投放日」
+  const [customRange, setCustomRange] = useState<[string, string] | null>(null);
 
-  const load = useCallback(async (cid: string) => {
+  const load = useCallback(async (cid: string, range: [string, string] | null) => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/user/team/review-daily?campaignId=${cid}`).then((r) => r.json());
+      const qs = range ? `&start=${range[0]}&end=${range[1]}` : "";
+      const res = await fetch(`/api/user/team/review-daily?campaignId=${cid}${qs}`).then((r) => r.json());
       if (res.code === 0) setData(res.data);
       else message.error(res.message || "复盘明细加载失败");
     } catch {
@@ -98,9 +105,49 @@ export default function ReviewAnalysisModal({ open, campaignId, campaignName, me
   useEffect(() => {
     if (open && campaignId) {
       setData(null);
-      void load(campaignId);
+      setCustomRange(null);
+      void load(campaignId, null);
     }
   }, [open, campaignId, load]);
+
+  const handleRangeChange = useCallback((dates: [Dayjs | null, Dayjs | null] | null) => {
+    if (!campaignId) return;
+    // 清空 = 恢复默认「暂停前 7 天」窗口
+    if (!dates || !dates[0] || !dates[1]) {
+      setCustomRange(null);
+      void load(campaignId, null);
+      return;
+    }
+    const range: [string, string] = [dates[0].format("YYYY-MM-DD"), dates[1].format("YYYY-MM-DD")];
+    setCustomRange(range);
+    void load(campaignId, range);
+  }, [campaignId, load]);
+
+  // 快捷预设：围绕暂停日的常用窗口 + 最近窗口
+  const rangePresets = useMemo(() => {
+    const presets: { label: string; value: [Dayjs, Dayjs] }[] = [];
+    const pauseDate = data?.campaign.pauseDate;
+    if (pauseDate) {
+      const p = dayjs(pauseDate);
+      presets.push(
+        { label: "暂停前 7 天（默认）", value: [p.subtract(7, "day"), p.subtract(1, "day")] },
+        { label: "暂停前 14 天", value: [p.subtract(14, "day"), p.subtract(1, "day")] },
+        { label: "暂停前 30 天", value: [p.subtract(30, "day"), p.subtract(1, "day")] },
+      );
+    }
+    const today = dayjs();
+    presets.push(
+      { label: "最近 7 天", value: [today.subtract(6, "day"), today] },
+      { label: "最近 30 天", value: [today.subtract(29, "day"), today] },
+    );
+    return presets;
+  }, [data?.campaign.pauseDate]);
+
+  const rangeValue: [Dayjs, Dayjs] | null = useMemo(() => {
+    if (customRange) return [dayjs(customRange[0]), dayjs(customRange[1])];
+    if (data?.range) return [dayjs(data.range.start), dayjs(data.range.end)];
+    return null;
+  }, [customRange, data?.range]);
 
   const handleGenerate = useCallback(async () => {
     if (!campaignId) return;
@@ -188,14 +235,32 @@ export default function ReviewAnalysisModal({ open, campaignId, campaignName, me
       destroyOnHidden
     >
       <Spin spinning={loading}>
-        {/* 暂停前 7 天逐日明细（指标列跟随外层列设置，D-250） */}
+        {/* D-268 日期窗口选择：默认暂停前 7 个完整投放日，可自由改选，清空恢复默认 */}
+        <Space wrap size={8} style={{ marginBottom: 12 }}>
+          <Text type="secondary" style={{ fontSize: 12 }}>数据窗口</Text>
+          <DatePicker.RangePicker
+            size="small"
+            value={rangeValue}
+            presets={rangePresets}
+            onChange={handleRangeChange}
+            disabledDate={(d) => d.isAfter(dayjs(), "day")}
+            allowClear
+          />
+          {customRange ? (
+            <Tag color="blue" style={{ fontSize: 11 }}>自定义窗口</Tag>
+          ) : (
+            <Text type="secondary" style={{ fontSize: 11 }}>默认：暂停前 7 个完整投放日（不含暂停当天）</Text>
+          )}
+        </Space>
+
+        {/* 窗口内逐日明细（指标列跟随外层列设置，D-250） */}
         <Table<DailyMetricRow>
           rowKey="date"
           dataSource={dailyRows}
           columns={dailyColumns}
           size="small"
           pagination={false}
-          scroll={{ x: tableScrollX }}
+          scroll={{ x: tableScrollX, y: 360 }}
           locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="窗口内无投放数据" /> }}
           style={{ marginBottom: 16 }}
           summary={() => {
@@ -212,14 +277,16 @@ export default function ReviewAnalysisModal({ open, campaignId, campaignName, me
               roi: t.cost > 0 ? (t.commission - t.cost) / t.cost : 0,
             };
             return (
-              <Table.Summary.Row>
-                <Table.Summary.Cell index={0}><Text strong style={{ fontSize: 12 }}>合计</Text></Table.Summary.Cell>
-                {metricKeys.map((k, i) => (
-                  <Table.Summary.Cell key={k} index={i + 1} align="right">
-                    {renderColumnSummary(k, totals)}
-                  </Table.Summary.Cell>
-                ))}
-              </Table.Summary.Row>
+              <Table.Summary fixed>
+                <Table.Summary.Row>
+                  <Table.Summary.Cell index={0}><Text strong style={{ fontSize: 12 }}>合计</Text></Table.Summary.Cell>
+                  {metricKeys.map((k, i) => (
+                    <Table.Summary.Cell key={k} index={i + 1} align="right">
+                      {renderColumnSummary(k, totals)}
+                    </Table.Summary.Cell>
+                  ))}
+                </Table.Summary.Row>
+              </Table.Summary>
             );
           }}
         />
@@ -253,6 +320,7 @@ export default function ReviewAnalysisModal({ open, campaignId, campaignName, me
           <Space size={6}>
             <RobotOutlined />
             <Text strong style={{ fontSize: 13 }}>AI 复盘点评</Text>
+            <Text type="secondary" style={{ fontSize: 11 }}>（基于默认窗口：暂停前 7 天，不随上方日期选择变化）</Text>
             {data?.review?.updatedAt && (
               <Text type="secondary" style={{ fontSize: 11 }}>
                 生成于 {data.review.updatedAt.slice(0, 16).replace("T", " ")}

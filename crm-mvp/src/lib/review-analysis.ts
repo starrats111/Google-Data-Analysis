@@ -15,7 +15,7 @@
 import dayjs from "dayjs";
 import utc from "dayjs/plugin/utc";
 import timezone from "dayjs/plugin/timezone";
-import { dateColumnStart } from "@/lib/date-utils";
+import { dateColumnStart, dateColumnEndExclusive } from "@/lib/date-utils";
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -68,6 +68,35 @@ export function buildReviewScopeKey(pauseDateStr: string): string {
   return `review_${pauseDateStr}`;
 }
 
+/** D-268 自定义窗口跨度上限（天），防止一次拉取过大范围 */
+export const MAX_REVIEW_WINDOW_DAYS = 92;
+
+const DATE_STR_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * D-268 眼睛弹窗自定义日期窗口：徐克 2026-08-21 需求，逐日明细不再锁死「暂停前 7 天」。
+ * 校验格式 / 先后顺序 / 跨度上限，不合法返回 null（调用方回 400）。
+ * pauseDateStr 仍取自 paused_at（标题展示与 AI 点评 scope 不随自定义窗口变化）。
+ */
+export function computeCustomWindow(
+  startStr: string,
+  endStr: string,
+  pauseDateStr: string,
+): PauseWindow | null {
+  if (!DATE_STR_RE.test(startStr) || !DATE_STR_RE.test(endStr)) return null;
+  const start = dayjs(startStr);
+  const end = dayjs(endStr);
+  if (!start.isValid() || !end.isValid() || end.isBefore(start)) return null;
+  if (end.diff(start, "day") + 1 > MAX_REVIEW_WINDOW_DAYS) return null;
+  return {
+    pauseDateStr,
+    startStr,
+    endStr,
+    dateStart: dateColumnStart(startStr),
+    dateEndExclusive: dateColumnEndExclusive(endStr),
+  };
+}
+
 /** 逐日行（对齐眼睛弹窗 DailyRow 字段命名） */
 export interface ReviewDailyRow {
   date: string;
@@ -101,12 +130,13 @@ export interface RawStatRow {
   rejected_commission: unknown;
 }
 
-/** 把窗口内的日表行补齐为完整 7 天（缺日补零行，图表/表格不断档） */
+/** 把窗口内的日表行补齐为完整逐日序列（缺日补零行，图表/表格不断档；天数由窗口决定，D-268） */
 export function buildDailyRows(window: PauseWindow, stats: RawStatRow[]): ReviewDailyRow[] {
   const byDate = new Map<string, RawStatRow>();
   for (const s of stats) byDate.set(s.date.toISOString().slice(0, 10), s);
   const rows: ReviewDailyRow[] = [];
-  for (let i = 0; i < 7; i += 1) {
+  const dayCount = dayjs(window.endStr).diff(dayjs(window.startStr), "day") + 1;
+  for (let i = 0; i < dayCount; i += 1) {
     const dateStr = dayjs(window.startStr).add(i, "day").format("YYYY-MM-DD");
     const s = byDate.get(dateStr);
     const spend = Number(s?.cost || 0);
