@@ -2838,13 +2838,21 @@ export function detectPageLanguage(html: string | null | undefined, pageUrl?: st
   // /nl/ /nl-be/ /fr/ /fr-be/ /en-us/ /de/ 等
   if (pageUrl) {
     try {
-      const pathname = new URL(pageUrl).pathname.toLowerCase();
+      const parsedUrl = new URL(pageUrl);
+      const pathname = parsedUrl.pathname.toLowerCase();
       // 匹配 /xx/ 或 /xx-yy/ 开头
       const m = pathname.match(/^\/([a-z]{2}(?:-[a-z]{2})?)\//);
       if (m) {
         const seg = m[1];
-        const mapped = BCP47_TO_GADS[seg];
-        if (mapped) return mapped;
+        // LANG-03（wj02 2026-08-22 反馈）：路径段 "uk" 在英国站里是 United Kingdom 地区前缀
+        // （tuimusement.com/uk/ 实测 html lang="en-GB"），与乌克兰语代码撞车。映射表里仅此
+        // 一处「语言 vs 国家」二义。非 .ua 域名不按语言处理，落到下方 <html lang> 检测；
+        // 真乌克兰站（如 polis.ua/uk）保持原判。
+        const ukRegionCollision = seg === "uk" && !parsedUrl.hostname.toLowerCase().endsWith(".ua");
+        if (!ukRegionCollision) {
+          const mapped = BCP47_TO_GADS[seg];
+          if (mapped) return mapped;
+        }
       }
     } catch {}
   }
