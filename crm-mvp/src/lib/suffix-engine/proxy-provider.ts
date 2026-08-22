@@ -85,10 +85,16 @@ const PROVIDER_SELECT = {
   country_code_map: true,
 } as const
 
-/** 全局可用池里选一个健康供应商（按 priority 升序，跳过熔断中的）。 */
+// ── 应用场景路由（D-271）────────────────────────────────────────
+// 常量与 where 片段抽在 proxy-scene.ts（纯模块，单测锁契约），此处转发导出保持既有引用面。
+
+export { SCENE_EXCHANGE, SCENE_AI, exchangeSceneWhere, aiSceneWhere } from './proxy-scene'
+import { exchangeSceneWhere, aiSceneWhere } from './proxy-scene'
+
+/** 全局可用池里选一个健康供应商（仅换链接场景，按 priority 升序，跳过熔断中的）。 */
 async function pickHealthyGlobal(): Promise<ProviderRow | null> {
   const all = await prisma.kyads_proxies.findMany({
-    where: { status: 'active', is_deleted: 0 },
+    where: { status: 'active', is_deleted: 0, ...exchangeSceneWhere() },
     orderBy: { priority: 'asc' },
     select: PROVIDER_SELECT,
   })
@@ -115,7 +121,7 @@ export async function pickProvider(userId?: bigint | null): Promise<ProviderRow 
     const ids = bindings.map((b) => b.proxy_id)
     if (ids.length > 0) {
       const assigned = await prisma.kyads_proxies.findMany({
-        where: { id: { in: ids }, status: 'active', is_deleted: 0 },
+        where: { id: { in: ids }, status: 'active', is_deleted: 0, ...exchangeSceneWhere() },
         orderBy: { priority: 'asc' },
         select: PROVIDER_SELECT,
       })
@@ -218,6 +224,35 @@ export async function getProviderProxyUrl(
 ): Promise<string | null> {
   const sel = await getProviderSelection(country, opts)
   return sel?.url ?? null
+}
+
+// ── AI 爬取场景选路（D-271）─────────────────────────────────────
+
+/** AI 爬取场景选一个健康供应商（按协议过滤，跳过熔断中的；proxy-health 探活直接喂熔断器）。 */
+async function pickAiProvider(proto: 'socks5' | 'http'): Promise<ProviderRow | null> {
+  const all = await prisma.kyads_proxies.findMany({
+    where: { status: 'active', is_deleted: 0, ...aiSceneWhere(proto) },
+    orderBy: { priority: 'asc' },
+    select: PROVIDER_SELECT,
+  })
+  return selectHealthy(all)
+}
+
+/**
+ * 取一个 AI 爬取场景的代理 URL（AI 爬虫/商品分类/竞品情报用）。
+ * 无可用供应商（未入库/全熔断/全停用）返回 null——调用方（crawl-proxy）落到
+ * system_config 模板 → env 的既有兜底链，行为与 D-271 之前完全一致。
+ */
+export async function getAiProviderProxyUrl(country: string, proto: 'socks5' | 'http'): Promise<string | null> {
+  if (!country) return null
+  try {
+    const provider = await pickAiProvider(proto)
+    if (!provider) return null
+    return proto === 'http' ? buildProviderHttpProxyUrl(provider, country) : buildProviderProxyUrl(provider, country)
+  } catch (e) {
+    console.warn('[proxy-provider] getAiProviderProxyUrl error:', e instanceof Error ? e.message : e)
+    return null
+  }
 }
 
 // ── 出口 IP 测试（后台「测试」按钮用）────────────────────────────

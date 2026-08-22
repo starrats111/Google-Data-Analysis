@@ -70,15 +70,19 @@ export async function GET(req: NextRequest) {
     const report = await checkAllProxiesHealth()
     let notified = 0
 
-    // 1) 逐个不可用供应商 → 单独提醒（疑似到期/认证失败）
+    // 1) 逐个不可用供应商 → 单独提醒（疑似到期/认证失败），文案按场景区分（D-271）
     for (const f of report.failed) {
-      const title = `[换链接代理] ${f.name} 不可用（疑似到期/认证失败）`
+      const isAi = f.scene === 'AI爬取'
+      const sceneLabel = isAi ? 'AI爬取代理' : '换链接代理'
+      const title = `[${sceneLabel}] ${f.name} 不可用（疑似到期/认证失败）`
       const content = [
         `代理供应商：${f.name}（${f.host}:${f.port}）`,
         `探活结果：${f.message}`,
         '',
         '常见原因：住宅代理流量包耗尽 / 订阅到期 / 账号被停用 / 凭据失效。',
-        '影响：该供应商无法生成换链接后缀，相关广告系列会逐步断货、库存偏低。',
+        isAi
+          ? '影响：AI 爬取/商品分类/竞品情报拿不到目标国家出口，相关任务会降级直连或跳过。'
+          : '影响：该供应商无法生成换链接后缀，相关广告系列会逐步断货、库存偏低。',
         '处理：登录对应代理商后台检查账号流量/到期状态并续费，或在「后台 → 代理管理」更新/更换凭据后点「测试」验证。',
       ].join('\n')
       if (await notifyAdminOnce(title, content, { source: 'proxy-health', providerId: f.id, name: f.name, host: f.host, message: f.message })) {
@@ -86,16 +90,21 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // 2) active 供应商全部不可用 → 升级为整体告警（换链接生产将全面停摆）
-    if (report.activeCount > 0 && report.healthy.length === 0) {
-      const title = `[换链接代理] 全部 ${report.activeCount} 家代理均不可用`
+    // 2) 换链接场景供应商全部不可用 → 升级为整体告警（换链接生产将全面停摆）。
+    //    D-271：按场景判定，不再看全表——否则 AI 行（arxlabs）活着会掩盖换链接全灭。
+    const { isExchangeSceneRow } = await import('@/lib/suffix-engine/proxy-scene')
+    const exHealthy = report.healthy.filter(isExchangeSceneRow)
+    const exFailed = report.failed.filter(isExchangeSceneRow)
+    const exTotal = exHealthy.length + exFailed.length
+    if (exTotal > 0 && exHealthy.length === 0) {
+      const title = `[换链接代理] 全部 ${exTotal} 家代理均不可用`
       const content = [
-        `检测到全部 ${report.activeCount} 家 active 代理供应商均探活失败：`,
-        ...report.failed.map((f) => `  • ${f.name}（${f.host}:${f.port}）：${f.message}`),
+        `检测到全部 ${exTotal} 家 active 换链接代理供应商均探活失败：`,
+        ...exFailed.map((f) => `  • ${f.name}（${f.host}:${f.port}）：${f.message}`),
         '',
         '换链接补货将全面停摆（无可用住宅代理生成后缀），请尽快续费/更换代理。',
       ].join('\n')
-      if (await notifyAdminOnce(title, content, { source: 'proxy-health', scope: 'all_down', activeCount: report.activeCount })) {
+      if (await notifyAdminOnce(title, content, { source: 'proxy-health', scope: 'all_down', activeCount: exTotal })) {
         notified++
       }
     }

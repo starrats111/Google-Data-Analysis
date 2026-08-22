@@ -49,8 +49,18 @@ export async function getProxyUrlForCountry(
     return null;
   }
 
+  // 2) D-271：AI 场景供应商池（kyads_proxies usage_scene=AI爬取，代理管理页统一维护，
+  //    自动享受探活/熔断/测试按钮）。注意这与换链接池是同表不同场景，出口隔离不变。
   try {
-    // 2) 从 DB 读取模板（管理台可配置），兜底读 env var —— 仅 AI 路径
+    const { getAiProviderProxyUrl } = await import("@/lib/suffix-engine/proxy-provider");
+    const aiUrl = await getAiProviderProxyUrl(country, "socks5");
+    if (aiUrl) return aiUrl;
+  } catch {
+    // 池不可用（未入库/全熔断）→ 落模板兜底
+  }
+
+  try {
+    // 3) 从 DB 读取模板（旧管理台配置，D-271 后作为回滚兜底保留），兜底读 env var —— 仅 AI 路径
     const { getCrawlProxyTemplate } = await import("@/lib/system-config");
     const template = await getCrawlProxyTemplate();
 
@@ -61,7 +71,7 @@ export async function getProxyUrlForCountry(
     // DB 不可用时走 env 兜底
   }
 
-  // 3) env 兜底：CRAWL_PROXY_US / CRAWL_PROXY_URL
+  // 4) env 兜底：CRAWL_PROXY_US / CRAWL_PROXY_URL
   const envKey = `CRAWL_PROXY_${country.trim().toUpperCase()}`;
   const envVal = process.env[envKey] || process.env.CRAWL_PROXY_URL || null;
   return envVal;
@@ -95,6 +105,15 @@ export async function getHttpProxyUrlForCountry(
     } catch {
       return null;
     }
+  }
+
+  // D-271：AI 场景供应商池优先（usage_scene=AI爬取 且 proxy_type=http，Puppeteer 专用）
+  try {
+    const { getAiProviderProxyUrl } = await import("@/lib/suffix-engine/proxy-provider");
+    const aiUrl = await getAiProviderProxyUrl(country, "http");
+    if (aiUrl) return aiUrl;
+  } catch {
+    // 池不可用 → 落模板兜底
   }
 
   try {

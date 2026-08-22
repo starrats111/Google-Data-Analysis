@@ -2,12 +2,11 @@
 
 import {
   Table, Button, Modal, Form, Input, Space, Typography,
-  Popconfirm, Card, Tabs, Spin, App, Switch, Alert,
+  Popconfirm, Card, Tabs, Spin, App, Switch,
 } from "antd";
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, SaveOutlined,
   CloudServerOutlined, ApiOutlined, DatabaseOutlined, SettingOutlined, GoogleOutlined,
-  GlobalOutlined,
 } from "@ant-design/icons";
 import { useEffect, useState, useCallback } from "react";
 import AppPageHeader from "@/components/AppPageHeader";
@@ -65,146 +64,9 @@ const CONFIG_GROUPS: Record<string, {
   },
 };
 
-// ─── curl 命令解析工具 ───
-
-/** 从 curl 命令解析出 host、port、username、password */
-function parseCurlProxy(curlCmd: string): { proto: "http" | "socks5"; host: string; port: number; username: string; password: string } | null {
-  const trimmed = curlCmd.trim();
-  const isSocks5 = /--socks5(?:-hostname)?/.test(trimmed);
-  const hostPortMatch = trimmed.match(/(?:-x|--socks5(?:-hostname)?)\s+([^\s:]+):(\d+)/);
-  if (!hostPortMatch) return null;
-  const credMatch = trimmed.match(/-U\s+["']?([^"'\s]+):([^"'\s]+)["']?/);
-  if (!credMatch) return null;
-  return {
-    proto: isSocks5 ? "socks5" : "http",
-    host: hostPortMatch[1],
-    port: parseInt(hostPortMatch[2]),
-    username: credMatch[1],
-    password: credMatch[2].replace(/["']$/, ""),
-  };
-}
-
-/** 将解析结果转为内部模板格式，自动替换国家代码为 ** 和随机化 sid */
-function buildProxyTemplate(proto: "http" | "socks5", host: string, port: number, username: string, password: string): string {
-  const normalizedUser = username
-    .replace(/region-[A-Z]{2,3}(?=[^A-Za-z]|$)/g, "region-**")
-    .replace(/(?<=sid-)([A-Za-z0-9]+)/g, "XXXXXXXX");
-  return `${proto}://${host}:${port}:${normalizedUser}:${password}`;
-}
-
-/** 将内部模板反向展示为 curl 格式（仅用于显示） */
-function templateToCurl(template: string): string {
-  if (!template) return "";
-  let proto = "http";
-  let rest = template;
-  const protoMatch = rest.match(/^(https?|socks5):\/\//i);
-  if (protoMatch) { proto = protoMatch[1].toLowerCase(); rest = rest.slice(protoMatch[0].length); }
-  const parts = rest.split(":");
-  if (parts.length < 4) return template;
-  const host = parts[0];
-  const port = parts[1];
-  const password = parts[parts.length - 1];
-  const username = parts.slice(2, parts.length - 1).join(":");
-  const flag = proto === "socks5" ? "--socks5" : "-x";
-  return `curl ${flag} ${host}:${port} -U "${username}:${password}" mayips.com`;
-}
-
-// ─── 专用爬取代理配置卡片 ───
-function CrawlProxyCard({ configValues, onSaved }: { configValues: Record<string, string>; onSaved: () => void }) {
-  const { message } = App.useApp();
-  const [saving, setSaving] = useState(false);
-  const [httpCurl, setHttpCurl] = useState("");
-  const [socks5Curl, setSocks5Curl] = useState("");
-  const [enabled, setEnabled] = useState(false);
-
-  useEffect(() => {
-    setHttpCurl(templateToCurl(configValues["crawl_proxy_http_template"] || ""));
-    setSocks5Curl(templateToCurl(configValues["crawl_proxy_template"] || ""));
-    setEnabled(configValues["crawl_proxy_enabled"] === "1");
-  }, [configValues]);
-
-  const handleSave = async () => {
-    const values: Record<string, string> = { crawl_proxy_enabled: enabled ? "1" : "0" };
-
-    if (httpCurl.trim()) {
-      const parsed = parseCurlProxy(httpCurl);
-      if (!parsed) { message.error("HTTP 代理 curl 命令格式无法解析，请检查格式"); return; }
-      if (parsed.proto !== "http") { message.error("HTTP 代理请使用 -x 格式（不带 --socks5）"); return; }
-      values["crawl_proxy_http_template"] = buildProxyTemplate(parsed.proto, parsed.host, parsed.port, parsed.username, parsed.password);
-    }
-
-    if (socks5Curl.trim()) {
-      const parsed = parseCurlProxy(socks5Curl);
-      if (!parsed) { message.error("SOCKS5 代理 curl 命令格式无法解析，请检查格式"); return; }
-      if (parsed.proto !== "socks5") { message.error("SOCKS5 代理请使用 --socks5 格式"); return; }
-      values["crawl_proxy_template"] = buildProxyTemplate(parsed.proto, parsed.host, parsed.port, parsed.username, parsed.password);
-    }
-
-    setSaving(true);
-    try {
-      const res = await fetch("/api/admin/system-config/batch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(values),
-      }).then((r) => r.json());
-      if (res.code === 0) { message.success("爬取代理配置已保存"); onSaved(); }
-      else message.error(res.message ?? "保存失败");
-    } catch { message.error("保存失败"); }
-    finally { setSaving(false); }
-  };
-
-  return (
-    <Card
-      title={<Space><GlobalOutlined /><span>爬取代理</span></Space>}
-      extra={<Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave}>保存</Button>}
-      style={{ marginBottom: 16 }}
-    >
-      <Alert
-        type="info"
-        showIcon
-        style={{ marginBottom: 16 }}
-        message="直接粘贴 cliproxy / arxlabs 等服务的 curl 测试命令，系统自动解析并将国家代码替换为占位符 **，sid 随机化。"
-        description={
-          <div style={{ fontFamily: "monospace", fontSize: 12, marginTop: 4 }}>
-            <div>HTTP 格式：<code>curl -x us.arxlabs.io:443 -U &quot;user-region-US-sid-XXX:pass&quot; mayips.com</code></div>
-            <div>SOCKS5 格式：<code>curl --socks5 us.arxlabs.io:443 -U &quot;user-region-US-sid-XXX:pass&quot; mayips.com</code></div>
-          </div>
-        }
-      />
-      <Form layout="vertical" style={{ maxWidth: 700 }}>
-        <Form.Item
-          label="HTTP 代理（Puppeteer/Chrome 使用，必填）"
-          help="对应 curl -x 格式，Puppeteer 专用，可绕过 Cloudflare JS 验证"
-        >
-          <Input.TextArea
-            rows={2}
-            value={httpCurl}
-            onChange={(e) => setHttpCurl(e.target.value)}
-            placeholder={'curl -x us.arxlabs.io:443 -U "vf8j1167993-region-US-sid-iZ9jtiHf-t-5:ede9qwjc" mayips.com'}
-            style={{ fontFamily: "monospace", fontSize: 12 }}
-          />
-        </Form.Item>
-        <Form.Item
-          label="SOCKS5 代理（Node.js HTTP 请求使用）"
-          help="对应 curl --socks5 格式，普通 HTTP 爬取使用"
-        >
-          <Input.TextArea
-            rows={2}
-            value={socks5Curl}
-            onChange={(e) => setSocks5Curl(e.target.value)}
-            placeholder={'curl --socks5 us.arxlabs.io:443 -U "vf8j1167993-region-US-sid-iZ9jtiHf-t-5:ede9qwjc" mayips.com'}
-            style={{ fontFamily: "monospace", fontSize: 12 }}
-          />
-        </Form.Item>
-        <Form.Item label="启用代理爬取">
-          <Switch checked={enabled} onChange={setEnabled} checkedChildren="已启用" unCheckedChildren="已停用" />
-        </Form.Item>
-      </Form>
-    </Card>
-  );
-}
-
 // ─── 通用配置 ───
+// （D-271：原「爬取代理」专用卡片 CrawlProxyCard 及 curl 解析工具已随 tab 下线一并移除，
+//   AI 爬取代理改在「代理管理」页维护；crawl_proxy_* 旧键可在「其他配置」查改作回滚兜底。）
 interface Config {
   id: string;
   config_key: string;
@@ -438,13 +300,8 @@ export default function SystemConfigPage() {
                 <ConfigGroupCard groupKey="google_sheets" group={CONFIG_GROUPS.google_sheets} configValues={configValues} onSaved={fetchAll} />
               ),
             },
-            {
-              key: "crawl_proxy",
-              label: <><GlobalOutlined /> 爬取代理</>,
-              children: (
-                <CrawlProxyCard configValues={configValues} onSaved={fetchAll} />
-              ),
-            },
+            // D-271：「爬取代理」tab 已下线——AI 爬取代理并入「代理管理」页（kyads_proxies，
+            // usage_scene=AI爬取）统一维护。旧 crawl_proxy_* 键保留作回滚兜底，可在「其他配置」里查改。
             {
               key: "general",
               label: <><SettingOutlined /> 其他配置</>,

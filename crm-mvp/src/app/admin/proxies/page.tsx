@@ -407,8 +407,19 @@ export default function ProxiesPage() {
           >
             <Input placeholder='如 {"HK":"CN_HK"}' />
           </Form.Item>
-          <Form.Item name="usageScene" label="应用场景" tooltip="列表展示用标签，如：换链接">
-            <Input placeholder="如 换链接" maxLength={64} />
+          <Form.Item
+            name="usageScene"
+            label="应用场景"
+            tooltip="D-271 起为路由键：换链接=换链接引擎专用池；AI爬取=AI爬虫/商品分类/竞品情报专用池。两条线出口严格隔离，请勿混标"
+          >
+            <Select
+              allowClear
+              placeholder="选择应用场景"
+              options={[
+                { value: "换链接", label: "换链接" },
+                { value: "AI爬取", label: "AI爬取" },
+              ]}
+            />
           </Form.Item>
           <Form.Item name="priority" label="优先级（数字越小越优先）" initialValue={5}>
             <InputNumber min={1} max={10} style={{ width: "100%" }} />

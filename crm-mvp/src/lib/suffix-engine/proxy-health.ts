@@ -25,6 +25,8 @@ export interface ProviderHealth {
   name: string
   host: string
   port: number
+  /** 应用场景（换链接 / AI爬取，D-271）：告警文案按场景区分影响面 */
+  scene: string | null
   ok: boolean
   message: string
   exitIp?: string | null
@@ -44,7 +46,7 @@ export interface ProxyHealthReport {
 export async function checkAllProxiesHealth(): Promise<ProxyHealthReport> {
   const providers = await prisma.kyads_proxies.findMany({
     where: { status: 'active', is_deleted: 0 },
-    select: { id: true, name: true, host: true, port: true },
+    select: { id: true, name: true, host: true, port: true, usage_scene: true },
     orderBy: { priority: 'asc' },
   })
 
@@ -57,6 +59,7 @@ export async function checkAllProxiesHealth(): Promise<ProxyHealthReport> {
       name: p.name,
       host: p.host,
       port: p.port,
+      scene: p.usage_scene ?? null,
       ok: false,
       message: '未探活',
     }
@@ -68,6 +71,7 @@ export async function checkAllProxiesHealth(): Promise<ProxyHealthReport> {
           name: p.name,
           host: p.host,
           port: p.port,
+          scene: p.usage_scene ?? null,
           ok: r.ok,
           message: r.message,
           exitIp: r.exitIp ?? null,
