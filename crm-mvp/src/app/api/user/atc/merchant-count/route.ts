@@ -14,7 +14,8 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
 
   const merchantId = BigInt(body.merchant_id);
   const forceRefresh = body.force_refresh === true;
-  const region = (body.region ?? "US").toUpperCase();
+  // D-271：竞争度统一「任何位置」口径，忽略前端传入的 region
+  const region = "ALL";
 
   // 1. D-215：取全局共享 key 池，不再只看自己配的 key
   const serpApiKeys = await getPoolKeys();

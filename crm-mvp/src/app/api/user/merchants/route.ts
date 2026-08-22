@@ -252,13 +252,9 @@ async function batchActiveAdvertisers(
  *   - team_atc_synced_at：团队最近一次该 domain 的查询时间
  *   - team_atc_region：团队快照对应的 region（决定 UI 显示哪个国家的数据）
  *
- * 与 user_merchants.atc_advertiser_count 字段并存：
- *   - atc_advertiser_count = "我自己查过的"
- *   - team_atc_count = "团队查过的"（含我自己）
- * 前端可同时显示，用灰"团队"Tag 区分。
- *
- * 默认 region=US（实测全员 watchlist 96.6% US；GB 占 3.5%）。
- * 同一 domain 多 region 时优先取 US；若 merchant.supported_regions 含 GB 等其他国家可在未来扩展。
+ * D-271（07 2026-08-22）：不再分「自查/团队共享」——快照就是全员唯一的数。
+ * 口径统一为「任何位置投放」（region="ALL"）；优先取 ALL 快照，
+ * 过渡期该 domain 还没有 ALL 快照时回退最新的旧国家快照（历史对照，全量扫描跑完自然消失）。
  */
 async function enrichWithTeamAtc(
   merchants: Array<{ id: bigint; merchant_url?: string | null }>,
@@ -276,11 +272,10 @@ async function enrichWithTeamAtc(
   }
   if (domainToMerchantIds.size === 0) return result;
 
-  // 2. 一次性查 merchant_atc_snapshots：domain ∈ 提取列表 AND region=US
+  // 2. 一次性查 merchant_atc_snapshots：domain ∈ 提取列表（D-271：ALL 优先，旧国家快照仅作过渡回退）
   const snapshots = await prisma.merchant_atc_snapshots.findMany({
     where: {
       domain: { in: Array.from(domainToMerchantIds.keys()) },
-      region: "US",
     },
     select: {
       domain: true,
@@ -290,9 +285,13 @@ async function enrichWithTeamAtc(
     },
   });
 
-  // 3. 建 domain → snapshot 映射；按 fetched_at desc 去重（同 domain 多 region 时取最新，同 region 主键唯一）
+  // 3. 建 domain → snapshot 映射：ALL 口径优先；无 ALL 时取最新的旧国家快照
   const domainSnap = new Map<string, { count: number; syncedAt: Date; region: string }>();
   for (const s of snapshots) {
+    const cur = domainSnap.get(s.domain);
+    const curIsAll = cur?.region === "ALL";
+    const newIsAll = s.region === "ALL";
+    if (cur && (curIsAll || (!newIsAll && cur.syncedAt >= s.fetched_at))) continue;
     domainSnap.set(s.domain, {
       count: s.real_advertiser_count,
       syncedAt: s.fetched_at,

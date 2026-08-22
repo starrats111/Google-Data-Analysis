@@ -735,6 +735,34 @@ export async function getOrFetchAdvertiserDomainSnapshot(opts: {
   };
 }
 
+/**
+ * D-271：把竞争度结果写到「同一商家的所有用户行」。
+ * 同商家 = 同 platform + merchant_id（有 idx_merchant_platform 索引，毫秒级）。
+ * 跨平台同域名的行由全量扫描脚本的按域名镜像兜底。
+ */
+async function propagateAtcToSameMerchantRows(merchantId: bigint, realCount: number, syncedAt: Date): Promise<void> {
+  const row = await prisma.user_merchants.findUnique({
+    where: { id: merchantId },
+    select: { platform: true, merchant_id: true },
+  });
+  if (!row) return;
+  await prisma.user_merchants.updateMany({
+    where: { platform: row.platform, merchant_id: row.merchant_id, is_deleted: 0 },
+    data: {
+      atc_advertiser_count: realCount,
+      atc_last_synced_at: syncedAt,
+      atc_sync_status: "done",
+    },
+  });
+}
+
+/**
+ * D-271（07 2026-08-22 拍板）：商家竞争度统一为「在任何位置投放的广告」口径——
+ * region 固定 "ALL"（不带国家筛选，与广告主在投数的 D-259 anywhere 口径一致），
+ * 快照键用 domain + "ALL"；旧的按国家快照保留作对照，不再新增。
+ * 同时删除「自查 / 团队共享」之分：查询结果通过 propagateAtcToSameMerchantRows
+ * 同步到所有用户的同一商家行，全员看到同一份数。
+ */
 export async function queryMerchantAtc(opts: {
   merchantId: bigint;
   merchantName: string;
@@ -743,23 +771,16 @@ export async function queryMerchantAtc(opts: {
   serpApiKeys: string[];
   forceRefresh?: boolean;
 }): Promise<AtcMerchantResult> {
-  const { merchantId, merchantName, domain, region = "US", serpApiKeys, forceRefresh = false } = opts;
+  const { merchantId, merchantName, domain, region = "ALL", serpApiKeys, forceRefresh = false } = opts;
 
-  // 1. 检查团队共享缓存
+  // 1. 检查共享缓存
   if (!forceRefresh) {
     const cached = await prisma.merchant_atc_snapshots.findUnique({
       where: { domain_region: { domain, region } },
     });
     if (cached && Date.now() - cached.fetched_at.getTime() < CACHE_TTL_MS) {
-      // 缓存命中：更新 user_merchants 统计，不消耗 SerpApi 额度
-      await prisma.user_merchants.update({
-        where: { id: merchantId },
-        data: {
-          atc_advertiser_count: cached.real_advertiser_count,
-          atc_last_synced_at: cached.fetched_at,
-          atc_sync_status: "done",
-        },
-      });
+      // 缓存命中：同步所有用户的同一商家行，不消耗 SerpApi 额度
+      await propagateAtcToSameMerchantRows(merchantId, cached.real_advertiser_count, cached.fetched_at);
       return {
         domain,
         region,
@@ -798,6 +819,8 @@ export async function queryMerchantAtc(opts: {
       });
     } catch (directErr) {
       // 3b. 直连失败（协议变更/限频/网络）→ 降级 SerpApi，保持原行为
+      // D-271：批量扫描传空 key 数组 = 明确不许烧 SerpApi 配额，直连失败就是失败
+      if (serpApiKeys.length === 0) throw directErr;
       console.warn(`[ATC-direct] 直连失败，降级 SerpApi（domain=${domain}）:`, directErr);
       const serpApiKey = pickApiKey(serpApiKeys);
       const params: Record<string, string> = {
@@ -885,15 +908,8 @@ export async function queryMerchantAtc(opts: {
       },
     });
 
-    // 7. 更新 user_merchants
-    await prisma.user_merchants.update({
-      where: { id: merchantId },
-      data: {
-        atc_advertiser_count: realCount,
-        atc_last_synced_at: now,
-        atc_sync_status: "done",
-      },
-    });
+    // 7. D-271：同步所有用户的同一商家行（不分自查/共享，全员同一份数）
+    await propagateAtcToSameMerchantRows(merchantId, realCount, now);
 
     return {
       domain,

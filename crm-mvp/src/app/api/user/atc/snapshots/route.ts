@@ -47,10 +47,13 @@ export const GET = withUser(async (_req, { user }) => {
     orderBy: { fetched_at: "desc" },
   });
 
-  // 3. 构建 merchantId → snapshot 映射（每个 domain 取最新快照）
+  // 3. 构建 merchantId → snapshot 映射（D-271：ALL 口径优先；无 ALL 时取最新旧国家快照过渡）
   const domainSnapshotMap = new Map<string, typeof snapshots[number]>();
   for (const snap of snapshots) {
-    if (!domainSnapshotMap.has(snap.domain)) {
+    const cur = domainSnapshotMap.get(snap.domain);
+    if (!cur) {
+      domainSnapshotMap.set(snap.domain, snap);
+    } else if (cur.region !== "ALL" && snap.region === "ALL") {
       domainSnapshotMap.set(snap.domain, snap);
     }
   }

@@ -1,6 +1,6 @@
 "use client";
 import { useState, useCallback, useMemo, useEffect } from "react";
-import { Card, Row, Col, Table, Input, Select, Button, Space, Tag, Modal, Form, Typography, Popconfirm, Popover, Switch, InputNumber, Tabs, App, Tooltip, Radio, DatePicker, Slider, Progress, Alert, AutoComplete } from "antd";
+import { Card, Row, Col, Table, Input, Select, Button, Space, Tag, Modal, Form, Typography, Popconfirm, Switch, InputNumber, Tabs, App, Tooltip, Radio, DatePicker, Slider, Progress, Alert, AutoComplete } from "antd";
 import { ShopOutlined, SearchOutlined, CheckOutlined, DollarOutlined, ExperimentOutlined, SaveOutlined, SyncOutlined, WarningOutlined, StarOutlined, ReloadOutlined, RobotOutlined, DeleteOutlined, CloseCircleOutlined, ThunderboltOutlined, EditOutlined, RedoOutlined } from "@ant-design/icons";
 import { PLATFORMS, BIDDING_STRATEGIES, ALL_COUNTRIES } from "@/lib/constants";
 import { POLICY_CATEGORY_MAP, POLICY_CATEGORY_LABELS } from "@/lib/policy-hub/policy-categories";
@@ -269,24 +269,8 @@ export default function MerchantsPage() {
   const [atcLoading, setAtcLoading] = useState<Record<string, boolean>>({});
   const [atcLocalData, setAtcLocalData] = useState<Record<string, { count: number; syncedAt: string; region: string; topAdvertisers?: { id: string; name: string }[] }>>({});
   const [atcDetailModal, setAtcDetailModal] = useState<{ open: boolean; merchantName: string; advertisers: { id: string; name: string }[]; region: string } | null>(null);
-  const [atcPopover, setAtcPopover] = useState<Record<string, boolean>>({}); // popover 开关
-  const [atcRegions, setAtcRegions] = useState<Record<string, string>>({}); // 每行选择的地区
+  // D-271：竞争度统一「任何位置」口径，行级国家选择器与 region 选项已删除
   const [serpApiConfigured, setSerpApiConfigured] = useState<boolean | null>(null);
-  // D-008 F-1=C：异步加载 ATC region 选项（单一信源 lib/atc-regions.ts）
-  // SSR fallback：仅 US；useEffect 加载后展开 26 国
-  const [atcRegionOptions, setAtcRegionOptions] = useState<Array<{ value: string; label: string }>>(
-    [{ value: "US", label: "🇺🇸 美国 (US)" }]
-  );
-  useEffect(() => {
-    fetch("/api/user/atc/regions")
-      .then((r) => r.json())
-      .then((res) => {
-        if (res.code === 0 && Array.isArray(res.data?.regions)) {
-          setAtcRegionOptions(res.data.regions);
-        }
-      })
-      .catch(() => { /* 静默：失败保留 fallback US */ });
-  }, []);
   // C-093 / C-094.1：广告主分类（同行 vs 品牌自投），Modal 内异步反查
   type DomainDetail = {
     domain: string;
@@ -342,7 +326,6 @@ export default function MerchantsPage() {
   const [batchSelectedKeys, setBatchSelectedKeys] = useState<string[]>([]);
   // 维护被选中的完整 merchant 对象（跨页保留），避免翻页后丢失跨页选中条目的数据
   const [batchSelectedMap, setBatchSelectedMap] = useState<Map<string, Merchant>>(new Map());
-  const [batchRegion, setBatchRegion] = useState("US");
   const [batchForce, setBatchForce] = useState(false);
   const [batchRunning, setBatchRunning] = useState(false);
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number; failed: number }>({ done: 0, total: 0, failed: 0 });
@@ -473,23 +456,18 @@ export default function MerchantsPage() {
     }
   }, [atcDetailModal, message]);
 
-  const getAtcRegion = useCallback((id: string) => atcRegions[id] ?? "US", [atcRegions]);
-  const setAtcRegion = useCallback((id: string, region: string) => {
-    setAtcRegions((prev) => ({ ...prev, [id]: region }));
-  }, []);
-  const openAtcPopover = useCallback((id: string) => setAtcPopover((p) => ({ ...p, [id]: true })), []);
-  const closeAtcPopover = useCallback((id: string) => setAtcPopover((p) => ({ ...p, [id]: false })), []);
-  const triggerAtcQuery = useCallback(async (rec: Merchant, region: string, force = false, silent = false) => {
-    closeAtcPopover(rec.id);
+  // D-271：不再传 region，后端固定「任何位置」（ALL）口径；查询结果全员共享同步
+  const triggerAtcQuery = useCallback(async (rec: Merchant, force = false, silent = false) => {
     setAtcLoading((prev) => ({ ...prev, [rec.id]: true }));
     try {
       const res = await fetch("/api/user/atc/merchant-count", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ merchant_id: rec.id, force_refresh: force, region }),
+        body: JSON.stringify({ merchant_id: rec.id, force_refresh: force }),
       }).then((r) => r.json());
       if (res.code === 0) {
         const topAdvertisers = (res.data.top_advertisers ?? []) as Array<{ id: string; name: string }>;
+        const region = (res.data.region as string) ?? "ALL";
         setAtcLocalData((prev) => ({ ...prev, [rec.id]: { count: res.data.real_count, syncedAt: res.data.fetched_at, region, topAdvertisers } }));
         return { ok: true, topAdvertisers, region };
       } else {
@@ -503,7 +481,7 @@ export default function MerchantsPage() {
     } finally {
       setAtcLoading((prev) => ({ ...prev, [rec.id]: false }));
     }
-  }, [message, closeAtcPopover]);
+  }, [message]);
 
   // C-091.5：一键批量查 ATC 竞争度（并发 3，避免 SerpApi 限流）
   // - batchForce=false：自动跳过已有 ATC 数据的商家（节省 SerpApi 配额）
@@ -540,7 +518,7 @@ export default function MerchantsPage() {
       while (queue.length > 0) {
         const m = queue.shift();
         if (!m) break;
-        const r = await triggerAtcQuery(m, batchRegion, batchForce, true);
+        const r = await triggerAtcQuery(m, batchForce, true);
         if (!r?.ok) {
           failed++;
         } else if (r.topAdvertisers && r.region) {
@@ -608,7 +586,7 @@ export default function MerchantsPage() {
       }
     };
     void fireClassify();
-  }, [serpApiConfigured, batchForce, atcLocalData, batchRegion, triggerAtcQuery, message]);
+  }, [serpApiConfigured, batchForce, atcLocalData, triggerAtcQuery, message]);
 
   const [claimModal, setClaimModal] = useState(false); const [claimM, setClaimM] = useState<Merchant | null>(null); const [claimForm] = Form.useForm();
   // 新增广告（同一商家多广告，非破坏性）：复用领取弹窗，提交时带 relaunch=true
@@ -1008,18 +986,13 @@ export default function MerchantsPage() {
 // __COLUMNS__
   // D-004：复制逻辑已转移到共享 MerchantNameCell 组件内部（支持多账号 Popover）
   // C-091：ATC 竞争度列 render（claimed/available 共用），抽出来避免 100 行复粘
-  // D-008 F-7=A：count fallback 链 = local（刚点） > 我自己查的（user_merchants） > 团队查的（snapshot）
+  // D-271：口径统一「任何位置投放」，不分自查/团队共享——系统查好给大家，谁点刷新都是更新同一份数。
+  //   count 优先级：local（本会话刚点）> 快照（系统/全员共享）> 行镜像值
   const renderAtcCompetitionCol = useCallback((_: unknown, rec: Merchant) => {
     const loading = atcLoading[rec.id];
     const local = atcLocalData[rec.id];
-    const myCount = rec.atc_advertiser_count ?? null;
-    const teamCount = rec.team_atc_count ?? null;
-    // 数据来源优先级：local > 自己查的 > 团队查的
-    const count = local?.count ?? myCount ?? teamCount ?? null;
-    const isTeamFallback = local == null && myCount == null && teamCount != null;
-    const status = local ? "done" : (myCount != null ? "done" : (teamCount != null ? "done" : (rec.atc_sync_status ?? "idle")));
-    const region = getAtcRegion(rec.id);
-    const popoverOpen = atcPopover[rec.id] ?? false;
+    const count = local?.count ?? rec.team_atc_count ?? rec.atc_advertiser_count ?? null;
+    const status = local || count !== null ? "done" : (rec.atc_sync_status ?? "idle");
 
     if (serpApiConfigured === false) {
       return <Button size="small" type="link" style={{ padding: 0, fontSize: 12 }} onClick={() => router.push("/user/settings")}>配置Key</Button>;
@@ -1028,100 +1001,39 @@ export default function MerchantsPage() {
       return <span style={{ color: "#1677ff", fontSize: 12 }}><SyncOutlined spin /> 查询中…</span>;
     }
 
-    const regionPopoverContent = (
-      <div style={{ width: 220 }}>
-        <div style={{ marginBottom: 8, fontSize: 12, color: "#666" }}>选择查询国家（仅统计搜索广告）</div>
-        {/* D-008 F-1=C：选项来自 /api/user/atc/regions（单一信源，26 国） */}
-        <Select
-          value={region}
-          onChange={(v) => setAtcRegion(rec.id, v)}
-          style={{ width: "100%", marginBottom: 10 }}
-          options={atcRegionOptions}
-          popupMatchSelectWidth={false}
-          showSearch
-          placeholder="国家代码 / 中文名"
-          filterOption={(input, option) => {
-            const kw = input.trim().toLowerCase();
-            if (!kw) return true;
-            const o = option as { value?: string; label?: string; zhName?: string } | undefined;
-            return (
-              (o?.value ?? "").toLowerCase().includes(kw) ||
-              (o?.zhName ?? "").toLowerCase().includes(kw) ||
-              (o?.label ?? "").toLowerCase().includes(kw)
-            );
-          }}
-        />
-        <Button type="primary" size="small" block onClick={() => triggerAtcQuery(rec, region, true)}>
-          开始查询
-        </Button>
-      </div>
-    );
-
     if (status === "done" && count !== null) {
       const color = count >= 50 ? "#f5222d" : count >= 10 ? "#fa8c16" : "#52c41a";
       const label = count >= 100 ? "100+" : String(count);
-      const shownRegion = local?.region ?? rec.team_atc_region ?? "US";
+      const shownRegion = local?.region ?? rec.team_atc_region ?? "ALL";
       const advertisers = local?.topAdvertisers ?? [];
-      // D-008 F-8：团队 fallback 时附加灰色 Tag + Tooltip 标识来源
-      const teamSyncedAtTip = isTeamFallback && rec.team_atc_synced_at
-        ? `团队最近一次查询时间：${new Date(rec.team_atc_synced_at).toLocaleString("zh-CN", { hour12: false })}`
-        : "";
+      const syncedAt = local?.syncedAt ?? rec.team_atc_synced_at ?? rec.atc_last_synced_at;
+      const syncedTip = syncedAt ? `最近查询：${new Date(syncedAt).toLocaleString("zh-CN", { hour12: false })}（全员共享）` : "";
       return (
         <Space size={4}>
-          <span
-            style={{ color, fontWeight: 600, cursor: advertisers.length > 0 ? "pointer" : "default", textDecoration: advertisers.length > 0 ? "underline" : "none" }}
-            onClick={() => advertisers.length > 0 && setAtcDetailModal({ open: true, merchantName: rec.merchant_name, advertisers, region: shownRegion })}
-          >{label}个</span>
-          <Tag style={{ fontSize: 11, padding: "0 4px", margin: 0 }}>{shownRegion}</Tag>
-          {isTeamFallback && (
-            <Tooltip title={`${teamSyncedAtTip}；点击右侧图标可重新查询自己的最新结果`}>
-              <Tag color="default" style={{ fontSize: 11, padding: "0 4px", margin: 0, color: "#999" }}>团队</Tag>
+          <Tooltip title={syncedTip}>
+            <span
+              style={{ color, fontWeight: 600, cursor: advertisers.length > 0 ? "pointer" : "default", textDecoration: advertisers.length > 0 ? "underline" : "none" }}
+              onClick={() => advertisers.length > 0 && setAtcDetailModal({ open: true, merchantName: rec.merchant_name, advertisers, region: shownRegion })}
+            >{label}个</span>
+          </Tooltip>
+          {shownRegion !== "ALL" && (
+            <Tooltip title="旧口径（按国家）的历史数据，系统统一刷新后自动变为「任何位置」口径">
+              <Tag style={{ fontSize: 11, padding: "0 4px", margin: 0, color: "#999" }}>{shownRegion}</Tag>
             </Tooltip>
           )}
-          <Tooltip title="更换国家或刷新">
-            <Popover
-              open={popoverOpen}
-              onOpenChange={(v) => v ? openAtcPopover(rec.id) : closeAtcPopover(rec.id)}
-              content={regionPopoverContent}
-              title={null}
-              trigger="click"
-              placement="bottomRight"
-            >
-              <Button size="small" icon={<ReloadOutlined />} type="text" />
-            </Popover>
+          <Tooltip title="重新查询（任何位置口径，结果全员同步）">
+            <Button size="small" icon={<ReloadOutlined />} type="text" onClick={() => triggerAtcQuery(rec, true)} />
           </Tooltip>
         </Space>
       );
     }
 
     if (status === "error") {
-      return (
-        <Popover
-          open={popoverOpen}
-          onOpenChange={(v) => v ? openAtcPopover(rec.id) : closeAtcPopover(rec.id)}
-          content={regionPopoverContent}
-          title={null}
-          trigger="click"
-          placement="bottomRight"
-        >
-          <Button size="small" danger>重新查询</Button>
-        </Popover>
-      );
+      return <Button size="small" danger onClick={() => triggerAtcQuery(rec, true)}>重新查询</Button>;
     }
 
-    return (
-      <Popover
-        open={popoverOpen}
-        onOpenChange={(v) => v ? openAtcPopover(rec.id) : closeAtcPopover(rec.id)}
-        content={regionPopoverContent}
-        title={null}
-        trigger="click"
-        placement="bottomRight"
-      >
-        <Button size="small">查竞争度</Button>
-      </Popover>
-    );
-  }, [atcLoading, atcLocalData, serpApiConfigured, triggerAtcQuery, router, getAtcRegion, setAtcRegion, atcPopover, openAtcPopover, closeAtcPopover, atcRegionOptions]);
+    return <Button size="small" onClick={() => triggerAtcQuery(rec, true)}>查竞争度</Button>;
+  }, [atcLoading, atcLocalData, serpApiConfigured, triggerAtcQuery, router]);
 
   // §78.4：拒付率列渲染（全员维度，时间窗 2025-11-01 至今）。无交易记录显示「-」。
   const renderChargebackRateCol = useCallback((_: unknown, rec: Merchant) => {
@@ -1387,44 +1299,7 @@ export default function MerchantsPage() {
           message={
             <Space wrap size={8}>
               <Text style={{ fontWeight: 600 }}>已选 {batchSelectedKeys.length} 个商家</Text>
-              <Select
-                value={batchRegion}
-                onChange={setBatchRegion}
-                size="small"
-                style={{ width: 220 }}
-                disabled={batchRunning}
-                showSearch
-                optionFilterProp="label"
-                placeholder="选择或搜索国家"
-                options={(() => {
-                  // C-094.4：聚合选中商家的 supported_regions 并集，排到列表最前面（带 ⭐）
-                  // 其余国家从 ALL_COUNTRIES 兜底，与领取广告 modal 用同一份国家库
-                  const supported = new Set<string>();
-                  for (const m of batchSelectedMap.values()) {
-                    const regions = (m as Merchant).supported_regions;
-                    if (Array.isArray(regions)) {
-                      for (const r of regions) {
-                        const code = typeof r === "string" ? r : ((r as { code?: string })?.code ?? "");
-                        if (code) supported.add(String(code).toUpperCase());
-                      }
-                    }
-                  }
-                  const star = ALL_COUNTRIES.filter((c) => supported.has(c.code)).map((c) => ({
-                    value: c.code, label: `⭐ ${c.flag} ${c.code} - ${c.name}`,
-                  }));
-                  const rest = ALL_COUNTRIES.filter((c) => !supported.has(c.code)).map((c) => ({
-                    value: c.code, label: `${c.flag} ${c.code} - ${c.name}`,
-                  }));
-                  // 商家 supported_regions 里如果出现 ALL_COUNTRIES 没收录的国家，也补在中间
-                  const extra: Array<{ value: string; label: string }> = [];
-                  for (const code of supported) {
-                    if (!ALL_COUNTRIES.find((c) => c.code === code)) {
-                      extra.push({ value: code, label: `⭐ ${code} - 支持地区` });
-                    }
-                  }
-                  return [...star, ...extra, ...rest];
-                })()}
-              />
+              {/* D-271：竞争度统一「任何位置」口径，国家选择器已删除 */}
               <Tooltip title="跳过已查：选中商家中已经有 ATC 数据的会被跳过，节省 SerpApi 配额；强制刷新：忽略缓存全部重查">
                 <Switch
                   checked={batchForce}
