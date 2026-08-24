@@ -29,6 +29,7 @@ import {
   type HttpGet,
 } from "@/lib/rival-intel/brand-assessment/serpapi-client";
 import type { AdEntry, AdSitelink } from "@/lib/rival-intel/brand-assessment/types";
+import { recoverCopyFromImageCreatives } from "./creative-copy-ocr";
 import type { AdCopyPoolResult } from "./ad-copy-pool";
 import {
   dedupeAdDescriptions,
@@ -91,6 +92,14 @@ export interface CompetitorCollectionStats {
    */
   transparencyInspirationOnly?: number;
   transparencyAdvertiserQueries?: number;
+  /** D-273.4 识图补文案：送识别的张数 / 图片缓存命中 / 真正提出文案的条数 */
+  copyOcrAttempted?: number;
+  copyOcrCacheHits?: number;
+  copyOcrRecovered?: number;
+  /** 判定为商品网格购物广告而跳过的条数（这类图没有标题描述结构） */
+  copyOcrShoppingSkipped?: number;
+  /** 识图串位触发的拆批重跑次数，长期不为 0 说明批量上限要下调 */
+  copyOcrMisalignedRetries?: number;
   googleAdsQueries: number;
   googleAdsAds: number;
   serpapiCostUsd: number;
@@ -830,22 +839,47 @@ export async function fetchCompetitorFromBrandAssessment(
   const transparencyAds = rawTransparency
     ? collectTransparencyAds(rawTransparency, domain)
     : [];
-  const partitionedTransparency = partitionTransparencyAdsByDomain(transparencyAds, domain);
+
+  // D-273.4：透明中心把文本广告渲染成图片存档，文案提不出来的那批只能识图取。
+  // 识图挂了不能连累整条竞品拉取——这里拿到的本来就是「原本要丢弃」的创意。
+  const warnings: string[] = [...googleAdsRes.warnings];
+  let copyOcrAds: AdEntry[] = [];
+  let copyOcrStats: Awaited<ReturnType<typeof recoverCopyFromImageCreatives>>["stats"] | null = null;
+  if (rawTransparency) {
+    try {
+      const recovered = await recoverCopyFromImageCreatives(creativeArray(rawTransparency), domain);
+      copyOcrAds = recovered.ads;
+      copyOcrStats = recovered.stats;
+      warnings.push(...recovered.warnings);
+    } catch (err) {
+      warnings.push(`创意文案识图失败: ${(err as Error).message}`.slice(0, 200));
+    }
+  }
+
+  const partitionedTransparency = partitionTransparencyAdsByDomain(
+    [...transparencyAds, ...copyOcrAds],
+    domain,
+  );
   const brandOwnAds = [...googleAdsRes.brandOwnAds, ...partitionedTransparency.brandOwnAds];
   const nonBrandAds = [...googleAdsRes.nonBrandAds, ...partitionedTransparency.nonBrandAds];
-  const warnings: string[] = [...googleAdsRes.warnings];
   if (transparencyRes.status !== "ok") {
     warnings.push(`transparency failed: ${transparencyRes.error ?? "unknown"}`);
   }
+  const publishableAds = transparencyAds.length + copyOcrAds.length;
   const collectionStats: CompetitorCollectionStats = {
     transparencyPages: transparencyRes.pages,
-    transparencyCreatives: transparencyAds.length,
-    transparencyPublishableAds: transparencyAds.length,
+    transparencyCreatives: publishableAds,
+    transparencyPublishableAds: publishableAds,
     transparencyInspirationOnly: Math.max(
       0,
-      creativeArray(rawTransparency).length - transparencyAds.length,
+      creativeArray(rawTransparency).length - publishableAds,
     ),
     transparencyAdvertiserQueries: transparencyRes.advertiserQueries,
+    copyOcrAttempted: copyOcrStats?.attempted,
+    copyOcrCacheHits: copyOcrStats?.cacheHits,
+    copyOcrRecovered: copyOcrStats?.recovered,
+    copyOcrShoppingSkipped: copyOcrStats?.shoppingSkipped,
+    copyOcrMisalignedRetries: copyOcrStats?.misalignedRetries,
     googleAdsQueries: googleAdsRes.queryCount,
     googleAdsAds: googleAdsRes.adCount,
     serpapiCostUsd: serpCost,
