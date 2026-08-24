@@ -110,6 +110,29 @@ function cleanStringList(value: unknown, limit = 8): string[] {
   return out;
 }
 
+/**
+ * 界面噪音兜底：有些归档图其实是落地页预览而非标准搜索广告截图，模型会把页面控件
+ * 文字拼进描述（实测 spiderfarmer 那张就混进了「Previous slide Next slide ... Shop by」）。
+ * prompt 里已经要求排除但模型不总是听，所以代码这层再拦一道。
+ * 只收几乎不可能出现在真实广告文案里的词，避免误杀正常文案。
+ */
+const UI_NOISE_MARKERS = [
+  "previous slide",
+  "next slide",
+  "skip to content",
+  "add to cart",
+  "my account",
+  "shop by",
+  "return policy",
+  "browse more",
+  "check more",
+] as const;
+
+function isUiNoise(text: string): boolean {
+  const t = text.toLowerCase();
+  return UI_NOISE_MARKERS.some((marker) => t.includes(marker));
+}
+
 /** 取域名主体词用于宽松比对：www.lavetir.com/x → lavetir */
 function domainCore(value: string): string {
   const host = value
@@ -218,9 +241,14 @@ function buildPrompt(count: number): string {
     '  "descriptions": 广告描述原文数组',
     "规则：",
     "- 保持原语言原文，不翻译、不改写、不补全、不合并不同图的内容",
-    "- 只要广告主自己的文案；排除 Sponsored、广告主名称、网址行、星级评分、评价条数、",
-    "  Return policy、Previous slide、Next slide、Check More、Browse More 这类界面元素",
+    "- headlines 只要广告最上方那一行醒目的主标题（通常 1 条，被 - 或 | 连接的算同一条）",
+    "- 广告下方那排附加链接是站内导航（如「官网」「产品文档」「价格方案」「新手教程」",
+    "  「Shop Now」这类短词），不是广告标题，一律不要放进 headlines",
+    "- 排除 Sponsored、广告主名称、网址行、星级评分、评价条数、Return policy、",
+    "  Previous slide、Next slide、Check More、Browse More 这类界面元素",
     "- shopping=true 时 headlines/descriptions 留空数组",
+    "- 若这张图是网站页面/落地页截图而非搜索广告（没有「标题+描述+网址」结构），",
+    "  descriptions 留空，别把页面上的按钮、轮播和导航文字拼成描述",
     "- 图看不清或确实没有文案就留空数组，不要编造",
     `只输出 JSON 数组，长度必须正好 ${count}，不要 markdown 代码块。`,
   ].join("\n");
@@ -307,8 +335,8 @@ async function callVisionBatch(
   const payloads = items.map((_, index) => {
     const obj = byIndex.get(index + 1);
     if (!obj) return null;
-    const headlines = cleanStringList(obj.headlines);
-    const descriptions = cleanStringList(obj.descriptions);
+    const headlines = cleanStringList(obj.headlines).filter((t) => !isUiNoise(t));
+    const descriptions = cleanStringList(obj.descriptions).filter((t) => !isUiNoise(t));
     const shopping = obj.shopping === true || obj.shopping === "true";
     const seenUrl = asString(obj.seen_url) || null;
     let status: CopyPayload["status"] = "success";
