@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { withLeader } from "@/lib/api-handler";
+import { withUser } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
+import { resolveBankFlowScope, scopeEntryWhere } from "@/lib/bank-flow-scope";
 import ExcelJS from "exceljs";
 import {
   buildBankStatementSheet, buildPayeeStatementSheet,
@@ -16,29 +17,31 @@ export const dynamic = "force-dynamic";
  *   带打款方式(卡号)列、期初余额=各卡合计逐笔滚动）
  * - methodId 指定时（单卡导出按钮）：仍导出该卡单独一张流水单
  */
-export const GET = withLeader(async (req: NextRequest, { user }) => {
-  if (!user.teamId) return new NextResponse("未关联小组", { status: 400 });
-  const teamId = BigInt(user.teamId);
+export const GET = withUser(async (req: NextRequest, { user }) => {
+  // D-275.1 双口径：组长=团队卡全量；组员=只导自己的自填卡
+  const scope = await resolveBankFlowScope(user);
+  if (!scope) return new NextResponse("未关联小组", { status: 400 });
   const { searchParams } = new URL(req.url);
   const month = searchParams.get("month") || "";
   const methodIdParam = searchParams.get("methodId");
   if (!/^\d{4}-\d{2}$/.test(month)) return new NextResponse("month 格式必须为 YYYY-MM", { status: 400 });
 
+  const entryWhere = await scopeEntryWhere(scope);
   const [methodRows, entryRows, openings] = await Promise.all([
     prisma.payment_methods.findMany({
-      where: { team_id: teamId, is_deleted: 0, ...(methodIdParam ? { id: BigInt(methodIdParam) } : {}) },
+      where: { ...scope.methodWhere, is_deleted: 0, ...(methodIdParam ? { id: BigInt(methodIdParam) } : {}) },
       orderBy: { created_at: "asc" },
       select: { id: true, payee_name: true, pay_channel: true, card_no: true },
     }),
     prisma.bank_flow_entries.findMany({
       where: {
-        team_id: teamId, month, is_deleted: 0,
+        ...entryWhere, month, is_deleted: 0,
         ...(methodIdParam ? { payment_method_id: BigInt(methodIdParam) } : {}),
       },
       orderBy: { txn_at: "asc" },
     }),
     prisma.report_overrides.findMany({
-      where: { user_id: BigInt(user.userId), month, scope_key: { startsWith: "bank_open:" }, is_deleted: 0 },
+      where: { user_id: scope.userId, month, scope_key: { startsWith: "bank_open:" }, is_deleted: 0 },
       select: { scope_key: true, value: true },
     }),
   ]);

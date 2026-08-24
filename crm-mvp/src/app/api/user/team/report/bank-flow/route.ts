@@ -1,17 +1,21 @@
 import { NextRequest } from "next/server";
 import { randomUUID } from "crypto";
 import { apiSuccess, apiError } from "@/lib/constants";
-import { withLeader } from "@/lib/api-handler";
+import { withUser } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import { splitByPlatform, type SplitBreakdownItem } from "@/lib/bank-flow-split";
 import { absorbSurplus } from "@/lib/bank-flow-fee";
+import { resolveBankFlowScope, scopeEntryWhere } from "@/lib/bank-flow-scope";
 
 export const dynamic = "force-dynamic";
 
 /**
- * R-07 银行流水 — 平台总打款入账登记（组长）
+ * R-07 银行流水 — 平台总打款入账登记
  *
- * GET    ?month=YYYY-MM             本月全部流水条目 + 本组收款方式（含期初余额）
+ * D-275.1 双口径：组长=团队口径（组长清单卡+全组明细，原行为）；
+ * 组员=个人口径（自己自填的卡+自己的明细，yz 组自管模式）。见 lib/bank-flow-scope.ts。
+ *
+ * GET    ?month=YYYY-MM             本月全部流水条目 + 本口径收款方式（含期初余额）
  * POST   { month, paymentMethodId, platform, txnAt, amount, ... }  新增打款登记
  * PUT    { id, ...可改字段 }         修改（含员工明细 breakdown，改后手续费自动重算）
  * DELETE { id }                     软删
@@ -97,24 +101,25 @@ function serializeEntry(e: {
 }
 
 // ── GET：月度流水 + 收款方式清单（含期初余额） ──────────────────────────────
-export const GET = withLeader(async (req: NextRequest, { user }) => {
-  if (!user.teamId) return apiError("未关联小组");
-  const teamId = BigInt(user.teamId);
+export const GET = withUser(async (req: NextRequest, { user }) => {
+  const scope = await resolveBankFlowScope(user);
+  if (!scope) return apiError("未关联小组");
   const month = new URL(req.url).searchParams.get("month") || "";
   if (!/^\d{4}-\d{2}$/.test(month)) return apiError("month 格式必须为 YYYY-MM");
 
+  const entryWhere = await scopeEntryWhere(scope);
   const [methods, entries, openings] = await Promise.all([
     prisma.payment_methods.findMany({
-      where: { team_id: teamId, is_deleted: 0 },
+      where: { ...scope.methodWhere, is_deleted: 0 },
       orderBy: { created_at: "asc" },
       select: { id: true, payee_name: true, pay_channel: true, card_no: true },
     }),
     prisma.bank_flow_entries.findMany({
-      where: { team_id: teamId, month, is_deleted: 0 },
+      where: { ...entryWhere, month, is_deleted: 0 },
       orderBy: { txn_at: "asc" },
     }),
     prisma.report_overrides.findMany({
-      where: { user_id: BigInt(user.userId), month, scope_key: { startsWith: "bank_open:" }, is_deleted: 0 },
+      where: { user_id: scope.userId, month, scope_key: { startsWith: "bank_open:" }, is_deleted: 0 },
       select: { scope_key: true, value: true },
     }),
   ]);
@@ -133,21 +138,23 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
 });
 
 // ── POST：新增打款登记 / 保存期初余额 ────────────────────────────────────────
-export const POST = withLeader(async (req: NextRequest, { user }) => {
-  if (!user.teamId) return apiError("未关联小组");
-  const teamId = BigInt(user.teamId);
+export const POST = withUser(async (req: NextRequest, { user }) => {
+  const scope = await resolveBankFlowScope(user);
+  if (!scope) return apiError("未关联小组");
+  const teamId = scope.teamId;
   const body = await req.json();
 
   // 期初余额（导出流水单滚动余额用）：{ kind:"opening", month, paymentMethodId, value|null }
+  // 按登记人 user_id 隔离存 report_overrides，组长/组员各存各的
   if (body.kind === "opening") {
     const { month, paymentMethodId, value } = body;
     if (!/^\d{4}-\d{2}$/.test(month || "")) return apiError("month 格式必须为 YYYY-MM");
     if (!paymentMethodId) return apiError("缺少收款方式");
     const scopeKey = `bank_open:${paymentMethodId}`;
-    const leaderId = BigInt(user.userId);
+    const ownerId = scope.userId;
     if (value === null) {
       await prisma.report_overrides.updateMany({
-        where: { user_id: leaderId, month, scope_key: scopeKey, is_deleted: 0 },
+        where: { user_id: ownerId, month, scope_key: scopeKey, is_deleted: 0 },
         data: { is_deleted: 1 },
       });
       return apiSuccess(null, "已清除期初余额");
@@ -155,9 +162,9 @@ export const POST = withLeader(async (req: NextRequest, { user }) => {
     const num = Number(value);
     if (!isFinite(num) || Math.abs(num) > 999999999) return apiError("期初余额必须为数字");
     await prisma.report_overrides.upsert({
-      where: { user_id_month_scope_key: { user_id: leaderId, month, scope_key: scopeKey } },
-      update: { value: num, updated_by: leaderId, is_deleted: 0 },
-      create: { user_id: leaderId, month, scope_key: scopeKey, value: num, updated_by: leaderId },
+      where: { user_id_month_scope_key: { user_id: ownerId, month, scope_key: scopeKey } },
+      update: { value: num, updated_by: ownerId, is_deleted: 0 },
+      create: { user_id: ownerId, month, scope_key: scopeKey, value: num, updated_by: ownerId },
     });
     return apiSuccess(null, "期初余额已保存");
   }
@@ -171,8 +178,9 @@ export const POST = withLeader(async (req: NextRequest, { user }) => {
   const amt = Number(amount);
   if (!isFinite(amt) || amt < 0 || amt > 999999999) return apiError("总打款金额必须为非负数字");
 
+  // D-275.1：卡必须属于本口径（组长=团队卡，组员=自己的自填卡）
   const method = await prisma.payment_methods.findFirst({
-    where: { id: BigInt(paymentMethodId || 0), team_id: teamId, is_deleted: 0 },
+    where: { id: BigInt(paymentMethodId || 0), ...scope.methodWhere, is_deleted: 0 },
     select: { id: true },
   });
   if (!method) return apiError("收款方式不存在");
@@ -221,15 +229,16 @@ export const POST = withLeader(async (req: NextRequest, { user }) => {
 });
 
 // ── PUT：修改（重算手续费） ──────────────────────────────────────────────────
-export const PUT = withLeader(async (req: NextRequest, { user }) => {
-  if (!user.teamId) return apiError("未关联小组");
-  const teamId = BigInt(user.teamId);
+export const PUT = withUser(async (req: NextRequest, { user }) => {
+  const scope = await resolveBankFlowScope(user);
+  if (!scope) return apiError("未关联小组");
   const body = await req.json();
   const { id } = body;
   if (!id) return apiError("缺少 ID");
 
+  const entryWhere = await scopeEntryWhere(scope);
   const existing = await prisma.bank_flow_entries.findFirst({
-    where: { id: BigInt(id), team_id: teamId, is_deleted: 0 },
+    where: { id: BigInt(id), ...entryWhere, is_deleted: 0 },
   });
   if (!existing) return apiError("流水记录不存在");
 
@@ -337,14 +346,15 @@ export const PUT = withLeader(async (req: NextRequest, { user }) => {
 });
 
 // ── DELETE：软删 ─────────────────────────────────────────────────────────────
-export const DELETE = withLeader(async (req: NextRequest, { user }) => {
-  if (!user.teamId) return apiError("未关联小组");
-  const teamId = BigInt(user.teamId);
+export const DELETE = withUser(async (req: NextRequest, { user }) => {
+  const scope = await resolveBankFlowScope(user);
+  if (!scope) return apiError("未关联小组");
   const { id } = await req.json();
   if (!id) return apiError("缺少 ID");
 
+  const entryWhere = await scopeEntryWhere(scope);
   const existing = await prisma.bank_flow_entries.findFirst({
-    where: { id: BigInt(id), team_id: teamId, is_deleted: 0 },
+    where: { id: BigInt(id), ...entryWhere, is_deleted: 0 },
     select: { id: true },
   });
   if (!existing) return apiError("流水记录不存在");

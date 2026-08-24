@@ -1,8 +1,9 @@
 import { NextRequest } from "next/server";
 import { apiSuccess, apiError } from "@/lib/constants";
-import { withLeader } from "@/lib/api-handler";
+import { withUser } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import { paymentDisplayAmount } from "@/lib/report-metrics";
+import { resolveBankFlowScope, scopeMembers, scopeNoun } from "@/lib/bank-flow-scope";
 
 export const dynamic = "force-dynamic";
 
@@ -36,9 +37,11 @@ const normCard = (s: string | null | undefined) => (s || "").replace(/[\s-]/g, "
 const normPayee = (s: string | null | undefined) =>
   (s || "").replace(/（/g, "(").replace(/）/g, ")").replace(/\s/g, "");
 
-export const GET = withLeader(async (req: NextRequest, { user }) => {
-  if (!user.teamId) return apiError("未关联小组");
-  const teamId = BigInt(user.teamId);
+export const GET = withUser(async (req: NextRequest, { user }) => {
+  // D-275.1 双口径：组长=全组成员+团队卡；组员=仅本人+自己的自填卡
+  const scope = await resolveBankFlowScope(user);
+  if (!scope) return apiError("未关联小组");
+  const teamId = scope.teamId;
 
   const sp = new URL(req.url).searchParams;
   const methodId = sp.get("methodId") || "";
@@ -51,17 +54,14 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   const month = dateStr.slice(0, 7);
 
   const method = await prisma.payment_methods.findFirst({
-    where: { id: BigInt(methodId), team_id: teamId, is_deleted: 0 },
+    where: { id: BigInt(methodId), ...scope.methodWhere, is_deleted: 0 },
     select: { id: true, payee_name: true, pay_channel: true, card_no: true },
   });
   if (!method) return apiError("收款方式不存在");
   // C-178：快照仍存组合文本「名字(打款方式)」，匹配时按组合文本比对
   const methodPayeeText = method.pay_channel ? `${method.payee_name}(${method.pay_channel})` : method.payee_name;
 
-  const members = await prisma.users.findMany({
-    where: { team_id: teamId, is_deleted: 0, role: { not: "admin" } },
-    select: { id: true, username: true, display_name: true },
-  });
+  const members = await scopeMembers(scope);
   const memberById = new Map(members.map((m) => [String(m.id), m]));
   const memberIds = members.map((m) => m.id);
 
@@ -162,7 +162,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   if (payments.length === 0) {
     return apiSuccess({
       matchedDate: null, items: [],
-      note: `到账日 ${dateStr} 前后 ${WINDOW_DAYS} 天内没有「${methodPayeeText}」×${platform} 的组员打款记录（按实际打款日 paid_date，含逐笔修正归属），可手动填写明细`,
+      note: `到账日 ${dateStr} 前后 ${WINDOW_DAYS} 天内没有「${methodPayeeText}」×${platform} 的${scopeNoun(scope)}打款记录（按实际打款日 paid_date，含逐笔修正归属），可手动填写明细`,
     });
   }
 

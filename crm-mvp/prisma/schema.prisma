@@ -1325,6 +1325,28 @@ model ad_image_ocr_cache {
 }
 
 // -----------------------------------------------------------
+// 33.1 竞品创意文案识图缓存（D-273.4）
+// 与 ad_image_ocr_cache 分表：那张表的 status='success' 已被 ATC 链路当作
+// 「域名已识别」读取，混入文案会污染既有语义。
+// -----------------------------------------------------------
+model ad_creative_copy_cache {
+  id           BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  image_url    String   @unique(map: "uk_copy_image_url") @db.VarChar(768)
+  /// success=识出文案 / empty=图内无可用文案 / shopping=商品网格购物广告 / failed=识别失败
+  status       String   @default("success") @db.VarChar(20)
+  headlines    Json?
+  descriptions Json?
+  /// 模型在图上读到的网址，与 SerpApi target_domain 核对以检测批量串位
+  seen_url     String?  @db.VarChar(255)
+  model_used   String?  @db.VarChar(64)
+  last_error   String?  @db.VarChar(512)
+  created_at   DateTime @default(now()) @db.DateTime(0)
+  updated_at   DateTime @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([status], map: "idx_copy_status")
+}
+
+// -----------------------------------------------------------
 // 34. ATC 广告情报 — 用户 SerpApi Key 多账号池
 // -----------------------------------------------------------
 model user_serpapi_keys {
