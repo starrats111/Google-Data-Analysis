@@ -3,12 +3,12 @@
 import { useState, useEffect, useMemo } from "react";
 import {
   Card, Tabs, Form, Input, Button, Select, Table, Space, Tag, Typography,
-  Popconfirm, Modal, Switch, Upload, Row, Col, App, Tooltip, Alert,
+  Popconfirm, Modal, Switch, Row, Col, App, Tooltip, Alert,
 } from "antd";
 import {
   SettingOutlined, ApiOutlined, GoogleOutlined,
   PlusOutlined, DeleteOutlined, SaveOutlined, EditOutlined, BellOutlined,
-  InboxOutlined, FileTextOutlined, CheckCircleOutlined, LockOutlined, CopyOutlined,
+  CheckCircleOutlined, LockOutlined, CopyOutlined,
   ExclamationCircleOutlined, CheckOutlined, SyncOutlined,
   SearchOutlined, CreditCardOutlined,
 } from "@ant-design/icons";
@@ -465,14 +465,21 @@ function MccAccountsTab() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editItem, setEditItem] = useState<Record<string, unknown> | null>(null);
   const [form] = Form.useForm();
-  const [jsonFileName, setJsonFileName] = useState<string>("");
+  // D-276: 本组 Token 池服务邮箱（需在 Google Ads 后台授权的 client_email 列表）
+  const [saEmails, setSaEmails] = useState<string[]>([]);
 
   const fetchData = async () => {
     const res = await fetch("/api/user/settings/mcc").then((r) => r.json());
     if (res.code === 0) setAccounts(res.data);
   };
 
-  useEffect(() => { fetchData(); }, []);
+  useEffect(() => {
+    fetchData();
+    fetch("/api/user/team/token-pool/emails")
+      .then((r) => r.json())
+      .then((res) => { if (res.code === 0) setSaEmails(res.data || []); })
+      .catch(() => {});
+  }, []);
 
   const handleSubmit = async () => {
     let values;
@@ -521,7 +528,6 @@ function MccAccountsTab() {
             // 编辑时不回填 developer_token（密码字段），避免误清空
             const { developer_token: _dt, service_account_json: _sa, ...rest } = record;
             form.setFieldsValue(rest);
-            setJsonFileName(record.service_account_json ? "已有凭证" : "");
             setModalOpen(true);
           }}>编辑</Button>
           <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id as string)}>
@@ -536,7 +542,7 @@ function MccAccountsTab() {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
         <Text>Google Ads MCC 账户管理</Text>
-        <Button icon={<PlusOutlined />} onClick={() => { setEditItem(null); form.resetFields(); setJsonFileName(""); setModalOpen(true); }}>添加 MCC</Button>
+        <Button icon={<PlusOutlined />} onClick={() => { setEditItem(null); form.resetFields(); setModalOpen(true); }}>添加 MCC</Button>
       </div>
       <Table columns={columns} dataSource={accounts} rowKey="id" size="small" pagination={{ defaultPageSize: 10, showTotal: (t) => `共 ${t} 条`, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"] }} />
       <Modal title={editItem ? "编辑 MCC" : "添加 MCC"} open={modalOpen} onOk={handleSubmit} onCancel={() => setModalOpen(false)}>
@@ -550,41 +556,29 @@ function MccAccountsTab() {
           <Form.Item name="currency" label="货币" initialValue="USD">
             <Select options={[{ value: "USD", label: "USD" }, { value: "CNY", label: "CNY" }]} />
           </Form.Item>
-          <Form.Item name="service_account_json" label="服务账号凭证 JSON">
-            {jsonFileName ? (
-              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", background: "#f6ffed", border: "1px solid #b7eb8f", borderRadius: 6 }}>
-                <CheckCircleOutlined style={{ color: "#52c41a" }} />
-                <FileTextOutlined />
-                <span style={{ flex: 1 }}>{jsonFileName}</span>
-                <Button size="small" type="link" danger onClick={() => { setJsonFileName(""); form.setFieldValue("service_account_json", undefined); }}>移除</Button>
-              </div>
-            ) : (
-              <Upload.Dragger
-                accept=".json"
-                showUploadList={false}
-                beforeUpload={(file) => {
-                  const reader = new FileReader();
-                  reader.onload = (e) => {
-                    try {
-                      const text = e.target?.result as string;
-                      JSON.parse(text); // 验证是合法 JSON
-                      form.setFieldValue("service_account_json", text);
-                      setJsonFileName(file.name);
-                      message.success(`已读取 ${file.name}`);
-                    } catch {
-                      message.error("文件不是有效的 JSON 格式");
-                    }
-                  };
-                  reader.readAsText(file);
-                  return false; // 阻止自动上传
-                }}
-                style={{ padding: "12px 0" }}
-              >
-                <p style={{ marginBottom: 8 }}><InboxOutlined style={{ fontSize: 28, color: "#4DA6FF" }} /></p>
-                <p style={{ fontSize: 13, color: "#666" }}>拖拽 JSON 文件到此处，或点击选择文件</p>
-                <p style={{ fontSize: 12, color: "#999" }}>仅支持 .json 格式</p>
-              </Upload.Dragger>
-            )}
+          {/* D-276: 上传凭证 JSON 改为提示授权 Token 池服务邮箱（凭证统一由组长在 Token 池维护） */}
+          <Form.Item label="服务账号授权">
+            <Alert
+              type="info"
+              showIcon
+              message="需要给以下服务邮箱授权"
+              description={
+                saEmails.length > 0 ? (
+                  <div>
+                    <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>
+                      请在 Google Ads 后台（管理员 → 访问权限和安全性）将以下服务邮箱添加为该 MCC 的用户：
+                    </div>
+                    {saEmails.map((email) => (
+                      <div key={email} style={{ padding: "2px 0" }}>
+                        <Text code copyable style={{ fontSize: 12 }}>{email}</Text>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <span style={{ fontSize: 12 }}>本组 Token 池暂无可用凭证，请联系组长在「小组设置 → Token 池」中配置</span>
+                )
+              }
+            />
           </Form.Item>
           <Form.Item name="developer_token" label="Developer Token" tooltip="Google Ads API 开发者令牌">
             <Input.Password placeholder={editItem?.developer_token ? "已保存（留空则不修改）" : "Google Ads API Developer Token"} />
