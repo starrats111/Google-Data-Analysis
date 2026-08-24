@@ -28,7 +28,7 @@ import {
 import dayjs, { type Dayjs } from "dayjs";
 import type { ColumnsType } from "antd/es/table";
 import { REPORT_PLATFORM_ORDER } from "@/lib/report-metrics";
-import { apportionFee } from "@/lib/bank-flow-fee";
+import { apportionFee, absorbSurplus } from "@/lib/bank-flow-fee";
 import { splitByPlatform } from "@/lib/bank-flow-split";
 
 const { Text } = Typography;
@@ -290,27 +290,38 @@ export default function BankFlowTab() {
     message.success(`已添加 ${merged.length} 行明细（${chosen.length} 笔打款）`);
   };
 
-  const breakdownTotal = useMemo(
+  const rawTotal = useMemo(
     () => Math.round(breakdown.reduce((s, b) => s + (b.amount || 0), 0) * 100) / 100,
     [breakdown],
   );
 
   // 弹窗内实时分摊：费率 = 总手续费 ÷ 明细合计，个人手续费 = 明细金额 × 费率（尾差调到金额最大者）
+  // D-274.1（07 拍板）：报表不允许负手续费——实际到账 > 明细合计时把差额按占比摊进明细金额；
+  // 合计/手续费/费率/拆分预览/保存 payload 全部使用摊入后的 effBreakdown（与后端保存口径一致）。
   const watchedAmount = Form.useWatch("amount", form);
+  const effBreakdown = useMemo(() => {
+    const adjusted = absorbSurplus(breakdown.map((b) => b.amount || 0), Number(watchedAmount) || 0);
+    return breakdown.map((b, i) => (adjusted[i] === (b.amount || 0) ? b : { ...b, amount: adjusted[i] }));
+  }, [breakdown, watchedAmount]);
+  const breakdownTotal = useMemo(
+    () => Math.round(effBreakdown.reduce((s, b) => s + (b.amount || 0), 0) * 100) / 100,
+    [effBreakdown],
+  );
+  const absorbed = Math.round((breakdownTotal - rawTotal) * 100) / 100;
   const modalFee = useMemo(
     () => Math.round((breakdownTotal - (Number(watchedAmount) || 0)) * 100) / 100,
     [breakdownTotal, watchedAmount],
   );
   const modalFees = useMemo(
-    () => apportionFee(breakdown.map((b) => b.amount || 0), modalFee),
-    [breakdown, modalFee],
+    () => apportionFee(effBreakdown.map((b) => b.amount || 0), modalFee),
+    [effBreakdown, modalFee],
   );
 
   // C-180：明细混含多平台时的拆分预览（与后端保存口径同一函数）
   const watchedPlatform = Form.useWatch("platform", form) as string | undefined;
   const splitGroups = useMemo(
-    () => splitByPlatform(breakdown, Number(watchedAmount) || 0, watchedPlatform || breakdown[0]?.platform || "", sourceDate),
-    [breakdown, watchedAmount, watchedPlatform, sourceDate],
+    () => splitByPlatform(effBreakdown, Number(watchedAmount) || 0, watchedPlatform || breakdown[0]?.platform || "", sourceDate),
+    [effBreakdown, breakdown, watchedAmount, watchedPlatform, sourceDate],
   );
 
   const handleSave = async () => {
@@ -330,7 +341,8 @@ export default function BankFlowTab() {
         counterparty: values.counterparty || "",
         summary: values.summary || "佣金结算",
         remark: values.remark || "",
-        breakdown,
+        // D-274.1：保存摊入多到账差额后的明细（手续费不为负），后端同规则兜底
+        breakdown: effBreakdown,
         sourceDate,
       };
       const res = await fetch("/api/user/team/report/bank-flow", {
@@ -518,7 +530,9 @@ export default function BankFlowTab() {
     },
     {
       title: "净到手(¥)", key: "net", width: 110, align: "right",
-      render: (_, b, idx) => <Text strong>¥{fmt(Math.round(((b.amount || 0) - (modalFees[idx] ?? 0)) * 100) / 100)}</Text>,
+      // D-274.1：净到手按摊入多到账差额后的金额算（保存入库的就是这个数）
+      render: (_, __, idx) =>
+        <Text strong>¥{fmt(Math.round(((effBreakdown[idx]?.amount || 0) - (modalFees[idx] ?? 0)) * 100) / 100)}</Text>,
     },
     {
       title: "", key: "del", width: 40,
@@ -849,6 +863,9 @@ export default function BankFlowTab() {
                 <Text type="secondary">
                   费率 {breakdownTotal > 0 ? `${((modalFee / breakdownTotal) * 100).toFixed(2)}%` : "—"}
                 </Text>
+                {absorbed >= 0.005 && (
+                  <Text type="secondary">（到账比明细多 ¥{fmt(absorbed)}，已按占比摊入员工金额）</Text>
+                )}
               </Space>
             </div>
             {splitGroups.length > 1 && (

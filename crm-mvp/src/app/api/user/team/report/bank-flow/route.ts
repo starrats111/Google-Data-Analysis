@@ -4,6 +4,7 @@ import { apiSuccess, apiError } from "@/lib/constants";
 import { withLeader } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
 import { splitByPlatform, type SplitBreakdownItem } from "@/lib/bank-flow-split";
+import { absorbSurplus } from "@/lib/bank-flow-fee";
 
 export const dynamic = "force-dynamic";
 
@@ -58,6 +59,12 @@ function parseBreakdown(raw: unknown): { items: BankFlowBreakdownItem[]; total: 
 
 /** C-180：拆分组号（同一笔银行到账的多平台条目共享） */
 const newTxnGroup = () => randomUUID().replace(/-/g, "").slice(0, 32);
+
+/** D-274.1（07 拍板）：报表不允许负手续费——到账多于明细合计时把差额按占比摊进明细金额 */
+function absorbIntoItems(items: BankFlowBreakdownItem[], totalAmount: number): BankFlowBreakdownItem[] {
+  const adjusted = absorbSurplus(items.map((it) => it.amount || 0), totalAmount);
+  return items.map((it, i) => ((it.amount || 0) === adjusted[i] ? it : { ...it, amount: adjusted[i] }));
+}
 
 function serializeEntry(e: {
   id: bigint; team_id: bigint; month: string; payment_method_id: bigint; txn_at: Date;
@@ -174,7 +181,8 @@ export const POST = withLeader(async (req: NextRequest, { user }) => {
   if (!bd) return apiError("员工明细格式无效");
 
   // C-180：明细混含多个平台时按平台拆分保存（同一笔银行到账共享 txn_group）
-  const groups = splitByPlatform(bd.items, amt, platform, sourceDate ?? null);
+  // D-274.1：先摊入多到账差额，保证手续费不为负
+  const groups = splitByPlatform(absorbIntoItems(bd.items, amt), amt, platform, sourceDate ?? null);
   if (groups.some((g) => !/^[A-Z]{2,8}$/.test(g.platform))) return apiError("明细行 platform 无效");
   const txnGroup = groups.length > 1 ? newTxnGroup() : null;
   const shared = {
@@ -260,7 +268,8 @@ export const PUT = withLeader(async (req: NextRequest, { user }) => {
     const fallbackSourceDate = body.sourceDate !== undefined
       ? (body.sourceDate || null)
       : (existing.source_date ? existing.source_date.toISOString().slice(0, 10) : null);
-    const groups = splitByPlatform(bd.items, amt, fallbackPlatform, fallbackSourceDate);
+    // D-274.1：先摊入多到账差额，保证手续费不为负
+    const groups = splitByPlatform(absorbIntoItems(bd.items, amt), amt, fallbackPlatform, fallbackSourceDate);
     if (groups.some((g) => !/^[A-Z]{2,8}$/.test(g.platform))) return apiError("明细行 platform 无效");
     const mainIdx = Math.max(0, groups.findIndex((g) => g.platform === existing.platform));
     const main = groups[mainIdx];
@@ -309,7 +318,20 @@ export const PUT = withLeader(async (req: NextRequest, { user }) => {
     );
   }
 
-  data.fee = r2(Number(existing.expected_amount) - amt);
+  // D-274.1：只改总额时同样不允许负手续费——到账多于明细则把差额摊进现有明细
+  let fee = r2(Number(existing.expected_amount) - amt);
+  if (fee < 0) {
+    let items: BankFlowBreakdownItem[] = [];
+    try { items = existing.breakdown ? JSON.parse(existing.breakdown) : []; } catch { /* 脏数据跳过 */ }
+    const adjusted = absorbIntoItems(items, amt);
+    const expected = r2(adjusted.reduce((s, it) => s + (it.amount || 0), 0));
+    if (expected !== r2(Number(existing.expected_amount))) {
+      data.breakdown = JSON.stringify(adjusted);
+      data.expected_amount = expected;
+      fee = r2(expected - amt);
+    }
+  }
+  data.fee = fee;
   const updated = await prisma.bank_flow_entries.update({ where: { id: existing.id }, data });
   return apiSuccess(serializeEntry(updated), "已保存");
 });
