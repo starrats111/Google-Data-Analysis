@@ -862,7 +862,7 @@ export async function fetchCompetitorFromBrandAssessment(
     if (isMonthlyQuotaError(allFailures)) {
       throw new Error(
         "SerpApi 额度已耗尽：池内每个 Key 都打满了本月配额（免费版 250 次/月），" +
-          "已自动逐个换过仍无可用额度。请在「个人设置 → 广告情报」补充可用 Key，或等下个计费周期。",
+          "已自动逐个换过仍无可用额度。请联系管理员在「管理员控制台 → SerpApi Key 池」补充可用 Key，或等下个计费周期。",
       );
     }
     throw new Error(

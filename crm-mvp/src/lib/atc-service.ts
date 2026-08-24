@@ -220,7 +220,7 @@ interface SerpApiResponse {
 // ─── 从 Key 池中随机选一个可用 Key ───
 export function pickApiKey(keys: string[]): string {
   const active = keys.filter((k) => k && k.trim());
-  if (active.length === 0) throw new Error("请先配置 SerpApi Key");
+  if (active.length === 0) throw new Error("系统内暂无可用 SerpApi Key，请联系管理员在「管理员控制台 → SerpApi Key 池」配置");
   return active[Math.floor(Math.random() * active.length)];
 }
 

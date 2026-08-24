@@ -16,7 +16,7 @@ export const GET = withUser(async (req: NextRequest) => {
   // D-215：取全局共享 key 池，不再只看自己配的 key
   const serpApiKeys = await getPoolKeys();
   if (serpApiKeys.length === 0) {
-    return NextResponse.json({ code: -1, message: "系统内暂无可用 SerpApi Key，请在「个人设置 → 广告情报」中配置" }, { status: 400 });
+    return NextResponse.json({ code: -1, message: "系统内暂无可用 SerpApi Key，请联系管理员在「管理员控制台 → SerpApi Key 池」配置" }, { status: 400 });
   }
 
   const result = await searchIntelligence({

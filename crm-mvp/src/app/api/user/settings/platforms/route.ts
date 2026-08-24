@@ -37,9 +37,13 @@ export async function POST(req: NextRequest) {
       });
       const method = await prisma.payment_methods.findFirst({
         where: { id: BigInt(payment_method_id), is_deleted: 0 },
-        select: { id: true, team_id: true },
+        select: { id: true, team_id: true, owner_user_id: true },
       });
       if (!method || !me?.team_id || method.team_id !== me.team_id) {
+        return apiError("收款方式不存在或不属于本组");
+      }
+      // D-275：个人自填的收款方式仅本人可绑，同组他人的自填行不可用
+      if (method.owner_user_id !== null && method.owner_user_id !== userId) {
         return apiError("收款方式不存在或不属于本组");
       }
       methodId = method.id;

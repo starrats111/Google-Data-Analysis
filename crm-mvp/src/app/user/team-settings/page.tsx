@@ -21,7 +21,7 @@ function PaymentMethodsCard() {
   const [form] = Form.useForm();
 
   const fetchData = () =>
-    fetch("/api/user/team/payment-methods")
+    fetch("/api/user/team/payment-methods?scope=team")
       .then((r) => r.json())
       .then((res) => { if (res?.code === 0) setRows(res.data || []); })
       .catch(() => undefined)

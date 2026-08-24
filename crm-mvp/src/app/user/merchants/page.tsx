@@ -270,7 +270,7 @@ export default function MerchantsPage() {
   const [atcLocalData, setAtcLocalData] = useState<Record<string, { count: number; syncedAt: string; region: string; topAdvertisers?: { id: string; name: string }[] }>>({});
   const [atcDetailModal, setAtcDetailModal] = useState<{ open: boolean; merchantName: string; advertisers: { id: string; name: string }[]; region: string } | null>(null);
   // D-271：竞争度统一「任何位置」口径，行级国家选择器与 region 选项已删除
-  const [serpApiConfigured, setSerpApiConfigured] = useState<boolean | null>(null);
+  // D-275：SerpApi Key 池上收管理员统一管理，员工侧「配置Key」引导删除（原 has_key 门控早已失效）
   // C-093 / C-094.1：广告主分类（同行 vs 品牌自投），Modal 内异步反查
   type DomainDetail = {
     domain: string;
@@ -334,9 +334,6 @@ export default function MerchantsPage() {
     setBatchSelectedMap(new Map());
   }, []);
   useEffect(() => {
-    fetch("/api/user/settings/serpapi").then((r) => r.json()).then((res) => {
-      if (res.code === 0) setSerpApiConfigured((res.data as { has_key: boolean; masked_key: string | null }).has_key);
-    }).catch(() => {});
     // 加载已持久化的 ATC 快照
     fetch("/api/user/atc/snapshots").then((r) => r.json()).then((res) => {
       if (res.code === 0 && res.data) {
@@ -492,10 +489,6 @@ export default function MerchantsPage() {
   //   随后自动出现在「我的广告主 → 可关注广告主」列表里。
   const doBatchAtcQuery = useCallback(async (selectedMerchants: Merchant[]) => {
     if (selectedMerchants.length === 0) return;
-    if (serpApiConfigured === false) {
-      message.error("请先在「个人设置 → 广告情报」中配置 SerpApi Key");
-      return;
-    }
 
     const targets = batchForce
       ? selectedMerchants
@@ -586,7 +579,7 @@ export default function MerchantsPage() {
       }
     };
     void fireClassify();
-  }, [serpApiConfigured, batchForce, atcLocalData, triggerAtcQuery, message]);
+  }, [batchForce, atcLocalData, triggerAtcQuery, message]);
 
   const [claimModal, setClaimModal] = useState(false); const [claimM, setClaimM] = useState<Merchant | null>(null); const [claimForm] = Form.useForm();
   // 新增广告（同一商家多广告，非破坏性）：复用领取弹窗，提交时带 relaunch=true
@@ -994,9 +987,6 @@ export default function MerchantsPage() {
     const count = local?.count ?? rec.team_atc_count ?? rec.atc_advertiser_count ?? null;
     const status = local || count !== null ? "done" : (rec.atc_sync_status ?? "idle");
 
-    if (serpApiConfigured === false) {
-      return <Button size="small" type="link" style={{ padding: 0, fontSize: 12 }} onClick={() => router.push("/user/settings")}>配置Key</Button>;
-    }
     if (loading || status === "syncing") {
       return <span style={{ color: "#1677ff", fontSize: 12 }}><SyncOutlined spin /> 查询中…</span>;
     }
@@ -1033,7 +1023,7 @@ export default function MerchantsPage() {
     }
 
     return <Button size="small" onClick={() => triggerAtcQuery(rec, true)}>查竞争度</Button>;
-  }, [atcLoading, atcLocalData, serpApiConfigured, triggerAtcQuery, router]);
+  }, [atcLoading, atcLocalData, triggerAtcQuery]);
 
   // §78.4：拒付率列渲染（全员维度，时间窗 2025-11-01 至今）。无交易记录显示「-」。
   const renderChargebackRateCol = useCallback((_: unknown, rec: Merchant) => {

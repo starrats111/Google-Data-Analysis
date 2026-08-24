@@ -6,7 +6,7 @@ import {
   Collapse, Empty, Alert, App, Tooltip, Switch, InputNumber, Badge, Tabs,
 } from "antd";
 import {
-  SearchOutlined, EyeOutlined, LinkOutlined, SettingOutlined,
+  SearchOutlined, EyeOutlined, LinkOutlined,
   FireOutlined, LoadingOutlined, StarOutlined, StarFilled,
 } from "@ant-design/icons";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -534,14 +534,8 @@ export default function IntelligencePage() {
 
       {noKey && (
         <Alert type="warning" showIcon style={{ marginBottom: 16 }}
-          message="尚未配置 SerpApi Key"
-          description={
-            <span>
-              请先前往「个人设置 → 广告情报」配置 API Key。
-              <Button type="link" size="small" icon={<SettingOutlined />} style={{ padding: "0 4px" }}
-                onClick={() => router.push("/user/settings")}>去配置</Button>
-            </span>
-          }
+          message="系统内暂无可用 SerpApi Key"
+          description="SerpApi Key 由管理员统一维护（管理员控制台 → SerpApi Key 池），请联系管理员补充可用 Key"
         />
       )}
 

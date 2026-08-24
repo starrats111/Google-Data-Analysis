@@ -13,6 +13,7 @@ import {
   AuditOutlined,
   GlobalOutlined,
   ClusterOutlined,
+  EyeOutlined,
 } from "@ant-design/icons";
 import { useRouter, usePathname } from "next/navigation";
 import { useState, useEffect } from "react";
@@ -82,6 +83,7 @@ const menuItems: MenuItem[] = [
     type: "group" as const,
     children: [
       { key: "/admin/ai-config", icon: <ApiOutlined />, label: "AI 配置" },
+      { key: "/admin/serpapi-keys", icon: <EyeOutlined />, label: "SerpApi Key 池" },
       { key: "/admin/semrush-config", icon: <ToolOutlined />, label: "SemRush 配置" },
       { key: "/admin/system-config", icon: <SettingOutlined />, label: "系统参数" },
     ],

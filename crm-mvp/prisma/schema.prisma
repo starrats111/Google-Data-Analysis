@@ -1471,6 +1471,8 @@ model semrush_health_logs {
 model payment_methods {
   id          BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
   team_id     BigInt   @db.UnsignedBigInt
+  // D-275：NULL=组长维护的团队级收款方式；非空=组员个人自填（yz 组模式，组长未维护清单时开放），仅本人可见可绑
+  owner_user_id BigInt? @db.UnsignedBigInt
   payee_name  String   @db.VarChar(64)
   pay_channel String   @default("") @db.VarChar(64) // 打款方式（如 农业/工商/香港/PingPong/WISE）
   card_no     String   @db.VarChar(64)

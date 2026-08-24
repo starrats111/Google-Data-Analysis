@@ -6493,6 +6493,7 @@ export type Semrush_health_logsScalarFieldEnum = (typeof Semrush_health_logsScal
 export const Payment_methodsScalarFieldEnum = {
   id: 'id',
   team_id: 'team_id',
+  owner_user_id: 'owner_user_id',
   payee_name: 'payee_name',
   pay_channel: 'pay_channel',
   card_no: 'card_no',

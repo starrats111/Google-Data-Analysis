@@ -9,8 +9,8 @@ import {
   SettingOutlined, ApiOutlined, GoogleOutlined,
   PlusOutlined, DeleteOutlined, SaveOutlined, EditOutlined, BellOutlined,
   InboxOutlined, FileTextOutlined, CheckCircleOutlined, LockOutlined, CopyOutlined,
-  EyeOutlined, ExclamationCircleOutlined, CheckOutlined, SyncOutlined,
-  SearchOutlined,
+  ExclamationCircleOutlined, CheckOutlined, SyncOutlined,
+  SearchOutlined, CreditCardOutlined,
 } from "@ant-design/icons";
 import {
   PLATFORMS,
@@ -416,11 +416,11 @@ function PlatformConnectionsTab() {
           <Form.Item
             name="payment_method_id"
             label="收款方式"
-            tooltip="从组长维护的收款方式清单中选择，月度收支报表按此显示收款人/卡号。一次绑定长期生效（历史月报表按当时绑定固化）"
+            tooltip="从收款方式清单中选择（组长维护的清单，或本组无清单时自己在「收款方式」标签页填写的银行卡），月度收支报表按此显示收款人/卡号。一次绑定长期生效（历史月报表按当时绑定固化）"
           >
             <Select
               allowClear
-              placeholder={paymentMethods.length === 0 ? "组长尚未维护收款方式清单" : "选择收款方式"}
+              placeholder={paymentMethods.length === 0 ? "暂无收款方式，请先在「收款方式」标签页添加" : "选择收款方式"}
               options={paymentMethods.map((m) => {
                 const name = m.pay_channel ? `${m.payee_name}（${m.pay_channel}）` : m.payee_name;
                 return { value: m.id, label: m.card_no ? `${name} · ${m.card_no}` : name };
@@ -766,58 +766,58 @@ function ChangePasswordTab() {
   );
 }
 
-// ==================== 广告情报 Tab ====================
-interface SerpApiKeyRow {
-  id: string;
-  key_name: string;
-  masked_key: string;
-  is_active: boolean;
-  created_at: string;
-}
+// ==================== 收款方式 Tab（D-275） ====================
+// 组长维护了团队清单 → 只读同步组长清单；组长没维护（yz 组模式）→ 自己填银行卡。
+// 填好后在「联盟平台连接」里为各联盟账号绑定，月度收支报表/银行流水按绑定显示。
+type PersonalPaymentMethod = { id: string; payee_name: string; pay_channel: string; card_no: string; created_at: string };
 
-function SerpApiTab() {
+function PaymentMethodsTab() {
   const { message } = App.useApp();
-  const [keys, setKeys] = useState<SerpApiKeyRow[]>([]);
+  const [mode, setMode] = useState<"team" | "self">("team");
+  const [rows, setRows] = useState<PersonalPaymentMethod[]>([]);
   const [loading, setLoading] = useState(true);
-  const [addVisible, setAddVisible] = useState(false);
-  const [newKey, setNewKey] = useState("");
-  const [newKeyName, setNewKeyName] = useState("");
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editItem, setEditItem] = useState<PersonalPaymentMethod | null>(null);
   const [saving, setSaving] = useState(false);
-  const [testingId, setTestingId] = useState<string | null>(null);
-  const [testKeyInput, setTestKeyInput] = useState("");
-  const [testingNew, setTestingNew] = useState(false);
+  const [form] = Form.useForm();
 
-  const fetchKeys = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch("/api/user/settings/serpapi").then((r) => r.json());
-      if (res.code === 0) setKeys(res.data);
-      else message.error(res.message || "加载 Key 列表失败");
-    } catch {
-      message.error("加载 Key 列表失败，请刷新重试");
-    } finally {
-      setLoading(false);
-    }
-  };
+  const fetchData = () =>
+    fetch("/api/user/settings/payment-methods")
+      .then((r) => r.json())
+      .then((res) => {
+        if (res?.code === 0) {
+          setMode(res.data?.mode === "self" ? "self" : "team");
+          setRows(res.data?.methods || []);
+        } else {
+          message.error(res?.message || "加载收款方式失败");
+        }
+      })
+      .catch(() => message.error("加载收款方式失败，请刷新重试"))
+      .finally(() => setLoading(false));
 
-  useEffect(() => { fetchKeys(); }, []);
+  useEffect(() => { fetchData(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleAdd = async () => {
-    const key = newKey.trim();
-    if (!key) { message.warning("请输入 API Key"); return; }
+  const handleSave = async () => {
+    let values: Record<string, unknown>;
+    try { values = await form.validateFields(); } catch { return; }
     setSaving(true);
     try {
-      const res = await fetch("/api/user/settings/serpapi", {
+      const body = editItem ? { id: editItem.id, ...values } : values;
+      const res = await fetch("/api/user/settings/payment-methods", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ api_key: key, key_name: newKeyName.trim() || undefined }),
+        body: JSON.stringify(body),
       }).then((r) => r.json());
       if (res.code === 0) {
-        message.success("添加成功");
-        setNewKey(""); setNewKeyName(""); setAddVisible(false); fetchKeys();
-      } else message.error(res.message);
+        message.success(res.message || "保存成功");
+        setModalOpen(false);
+        setEditItem(null);
+        fetchData();
+      } else {
+        message.error(res.message);
+      }
     } catch {
-      message.error("网络异常，添加失败，请重试");
+      message.error("网络异常，请重试");
     } finally {
       setSaving(false);
     }
@@ -825,96 +825,37 @@ function SerpApiTab() {
 
   const handleDelete = async (id: string) => {
     try {
-      const res = await fetch("/api/user/settings/serpapi", {
+      const res = await fetch("/api/user/settings/payment-methods", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id }),
       }).then((r) => r.json());
-      if (res.code === 0) { message.success("已删除"); fetchKeys(); }
+      if (res.code === 0) { message.success("删除成功"); fetchData(); }
       else message.error(res.message);
     } catch {
       message.error("网络异常，删除失败，请重试");
     }
   };
 
-  const handleToggle = async (id: string, is_active: boolean) => {
-    try {
-      const res = await fetch("/api/user/settings/serpapi", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, is_active: !is_active }),
-      }).then((r) => r.json());
-      if (res.code === 0) { message.success(is_active ? "已禁用" : "已启用"); fetchKeys(); }
-      else message.error(res.message);
-    } catch {
-      message.error("网络异常，操作失败，请重试");
-    }
-  };
+  const baseColumns = [
+    { title: "收款人", dataIndex: "payee_name" },
+    { title: "打款方式", dataIndex: "pay_channel", render: (v: string) => v ? <Tag color="blue">{v}</Tag> : <Text type="secondary">未填</Text> },
+    { title: "收款卡号", dataIndex: "card_no", render: (v: string) => v || <Text type="secondary">未填</Text> },
+  ];
 
-  const handleTestExisting = async (id: string) => {
-    setTestingId(id);
-    try {
-      const res = await fetch("/api/user/settings/serpapi", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id }),
-      }).then((r) => r.json());
-      if (res.code === 0) message.success(res.message);
-      else message.error(res.message);
-    } catch {
-      message.error("网络异常，测试失败，请重试");
-    } finally {
-      setTestingId(null);
-    }
-  };
-
-  const handleTestNew = async () => {
-    const key = testKeyInput.trim() || newKey.trim();
-    if (!key) { message.warning("请先输入 Key"); return; }
-    setTestingNew(true);
-    try {
-      const res = await fetch("/api/user/settings/serpapi", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ api_key: key }),
-      }).then((r) => r.json());
-      if (res.code === 0) message.success(res.message);
-      else message.error(res.message);
-    } catch {
-      message.error("网络异常，测试失败，请重试");
-    } finally {
-      setTestingNew(false);
-    }
-  };
-
-  const totalQuota = keys.filter((k) => k.is_active).length * 250;
-
-  const columns = [
-    { title: "备注名", dataIndex: "key_name", width: 120, render: (v: string) => <Text strong>{v}</Text> },
-    { title: "Key（脱敏）", dataIndex: "masked_key", render: (v: string) => <Text code style={{ fontSize: 12 }}>{v}</Text> },
+  const selfColumns = [
+    ...baseColumns,
     {
-      title: "状态", dataIndex: "is_active", width: 80,
-      render: (v: boolean) => v ? <Tag color="green">启用</Tag> : <Tag color="default">禁用</Tag>,
-    },
-    {
-      title: "操作", width: 200,
-      render: (_: unknown, rec: SerpApiKeyRow) => (
+      title: "操作", width: 140,
+      render: (_: unknown, rec: PersonalPaymentMethod) => (
         <Space size={4}>
-          <Button
-            size="small"
-            loading={testingId === rec.id}
-            onClick={() => handleTestExisting(rec.id)}
-          >
-            测试
-          </Button>
-          <Button
-            size="small"
-            onClick={() => handleToggle(rec.id, rec.is_active)}
-          >
-            {rec.is_active ? "禁用" : "启用"}
-          </Button>
-          <Popconfirm title="确认删除此 Key？" onConfirm={() => handleDelete(rec.id)}>
-            <Button size="small" danger>删除</Button>
+          <Button size="small" icon={<EditOutlined />} onClick={() => {
+            setEditItem(rec);
+            form.setFieldsValue({ payee_name: rec.payee_name, pay_channel: rec.pay_channel, card_no: rec.card_no });
+            setModalOpen(true);
+          }}>编辑</Button>
+          <Popconfirm title="确认删除此收款方式？" onConfirm={() => handleDelete(rec.id)}>
+            <Button size="small" danger icon={<DeleteOutlined />} />
           </Popconfirm>
         </Space>
       ),
@@ -924,76 +865,69 @@ function SerpApiTab() {
   return (
     <div style={{ maxWidth: 680 }}>
       <Card
-        title={<><EyeOutlined /> 广告情报 — SerpApi Key 管理</>}
+        title={<><CreditCardOutlined /> 收款方式</>}
         size="small"
-        extra={
-          <Button type="primary" size="small" icon={<PlusOutlined />} onClick={() => setAddVisible(true)}>
-            添加 Key
-          </Button>
-        }
         loading={loading}
+        extra={
+          mode === "self" && (
+            <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => {
+              setEditItem(null);
+              form.resetFields();
+              setModalOpen(true);
+            }}>添加</Button>
+          )
+        }
       >
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          {keys.length > 0 && (
-            <div style={{ background: "#f0f7ff", borderRadius: 6, padding: "8px 14px", fontSize: 12, color: "#1677ff" }}>
-              已配置 <strong>{keys.length}</strong> 个 Key，启用 <strong>{keys.filter(k => k.is_active).length}</strong> 个 ·
-              合计免费额度 <strong>{totalQuota}</strong> 次/月
-            </div>
-          )}
-
-          {keys.length === 0 ? (
-            <div style={{ textAlign: "center", padding: "24px 0", color: "#bfbfbf" }}>
-              <EyeOutlined style={{ fontSize: 32, marginBottom: 8 }} />
-              <div>尚未配置 SerpApi Key，点击右上角「添加 Key」开始使用</div>
-            </div>
-          ) : (
-            <Table
-              dataSource={keys}
-              columns={columns}
-              rowKey="id"
-              size="small"
-              pagination={false}
-            />
-          )}
-
-          {addVisible && (
-            <Card size="small" style={{ background: "#fafafa" }} title="添加新 Key">
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                <div>
-                  <Text type="secondary" style={{ display: "block", marginBottom: 4 }}>备注名（选填）</Text>
-                  <Input
-                    placeholder={`Key ${keys.length + 1}`}
-                    value={newKeyName}
-                    onChange={(e) => setNewKeyName(e.target.value)}
-                    style={{ maxWidth: 200 }}
-                  />
-                </div>
-                <div>
-                  <Text type="secondary" style={{ display: "block", marginBottom: 4 }}>SerpApi API Key</Text>
-                  <Space.Compact style={{ width: "100%" }}>
-                    <Input.Password
-                      placeholder="粘贴 SerpApi API Key"
-                      value={newKey}
-                      onChange={(e) => { setNewKey(e.target.value); setTestKeyInput(e.target.value); }}
-                      style={{ flex: 1 }}
-                    />
-                    <Button loading={testingNew} onClick={handleTestNew}>测试</Button>
-                    <Button type="primary" loading={saving} icon={<SaveOutlined />} onClick={handleAdd}>添加</Button>
-                    <Button onClick={() => { setAddVisible(false); setNewKey(""); setNewKeyName(""); }}>取消</Button>
-                  </Space.Compact>
-                </div>
-              </div>
-            </Card>
-          )}
-
-          <div style={{ background: "#f6f8fa", borderRadius: 6, padding: "10px 14px", fontSize: 12, color: "#666", lineHeight: "1.8" }}>
-            <div><strong>免费额度</strong>：每人每账号 250 次/月，多 Key 额度叠加</div>
-            <div><strong>获取地址</strong>：<a href="https://serpapi.com/manage-api-key" target="_blank" rel="noreferrer">serpapi.com → Dashboard → API Key</a></div>
-            <div><strong>选取策略</strong>：每次查询随机从启用的 Key 中选取，均匀分摊用量</div>
-            <div><strong>团队缓存</strong>：同一商家域名 24h 内只消耗 1 次额度</div>
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message={
+            mode === "team"
+              ? "本组收款方式由组长统一维护（以下为组长清单，只读）。在「联盟平台连接」中为各联盟账号选择收款方式，月度收支报表按绑定显示收款人/卡号"
+              : "本组组长未维护收款方式清单，请自行填写银行卡信息。填好后在「联盟平台连接」中为各联盟账号选择，月度收支报表按绑定显示收款人/卡号；自填的收款方式仅自己可见可用"
+          }
+        />
+        {rows.length === 0 && !loading ? (
+          <div style={{ textAlign: "center", padding: "24px 0", color: "#bfbfbf" }}>
+            <CreditCardOutlined style={{ fontSize: 32, marginBottom: 8 }} />
+            <div>{mode === "team" ? "组长尚未添加收款方式" : "尚未填写收款方式，点击右上角「添加」开始"}</div>
           </div>
-        </div>
+        ) : (
+          <Table
+            dataSource={rows}
+            rowKey="id"
+            size="small"
+            pagination={false}
+            columns={mode === "self" ? selfColumns : baseColumns}
+          />
+        )}
       </Card>
+      <Modal
+        title={editItem ? "编辑收款方式" : "添加收款方式"}
+        open={modalOpen}
+        confirmLoading={saving}
+        onOk={handleSave}
+        onCancel={() => { setModalOpen(false); setEditItem(null); }}
+      >
+        <Form form={form} layout="vertical">
+          <Form.Item
+            name="payee_name" label="收款人姓名"
+            rules={[
+              { required: true, message: "请输入收款人姓名" },
+              { pattern: /^[^（()）]*$/, message: "请填纯名字，银行/渠道填在下方「打款方式」" },
+            ]}
+          >
+            <Input placeholder="如 张文俊（纯名字，不带括号）" maxLength={64} />
+          </Form.Item>
+          <Form.Item name="pay_channel" label="打款方式" tooltip="该卡的收款银行/渠道，结算查询「打款记录」按此列展示与筛选">
+            <Input placeholder="如 农业 / 工商 / 香港 / PingPong / WISE" maxLength={64} />
+          </Form.Item>
+          <Form.Item name="card_no" label="收款卡号">
+            <Input placeholder="如 6222031203014493768" maxLength={64} />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 }
@@ -1210,7 +1144,7 @@ export default function SettingsPage() {
           { key: "mcc", label: <><GoogleOutlined /> Google Ads MCC</>, children: <MccAccountsTab /> },
           { key: "notifications", label: <><BellOutlined /> 通知设置</>, children: <NotificationPreferencesTab /> },
           { key: "password", label: <><LockOutlined /> 修改密码</>, children: <ChangePasswordTab /> },
-          { key: "serpapi", label: <><EyeOutlined /> 广告情报</>, children: <SerpApiTab /> },
+          { key: "payment", label: <><CreditCardOutlined /> 收款方式</>, children: <PaymentMethodsTab /> },
           { key: "semrush", label: <><SearchOutlined /> SemRush 关键词</>, children: <SemRushTab /> },
         ]}
       />
