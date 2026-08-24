@@ -39,7 +39,6 @@ import { countryCodeToDataForSeoParams } from "./dataforseo-country-params";
 const SERPAPI_FALLBACK_ESTIMATED_COST_USD = 0.195;
 const FALLBACK_TTL_MS = 7 * 24 * 3600 * 1000;
 const MAX_TRANSPARENCY_PAGES = 2;
-const MAX_TRANSPARENCY_DETAIL_FETCHES = 20;
 const MAX_TRANSPARENCY_ADVERTISER_EXPANSIONS = 2;
 const GOOGLE_ADS_DEVICES = ["desktop", "mobile"] as const;
 const FILTER_MIN_TITLES = 3;
@@ -85,8 +84,11 @@ export interface CompetitorSourceResult extends AdCopyPoolResult {
 export interface CompetitorCollectionStats {
   transparencyPages: number;
   transparencyCreatives: number;
-  transparencyDetailsFetched?: number;
   transparencyPublishableAds?: number;
+  /**
+   * 列表里拿到、但提取不出文案的创意条数——它们的文案印在 `image` 那张广告截图里，
+   * 只能靠 OCR 取。实测这个数通常等于创意总数（SerpApi 对文本广告不回文字）。
+   */
   transparencyInspirationOnly?: number;
   transparencyAdvertiserQueries?: number;
   googleAdsQueries: number;
@@ -264,6 +266,20 @@ export interface PersistFallbackResultInput {
 
 export type PersistFallbackResult = (input: PersistFallbackResultInput) => Promise<void>;
 
+/**
+ * 拉 Google 广告透明中心的在投创意。
+ *
+ * ⚠️ 别再加「拉创意详情补文本」那一步（2026-08-24 D-273 实证删除）：
+ * SerpApi 的 `google_ads_transparency_center_ad_details` 引擎对 `format=text` 的创意
+ * **只回一个 `image` 链接，不回任何 headline / description**——列表接口如此，详情接口
+ * 也一样。Google 的透明中心本身就是把文本广告渲染成图片存档的，文案在图里。
+ *
+ * 删掉的那一步每次兜底要打最多 20 次详情请求（占单次兜底 35 次调用的 57%），
+ * 而全库历史 9 行品牌评估数据里，它一条可用文案都没产出过——纯烧额度。
+ *
+ * 要拿到这些文案只能 OCR `image`（本地 tesseract 与 gemini 视觉均已实测可准确读出
+ * 标题/描述），那是独立方案，不在本函数职责内。
+ */
 async function fetchTransparencyDeep(params: {
   domain: string;
   apiKey: string;
@@ -275,7 +291,6 @@ async function fetchTransparencyDeep(params: {
   error?: string;
   costUsd: number;
   pages: number;
-  detailsFetched: number;
   advertiserQueries: number;
 }> {
   const payloads: unknown[] = [];
@@ -309,7 +324,6 @@ async function fetchTransparencyDeep(params: {
       error: lastError || "failed",
       costUsd,
       pages: 0,
-      detailsFetched: 0,
       advertiserQueries: 0,
     };
   }
@@ -333,19 +347,11 @@ async function fetchTransparencyDeep(params: {
     if (res.status === "ok") payloads.push(res.data);
   }
 
-  const enriched = await enrichTransparencyDetails(
-    mergeTransparencyPayloads(payloads),
-    params.apiKey,
-    params.region,
-    params.httpGet,
-    params.domain,
-  );
   return {
     status: "ok",
-    data: enriched.data,
+    data: mergeTransparencyPayloads(payloads),
     costUsd,
     pages: payloads.length,
-    detailsFetched: enriched.detailsFetched,
     advertiserQueries,
   };
 }
@@ -524,29 +530,10 @@ export function partitionTransparencyAdsByDomain(
   return { brandOwnAds, nonBrandAds };
 }
 
-function transparencyDetailPriority(
-  creative: unknown,
-  brandDomain: string,
-): number {
-  const c = asObject(creative);
-  if (!c) return 0;
-  if (hasPublishableTransparencyText(creative)) return 0;
-  const link = transparencyDetailsLink(creative);
-  if (!link) return 1;
-  const target = firstString(c.target_domain, c.domain, c.visible_link, c.displayed_url);
-  if (target && isBrandOwnUrl(target, brandDomain)) return 3;
-  return 2;
-}
-
 function getNextPageToken(raw: unknown): string | null {
   const root = asObject(raw);
   const pagination = asObject(root?.serpapi_pagination);
   return cleanText(pagination?.next_page_token) ?? cleanText(root?.next_page_token);
-}
-
-function transparencyDetailsLink(creative: unknown): string | null {
-  const c = asObject(creative);
-  return cleanText(c?.serpapi_details_link) ?? cleanText(c?.details_link);
 }
 
 function transparencyAdvertiserId(creative: unknown): string | null {
@@ -583,100 +570,6 @@ function collectOfficialTransparencyAdvertiserIds(
     ids.push(id);
   }
   return ids;
-}
-
-function hasPublishableTransparencyText(creative: unknown): boolean {
-  return normalizeTransparencyCreative(creative, "") !== null;
-}
-
-function pickDetailCreatives(detail: unknown): Record<string, unknown>[] {
-  const root = asObject(detail) ?? {};
-  const details = asArray(root.ad_creatives)
-    .map((item) => asObject(item))
-    .filter((item): item is Record<string, unknown> => item !== null);
-  if (details.length > 0) return details;
-
-  const single = asObject(root.ad_creative) ?? asObject(root.adCreative) ?? asObject(root.creative);
-  return [single ?? root];
-}
-
-function withSerpApiParams(url: string, apiKey: string, region: string | null): string {
-  try {
-    const parsed = new URL(url);
-    if (parsed.hostname.endsWith("serpapi.com") && !parsed.searchParams.has("api_key")) {
-      parsed.searchParams.set("api_key", apiKey);
-    }
-    if (
-      parsed.hostname.endsWith("serpapi.com") &&
-      parsed.searchParams.get("engine") === "google_ads_transparency_center_ad_details" &&
-      region &&
-      !parsed.searchParams.has("region")
-    ) {
-      parsed.searchParams.set("region", region);
-    }
-    return parsed.toString();
-  } catch {
-    return url;
-  }
-}
-
-async function fetchTransparencyDetail(
-  url: string,
-  apiKey: string,
-  region: string | null,
-  httpGet: HttpGet,
-): Promise<Record<string, unknown>[] | null> {
-  try {
-    const res = await httpGet(withSerpApiParams(url, apiKey, region), 30_000);
-    if (res.status < 200 || res.status >= 300) return null;
-    return pickDetailCreatives(JSON.parse(res.body));
-  } catch {
-    return null;
-  }
-}
-
-async function enrichTransparencyDetails(
-  rawTransparency: unknown,
-  apiKey: string,
-  region: string | null,
-  httpGet: HttpGet,
-  brandDomain: string,
-): Promise<{ data: unknown; detailsFetched: number }> {
-  const root = asObject(rawTransparency);
-  if (!root) return { data: rawTransparency, detailsFetched: 0 };
-  const creatives = [...asArray(root.ad_creatives)].sort(
-    (a, b) =>
-      transparencyDetailPriority(b, brandDomain) -
-      transparencyDetailPriority(a, brandDomain),
-  );
-  let detailsFetched = 0;
-  const enriched: unknown[] = [];
-
-  for (const creative of creatives) {
-    if (
-      detailsFetched >= MAX_TRANSPARENCY_DETAIL_FETCHES ||
-      hasPublishableTransparencyText(creative)
-    ) {
-      enriched.push(creative);
-      continue;
-    }
-    const link = transparencyDetailsLink(creative);
-    if (!link) {
-      enriched.push(creative);
-      continue;
-    }
-    detailsFetched += 1;
-    const details = await fetchTransparencyDetail(link, apiKey, region, httpGet);
-    if (!details || details.length === 0) {
-      enriched.push(creative);
-      continue;
-    }
-    for (const detail of details) {
-      enriched.push({ ...(asObject(creative) ?? {}), ...detail });
-    }
-  }
-
-  return { data: { ...root, ad_creatives: enriched }, detailsFetched };
 }
 
 function creativeArray(raw: unknown): unknown[] {
@@ -947,7 +840,6 @@ export async function fetchCompetitorFromBrandAssessment(
   const collectionStats: CompetitorCollectionStats = {
     transparencyPages: transparencyRes.pages,
     transparencyCreatives: transparencyAds.length,
-    transparencyDetailsFetched: transparencyRes.detailsFetched,
     transparencyPublishableAds: transparencyAds.length,
     transparencyInspirationOnly: Math.max(
       0,
