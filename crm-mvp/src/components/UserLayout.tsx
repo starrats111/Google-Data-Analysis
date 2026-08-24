@@ -21,7 +21,6 @@ import {
   StarOutlined,
   SwapOutlined,
   HistoryOutlined,
-  CreditCardOutlined,
 } from "@ant-design/icons";
 import { useRouter, usePathname } from "next/navigation";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
@@ -55,9 +54,8 @@ const userMenuItems: MenuItem[] = [
     children: [
       { key: "/user/data-center", icon: <TableOutlined />, label: "数据中心" },
       { key: "/user/data-center/settlement", icon: <AccountBookOutlined />, label: "结算查询" },
+      // D-275.1：个人版银行流水并在结算报表页内（第三个 tab），不设独立菜单项
       { key: "/user/settlement-report", icon: <BarChartOutlined />, label: "结算报表" },
-      // D-275.1：个人版银行流水（yz 组自管收款；组长清单组打开只有提示，由组长在收支报表登记）
-      { key: "/user/bank-flow", icon: <CreditCardOutlined />, label: "银行流水" },
     ],
   },
   {

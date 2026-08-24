@@ -4,6 +4,8 @@
  * R-02 组员端 — 结算报表
  * 月报 Tab：单月收支统计表（类 Excel 预览 + 广告费/实收内联编辑 + xlsx 导出）
  * 年度 Tab：个人年度报表（逐月合计，不分上下半月 + xlsx 导出）
+ * 银行流水 Tab（D-275.1）：个人版银行流水——yz 组自管收款的组员登记自己银行卡到账；
+ *   组长清单组的组员只显示提示（流水由组长在收支报表登记）
  */
 
 import { useState, useEffect, useCallback } from "react";
@@ -12,6 +14,7 @@ import { AccountBookOutlined, DownloadOutlined, ReloadOutlined } from "@ant-desi
 import dayjs, { type Dayjs } from "dayjs";
 import AppPageHeader from "@/components/AppPageHeader";
 import MonthlyReportTable from "@/components/MonthlyReportTable";
+import BankFlowTab from "../team-report/BankFlowTab";
 import type { MemberMonthlyReport, MemberAnnualReport, MemberAnnualMonth } from "@/lib/monthly-report";
 
 const { Text } = Typography;
@@ -225,6 +228,37 @@ function AnnualTab() {
   );
 }
 
+/** D-275.1 个人版银行流水：自管收款组（yz）开放登记，组长清单组只提示 */
+function PersonalBankFlowTab() {
+  const { message } = App.useApp();
+  // null=加载中；"self"=自管收款（开放登记）；"team"=组长清单组（只提示）
+  const [mode, setMode] = useState<"self" | "team" | null>(null);
+
+  useEffect(() => {
+    fetch("/api/user/settings/payment-methods")
+      .then((r) => r.json())
+      .then((res) => {
+        if (res?.code === 0) setMode(res.data?.mode === "self" ? "self" : "team");
+        else message.error(res?.message || "加载失败，请刷新重试");
+      })
+      .catch(() => message.error("加载失败，请刷新重试"));
+  }, [message]);
+
+  if (mode === null) return <div style={{ textAlign: "center", padding: 60 }}><Spin /></div>;
+  if (mode === "team") {
+    return (
+      <Alert
+        type="info"
+        showIcon
+        message="本组银行流水由组长统一登记"
+        description="你所在小组的收款方式由组长维护，银行流水由组长在「收支报表 → 银行流水」登记，此页面无需操作。如有疑问请联系组长。"
+        style={{ maxWidth: 680 }}
+      />
+    );
+  }
+  return <BankFlowTab />;
+}
+
 export default function SettlementReportPage() {
   return (
     <div>
@@ -238,6 +272,7 @@ export default function SettlementReportPage() {
           items={[
             { key: "monthly", label: "月度报表", children: <MonthlyTab /> },
             { key: "annual", label: "年度报表", children: <AnnualTab /> },
+            { key: "bank-flow", label: "银行流水", children: <PersonalBankFlowTab /> },
           ]}
         />
       </Card>
