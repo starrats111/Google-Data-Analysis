@@ -75,15 +75,24 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     select: { user_id: true, account_name: true, payee_name: true, card_no: true },
   });
 
-  // 逐账号判定归属：该月快照有该账号且收款人非空 → 按快照文本匹配；否则退回实时绑定
+  // 逐账号判定归属：该月快照有该账号且收款人非空 → 按快照文本匹配；否则退回实时绑定。
+  // 2026-08-24 修正：老格式快照只存裸名（如「张文俊」，无渠道、卡号为空）时，
+  // 与组合文本「张文俊(工商)」全等比对永远失败，导致该成员被整批漏掉（朱文欣 3-13 RW 漏预填的病根）。
+  // 裸名与本卡收款人同名时视为「渠道未知」，回退实时绑定判定归属；裸名不同名才确定排除。
   const snapByKey = new Map(snaps.map((s) => [`${s.user_id}\u0000${(s.account_name || "").trim()}`, s]));
   const matchedConns = conns.filter((c) => {
     const s = snapByKey.get(`${c.user_id}\u0000${(c.account_name || "").trim()}`);
     if (s && (s.payee_name || "").trim()) {
-      if (normPayee(s.payee_name) !== normPayee(methodPayeeText)) return false;
-      const mc = normCard(method.card_no);
-      const sc = normCard(s.card_no);
-      return !mc || !sc || mc === sc;
+      const snapPayee = normPayee(s.payee_name);
+      if (snapPayee === normPayee(methodPayeeText)) {
+        const mc = normCard(method.card_no);
+        const sc = normCard(s.card_no);
+        return !mc || !sc || mc === sc;
+      }
+      if (!snapPayee.includes("(") && snapPayee === normPayee(method.payee_name)) {
+        return c.payment_method_id === method.id;
+      }
+      return false;
     }
     return c.payment_method_id === method.id;
   });

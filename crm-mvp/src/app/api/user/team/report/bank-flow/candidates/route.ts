@@ -61,15 +61,23 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   const snapByKey = new Map(
     snaps.map((s) => [`${s.user_id}\u0000${s.platform}\u0000${(s.account_name || "").trim()}`, s]),
   );
+  // 2026-08-24 修正（与 ./prefill 同步）：老格式快照裸名（无「(渠道)」）与本卡收款人同名时
+  // 视为渠道未知，回退实时绑定判定归属，不再把该成员整批漏掉。
   const matchedConnIds = new Set(
     conns
       .filter((c) => {
         const s = snapByKey.get(`${c.user_id}\u0000${c.platform}\u0000${(c.account_name || "").trim()}`);
         if (s && (s.payee_name || "").trim()) {
-          if (normPayee(s.payee_name) !== normPayee(methodPayeeText)) return false;
-          const mc = normCard(method.card_no);
-          const sc = normCard(s.card_no);
-          return !mc || !sc || mc === sc;
+          const snapPayee = normPayee(s.payee_name);
+          if (snapPayee === normPayee(methodPayeeText)) {
+            const mc = normCard(method.card_no);
+            const sc = normCard(s.card_no);
+            return !mc || !sc || mc === sc;
+          }
+          if (!snapPayee.includes("(") && snapPayee === normPayee(method.payee_name)) {
+            return c.payment_method_id === method.id;
+          }
+          return false;
         }
         return c.payment_method_id === method.id;
       })

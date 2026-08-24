@@ -8,7 +8,13 @@ function cacheKey(currency: string, dateStr: string): string {
 
 /**
  * 获取指定币种在指定日期的 → USD 汇率。
- * 查询顺序：内存缓存 → 数据库快照 → API（结果写入快照）→ 最近快照兜底。
+ * 查询顺序：内存缓存 → 数据库快照 → （仅当天±1日）API 最新价写入快照 → 早于该日的最近快照 → 最近快照兜底。
+ *
+ * 2026-08-24 修正（07 拍板）：er-api 的 /latest 只会返回「现在」的价，
+ * 历史上曾把它打上历史日期的标签批量落库，制造了 2025-11~2026-03 共 145 天的假历史汇率
+ * （银行流水「手续费」被虚增约 0.85%）。现在：
+ * - 只有请求日期在今天 ±1 天内（容忍时区偏移）才允许用最新价落库；
+ * - 历史日期缺快照时，借用不晚于该日的最近真实快照做估算，**不落库**，不再制造假历史。
  */
 export async function getExchangeRate(currency: string, dateStr: string): Promise<number> {
   if (!currency || currency.toUpperCase() === "USD") return 1;
@@ -29,17 +35,31 @@ export async function getExchangeRate(currency: string, dateStr: string): Promis
     return rate;
   }
 
-  const apiRate = await fetchRateFromApi(cur);
-  if (apiRate > 0) {
-    try {
-      await prisma.exchange_rate_snapshots.create({
-        data: { currency: cur, date: dateObj, rate_to_usd: apiRate },
-      });
-    } catch {
-      // currency_date 唯一约束冲突时忽略（并发写入）
+  const isCurrentDate = Math.abs(dateObj.getTime() - Date.now()) <= 86400000 * 1.5;
+  if (isCurrentDate) {
+    const apiRate = await fetchRateFromApi(cur);
+    if (apiRate > 0) {
+      try {
+        await prisma.exchange_rate_snapshots.create({
+          data: { currency: cur, date: dateObj, rate_to_usd: apiRate },
+        });
+      } catch {
+        // currency_date 唯一约束冲突时忽略（并发写入）
+      }
+      rateCache.set(key, apiRate);
+      return apiRate;
     }
-    rateCache.set(key, apiRate);
-    return apiRate;
+  } else {
+    // 历史日期：借用不晚于该日的最近真实快照（只读，不落库）
+    const prior = await prisma.exchange_rate_snapshots.findFirst({
+      where: { currency: cur, date: { lte: dateObj } },
+      orderBy: { date: "desc" },
+    });
+    if (prior) {
+      const rate = Number(prior.rate_to_usd);
+      rateCache.set(key, rate);
+      return rate;
+    }
   }
 
   const nearest = await prisma.exchange_rate_snapshots.findFirst({
