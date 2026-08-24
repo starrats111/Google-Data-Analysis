@@ -754,16 +754,16 @@ function roundCost(value: number): number {
   return Number(value.toFixed(6));
 }
 
-const defaultHttpGet: HttpGet = async (url, timeoutMs) => {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, { signal: controller.signal });
-    return { status: res.status, body: await res.text() };
-  } finally {
-    clearTimeout(timer);
-  }
-};
+/**
+ * 生产用 httpGet：走 SerpApi 共享池，撞额度自动换 key。
+ *
+ * 一次兜底最多要打几十个 SerpApi 请求（6 个品牌词 × 2 种设备，再加 transparency 翻页
+ * 与创意详情），中途把某个 key 的额度打满是常态，不换 key 就会整单失败。
+ */
+async function createDefaultHttpGet(initialKey: string): Promise<HttpGet> {
+  const { createPooledSerpApiHttpGet } = await import("@/lib/serpapi-key-pool");
+  return createPooledSerpApiHttpGet({ initialKey });
+}
 
 /**
  * D-233：kyads 把 SerpApi 单 key 和每日预算都存在它自己的 `ai_model_configs` 一行里。
@@ -912,7 +912,7 @@ export async function fetchCompetitorFromBrandAssessment(
 
   const countryParams = countryToParams(country);
   const transparencyRegion = String(countryCodeToDataForSeoParams(country).locationCode);
-  const httpGet = deps.httpGet ?? defaultHttpGet;
+  const httpGet = deps.httpGet ?? (await createDefaultHttpGet(apiKey));
   const googleAdsRes = await fetchGoogleAdsMatrix({
     brandToken,
     domain,
@@ -965,6 +965,14 @@ export async function fetchCompetitorFromBrandAssessment(
   await addCostLedger({ ledgerDate: now, amountUsd: serpCost });
 
   if (googleAdsRes.status !== "ok" && transparencyRes.status !== "ok") {
+    const { isMonthlyQuotaError } = await import("@/lib/serpapi-key-pool");
+    const allFailures = [...warnings, transparencyRes.error ?? ""].join(" | ");
+    if (isMonthlyQuotaError(allFailures)) {
+      throw new Error(
+        "SerpApi 额度已耗尽：池内每个 Key 都打满了本月配额（免费版 250 次/月），" +
+          "已自动逐个换过仍无可用额度。请在「个人设置 → 广告情报」补充可用 Key，或等下个计费周期。",
+      );
+    }
     throw new Error(
       `缺少可用品牌评估创意，且 SerpApi 竞品创意拉取失败：google_ads=failed, transparency=${transparencyRes.error ?? "failed"}`,
     );

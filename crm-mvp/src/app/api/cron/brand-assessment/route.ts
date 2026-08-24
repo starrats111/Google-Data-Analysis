@@ -13,7 +13,10 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { runCronTick } from "@/lib/rival-intel/brand-assessment/cron-runner";
-import { defaultHttpGet, defaultLlmCaller } from "@/lib/rival-intel/brand-assessment/wiring";
+import {
+  createBrandAssessmentHttpGet,
+  defaultLlmCaller,
+} from "@/lib/rival-intel/brand-assessment/wiring";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -32,7 +35,7 @@ export async function GET(req: NextRequest) {
   isRunning = true;
   try {
     const summary = await runCronTick({
-      httpGet: defaultHttpGet,
+      httpGet: createBrandAssessmentHttpGet(),
       llmCaller: defaultLlmCaller,
       maxJobs: 3,
     });

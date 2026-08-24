@@ -7,6 +7,7 @@
  * llm-evaluator 的按次计费留个标识。
  */
 import { callAiWithFallback } from "@/lib/ai-service";
+import { createPooledSerpApiHttpGet } from "@/lib/serpapi-key-pool";
 import type { LlmCaller } from "./llm-evaluator";
 import type { HttpGet } from "./serpapi-client";
 
@@ -14,7 +15,7 @@ export const BRAND_ASSESSMENT_AI_SCENE = "brand_assessment";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
-export const defaultHttpGet: HttpGet = async (url, timeoutMs) => {
+const rawHttpGet: HttpGet = async (url, timeoutMs) => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs || DEFAULT_TIMEOUT_MS);
   try {
@@ -25,6 +26,17 @@ export const defaultHttpGet: HttpGet = async (url, timeoutMs) => {
     clearTimeout(timer);
   }
 };
+
+/**
+ * 每跑一轮建一个新的池化 httpGet：撞额度自动换池内下一个 key。
+ *
+ * 必须是工厂而不是模块级单例——池化实例内部记着「本轮已试过哪些 key」，
+ * 单例会让这份记录跨请求累积，某个 key 被试废一次后就再也轮不到它，
+ * 哪怕它第二天额度已经重置。
+ */
+export function createBrandAssessmentHttpGet(): HttpGet {
+  return createPooledSerpApiHttpGet({ baseHttpGet: rawHttpGet });
+}
 
 export const defaultLlmCaller: LlmCaller = async ({ systemPrompt, userPrompt }) => {
   const content = await callAiWithFallback(
