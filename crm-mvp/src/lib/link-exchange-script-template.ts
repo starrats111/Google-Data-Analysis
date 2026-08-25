@@ -861,8 +861,46 @@ function collectQsForAccount(tz) {
   return map;
 }
 
+/** CID 显示格式：纯数字转 xxx-xxx-xxxx（与账号迭代器 getCustomerId() 的格式一致） */
+function formatCidDashed(id) {
+  var s = String(id).replace(/\\D/g, '');
+  return s.length === 10 ? s.slice(0, 3) + '-' + s.slice(3, 6) + '-' + s.slice(6) : s;
+}
+
+/**
+ * D-277：CID_List 加 Status 列（Google 账户状态真值）。
+ * GAQL customer_client 不过滤状态也不排除隐藏账号，能带回 ENABLED / SUSPENDED /
+ * CANCELLED / CLOSED——比 AdsManagerApp.accounts() 迭代器（默认排除非活账号）覆盖更全。
+ * 必须在任何 AdsManagerApp.select() 之前调用（要在 MCC 自身上下文执行）。
+ * 失败时返回 null，调用方回退老两列模式（CustomerID/AccountName），CRM 侧向后兼容。
+ */
+function collectCidStatusRows() {
+  var rows = [];
+  var it = AdsApp.search(
+    'SELECT customer_client.id, customer_client.descriptive_name, customer_client.status ' +
+    'FROM customer_client WHERE customer_client.manager = false'
+  );
+  while (it.hasNext()) {
+    var row = it.next();
+    var cc = row.customerClient;
+    if (!cc || !cc.id) continue;
+    rows.push([formatCidDashed(cc.id), cc.descriptiveName || '', String(cc.status || '')]);
+  }
+  return rows;
+}
+
 function collectDataCenterSheets() {
   var spreadsheet = SpreadsheetApp.openByUrl(CONFIG.SPREADSHEET_URL);
+
+  // D-277：先在 MCC 上下文采账户状态（后面循环会 select 子账号，上下文就变了）
+  var cidStatusRows = null;
+  try {
+    cidStatusRows = collectCidStatusRows();
+    console.log('   CID 状态采集: ' + cidStatusRows.length + ' 账号（customer_client）');
+  } catch (e) {
+    console.log('   CID 状态采集失败（CID_List 回退无状态两列模式）: ' + e.message);
+    cidStatusRows = null;
+  }
 
   var accounts = [];
   var accountIterator = AdsManagerApp.accounts().get();
@@ -942,11 +980,20 @@ function collectDataCenterSheets() {
 
   var cidSheet = spreadsheet.getSheetByName('CID_List') || spreadsheet.insertSheet('CID_List');
   cidSheet.clearContents();
-  cidSheet.getRange(1, 1, 1, 2).setValues([['CustomerID', 'AccountName']]);
-  cidRows.sort(function(a, b) { return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0; });
-  if (cidRows.length > 0) cidSheet.getRange(2, 1, cidRows.length, 2).setValues(cidRows);
+  if (cidStatusRows && cidStatusRows.length > 0) {
+    // D-277 三列模式：CustomerID / AccountName / Status（Google 账户状态真值）
+    cidSheet.getRange(1, 1, 1, 3).setValues([['CustomerID', 'AccountName', 'Status']]);
+    cidStatusRows.sort(function(a, b) { return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0; });
+    cidSheet.getRange(2, 1, cidStatusRows.length, 3).setValues(cidStatusRows);
+    console.log('   CID_List: ' + cidStatusRows.length + ' 账号（含状态列）');
+  } else {
+    // 兜底：customer_client 查询失败时维持老两列格式（CRM 侧跳过状态处理，其余照旧）
+    cidSheet.getRange(1, 1, 1, 2).setValues([['CustomerID', 'AccountName']]);
+    cidRows.sort(function(a, b) { return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0; });
+    if (cidRows.length > 0) cidSheet.getRange(2, 1, cidRows.length, 2).setValues(cidRows);
+    console.log('   CID_List: ' + cidRows.length + ' 账号（无状态兜底模式）');
+  }
   cidSheet.setFrozenRows(1);
-  console.log('   CID_List: ' + cidRows.length + ' 账号');
 
   var infoSheet = spreadsheet.getSheetByName('CampaignInfo') || spreadsheet.insertSheet('CampaignInfo');
   // D-264：新增 Budget 列（micros，账户币种）。零花费/停投系列 DailyData 不落行，

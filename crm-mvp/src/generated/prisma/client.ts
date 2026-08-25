@@ -304,6 +304,11 @@ export type atc_advertiser_domain_snapshot = Prisma.atc_advertiser_domain_snapsh
  */
 export type ad_image_ocr_cache = Prisma.ad_image_ocr_cacheModel
 /**
+ * Model ad_creative_copy_cache
+ * 
+ */
+export type ad_creative_copy_cache = Prisma.ad_creative_copy_cacheModel
+/**
  * Model user_serpapi_keys
  * 
  */

@@ -59,6 +59,7 @@ const menuItems: MenuItem[] = [
     type: "group" as const,
     children: [
       { key: "/admin/cid-management", icon: <ClusterOutlined />, label: "员工 CID 管理" },
+      { key: "/admin/account-status", icon: <SafetyCertificateOutlined />, label: "账户状态总览" },
     ],
   },
   {

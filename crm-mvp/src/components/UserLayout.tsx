@@ -21,6 +21,7 @@ import {
   StarOutlined,
   SwapOutlined,
   HistoryOutlined,
+  SafetyOutlined,
 } from "@ant-design/icons";
 import { useRouter, usePathname } from "next/navigation";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
@@ -56,6 +57,8 @@ const userMenuItems: MenuItem[] = [
       { key: "/user/data-center/settlement", icon: <AccountBookOutlined />, label: "结算查询" },
       // D-275.1：个人版银行流水并在结算报表页内（第三个 tab），不设独立菜单项
       { key: "/user/settlement-report", icon: <BarChartOutlined />, label: "结算报表" },
+      // D-277：账户状态总览（成员看自己名下 MCC；状态由统一脚本半小时级回传）
+      { key: "/user/account-status", icon: <SafetyOutlined />, label: "账户状态" },
     ],
   },
   {
@@ -107,6 +110,8 @@ const leaderMenuItems: MenuItem[] = [
     children: [
       { key: "/user/data-center/settlement", icon: <AccountBookOutlined />, label: "结算查询" },
       { key: "/user/advertisers", icon: <StarOutlined />, label: "我的广告主" },
+      // D-277：账户状态总览（组长看全组）
+      { key: "/user/account-status", icon: <SafetyOutlined />, label: "账户状态" },
     ],
   },
 ];

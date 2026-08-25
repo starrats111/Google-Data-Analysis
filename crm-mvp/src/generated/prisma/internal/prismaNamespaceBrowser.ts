@@ -103,6 +103,7 @@ export const ModelName = {
   merchant_atc_snapshots: 'merchant_atc_snapshots',
   atc_advertiser_domain_snapshot: 'atc_advertiser_domain_snapshot',
   ad_image_ocr_cache: 'ad_image_ocr_cache',
+  ad_creative_copy_cache: 'ad_creative_copy_cache',
   user_serpapi_keys: 'user_serpapi_keys',
   user_semrush_keys: 'user_semrush_keys',
   merchant_monitor_rules: 'merchant_monitor_rules',
@@ -900,6 +901,7 @@ export const Mcc_cid_accountsScalarFieldEnum = {
   customer_name: 'customer_name',
   is_available: 'is_available',
   status: 'status',
+  status_changed_at: 'status_changed_at',
   last_synced_at: 'last_synced_at',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
@@ -1189,6 +1191,22 @@ export const Ad_image_ocr_cacheScalarFieldEnum = {
 } as const
 
 export type Ad_image_ocr_cacheScalarFieldEnum = (typeof Ad_image_ocr_cacheScalarFieldEnum)[keyof typeof Ad_image_ocr_cacheScalarFieldEnum]
+
+
+export const Ad_creative_copy_cacheScalarFieldEnum = {
+  id: 'id',
+  image_url: 'image_url',
+  status: 'status',
+  headlines: 'headlines',
+  descriptions: 'descriptions',
+  seen_url: 'seen_url',
+  model_used: 'model_used',
+  last_error: 'last_error',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Ad_creative_copy_cacheScalarFieldEnum = (typeof Ad_creative_copy_cacheScalarFieldEnum)[keyof typeof Ad_creative_copy_cacheScalarFieldEnum]
 
 
 export const User_serpapi_keysScalarFieldEnum = {
@@ -2207,6 +2225,17 @@ export const ad_image_ocr_cacheOrderByRelevanceFieldEnum = {
 } as const
 
 export type ad_image_ocr_cacheOrderByRelevanceFieldEnum = (typeof ad_image_ocr_cacheOrderByRelevanceFieldEnum)[keyof typeof ad_image_ocr_cacheOrderByRelevanceFieldEnum]
+
+
+export const ad_creative_copy_cacheOrderByRelevanceFieldEnum = {
+  image_url: 'image_url',
+  status: 'status',
+  seen_url: 'seen_url',
+  model_used: 'model_used',
+  last_error: 'last_error'
+} as const
+
+export type ad_creative_copy_cacheOrderByRelevanceFieldEnum = (typeof ad_creative_copy_cacheOrderByRelevanceFieldEnum)[keyof typeof ad_creative_copy_cacheOrderByRelevanceFieldEnum]
 
 
 export const user_serpapi_keysOrderByRelevanceFieldEnum = {

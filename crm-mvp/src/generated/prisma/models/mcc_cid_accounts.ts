@@ -45,6 +45,7 @@ export type Mcc_cid_accountsMinAggregateOutputType = {
   customer_name: string | null
   is_available: string | null
   status: string | null
+  status_changed_at: Date | null
   last_synced_at: Date | null
   is_deleted: number | null
   created_at: Date | null
@@ -58,6 +59,7 @@ export type Mcc_cid_accountsMaxAggregateOutputType = {
   customer_name: string | null
   is_available: string | null
   status: string | null
+  status_changed_at: Date | null
   last_synced_at: Date | null
   is_deleted: number | null
   created_at: Date | null
@@ -71,6 +73,7 @@ export type Mcc_cid_accountsCountAggregateOutputType = {
   customer_name: number
   is_available: number
   status: number
+  status_changed_at: number
   last_synced_at: number
   is_deleted: number
   created_at: number
@@ -98,6 +101,7 @@ export type Mcc_cid_accountsMinAggregateInputType = {
   customer_name?: true
   is_available?: true
   status?: true
+  status_changed_at?: true
   last_synced_at?: true
   is_deleted?: true
   created_at?: true
@@ -111,6 +115,7 @@ export type Mcc_cid_accountsMaxAggregateInputType = {
   customer_name?: true
   is_available?: true
   status?: true
+  status_changed_at?: true
   last_synced_at?: true
   is_deleted?: true
   created_at?: true
@@ -124,6 +129,7 @@ export type Mcc_cid_accountsCountAggregateInputType = {
   customer_name?: true
   is_available?: true
   status?: true
+  status_changed_at?: true
   last_synced_at?: true
   is_deleted?: true
   created_at?: true
@@ -224,6 +230,7 @@ export type Mcc_cid_accountsGroupByOutputType = {
   customer_name: string | null
   is_available: string
   status: string
+  status_changed_at: Date | null
   last_synced_at: Date | null
   is_deleted: number
   created_at: Date
@@ -260,6 +267,7 @@ export type mcc_cid_accountsWhereInput = {
   customer_name?: Prisma.StringNullableFilter<"mcc_cid_accounts"> | string | null
   is_available?: Prisma.StringFilter<"mcc_cid_accounts"> | string
   status?: Prisma.StringFilter<"mcc_cid_accounts"> | string
+  status_changed_at?: Prisma.DateTimeNullableFilter<"mcc_cid_accounts"> | Date | string | null
   last_synced_at?: Prisma.DateTimeNullableFilter<"mcc_cid_accounts"> | Date | string | null
   is_deleted?: Prisma.IntFilter<"mcc_cid_accounts"> | number
   created_at?: Prisma.DateTimeFilter<"mcc_cid_accounts"> | Date | string
@@ -273,6 +281,7 @@ export type mcc_cid_accountsOrderByWithRelationInput = {
   customer_name?: Prisma.SortOrderInput | Prisma.SortOrder
   is_available?: Prisma.SortOrder
   status?: Prisma.SortOrder
+  status_changed_at?: Prisma.SortOrderInput | Prisma.SortOrder
   last_synced_at?: Prisma.SortOrderInput | Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
@@ -291,6 +300,7 @@ export type mcc_cid_accountsWhereUniqueInput = Prisma.AtLeast<{
   customer_name?: Prisma.StringNullableFilter<"mcc_cid_accounts"> | string | null
   is_available?: Prisma.StringFilter<"mcc_cid_accounts"> | string
   status?: Prisma.StringFilter<"mcc_cid_accounts"> | string
+  status_changed_at?: Prisma.DateTimeNullableFilter<"mcc_cid_accounts"> | Date | string | null
   last_synced_at?: Prisma.DateTimeNullableFilter<"mcc_cid_accounts"> | Date | string | null
   is_deleted?: Prisma.IntFilter<"mcc_cid_accounts"> | number
   created_at?: Prisma.DateTimeFilter<"mcc_cid_accounts"> | Date | string
@@ -304,6 +314,7 @@ export type mcc_cid_accountsOrderByWithAggregationInput = {
   customer_name?: Prisma.SortOrderInput | Prisma.SortOrder
   is_available?: Prisma.SortOrder
   status?: Prisma.SortOrder
+  status_changed_at?: Prisma.SortOrderInput | Prisma.SortOrder
   last_synced_at?: Prisma.SortOrderInput | Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
@@ -325,6 +336,7 @@ export type mcc_cid_accountsScalarWhereWithAggregatesInput = {
   customer_name?: Prisma.StringNullableWithAggregatesFilter<"mcc_cid_accounts"> | string | null
   is_available?: Prisma.StringWithAggregatesFilter<"mcc_cid_accounts"> | string
   status?: Prisma.StringWithAggregatesFilter<"mcc_cid_accounts"> | string
+  status_changed_at?: Prisma.DateTimeNullableWithAggregatesFilter<"mcc_cid_accounts"> | Date | string | null
   last_synced_at?: Prisma.DateTimeNullableWithAggregatesFilter<"mcc_cid_accounts"> | Date | string | null
   is_deleted?: Prisma.IntWithAggregatesFilter<"mcc_cid_accounts"> | number
   created_at?: Prisma.DateTimeWithAggregatesFilter<"mcc_cid_accounts"> | Date | string
@@ -338,6 +350,7 @@ export type mcc_cid_accountsCreateInput = {
   customer_name?: string | null
   is_available?: string
   status?: string
+  status_changed_at?: Date | string | null
   last_synced_at?: Date | string | null
   is_deleted?: number
   created_at?: Date | string
@@ -351,6 +364,7 @@ export type mcc_cid_accountsUncheckedCreateInput = {
   customer_name?: string | null
   is_available?: string
   status?: string
+  status_changed_at?: Date | string | null
   last_synced_at?: Date | string | null
   is_deleted?: number
   created_at?: Date | string
@@ -364,6 +378,7 @@ export type mcc_cid_accountsUpdateInput = {
   customer_name?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   is_available?: Prisma.StringFieldUpdateOperationsInput | string
   status?: Prisma.StringFieldUpdateOperationsInput | string
+  status_changed_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   last_synced_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -377,6 +392,7 @@ export type mcc_cid_accountsUncheckedUpdateInput = {
   customer_name?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   is_available?: Prisma.StringFieldUpdateOperationsInput | string
   status?: Prisma.StringFieldUpdateOperationsInput | string
+  status_changed_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   last_synced_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -390,6 +406,7 @@ export type mcc_cid_accountsCreateManyInput = {
   customer_name?: string | null
   is_available?: string
   status?: string
+  status_changed_at?: Date | string | null
   last_synced_at?: Date | string | null
   is_deleted?: number
   created_at?: Date | string
@@ -403,6 +420,7 @@ export type mcc_cid_accountsUpdateManyMutationInput = {
   customer_name?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   is_available?: Prisma.StringFieldUpdateOperationsInput | string
   status?: Prisma.StringFieldUpdateOperationsInput | string
+  status_changed_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   last_synced_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -416,6 +434,7 @@ export type mcc_cid_accountsUncheckedUpdateManyInput = {
   customer_name?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   is_available?: Prisma.StringFieldUpdateOperationsInput | string
   status?: Prisma.StringFieldUpdateOperationsInput | string
+  status_changed_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   last_synced_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
@@ -440,6 +459,7 @@ export type mcc_cid_accountsCountOrderByAggregateInput = {
   customer_name?: Prisma.SortOrder
   is_available?: Prisma.SortOrder
   status?: Prisma.SortOrder
+  status_changed_at?: Prisma.SortOrder
   last_synced_at?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
@@ -459,6 +479,7 @@ export type mcc_cid_accountsMaxOrderByAggregateInput = {
   customer_name?: Prisma.SortOrder
   is_available?: Prisma.SortOrder
   status?: Prisma.SortOrder
+  status_changed_at?: Prisma.SortOrder
   last_synced_at?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
@@ -472,6 +493,7 @@ export type mcc_cid_accountsMinOrderByAggregateInput = {
   customer_name?: Prisma.SortOrder
   is_available?: Prisma.SortOrder
   status?: Prisma.SortOrder
+  status_changed_at?: Prisma.SortOrder
   last_synced_at?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
@@ -493,6 +515,7 @@ export type mcc_cid_accountsSelect<ExtArgs extends runtime.Types.Extensions.Inte
   customer_name?: boolean
   is_available?: boolean
   status?: boolean
+  status_changed_at?: boolean
   last_synced_at?: boolean
   is_deleted?: boolean
   created_at?: boolean
@@ -508,13 +531,14 @@ export type mcc_cid_accountsSelectScalar = {
   customer_name?: boolean
   is_available?: boolean
   status?: boolean
+  status_changed_at?: boolean
   last_synced_at?: boolean
   is_deleted?: boolean
   created_at?: boolean
   updated_at?: boolean
 }
 
-export type mcc_cid_accountsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "mcc_account_id" | "customer_id" | "customer_name" | "is_available" | "status" | "last_synced_at" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["mcc_cid_accounts"]>
+export type mcc_cid_accountsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "mcc_account_id" | "customer_id" | "customer_name" | "is_available" | "status" | "status_changed_at" | "last_synced_at" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["mcc_cid_accounts"]>
 
 export type $mcc_cid_accountsPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "mcc_cid_accounts"
@@ -526,6 +550,7 @@ export type $mcc_cid_accountsPayload<ExtArgs extends runtime.Types.Extensions.In
     customer_name: string | null
     is_available: string
     status: string
+    status_changed_at: Date | null
     last_synced_at: Date | null
     is_deleted: number
     created_at: Date
@@ -905,6 +930,7 @@ export interface mcc_cid_accountsFieldRefs {
   readonly customer_name: Prisma.FieldRef<"mcc_cid_accounts", 'String'>
   readonly is_available: Prisma.FieldRef<"mcc_cid_accounts", 'String'>
   readonly status: Prisma.FieldRef<"mcc_cid_accounts", 'String'>
+  readonly status_changed_at: Prisma.FieldRef<"mcc_cid_accounts", 'DateTime'>
   readonly last_synced_at: Prisma.FieldRef<"mcc_cid_accounts", 'DateTime'>
   readonly is_deleted: Prisma.FieldRef<"mcc_cid_accounts", 'Int'>
   readonly created_at: Prisma.FieldRef<"mcc_cid_accounts", 'DateTime'>

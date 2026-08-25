@@ -436,6 +436,7 @@ export const ModelName = {
   merchant_atc_snapshots: 'merchant_atc_snapshots',
   atc_advertiser_domain_snapshot: 'atc_advertiser_domain_snapshot',
   ad_image_ocr_cache: 'ad_image_ocr_cache',
+  ad_creative_copy_cache: 'ad_creative_copy_cache',
   user_serpapi_keys: 'user_serpapi_keys',
   user_semrush_keys: 'user_semrush_keys',
   merchant_monitor_rules: 'merchant_monitor_rules',
@@ -472,7 +473,7 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
     omit: GlobalOmitOptions
   }
   meta: {
-    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "parent_networks" | "platform_blacklist" | "ad_rejection_feedback" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "ad_generation_jobs" | "ad_submit_jobs" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "ai_recommendations" | "spend_guard_actions" | "google_mcc_accounts" | "affiliate_transactions" | "affiliate_click_daily" | "affiliate_payments" | "notifications" | "notification_preferences" | "user_table_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "kyads_click_task_items" | "proxy_exit_ip_usage" | "suffix_alerts" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "user_serpapi_keys" | "user_semrush_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log" | "semrush_keyword_cache" | "semrush_health_logs" | "payment_methods" | "report_overrides" | "payment_binding_snapshots" | "bank_flow_entries" | "policy_violations" | "team_developer_tokens" | "token_usage_daily" | "google_ads_api_usage" | "ad_decision_journal" | "ad_creation_drafts" | "brand_assessment_jobs" | "brand_assessment_results" | "brand_intel_cost_ledger" | "dataforseo_brand_keyword_cache"
+    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "parent_networks" | "platform_blacklist" | "ad_rejection_feedback" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "ad_generation_jobs" | "ad_submit_jobs" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "ai_recommendations" | "spend_guard_actions" | "google_mcc_accounts" | "affiliate_transactions" | "affiliate_click_daily" | "affiliate_payments" | "notifications" | "notification_preferences" | "user_table_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "kyads_click_task_items" | "proxy_exit_ip_usage" | "suffix_alerts" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "ad_creative_copy_cache" | "user_serpapi_keys" | "user_semrush_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log" | "semrush_keyword_cache" | "semrush_health_logs" | "payment_methods" | "report_overrides" | "payment_binding_snapshots" | "bank_flow_entries" | "policy_violations" | "team_developer_tokens" | "token_usage_daily" | "google_ads_api_usage" | "ad_decision_journal" | "ad_creation_drafts" | "brand_assessment_jobs" | "brand_assessment_results" | "brand_intel_cost_ledger" | "dataforseo_brand_keyword_cache"
     txIsolationLevel: TransactionIsolationLevel
   }
   model: {
@@ -3908,6 +3909,72 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         }
       }
     }
+    ad_creative_copy_cache: {
+      payload: Prisma.$ad_creative_copy_cachePayload<ExtArgs>
+      fields: Prisma.ad_creative_copy_cacheFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.ad_creative_copy_cacheFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_creative_copy_cachePayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.ad_creative_copy_cacheFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_creative_copy_cachePayload>
+        }
+        findFirst: {
+          args: Prisma.ad_creative_copy_cacheFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_creative_copy_cachePayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.ad_creative_copy_cacheFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_creative_copy_cachePayload>
+        }
+        findMany: {
+          args: Prisma.ad_creative_copy_cacheFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_creative_copy_cachePayload>[]
+        }
+        create: {
+          args: Prisma.ad_creative_copy_cacheCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_creative_copy_cachePayload>
+        }
+        createMany: {
+          args: Prisma.ad_creative_copy_cacheCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.ad_creative_copy_cacheDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_creative_copy_cachePayload>
+        }
+        update: {
+          args: Prisma.ad_creative_copy_cacheUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_creative_copy_cachePayload>
+        }
+        deleteMany: {
+          args: Prisma.ad_creative_copy_cacheDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.ad_creative_copy_cacheUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.ad_creative_copy_cacheUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$ad_creative_copy_cachePayload>
+        }
+        aggregate: {
+          args: Prisma.Ad_creative_copy_cacheAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateAd_creative_copy_cache>
+        }
+        groupBy: {
+          args: Prisma.ad_creative_copy_cacheGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Ad_creative_copy_cacheGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.ad_creative_copy_cacheCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Ad_creative_copy_cacheCountAggregateOutputType> | number
+        }
+      }
+    }
     user_serpapi_keys: {
       payload: Prisma.$user_serpapi_keysPayload<ExtArgs>
       fields: Prisma.user_serpapi_keysFieldRefs
@@ -6091,6 +6158,7 @@ export const Mcc_cid_accountsScalarFieldEnum = {
   customer_name: 'customer_name',
   is_available: 'is_available',
   status: 'status',
+  status_changed_at: 'status_changed_at',
   last_synced_at: 'last_synced_at',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
@@ -6380,6 +6448,22 @@ export const Ad_image_ocr_cacheScalarFieldEnum = {
 } as const
 
 export type Ad_image_ocr_cacheScalarFieldEnum = (typeof Ad_image_ocr_cacheScalarFieldEnum)[keyof typeof Ad_image_ocr_cacheScalarFieldEnum]
+
+
+export const Ad_creative_copy_cacheScalarFieldEnum = {
+  id: 'id',
+  image_url: 'image_url',
+  status: 'status',
+  headlines: 'headlines',
+  descriptions: 'descriptions',
+  seen_url: 'seen_url',
+  model_used: 'model_used',
+  last_error: 'last_error',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Ad_creative_copy_cacheScalarFieldEnum = (typeof Ad_creative_copy_cacheScalarFieldEnum)[keyof typeof Ad_creative_copy_cacheScalarFieldEnum]
 
 
 export const User_serpapi_keysScalarFieldEnum = {
@@ -7400,6 +7484,17 @@ export const ad_image_ocr_cacheOrderByRelevanceFieldEnum = {
 export type ad_image_ocr_cacheOrderByRelevanceFieldEnum = (typeof ad_image_ocr_cacheOrderByRelevanceFieldEnum)[keyof typeof ad_image_ocr_cacheOrderByRelevanceFieldEnum]
 
 
+export const ad_creative_copy_cacheOrderByRelevanceFieldEnum = {
+  image_url: 'image_url',
+  status: 'status',
+  seen_url: 'seen_url',
+  model_used: 'model_used',
+  last_error: 'last_error'
+} as const
+
+export type ad_creative_copy_cacheOrderByRelevanceFieldEnum = (typeof ad_creative_copy_cacheOrderByRelevanceFieldEnum)[keyof typeof ad_creative_copy_cacheOrderByRelevanceFieldEnum]
+
+
 export const user_serpapi_keysOrderByRelevanceFieldEnum = {
   key_name: 'key_name',
   api_key: 'api_key',
@@ -7844,6 +7939,7 @@ export type GlobalOmitConfig = {
   merchant_atc_snapshots?: Prisma.merchant_atc_snapshotsOmit
   atc_advertiser_domain_snapshot?: Prisma.atc_advertiser_domain_snapshotOmit
   ad_image_ocr_cache?: Prisma.ad_image_ocr_cacheOmit
+  ad_creative_copy_cache?: Prisma.ad_creative_copy_cacheOmit
   user_serpapi_keys?: Prisma.user_serpapi_keysOmit
   user_semrush_keys?: Prisma.user_semrush_keysOmit
   merchant_monitor_rules?: Prisma.merchant_monitor_rulesOmit

@@ -360,6 +360,19 @@ export async function GET(req: NextRequest) {
       log(`当日花费同步失败: ${e instanceof Error ? e.message : String(e)}`);
     }
 
+    // D-277 账户状态半小时级同步：读各 MCC Sheet CID_List 的 Status 列（Google 账户
+    // 状态真值），被停/注销跟随写库并告警归属人；老脚本（无状态列）的 MCC 自动跳过。
+    let cidStatus: { mccs: number; withStatusCol: number; updated: number; recoverNotices: number } | null = null;
+    try {
+      const { syncCidStatusesFromSheets } = await import("@/lib/cid-list-sheet-sync");
+      cidStatus = await syncCidStatusesFromSheets(log);
+      if (cidStatus.updated > 0 || cidStatus.recoverNotices > 0) {
+        log(`账户状态：${cidStatus.withStatusCol}/${cidStatus.mccs} 个 MCC 有状态列，状态跟随 ${cidStatus.updated}，待人工恢复提醒 ${cidStatus.recoverNotices}`);
+      }
+    } catch (e) {
+      log(`账户状态同步失败: ${e instanceof Error ? e.message : String(e)}`);
+    }
+
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     log(
       `同步完成：${result.mccCount} 个MCC，${result.mccWithData} 个有今日数据，` +
@@ -395,6 +408,7 @@ export async function GET(req: NextRequest) {
         meta_updated: cost.metaUpdated,
         errors: cost.errors,
       },
+      cid_status: cidStatus,
       errors: result.errors,
     });
   } catch (e) {

@@ -1,6 +1,12 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { parseCidListRows, diffCidList, type ExistingCidRow } from "../src/lib/cid-list-sheet-sync";
+import {
+  parseCidListRows,
+  diffCidList,
+  diffCidStatuses,
+  mapSheetStatus,
+  type ExistingCidRow,
+} from "../src/lib/cid-list-sheet-sync";
 
 const ex = (id: number, cid: string, name: string | null, status = "active"): ExistingCidRow => ({
   id: BigInt(id), customer_id: cid, customer_name: name, status,
@@ -14,8 +20,22 @@ describe("parseCidListRows", () => {
       ["9876543210", "acc2"],
     ]);
     assert.deepEqual(rows, [
-      { customer_id: "1234567890", customer_name: "acc1" },
-      { customer_id: "9876543210", customer_name: "acc2" },
+      { customer_id: "1234567890", customer_name: "acc1", google_status: null },
+      { customer_id: "9876543210", customer_name: "acc2", google_status: null },
+    ]);
+  });
+
+  test("D-277 三列表头：Status 列解析为大写原值；空串归 null（不确定不动库）", () => {
+    const rows = parseCidListRows([
+      ["CustomerID", "AccountName", "Status"],
+      ["123-456-7890", "acc1", "ENABLED"],
+      ["222-222-2222", "acc2", "suspended"],
+      ["333-333-3333", "acc3", ""],
+    ]);
+    assert.deepEqual(rows, [
+      { customer_id: "1234567890", customer_name: "acc1", google_status: "ENABLED" },
+      { customer_id: "2222222222", customer_name: "acc2", google_status: "SUSPENDED" },
+      { customer_id: "3333333333", customer_name: "acc3", google_status: null },
     ]);
   });
 
@@ -112,5 +132,67 @@ describe("diffCidList", () => {
     );
     assert.equal(d.cancelSkippedByGuard, false);
     assert.equal(d.cancel.length, 4);
+  });
+});
+
+describe("mapSheetStatus (D-277)", () => {
+  test("Google 状态 → 库内三态；不确定值归 null", () => {
+    assert.equal(mapSheetStatus("ENABLED"), "active");
+    assert.equal(mapSheetStatus("SUSPENDED"), "suspended");
+    assert.equal(mapSheetStatus("CANCELED"), "cancelled");
+    assert.equal(mapSheetStatus("CANCELLED"), "cancelled");
+    assert.equal(mapSheetStatus("CLOSED"), "cancelled");
+    assert.equal(mapSheetStatus("enabled"), "active"); // 大小写容错
+    assert.equal(mapSheetStatus("UNKNOWN"), null);
+    assert.equal(mapSheetStatus(""), null);
+    assert.equal(mapSheetStatus(null), null);
+    assert.equal(mapSheetStatus(undefined), null);
+  });
+});
+
+describe("diffCidStatuses (D-277)", () => {
+  const row = (cid: string, status: string | null) => ({
+    customer_id: cid, customer_name: `n${cid.slice(0, 3)}`, google_status: status,
+  });
+
+  test("active + Sheet SUSPENDED → suspend；active + CANCELED → cancel", () => {
+    const changes = diffCidStatuses(
+      [row("1111111111", "SUSPENDED"), row("2222222222", "CANCELED")],
+      [ex(1, "1111111111", "a"), ex(2, "2222222222", "b")],
+    );
+    assert.equal(changes.length, 2);
+    assert.deepEqual(changes.map((c) => c.kind), ["suspend", "cancel"]);
+    assert.deepEqual(changes.map((c) => c.toStatus), ["suspended", "cancelled"]);
+  });
+
+  test("库内被停 + Sheet ENABLED → 只提醒不动库（recover_notice，07 q5=b）", () => {
+    const changes = diffCidStatuses(
+      [row("1111111111", "ENABLED")],
+      [ex(1, "1111111111", "a", "suspended")],
+    );
+    assert.equal(changes.length, 1);
+    assert.equal(changes[0].kind, "recover_notice");
+    assert.equal(changes[0].toStatus, null);
+  });
+
+  test("suspended ↔ cancelled 之间跟随 Google 真值", () => {
+    const changes = diffCidStatuses(
+      [row("1111111111", "CANCELLED"), row("2222222222", "SUSPENDED")],
+      [ex(1, "1111111111", "a", "suspended"), ex(2, "2222222222", "b", "cancelled")],
+    );
+    assert.deepEqual(changes.map((c) => c.kind), ["cancel", "suspend"]);
+  });
+
+  test("状态一致 / 无状态列 / 不确定值 / 新 CID → 不产生动作", () => {
+    const changes = diffCidStatuses(
+      [
+        row("1111111111", "ENABLED"),   // 与库内 active 一致
+        row("2222222222", null),         // 老脚本无列
+        row("3333333333", "UNKNOWN"),   // 不确定值
+        row("9999999999", "SUSPENDED"), // 库内无此号（新号走 create 路径）
+      ],
+      [ex(1, "1111111111", "a"), ex(2, "2222222222", "b"), ex(3, "3333333333", "c")],
+    );
+    assert.equal(changes.length, 0);
   });
 });

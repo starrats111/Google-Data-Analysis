@@ -954,6 +954,7 @@ model mcc_cid_accounts {
   customer_name  String?   @db.VarChar(255) // CID 账户名称
   is_available   String    @default("Y") @db.VarChar(1) // Y=可用, N=已被广告系列占用
   status         String    @default("active") @db.VarChar(16) // active / suspended / cancelled
+  status_changed_at DateTime? @db.DateTime(0) // D-277：最近一次状态变化时间（UTC），账户状态总览展示用
   last_synced_at DateTime? @db.DateTime(0)
   is_deleted     Int       @default(0) @db.TinyInt
   created_at     DateTime  @default(now()) @db.DateTime(0)
