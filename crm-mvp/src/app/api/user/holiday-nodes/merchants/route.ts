@@ -4,11 +4,14 @@ import { apiSuccess, apiError } from "@/lib/constants";
 import { serializeData } from "@/lib/auth";
 import prisma from "@/lib/prisma";
 import { NODE_SOURCE } from "@/lib/holiday-nodes";
+import { normalizePlatformCode, isValidPlatformCode } from "@/lib/constants";
 
 /**
  * D-278 节点推荐清单层（用户端）
  * GET ?code=black_friday → 该节点官方清单商家（EPC/佣金参考值），
  * 并与当前用户自己的商家库比对：在库标可认领/已认领，未入库如实标注（数据真实性规范：不造数据）。
+ * 匹配口径：清单行 affiliate 能解析成平台代码时按 平台+MID 精确匹配（不同平台数字 MID 会撞号，
+ * 不能只按 MID 匹配）；解析不了的按名称匹配兜底。
  */
 export const GET = withUser(async (req: NextRequest, { user }) => {
   const code = new URL(req.url).searchParams.get("code") || "";
@@ -21,9 +24,15 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
     take: 500,
   });
 
-  // 与"我的商家库"比对：优先按 mid ↔ merchant_id 精确匹配，无 mid 的行按名称匹配
-  const mids = items.map((i) => i.mid).filter(Boolean) as string[];
-  const names = items.filter((i) => !i.mid).map((i) => i.merchant_name);
+  // 解析每行的平台代码（affiliate → LH/PM/...），解析不了的走名称匹配
+  const recPlatform = (affiliate: string | null): string | null => {
+    if (!affiliate) return null;
+    const p = normalizePlatformCode(affiliate);
+    return isValidPlatformCode(p) ? p : null;
+  };
+
+  const mids = items.filter((i) => i.mid && recPlatform(i.affiliate)).map((i) => i.mid as string);
+  const names = items.map((i) => i.merchant_name);
   const mine = await prisma.user_merchants.findMany({
     where: {
       user_id: userId,
@@ -38,18 +47,23 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
       status: true, category: true, violation_status: true, policy_status: true,
     },
   });
-  const byMid = new Map<string, (typeof mine)[0]>();
+  // 平台+MID 精确键；名称键兜底。同键多行时优先保留已认领的那行
+  const byPlatMid = new Map<string, (typeof mine)[0]>();
   const byName = new Map<string, (typeof mine)[0]>();
+  const prefer = (prev: (typeof mine)[0] | undefined, cur: (typeof mine)[0]) =>
+    !prev || (prev.status === "available" && cur.status !== "available") ? cur : prev;
   for (const m of mine) {
-    // 同 MID 多平台行时优先保留已认领的那行
-    const prev = byMid.get(m.merchant_id);
-    if (!prev || (prev.status === "available" && m.status !== "available")) byMid.set(m.merchant_id, m);
-    const prevN = byName.get(m.merchant_name.toLowerCase());
-    if (!prevN || (prevN.status === "available" && m.status !== "available")) byName.set(m.merchant_name.toLowerCase(), m);
+    const k = `${m.platform}:${m.merchant_id}`;
+    byPlatMid.set(k, prefer(byPlatMid.get(k), m));
+    const nk = m.merchant_name.toLowerCase();
+    byName.set(nk, prefer(byName.get(nk), m));
   }
 
   const enriched = items.map((it) => {
-    const match = (it.mid ? byMid.get(it.mid) : undefined) || byName.get(it.merchant_name.toLowerCase());
+    const plat = recPlatform(it.affiliate);
+    const match =
+      (plat && it.mid ? byPlatMid.get(`${plat}:${it.mid}`) : undefined) ||
+      byName.get(it.merchant_name.toLowerCase());
     return {
       ...it,
       my_merchant_id: match ? match.id : null,

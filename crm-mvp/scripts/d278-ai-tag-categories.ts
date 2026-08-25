@@ -3,12 +3,13 @@
  *
  * propose 阶段（只读，不动库）：
  *   取节点清单（merchant_recommendations source=node）对应的 user_merchants 行，
+ *   按 平台+MID 精确定位（清单行 affiliate 解析成平台代码；不同平台数字 MID 会撞号，禁止裸 MID 匹配），
  *   凡品类为空/Others/不在统一品类表（CATEGORY_CN）里的，让 AI 从封闭品类表中选一个；
  *   AI 拿不准必须回 Unknown（质量闸：不确定不硬塞）。产出对照表 JSON + Markdown 给 07 确认。
  *
  * apply 阶段（07 确认后执行）：
- *   按对照表刷 user_merchants.category（只动 category_manual=0 的行；刷后置 category_manual=1，
- *   语义=经 07 人工确认的标签，平台同步不再覆盖）。刷前备份原值 JSON，可整批还原。
+ *   按对照表刷 user_merchants.category（限定 platform+merchant_id 且 category_manual=0 的行；
+ *   刷后置 category_manual=1，语义=经 07 人工确认的标签，平台同步不再覆盖）。刷前备份原值 JSON 可整批还原。
  *
  * 用法（生产服务器 crm-mvp 目录）：
  *   npx tsx scripts/d278-ai-tag-categories.ts --phase=propose --node=black_friday
@@ -31,6 +32,7 @@ const BATCH = 20;
 const log = (msg: string) => console.log(`[${new Date().toISOString()}] ${msg}`);
 
 interface TagItem {
+  platform: string;
   mid: string;
   name: string;
   website: string | null;
@@ -40,40 +42,53 @@ interface TagItem {
 
 async function propose() {
   const { default: prisma } = await import("../src/lib/prisma");
-  const { CATEGORY_CN } = await import("../src/lib/category-cn");
+  const { CATEGORY_CN, catCn } = await import("../src/lib/category-cn");
+  const { normalizePlatformCode, isValidPlatformCode } = await import("../src/lib/constants");
   const { callAiWithFallback } = await import("../src/lib/ai-service");
   const validCats = Object.keys(CATEGORY_CN);
 
   const recs = await prisma.merchant_recommendations.findMany({
     where: { source: "node", node_code: NODE_CODE, is_deleted: 0, mid: { not: null } },
-    select: { mid: true, merchant_name: true, website: true },
+    select: { mid: true, merchant_name: true, website: true, affiliate: true },
   });
   log(`节点 ${NODE_CODE} 清单商家 ${recs.length} 个`);
 
-  const mids = recs.map((r) => r.mid as string);
+  // 平台+MID 精确定位（撞号防线）
+  const keyed: { platform: string; mid: string; recName: string; recSite: string | null }[] = [];
+  let noPlatform = 0;
+  for (const r of recs) {
+    const p = r.affiliate ? normalizePlatformCode(r.affiliate) : "";
+    if (!p || !isValidPlatformCode(p)) { noPlatform++; continue; }
+    keyed.push({ platform: p, mid: r.mid as string, recName: r.merchant_name, recSite: r.website });
+  }
+  if (noPlatform > 0) log(`⚠️ ${noPlatform} 行清单 affiliate 无法解析成平台代码，跳过（不猜平台）`);
+
   const rows = await prisma.user_merchants.findMany({
-    where: { merchant_id: { in: mids }, is_deleted: 0 },
-    select: { merchant_id: true, merchant_name: true, merchant_url: true, category: true, category_manual: true },
+    where: {
+      is_deleted: 0,
+      OR: keyed.map((k) => ({ platform: k.platform, merchant_id: k.mid })),
+    },
+    select: { platform: true, merchant_id: true, merchant_name: true, merchant_url: true, category: true, category_manual: true },
   });
-  // 每个 MID 的现状：有任意一行人工标签（category_manual=1）就跳过；有合法品类值的记下来
+  // 每个 平台:MID 的现状：有任意一行人工标签（category_manual=1）就跳过；有合法品类值的记下来
   const state = new Map<string, { name: string; url: string | null; cat: string | null; manual: boolean; validCat: string | null }>();
   for (const r of rows) {
-    const s = state.get(r.merchant_id) || { name: r.merchant_name, url: r.merchant_url, cat: null, manual: false, validCat: null };
+    const key = `${r.platform}:${r.merchant_id}`;
+    const s = state.get(key) || { name: r.merchant_name, url: r.merchant_url, cat: null, manual: false, validCat: null };
     if (r.category_manual === 1) s.manual = true;
     if (r.category && !s.cat) s.cat = r.category;
     if (r.category && r.category !== "Others" && validCats.includes(r.category)) s.validCat = r.category;
-    state.set(r.merchant_id, s);
+    state.set(key, s);
   }
 
-  const targets: { mid: string; name: string; url: string | null; cat: string | null }[] = [];
+  const targets: { platform: string; mid: string; name: string; url: string | null; cat: string | null }[] = [];
   let skipManual = 0, skipValid = 0, notInLib = 0;
-  for (const rec of recs) {
-    const mid = rec.mid as string;
-    const s = state.get(mid);
-    if (!s) { notInLib++; continue; } // 未入库的 8 个：库里没行，无处打标，等正式同步后再说
+  for (const k of keyed) {
+    const s = state.get(`${k.platform}:${k.mid}`);
+    if (!s) { notInLib++; continue; } // 未入库：库里没行，无处打标，等正式同步后再说
     if (s.manual) { skipManual++; continue; }
     if (s.validCat) { skipValid++; continue; } // 已有合法品类不重打
-    targets.push({ mid, name: s.name || rec.merchant_name, url: s.url || rec.website, cat: s.cat });
+    targets.push({ platform: k.platform, mid: k.mid, name: s.name || k.recName, url: s.url || k.recSite, cat: s.cat });
   }
   log(`待打标 ${targets.length} 个（跳过：人工标签 ${skipManual}、已有合法品类 ${skipValid}、未入库 ${notInLib}）`);
 
@@ -95,13 +110,13 @@ async function propose() {
       for (const t of chunk) {
         const cat = byMid.get(t.mid);
         const proposed = cat && validCats.includes(cat) ? cat : "Unknown";
-        items.push({ mid: t.mid, name: t.name, website: t.url, current_category: t.cat, proposed });
+        items.push({ platform: t.platform, mid: t.mid, name: t.name, website: t.url, current_category: t.cat, proposed });
       }
       log(`批 ${i / BATCH + 1}/${Math.ceil(targets.length / BATCH)} 完成`);
     } catch (e) {
       // 失败路径：该批全部标 Unknown（待人工），不中断后续批次
       log(`批 ${i / BATCH + 1} AI 调用失败（该批全部记 Unknown 待人工）：${e instanceof Error ? e.message : e}`);
-      for (const t of chunk) items.push({ mid: t.mid, name: t.name, website: t.url, current_category: t.cat, proposed: "Unknown" });
+      for (const t of chunk) items.push({ platform: t.platform, mid: t.mid, name: t.name, website: t.url, current_category: t.cat, proposed: "Unknown" });
     }
   }
 
@@ -109,10 +124,9 @@ async function propose() {
   writeFileSync(outFile, JSON.stringify({ node: NODE_CODE, generated_at: new Date().toISOString(), items }, null, 2));
   log(`对照表已写 ${outFile}（共 ${items.length} 条，其中 Unknown ${items.filter((x) => x.proposed === "Unknown").length} 条）`);
 
-  const { catCn } = await import("../src/lib/category-cn");
-  console.log(`\n| MID | 商家 | 现品类 | AI 建议 |\n|---|---|---|---|`);
+  console.log(`\n| 平台 | MID | 商家 | 现品类 | AI 建议 |\n|---|---|---|---|---|`);
   for (const it of items) {
-    console.log(`| ${it.mid} | ${it.name} | ${catCn(it.current_category)} | ${it.proposed === "Unknown" ? "❓待人工" : `${catCn(it.proposed)} (${it.proposed})`} |`);
+    console.log(`| ${it.platform} | ${it.mid} | ${it.name} | ${catCn(it.current_category)} | ${it.proposed === "Unknown" ? "❓待人工" : `${catCn(it.proposed)} (${it.proposed})`} |`);
   }
   await prisma.$disconnect();
 }
@@ -124,24 +138,27 @@ async function apply() {
   const validCats = Object.keys(CATEGORY_CN);
 
   const data = JSON.parse(readFileSync(FILE, "utf-8")) as { items: TagItem[] };
-  const todo = data.items.filter((x) => x.proposed !== "Unknown" && validCats.includes(x.proposed));
-  log(`确认表共 ${data.items.length} 条，可执行 ${todo.length} 条（Unknown/非法值不动）`);
+  const todo = data.items.filter((x) => x.platform && x.proposed !== "Unknown" && validCats.includes(x.proposed));
+  log(`确认表共 ${data.items.length} 条，可执行 ${todo.length} 条（Unknown/非法值/缺平台不动）`);
 
   // 刷新前备份原值（回滚用）
-  const mids = todo.map((t) => t.mid);
   const before = await prisma.user_merchants.findMany({
-    where: { merchant_id: { in: mids }, is_deleted: 0, category_manual: 0 },
-    select: { id: true, merchant_id: true, category: true },
+    where: {
+      is_deleted: 0,
+      category_manual: 0,
+      OR: todo.map((t) => ({ platform: t.platform, merchant_id: t.mid })),
+    },
+    select: { id: true, platform: true, merchant_id: true, category: true },
   });
   const backupFile = `/tmp/d278_tag_backup_${Date.now()}.json`;
-  writeFileSync(backupFile, JSON.stringify(before.map((b) => ({ id: String(b.id), merchant_id: b.merchant_id, category: b.category }))));
+  writeFileSync(backupFile, JSON.stringify(before.map((b) => ({ id: String(b.id), platform: b.platform, merchant_id: b.merchant_id, category: b.category }))));
   log(`已备份 ${before.length} 行原值 → ${backupFile}`);
 
   let updated = 0;
   for (const t of todo) {
     const r = await prisma.user_merchants.updateMany({
-      // 只动非人工行；刷后置 category_manual=1 = 该标签经 07 确认，平台同步不再覆盖
-      where: { merchant_id: t.mid, is_deleted: 0, category_manual: 0 },
+      // 平台+MID 限定（防撞号）；只动非人工行；刷后置 category_manual=1 = 经 07 确认，平台同步不再覆盖
+      where: { platform: t.platform, merchant_id: t.mid, is_deleted: 0, category_manual: 0 },
       data: { category: t.proposed, category_manual: 1 },
     });
     updated += r.count;
