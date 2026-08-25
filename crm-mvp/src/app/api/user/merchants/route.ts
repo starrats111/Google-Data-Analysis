@@ -324,6 +324,9 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
   const pageSize = Math.min(parseInt(searchParams.get("pageSize") || "50"), 500);
 
   const label = searchParams.get("label") || "";
+  // D-278：品类筛选（CSV，值为 CATEGORY_CN 英文键）+ 可投过滤，节点推荐"品类扩展层"复用本接口
+  const category = searchParams.get("category") || "";
+  const investableOnly = searchParams.get("investable") === "1";
   const sortField = searchParams.get("sortField") || "";
   const sortOrder = (searchParams.get("sortOrder") || "asc") as "asc" | "desc";
   const userId = BigInt(user.userId);
@@ -535,6 +538,17 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
         { merchant_id: { contains: search } },
         { merchant_url: { contains: search } }, // C-094.8：允许按域名搜索
       ];
+    }
+    // D-278：品类扩展层——按品类圈同类商家，且只圈可投状态（07 第 5 问拍板：排除违规/禁投/下架）
+    if (category) {
+      const cats = category.split(",").map((c) => c.trim()).filter(Boolean);
+      if (cats.length > 0) where.category = { in: cats };
+    }
+    if (investableOnly) {
+      where.violation_status = "normal";
+      where.policy_status = { not: "prohibited" };
+      where.listing_status = "active";
+      where.parent_blacklisted = 0;
     }
 
     // 标签筛选：在数据库层面预筛选

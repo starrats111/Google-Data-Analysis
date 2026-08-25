@@ -7,6 +7,7 @@ import {
   DashboardOutlined,
   LogoutOutlined,
   ApiOutlined,
+  CalendarOutlined,
   ToolOutlined,
   AppstoreOutlined,
   SafetyCertificateOutlined,
@@ -51,6 +52,7 @@ const menuItems: MenuItem[] = [
       { key: "/admin/affiliate-networks", icon: <GlobalOutlined />, label: "上级联盟与黑名单" },
       { key: "/admin/policy-categories", icon: <AuditOutlined />, label: "政策类别管理" },
       { key: "/admin/policy-violations", icon: <AuditOutlined />, label: "Google Ads 政策违规" },
+      { key: "/admin/holiday-nodes", icon: <CalendarOutlined />, label: "节点推荐管理" },
     ],
   },
   {

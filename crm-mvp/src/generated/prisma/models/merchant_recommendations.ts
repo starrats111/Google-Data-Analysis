@@ -66,6 +66,7 @@ export type Merchant_recommendationsMinAggregateOutputType = {
   atc_domain: string | null
   atc_days: number | null
   atc_last_seen: Date | null
+  node_code: string | null
   is_deleted: number | null
   created_at: Date | null
 }
@@ -92,6 +93,7 @@ export type Merchant_recommendationsMaxAggregateOutputType = {
   atc_domain: string | null
   atc_days: number | null
   atc_last_seen: Date | null
+  node_code: string | null
   is_deleted: number | null
   created_at: Date | null
 }
@@ -118,6 +120,7 @@ export type Merchant_recommendationsCountAggregateOutputType = {
   atc_domain: number
   atc_days: number
   atc_last_seen: number
+  node_code: number
   is_deleted: number
   created_at: number
   _all: number
@@ -164,6 +167,7 @@ export type Merchant_recommendationsMinAggregateInputType = {
   atc_domain?: true
   atc_days?: true
   atc_last_seen?: true
+  node_code?: true
   is_deleted?: true
   created_at?: true
 }
@@ -190,6 +194,7 @@ export type Merchant_recommendationsMaxAggregateInputType = {
   atc_domain?: true
   atc_days?: true
   atc_last_seen?: true
+  node_code?: true
   is_deleted?: true
   created_at?: true
 }
@@ -216,6 +221,7 @@ export type Merchant_recommendationsCountAggregateInputType = {
   atc_domain?: true
   atc_days?: true
   atc_last_seen?: true
+  node_code?: true
   is_deleted?: true
   created_at?: true
   _all?: true
@@ -329,6 +335,7 @@ export type Merchant_recommendationsGroupByOutputType = {
   atc_domain: string | null
   atc_days: number | null
   atc_last_seen: Date | null
+  node_code: string | null
   is_deleted: number
   created_at: Date
   _count: Merchant_recommendationsCountAggregateOutputType | null
@@ -378,6 +385,7 @@ export type merchant_recommendationsWhereInput = {
   atc_domain?: Prisma.StringNullableFilter<"merchant_recommendations"> | string | null
   atc_days?: Prisma.IntNullableFilter<"merchant_recommendations"> | number | null
   atc_last_seen?: Prisma.DateTimeNullableFilter<"merchant_recommendations"> | Date | string | null
+  node_code?: Prisma.StringNullableFilter<"merchant_recommendations"> | string | null
   is_deleted?: Prisma.IntFilter<"merchant_recommendations"> | number
   created_at?: Prisma.DateTimeFilter<"merchant_recommendations"> | Date | string
 }
@@ -404,6 +412,7 @@ export type merchant_recommendationsOrderByWithRelationInput = {
   atc_domain?: Prisma.SortOrderInput | Prisma.SortOrder
   atc_days?: Prisma.SortOrderInput | Prisma.SortOrder
   atc_last_seen?: Prisma.SortOrderInput | Prisma.SortOrder
+  node_code?: Prisma.SortOrderInput | Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   _relevance?: Prisma.merchant_recommendationsOrderByRelevanceInput
@@ -434,6 +443,7 @@ export type merchant_recommendationsWhereUniqueInput = Prisma.AtLeast<{
   atc_domain?: Prisma.StringNullableFilter<"merchant_recommendations"> | string | null
   atc_days?: Prisma.IntNullableFilter<"merchant_recommendations"> | number | null
   atc_last_seen?: Prisma.DateTimeNullableFilter<"merchant_recommendations"> | Date | string | null
+  node_code?: Prisma.StringNullableFilter<"merchant_recommendations"> | string | null
   is_deleted?: Prisma.IntFilter<"merchant_recommendations"> | number
   created_at?: Prisma.DateTimeFilter<"merchant_recommendations"> | Date | string
 }, "id">
@@ -460,6 +470,7 @@ export type merchant_recommendationsOrderByWithAggregationInput = {
   atc_domain?: Prisma.SortOrderInput | Prisma.SortOrder
   atc_days?: Prisma.SortOrderInput | Prisma.SortOrder
   atc_last_seen?: Prisma.SortOrderInput | Prisma.SortOrder
+  node_code?: Prisma.SortOrderInput | Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   _count?: Prisma.merchant_recommendationsCountOrderByAggregateInput
@@ -494,6 +505,7 @@ export type merchant_recommendationsScalarWhereWithAggregatesInput = {
   atc_domain?: Prisma.StringNullableWithAggregatesFilter<"merchant_recommendations"> | string | null
   atc_days?: Prisma.IntNullableWithAggregatesFilter<"merchant_recommendations"> | number | null
   atc_last_seen?: Prisma.DateTimeNullableWithAggregatesFilter<"merchant_recommendations"> | Date | string | null
+  node_code?: Prisma.StringNullableWithAggregatesFilter<"merchant_recommendations"> | string | null
   is_deleted?: Prisma.IntWithAggregatesFilter<"merchant_recommendations"> | number
   created_at?: Prisma.DateTimeWithAggregatesFilter<"merchant_recommendations"> | Date | string
 }
@@ -520,6 +532,7 @@ export type merchant_recommendationsCreateInput = {
   atc_domain?: string | null
   atc_days?: number | null
   atc_last_seen?: Date | string | null
+  node_code?: string | null
   is_deleted?: number
   created_at?: Date | string
 }
@@ -546,6 +559,7 @@ export type merchant_recommendationsUncheckedCreateInput = {
   atc_domain?: string | null
   atc_days?: number | null
   atc_last_seen?: Date | string | null
+  node_code?: string | null
   is_deleted?: number
   created_at?: Date | string
 }
@@ -572,6 +586,7 @@ export type merchant_recommendationsUpdateInput = {
   atc_domain?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   atc_days?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   atc_last_seen?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  node_code?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -598,6 +613,7 @@ export type merchant_recommendationsUncheckedUpdateInput = {
   atc_domain?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   atc_days?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   atc_last_seen?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  node_code?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -624,6 +640,7 @@ export type merchant_recommendationsCreateManyInput = {
   atc_domain?: string | null
   atc_days?: number | null
   atc_last_seen?: Date | string | null
+  node_code?: string | null
   is_deleted?: number
   created_at?: Date | string
 }
@@ -650,6 +667,7 @@ export type merchant_recommendationsUpdateManyMutationInput = {
   atc_domain?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   atc_days?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   atc_last_seen?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  node_code?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -676,6 +694,7 @@ export type merchant_recommendationsUncheckedUpdateManyInput = {
   atc_domain?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   atc_days?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   atc_last_seen?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  node_code?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -708,6 +727,7 @@ export type merchant_recommendationsCountOrderByAggregateInput = {
   atc_domain?: Prisma.SortOrder
   atc_days?: Prisma.SortOrder
   atc_last_seen?: Prisma.SortOrder
+  node_code?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
 }
@@ -743,6 +763,7 @@ export type merchant_recommendationsMaxOrderByAggregateInput = {
   atc_domain?: Prisma.SortOrder
   atc_days?: Prisma.SortOrder
   atc_last_seen?: Prisma.SortOrder
+  node_code?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
 }
@@ -769,6 +790,7 @@ export type merchant_recommendationsMinOrderByAggregateInput = {
   atc_domain?: Prisma.SortOrder
   atc_days?: Prisma.SortOrder
   atc_last_seen?: Prisma.SortOrder
+  node_code?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
 }
@@ -806,6 +828,7 @@ export type merchant_recommendationsSelect<ExtArgs extends runtime.Types.Extensi
   atc_domain?: boolean
   atc_days?: boolean
   atc_last_seen?: boolean
+  node_code?: boolean
   is_deleted?: boolean
   created_at?: boolean
 }, ExtArgs["result"]["merchant_recommendations"]>
@@ -834,11 +857,12 @@ export type merchant_recommendationsSelectScalar = {
   atc_domain?: boolean
   atc_days?: boolean
   atc_last_seen?: boolean
+  node_code?: boolean
   is_deleted?: boolean
   created_at?: boolean
 }
 
-export type merchant_recommendationsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "merchant_name" | "roi_reference" | "commission_info" | "settlement_info" | "remark" | "share_time" | "upload_batch" | "source" | "mcid" | "mid" | "affiliate" | "website" | "merchant_base" | "epc" | "commission_cap" | "avg_commission_rate" | "avg_order_commission" | "atc_domain" | "atc_days" | "atc_last_seen" | "is_deleted" | "created_at", ExtArgs["result"]["merchant_recommendations"]>
+export type merchant_recommendationsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "merchant_name" | "roi_reference" | "commission_info" | "settlement_info" | "remark" | "share_time" | "upload_batch" | "source" | "mcid" | "mid" | "affiliate" | "website" | "merchant_base" | "epc" | "commission_cap" | "avg_commission_rate" | "avg_order_commission" | "atc_domain" | "atc_days" | "atc_last_seen" | "node_code" | "is_deleted" | "created_at", ExtArgs["result"]["merchant_recommendations"]>
 
 export type $merchant_recommendationsPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "merchant_recommendations"
@@ -865,6 +889,7 @@ export type $merchant_recommendationsPayload<ExtArgs extends runtime.Types.Exten
     atc_domain: string | null
     atc_days: number | null
     atc_last_seen: Date | null
+    node_code: string | null
     is_deleted: number
     created_at: Date
   }, ExtArgs["result"]["merchant_recommendations"]>
@@ -1257,6 +1282,7 @@ export interface merchant_recommendationsFieldRefs {
   readonly atc_domain: Prisma.FieldRef<"merchant_recommendations", 'String'>
   readonly atc_days: Prisma.FieldRef<"merchant_recommendations", 'Int'>
   readonly atc_last_seen: Prisma.FieldRef<"merchant_recommendations", 'DateTime'>
+  readonly node_code: Prisma.FieldRef<"merchant_recommendations", 'String'>
   readonly is_deleted: Prisma.FieldRef<"merchant_recommendations", 'Int'>
   readonly created_at: Prisma.FieldRef<"merchant_recommendations", 'DateTime'>
 }

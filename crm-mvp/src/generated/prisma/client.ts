@@ -102,6 +102,11 @@ export type merchant_violations = Prisma.merchant_violationsModel
  */
 export type merchant_recommendations = Prisma.merchant_recommendationsModel
 /**
+ * Model holiday_nodes
+ * 
+ */
+export type holiday_nodes = Prisma.holiday_nodesModel
+/**
  * Model sheet_configs
  * 
  */

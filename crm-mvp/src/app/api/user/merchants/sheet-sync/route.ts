@@ -35,9 +35,11 @@ export async function GET(req: NextRequest) {
     // D-213 推荐列表现在有两档来源，各自的排序依据不同：
     //   官方（sheets/excel）看 EPC 与佣金率，仍按最新收录排；
     //   系统发现（atc）没有 EPC，只有同行投放天数，按天数从高到低排。
+    // D-278：节点清单（source=node）只在选品页「节点推荐」专区展示，此处一律排除，避免两处口径混淆
     const recSource = searchParams.get("rec_source") || "all";
-    if (recSource === "official") where.source = { not: "atc" };
+    if (recSource === "official") where.source = { notIn: ["atc", "node"] };
     else if (recSource === "atc") where.source = "atc";
+    else where.source = { not: "node" };
 
     const orderBy =
       recSource === "atc"

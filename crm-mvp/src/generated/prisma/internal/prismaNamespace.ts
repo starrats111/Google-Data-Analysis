@@ -396,6 +396,7 @@ export const ModelName = {
   ad_rejection_feedback: 'ad_rejection_feedback',
   merchant_violations: 'merchant_violations',
   merchant_recommendations: 'merchant_recommendations',
+  holiday_nodes: 'holiday_nodes',
   sheet_configs: 'sheet_configs',
   ad_default_settings: 'ad_default_settings',
   campaigns: 'campaigns',
@@ -473,7 +474,7 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
     omit: GlobalOmitOptions
   }
   meta: {
-    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "parent_networks" | "platform_blacklist" | "ad_rejection_feedback" | "merchant_violations" | "merchant_recommendations" | "sheet_configs" | "ad_default_settings" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "ad_generation_jobs" | "ad_submit_jobs" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "ai_recommendations" | "spend_guard_actions" | "google_mcc_accounts" | "affiliate_transactions" | "affiliate_click_daily" | "affiliate_payments" | "notifications" | "notification_preferences" | "user_table_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "kyads_click_task_items" | "proxy_exit_ip_usage" | "suffix_alerts" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "ad_creative_copy_cache" | "user_serpapi_keys" | "user_semrush_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log" | "semrush_keyword_cache" | "semrush_health_logs" | "payment_methods" | "report_overrides" | "payment_binding_snapshots" | "bank_flow_entries" | "policy_violations" | "team_developer_tokens" | "token_usage_daily" | "google_ads_api_usage" | "ad_decision_journal" | "ad_creation_drafts" | "brand_assessment_jobs" | "brand_assessment_results" | "brand_intel_cost_ledger" | "dataforseo_brand_keyword_cache"
+    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "parent_networks" | "platform_blacklist" | "ad_rejection_feedback" | "merchant_violations" | "merchant_recommendations" | "holiday_nodes" | "sheet_configs" | "ad_default_settings" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "ad_generation_jobs" | "ad_submit_jobs" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "ai_recommendations" | "spend_guard_actions" | "google_mcc_accounts" | "affiliate_transactions" | "affiliate_click_daily" | "affiliate_payments" | "notifications" | "notification_preferences" | "user_table_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "kyads_click_task_items" | "proxy_exit_ip_usage" | "suffix_alerts" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "ad_creative_copy_cache" | "user_serpapi_keys" | "user_semrush_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log" | "semrush_keyword_cache" | "semrush_health_logs" | "payment_methods" | "report_overrides" | "payment_binding_snapshots" | "bank_flow_entries" | "policy_violations" | "team_developer_tokens" | "token_usage_daily" | "google_ads_api_usage" | "ad_decision_journal" | "ad_creation_drafts" | "brand_assessment_jobs" | "brand_assessment_results" | "brand_intel_cost_ledger" | "dataforseo_brand_keyword_cache"
     txIsolationLevel: TransactionIsolationLevel
   }
   model: {
@@ -1266,6 +1267,72 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         count: {
           args: Prisma.merchant_recommendationsCountArgs<ExtArgs>
           result: runtime.Types.Utils.Optional<Prisma.Merchant_recommendationsCountAggregateOutputType> | number
+        }
+      }
+    }
+    holiday_nodes: {
+      payload: Prisma.$holiday_nodesPayload<ExtArgs>
+      fields: Prisma.holiday_nodesFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.holiday_nodesFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$holiday_nodesPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.holiday_nodesFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$holiday_nodesPayload>
+        }
+        findFirst: {
+          args: Prisma.holiday_nodesFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$holiday_nodesPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.holiday_nodesFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$holiday_nodesPayload>
+        }
+        findMany: {
+          args: Prisma.holiday_nodesFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$holiday_nodesPayload>[]
+        }
+        create: {
+          args: Prisma.holiday_nodesCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$holiday_nodesPayload>
+        }
+        createMany: {
+          args: Prisma.holiday_nodesCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.holiday_nodesDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$holiday_nodesPayload>
+        }
+        update: {
+          args: Prisma.holiday_nodesUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$holiday_nodesPayload>
+        }
+        deleteMany: {
+          args: Prisma.holiday_nodesDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.holiday_nodesUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.holiday_nodesUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$holiday_nodesPayload>
+        }
+        aggregate: {
+          args: Prisma.Holiday_nodesAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateHoliday_nodes>
+        }
+        groupBy: {
+          args: Prisma.holiday_nodesGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Holiday_nodesGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.holiday_nodesCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Holiday_nodesCountAggregateOutputType> | number
         }
       }
     }
@@ -5651,11 +5718,31 @@ export const Merchant_recommendationsScalarFieldEnum = {
   atc_domain: 'atc_domain',
   atc_days: 'atc_days',
   atc_last_seen: 'atc_last_seen',
+  node_code: 'node_code',
   is_deleted: 'is_deleted',
   created_at: 'created_at'
 } as const
 
 export type Merchant_recommendationsScalarFieldEnum = (typeof Merchant_recommendationsScalarFieldEnum)[keyof typeof Merchant_recommendationsScalarFieldEnum]
+
+
+export const Holiday_nodesScalarFieldEnum = {
+  id: 'id',
+  code: 'code',
+  name: 'name',
+  node_date: 'node_date',
+  countries: 'countries',
+  lead_days: 'lead_days',
+  categories: 'categories',
+  description: 'description',
+  enabled: 'enabled',
+  notified_at: 'notified_at',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Holiday_nodesScalarFieldEnum = (typeof Holiday_nodesScalarFieldEnum)[keyof typeof Holiday_nodesScalarFieldEnum]
 
 
 export const Sheet_configsScalarFieldEnum = {
@@ -7076,10 +7163,21 @@ export const merchant_recommendationsOrderByRelevanceFieldEnum = {
   website: 'website',
   merchant_base: 'merchant_base',
   commission_cap: 'commission_cap',
-  atc_domain: 'atc_domain'
+  atc_domain: 'atc_domain',
+  node_code: 'node_code'
 } as const
 
 export type merchant_recommendationsOrderByRelevanceFieldEnum = (typeof merchant_recommendationsOrderByRelevanceFieldEnum)[keyof typeof merchant_recommendationsOrderByRelevanceFieldEnum]
+
+
+export const holiday_nodesOrderByRelevanceFieldEnum = {
+  code: 'code',
+  name: 'name',
+  countries: 'countries',
+  description: 'description'
+} as const
+
+export type holiday_nodesOrderByRelevanceFieldEnum = (typeof holiday_nodesOrderByRelevanceFieldEnum)[keyof typeof holiday_nodesOrderByRelevanceFieldEnum]
 
 
 export const sheet_configsOrderByRelevanceFieldEnum = {
@@ -7899,6 +7997,7 @@ export type GlobalOmitConfig = {
   ad_rejection_feedback?: Prisma.ad_rejection_feedbackOmit
   merchant_violations?: Prisma.merchant_violationsOmit
   merchant_recommendations?: Prisma.merchant_recommendationsOmit
+  holiday_nodes?: Prisma.holiday_nodesOmit
   sheet_configs?: Prisma.sheet_configsOmit
   ad_default_settings?: Prisma.ad_default_settingsOmit
   campaigns?: Prisma.campaignsOmit

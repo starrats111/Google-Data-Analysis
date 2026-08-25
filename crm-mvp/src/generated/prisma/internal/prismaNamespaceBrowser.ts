@@ -63,6 +63,7 @@ export const ModelName = {
   ad_rejection_feedback: 'ad_rejection_feedback',
   merchant_violations: 'merchant_violations',
   merchant_recommendations: 'merchant_recommendations',
+  holiday_nodes: 'holiday_nodes',
   sheet_configs: 'sheet_configs',
   ad_default_settings: 'ad_default_settings',
   campaigns: 'campaigns',
@@ -394,11 +395,31 @@ export const Merchant_recommendationsScalarFieldEnum = {
   atc_domain: 'atc_domain',
   atc_days: 'atc_days',
   atc_last_seen: 'atc_last_seen',
+  node_code: 'node_code',
   is_deleted: 'is_deleted',
   created_at: 'created_at'
 } as const
 
 export type Merchant_recommendationsScalarFieldEnum = (typeof Merchant_recommendationsScalarFieldEnum)[keyof typeof Merchant_recommendationsScalarFieldEnum]
+
+
+export const Holiday_nodesScalarFieldEnum = {
+  id: 'id',
+  code: 'code',
+  name: 'name',
+  node_date: 'node_date',
+  countries: 'countries',
+  lead_days: 'lead_days',
+  categories: 'categories',
+  description: 'description',
+  enabled: 'enabled',
+  notified_at: 'notified_at',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at',
+  updated_at: 'updated_at'
+} as const
+
+export type Holiday_nodesScalarFieldEnum = (typeof Holiday_nodesScalarFieldEnum)[keyof typeof Holiday_nodesScalarFieldEnum]
 
 
 export const Sheet_configsScalarFieldEnum = {
@@ -1819,10 +1840,21 @@ export const merchant_recommendationsOrderByRelevanceFieldEnum = {
   website: 'website',
   merchant_base: 'merchant_base',
   commission_cap: 'commission_cap',
-  atc_domain: 'atc_domain'
+  atc_domain: 'atc_domain',
+  node_code: 'node_code'
 } as const
 
 export type merchant_recommendationsOrderByRelevanceFieldEnum = (typeof merchant_recommendationsOrderByRelevanceFieldEnum)[keyof typeof merchant_recommendationsOrderByRelevanceFieldEnum]
+
+
+export const holiday_nodesOrderByRelevanceFieldEnum = {
+  code: 'code',
+  name: 'name',
+  countries: 'countries',
+  description: 'description'
+} as const
+
+export type holiday_nodesOrderByRelevanceFieldEnum = (typeof holiday_nodesOrderByRelevanceFieldEnum)[keyof typeof holiday_nodesOrderByRelevanceFieldEnum]
 
 
 export const sheet_configsOrderByRelevanceFieldEnum = {

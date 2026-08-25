@@ -327,6 +327,8 @@ model merchant_recommendations {
   atc_domain           String?   @db.VarChar(255) // 同行在投的商家域名，重算时按它去重
   atc_days             Int?      @db.UnsignedInt // 同行已连续投放天数
   atc_last_seen        DateTime? @db.Date // 最后一次确认同行还在投的日期
+  // D-278 海外节点推荐扩展字段（source='node' 时才有值）：挂在哪个节点下（holiday_nodes.code）
+  node_code            String?   @db.VarChar(32)
   is_deleted           Int      @default(0) @db.TinyInt
   created_at           DateTime @default(now()) @db.DateTime(0)
 
@@ -334,6 +336,33 @@ model merchant_recommendations {
   @@index([mid], map: "idx_rec_mid")
   @@index([source], map: "idx_rec_source")
   @@index([atc_domain], map: "idx_rec_atc_domain")
+  @@index([node_code], map: "idx_rec_node_code")
+}
+
+// -----------------------------------------------------------
+// 6c2. 海外节点日历（D-278）
+// 徐老师需求：按国外重大时间节点（黑五/圣诞/母亲节…）推荐投放商家。
+// 每行一个节点；node_date 存"本届"日期，节点过后管理员改成下一届日期即可复用
+// （notified_at 防重发的判定窗口随 node_date 移动自动复位）。
+// categories 存推荐品类 JSON 数组（值必须是选品页 CATEGORY_CN 的英文键），
+// 品类扩展层按它去圈库内同类可投商家。
+// -----------------------------------------------------------
+model holiday_nodes {
+  id          BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  code        String    @unique(map: "uk_node_code") @db.VarChar(32) // black_friday / christmas ...
+  name        String    @db.VarChar(64) // 黑色星期五
+  node_date   DateTime  @db.Date // 本届日期
+  countries   String?   @db.VarChar(255) // 适用国家 CSV（US,GB,...），空=通用
+  lead_days   Int       @default(30) @db.UnsignedInt // 提前提醒天数（07 拍板默认 30）
+  categories  Json? // 推荐品类数组，如 ["Clothing & Accessories","Health & Beauty"]
+  description String?   @db.VarChar(512)
+  enabled     Int       @default(1) @db.TinyInt
+  notified_at DateTime? @db.DateTime(0) // 本届已提醒时间（UTC 存），防重复群发
+  is_deleted  Int       @default(0) @db.TinyInt
+  created_at  DateTime  @default(now()) @db.DateTime(0)
+  updated_at  DateTime  @default(now()) @updatedAt @db.DateTime(0)
+
+  @@index([enabled, node_date], map: "idx_node_enabled_date")
 }
 
 // -----------------------------------------------------------

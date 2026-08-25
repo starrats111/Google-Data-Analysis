@@ -1,8 +1,9 @@
 "use client";
 import { useState, useCallback, useMemo, useEffect } from "react";
 import { Card, Row, Col, Table, Input, Select, Button, Space, Tag, Modal, Form, Typography, Popconfirm, Switch, InputNumber, Tabs, App, Tooltip, Radio, DatePicker, Slider, Progress, Alert, AutoComplete } from "antd";
-import { ShopOutlined, SearchOutlined, CheckOutlined, DollarOutlined, ExperimentOutlined, SaveOutlined, SyncOutlined, WarningOutlined, StarOutlined, ReloadOutlined, RobotOutlined, DeleteOutlined, CloseCircleOutlined, ThunderboltOutlined, EditOutlined, RedoOutlined } from "@ant-design/icons";
+import { ShopOutlined, SearchOutlined, CheckOutlined, DollarOutlined, ExperimentOutlined, SaveOutlined, SyncOutlined, WarningOutlined, StarOutlined, ReloadOutlined, RobotOutlined, DeleteOutlined, CloseCircleOutlined, ThunderboltOutlined, EditOutlined, RedoOutlined, FireOutlined, CalendarOutlined } from "@ant-design/icons";
 import { PLATFORMS, BIDDING_STRATEGIES, ALL_COUNTRIES } from "@/lib/constants";
+import { CATEGORY_CN, catCn } from "@/lib/category-cn";
 import { POLICY_CATEGORY_MAP, POLICY_CATEGORY_LABELS } from "@/lib/policy-hub/policy-categories";
 import { compareConnections, connectionLabel, type ConnectionLabelInput } from "@/lib/connection-label";
 // D-004：使用共享 MerchantNameCell（支持多账号 Popover 修复 BUG-1）
@@ -31,31 +32,7 @@ interface AdSettingsApiData {
   ad_engine?: string;
   ai_rule_profile?: Record<string, unknown>;
 }
-// 主营业务英中翻译
-const CATEGORY_CN: Record<string, string> = {
-  "Others": "其他", "Health & Beauty": "健康美容", "Home & Garden": "家居园艺",
-  "Online Services & Software": "在线服务与软件", "Telecommunications": "电信",
-  "B2B": "企业服务", "Marketing": "营销", "Fashion": "时尚服饰",
-  "Electronics": "电子产品", "Travel": "旅游出行", "Finance": "金融理财",
-  "Education": "教育培训", "Food & Drink": "食品饮料", "Sports & Fitness": "运动健身",
-  "Automotive": "汽车", "Entertainment": "娱乐", "Pets": "宠物",
-  "Baby & Kids": "母婴", "Books & Media": "图书媒体", "Gifts & Flowers": "礼品鲜花",
-  "Insurance": "保险", "Legal": "法律", "Real Estate": "房地产",
-  "Art & Photography": "艺术摄影", "Music": "音乐", "Gaming": "游戏",
-  "Jewelry & Watches": "珠宝手表", "Office Supplies": "办公用品",
-  "Toys & Hobbies": "玩具爱好", "Outdoors": "户外运动", "Computers": "电脑",
-  "Web Hosting": "网站托管", "VPN & Security": "VPN与安全", "Dating": "交友",
-  "Clothing": "服装", "Shoes": "鞋类", "Accessories": "配饰",
-  "Furniture": "家具", "Appliances": "家电", "Tools": "工具",
-  "Software": "软件", "SaaS": "SaaS", "Crypto": "加密货币",
-  "CBD & Cannabis": "CBD", "Supplements": "保健品", "Skincare": "护肤",
-  "Cosmetics": "化妆品", "Fragrance": "香水", "Hair Care": "护发",
-  // D-221：Hermes 禁投品类闸查出来的品类。联盟平台对这些商家一律只给 `Others>Others`，
-  // 是 Hermes 抓落地页/数词频/回灌 Google 拒登才定出来的，落到这一栏是为了让看表的人一眼知道碰不得。
-  "Adult": "成人用品", "Gambling": "博彩", "Tobacco & Vape": "烟草电子烟",
-  "Weapons": "武器刀具", "Counterfeit": "仿冒商品",
-};
-const catCn = (v: string | null) => { if (!v) return "-"; return CATEGORY_CN[v] || v; };
+// 主营业务英中翻译：D-278 起抽到 @/lib/category-cn 共享（管理端节点页、AI 打标脚本同用一张表），见顶部 import
 /** D-050 政策类别下拉选项（按 4 大类 + 子项中文名展示，value=policyName code） */
 const POLICY_OPTIONS = Object.entries(POLICY_CATEGORY_MAP).map(([code, e]) => ({
   value: code,
@@ -117,6 +94,19 @@ const CommissionCell = ({ v }: { v: string | null }) => {
   }
   return <span>{v}</span>;
 };
+// D-278 节点推荐类型
+interface HolidayNodeItem {
+  code: string; name: string; node_date: string; countries: string | null;
+  lead_days: number; categories: string[]; description: string | null;
+  days_until: number; in_window: boolean; list_count: number;
+}
+interface NodeMerchantItem {
+  id: string; merchant_name: string; affiliate: string | null; website: string | null;
+  merchant_base: string | null; mid: string | null; epc: number | null;
+  avg_commission_rate: number | null; avg_order_commission: number | null;
+  my_merchant_id: string | null; my_status: string | null; my_platform: string | null;
+  my_category: string | null; my_violation: boolean; my_policy_status: string | null;
+}
 // __TYPES__
 interface Merchant {
   id: string; merchant_name: string; platform: string; merchant_id: string;
@@ -216,6 +206,39 @@ export default function MerchantsPage() {
   const [recSource, setRecSource] = useState("all");
   const { data: vioData, isLoading: vl, error: vioError, mutate: vioMutate } = useApiWithParams<{ items: any[]; total: number }>(tab === "violations" ? "/api/user/merchants/sheet-sync" : null, { type: "violation", page: vioPage, pageSize: vioPageSize, ...(vioSearch ? { search: vioSearch } : {}) });
   const { data: recData, isLoading: rl, error: recError, mutate: recMutate } = useApiWithParams<{ items: any[]; total: number }>(tab === "recommendations" ? "/api/user/merchants/sheet-sync" : null, { type: "recommendation", page: recPage, pageSize: recPageSize, rec_source: recSource, ...(recSearch ? { search: recSearch } : {}) });
+  // D-278 节点推荐：节点列表常驻拉取（顶部横幅要用，量极小），清单层/扩展层仅在 Tab 激活时拉
+  const { data: ndListData } = useApi<{ items: HolidayNodeItem[] }>("/api/user/holiday-nodes", { dedupingInterval: 300000, revalidateOnFocus: false });
+  const holidayNodes = useMemo(() => ndListData?.items || [], [ndListData]);
+  const [ndCode, setNdCode] = useState("");
+  const activeNode = useMemo(() => holidayNodes.find((n) => n.code === ndCode) || null, [holidayNodes, ndCode]);
+  // 默认选中：优先"提醒窗口内且有清单"的节点，其次最近的未来节点
+  useEffect(() => {
+    if (!ndCode && holidayNodes.length > 0) {
+      const pick = holidayNodes.find((n) => n.in_window && n.list_count > 0) || holidayNodes.find((n) => n.days_until >= 0) || holidayNodes[0];
+      setNdCode(pick.code);
+    }
+  }, [holidayNodes, ndCode]);
+  const { data: ndL1Data, isLoading: ndL1Loading } = useApiWithParams<{ items: NodeMerchantItem[]; total: number }>(
+    tab === "nodes" && ndCode ? "/api/user/holiday-nodes/merchants" : null, { code: ndCode });
+  // 扩展层：按节点推荐品类圈库内同类可投商家（复用选取商家接口）
+  const ndCategories = useMemo(() => activeNode?.categories || [], [activeNode]);
+  const [ndCatSel, setNdCatSel] = useState<string[]>([]);
+  const [ndExpPage, setNdExpPage] = useState(1);
+  const [ndExpPageSize, setNdExpPageSize] = useState(20);
+  useEffect(() => { setNdCatSel([]); setNdExpPage(1); }, [ndCode]);
+  const ndExpParams = useMemo(() => ({
+    tab: "available", category: (ndCatSel.length > 0 ? ndCatSel : ndCategories).join(","), investable: 1,
+    page: ndExpPage, pageSize: ndExpPageSize,
+  }), [ndCatSel, ndCategories, ndExpPage, ndExpPageSize]);
+  const { data: ndExpData, isLoading: ndExpLoading } = useApiWithParams<MerchantResponse>(
+    tab === "nodes" && ndCode && ndCategories.length > 0 ? "/api/user/merchants" : null, ndExpParams);
+  // 提醒窗口内的节点 → 顶部横幅（优先有清单的）
+  const bannerNode = useMemo(() => holidayNodes.find((n) => n.in_window && n.list_count > 0) || holidayNodes.find((n) => n.in_window) || null, [holidayNodes]);
+  // 从节点清单跳去"选取商家"Tab 走既有认领流程
+  const ndGoPick = useCallback((name: string) => {
+    setTab("available"); setSearchInput(name); setSearch(name);
+    setPlatform(""); setLabelFilter(""); setPage(1);
+  }, []);
   // C-019 拒付商家 Tab 状态（见 §19.6）
   const [cbDateRange, setCbDateRange] = useState<[Dayjs, Dayjs]>(() => [dayjs("2025-11-01"), dayjs()]);
   const [cbThreshold, setCbThreshold] = useState(50);
@@ -1181,8 +1204,79 @@ export default function MerchantsPage() {
       render: (v: string | null, rec: any) => rec.source === "excel" ? (v || "无限制") : (rec.remark ? <Button type="link" size="small" onClick={() => { setRTitle("推荐详情"); setRContent(rec.remark); setRModal(true); }}>查看</Button> : "-"),
     },
   ], []);
+  // D-278 节点推荐清单层列：LH 官方历史实绩数据 + 与我的商家库比对结果
+  const nodeL1Cols = useMemo(() => [
+    { title: "商家名称", dataIndex: "merchant_name", width: 220, ellipsis: true,
+      render: (v: string, rec: NodeMerchantItem) => (
+        <Space size={4}>
+          {rec.website ? (
+            <a href={rec.website.startsWith("http") ? rec.website : `https://${rec.website}`} target="_blank" rel="noreferrer" style={{ fontWeight: 600 }}>{v}</a>
+          ) : <span style={{ fontWeight: 600 }}>{v}</span>}
+        </Space>
+      ),
+    },
+    { title: "联盟", dataIndex: "affiliate", width: 90, render: (v: string | null) => v ? <Tag color="blue">{v}</Tag> : "-" },
+    { title: "出单国家", dataIndex: "merchant_base", width: 110,
+      render: (v: string | null) => v ? <Space size={2} wrap>{v.split(",").map((c) => <Tag key={c} style={{ margin: 0, padding: "0 4px", fontSize: 11 }}>{c}</Tag>)}</Space> : "-",
+    },
+    { title: "EPC", dataIndex: "epc", width: 80, align: "right" as const,
+      render: (v: number | null) => v != null ? `$${Number(v).toFixed(2)}` : "-",
+    },
+    { title: "佣金率", dataIndex: "avg_commission_rate", width: 90, align: "right" as const,
+      render: (v: number | null) => {
+        if (v == null) return "-";
+        const n = Number(v);
+        return n > 1 ? `$${n.toFixed(2)}` : `${(n * 100).toFixed(2)}%`;
+      },
+    },
+    { title: "每单均佣", dataIndex: "avg_order_commission", width: 90, align: "right" as const,
+      render: (v: number | null) => v != null ? `$${Number(v).toFixed(2)}` : "-",
+    },
+    { title: "品类", dataIndex: "my_category", width: 110, ellipsis: true, render: (v: string | null) => catCn(v) },
+    { title: "我的库状态", dataIndex: "my_status", width: 110,
+      render: (v: string | null, rec: NodeMerchantItem) => {
+        if (rec.my_violation) return <Tag color="red">违规</Tag>;
+        if (rec.my_policy_status === "prohibited") return <Tag color="red">禁止投放</Tag>;
+        if (v === "claimed") return <Tag color="blue">已认领</Tag>;
+        if (v === "paused") return <Tag color="orange">已认领(暂停)</Tag>;
+        if (v === "available") return <Tag color="green">可认领</Tag>;
+        return <Tooltip title="该商家尚未同步进你的商家库（可能你未连接对应平台，或平台还没开放），等正式同步后可认领"><Tag>未入库</Tag></Tooltip>;
+      },
+    },
+    { title: "操作", key: "action", width: 90,
+      render: (_: unknown, rec: NodeMerchantItem) =>
+        rec.my_status === "available" && !rec.my_violation && rec.my_policy_status !== "prohibited"
+          ? <Button type="link" size="small" onClick={() => ndGoPick(rec.merchant_name)}>去选品</Button>
+          : "-",
+    },
+  ], [ndGoPick]);
+  // D-278 品类扩展层列（数据来自选取商家接口，行结构同 available，这里只用到少数字段）
+  interface NodeExpRow { merchant_name: string; merchant_url: string | null }
+  const nodeL2Cols = useMemo(() => [
+    { title: "平台", dataIndex: "platform", width: 70, render: (v: string) => <Tag color={PC[v] || "default"}>{v}</Tag> },
+    { title: "商家名称", dataIndex: "merchant_name", width: 220, ellipsis: true,
+      render: (v: string, m: NodeExpRow) => m.merchant_url
+        ? <a href={m.merchant_url.startsWith("http") ? m.merchant_url : `https://${m.merchant_url}`} target="_blank" rel="noreferrer" style={{ fontWeight: 600 }}>{v}</a>
+        : <span style={{ fontWeight: 600 }}>{v}</span>,
+    },
+    { title: "品类", dataIndex: "category", width: 110, ellipsis: true, render: (v: string | null) => catCn(v) },
+    { title: "佣金", dataIndex: "commission_rate", width: 120, ellipsis: true, render: (v: string | null) => <CommissionCell v={v} /> },
+    { title: "支持地区", dataIndex: "supported_regions", width: 140, render: (v: unknown[] | null) => <RB r={v} /> },
+    { title: "在投人数", dataIndex: "active_advertisers", width: 80, align: "right" as const, render: (v: number) => v > 0 ? <Tag color="orange">{v}</Tag> : "-" },
+    { title: "操作", key: "action", width: 90,
+      render: (_: unknown, m: NodeExpRow) => <Button type="link" size="small" onClick={() => ndGoPick(m.merchant_name)}>去选品</Button>,
+    },
+  ], [ndGoPick]);
   return (<div style={{ maxWidth: 1600, margin: "0 auto" }}>
     <AppPageHeader icon={<ShopOutlined />} title="我的商家" subtitle="关注、领取、配置广告投放，所有商家运营围绕这一页" />
+    {bannerNode && tab !== "nodes" && (
+      <Alert
+        type="warning" showIcon icon={<FireOutlined />}
+        style={{ marginBottom: 16 }}
+        message={<span><b>{bannerNode.name}</b>（{bannerNode.node_date}）还有 <b style={{ color: "#fa541c" }}>{bannerNode.days_until}</b> 天{bannerNode.countries ? `，主要市场 ${bannerNode.countries}` : ""}{bannerNode.list_count > 0 ? `，官方推荐清单 ${bannerNode.list_count} 个商家已就位` : ""}</span>}
+        action={<Button size="small" type="primary" onClick={() => { setNdCode(bannerNode.code); setTab("nodes"); }}>查看节点推荐</Button>}
+      />
+    )}
     <Form form={adForm} component={false} layout="vertical" size="small">
       <Row gutter={[20, 20]} align="stretch" style={{ marginBottom: 20 }}>
         <Col xs={24} sm={12} md={6}><Card size="small" className="stat-card-hero" title={<><ShopOutlined style={{ color: "#999", marginRight: 6 }} />我的商家</>} style={{ height: "100%" }}>
@@ -1268,6 +1362,7 @@ export default function MerchantsPage() {
           { key: "available", label: "选取商家" },
           { key: "violations", label: <span><WarningOutlined style={{ color: "#ff4d4f", marginRight: 4 }} />违规商家</span> },
           { key: "recommendations", label: <span><StarOutlined style={{ color: "#52c41a", marginRight: 4 }} />推荐商家</span> },
+          { key: "nodes", label: <span><CalendarOutlined style={{ color: "#fa541c", marginRight: 4 }} />节点推荐{bannerNode ? <Tag color="volcano" style={{ marginLeft: 4, padding: "0 4px", fontSize: 11 }}>{bannerNode.days_until}天</Tag> : null}</span> },
           { key: "chargebacks", label: <span><CloseCircleOutlined style={{ color: "#ff4d4f", marginRight: 4 }} />拒付商家</span> },
         ]} />
       {(tab === "claimed" || tab === "available") && (
@@ -1381,6 +1476,46 @@ export default function MerchantsPage() {
         <div className="filter-bar"><Input allowClear placeholder="搜索商家名" style={{ width: 240 }} prefix={<SearchOutlined />} size="small" value={recSearch} onChange={(e) => setRecSearch(e.target.value)} onPressEnter={() => setRecPage(1)} /><Select size="small" style={{ width: 140 }} value={recSource} onChange={(v) => { setRecSource(v); setRecPage(1); }} options={[{ value: "all", label: "全部来源" }, { value: "official", label: "官方名单" }, { value: "atc", label: "系统发现" }]} /><Button type="primary" size="small" icon={<SearchOutlined />} onClick={() => setRecPage(1)}>查询</Button><Button size="small" icon={<ReloadOutlined />} onClick={() => recMutate()}>刷新</Button></div>
         {recSource === "atc" && <div style={{ marginBottom: 12, padding: "8px 12px", background: "#f9f0ff", border: "1px solid #efdbff", borderRadius: 6, fontSize: 12, color: "#666" }}>系统每天从广告透明中心追踪同行，把已连续投放 15 天以上、且近期仍在投的商家收进来，按同行投放天数从高到低排。停投的会自动下架。</div>}
         <Table rowKey="id" loading={rl} dataSource={recData?.items || []} size="small" scroll={{ x: 1100 }} pagination={{ current: recPage, pageSize: recPageSize, total: recData?.total || 0, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"], showTotal: (t: number) => `共 ${t} 条`, onChange: (p, ps) => { if (ps !== recPageSize) { setRecPageSize(ps); setRecPage(1); } else setRecPage(p); } }} columns={recCols} /></div>)}
+      {tab === "nodes" && (<div>
+        {/* D-278 节点选择器：按临近程度排列 */}
+        <div className="filter-bar" style={{ flexWrap: "wrap", gap: 8 }}>
+          {holidayNodes.length === 0 && <Text type="secondary" style={{ fontSize: 12 }}>暂无配置的节点</Text>}
+          {holidayNodes.map((n) => (
+            <Tag.CheckableTag key={n.code} checked={ndCode === n.code} onChange={() => setNdCode(n.code)} style={{ border: "1px solid #d9d9d9", padding: "2px 10px", fontSize: 12 }}>
+              {n.in_window && <FireOutlined style={{ color: ndCode === n.code ? undefined : "#fa541c", marginRight: 4 }} />}
+              {n.name} · {n.days_until >= 0 ? `${n.days_until}天后` : `${-n.days_until}天前`}
+              {n.list_count > 0 ? `（清单${n.list_count}）` : ""}
+            </Tag.CheckableTag>
+          ))}
+        </div>
+        {activeNode && (
+          <div style={{ marginBottom: 12, padding: "8px 12px", background: "#fff7e6", border: "1px solid #ffd591", borderRadius: 6, fontSize: 12, color: "#666" }}>
+            <CalendarOutlined style={{ color: "#fa541c", marginRight: 6 }} />
+            <b>{activeNode.name}</b>（{activeNode.node_date}{activeNode.countries ? `，主要市场 ${activeNode.countries}` : ""}）
+            {activeNode.description ? ` — ${activeNode.description}` : ""}。
+            系统只做推荐与提醒，是否投放由你决定；清单为联盟官方分享的历史实绩参考，不代表我们账户的预期收益。
+          </div>
+        )}
+        {/* 第一层：官方清单商家（有去年实绩背书） */}
+        <div style={{ fontWeight: 600, margin: "12px 0 8px" }}>官方推荐清单{ndL1Data ? `（${ndL1Data.total} 个商家）` : ""}</div>
+        {activeNode && activeNode.list_count === 0 && <Alert type="info" showIcon style={{ marginBottom: 12 }} message="该节点暂无官方推荐清单，可先参考下方品类扩展，或等管理员导入清单" />}
+        <Table rowKey="id" loading={ndL1Loading} dataSource={ndL1Data?.items || []} columns={nodeL1Cols} size="small" scroll={{ x: 1100 }}
+          pagination={{ pageSize: 20, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"], showTotal: (t: number) => `共 ${t} 条` }} />
+        {/* 第二层：品类扩展——库内同类可投商家（不限平台，排除违规/禁投/下架） */}
+        <div style={{ fontWeight: 600, margin: "20px 0 8px" }}>品类扩展 · 库内同类可投商家</div>
+        {ndCategories.length === 0 ? (
+          <Alert type="info" showIcon message="该节点的推荐品类待确认后开放（品类标签由 AI 初标 + 人工确认，确认前不展示扩展商家，避免误导）" />
+        ) : (<>
+          <div className="filter-bar">
+            <Select mode="multiple" allowClear placeholder="筛选品类（默认全部推荐品类）" size="small" style={{ minWidth: 320 }}
+              value={ndCatSel} onChange={(v) => { setNdCatSel(v); setNdExpPage(1); }}
+              options={ndCategories.map((c) => ({ value: c, label: catCn(c) }))} />
+            <Text type="secondary" style={{ fontSize: 12 }}>只显示你已连接平台中状态正常、可认领的商家</Text>
+          </div>
+          <Table rowKey="id" loading={ndExpLoading} dataSource={ndExpData?.merchants || []} columns={nodeL2Cols as never} size="small" scroll={{ x: 1000 }}
+            pagination={{ current: ndExpPage, pageSize: ndExpPageSize, total: ndExpData?.total || 0, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"], showTotal: (t: number) => `共 ${t} 条`, onChange: (p, ps) => { if (ps !== ndExpPageSize) { setNdExpPageSize(ps); setNdExpPage(1); } else setNdExpPage(p); } }} />
+        </>)}
+      </div>)}
       {tab === "chargebacks" && (<div>
         <div style={{ marginBottom: 12, padding: "8px 12px", background: "#fffbe6", border: "1px solid #ffe58f", borderRadius: 6, fontSize: 12, color: "#666" }}>
           <WarningOutlined style={{ color: "#faad14", marginRight: 6 }} />

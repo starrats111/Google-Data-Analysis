@@ -87,6 +87,15 @@ async function doDailySync() {
       log(`Sheet freshness check failed (non-fatal): ${e instanceof Error ? e.message : e}`);
     }
 
+    // D-278：海外节点推荐提醒——节点前 lead_days 天全员站内通知一次（非弹窗，07 拍板发全员）
+    log("Step 2.46: Checking holiday node reminders...");
+    try {
+      const { checkHolidayNodeReminders } = await import("@/lib/holiday-nodes");
+      await checkHolidayNodeReminders(log);
+    } catch (e) {
+      log(`Holiday node reminder failed (non-fatal): ${e instanceof Error ? e.message : e}`);
+    }
+
     log("Step 2.5: Syncing campaign statuses from Google Ads API...");
     await syncAllCampaignStatuses();
 
