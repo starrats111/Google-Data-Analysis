@@ -19,11 +19,11 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import {
   Card, DatePicker, Button, Space, Spin, Empty, Typography, Table, Modal, Form,
   Select, InputNumber, Input, Popconfirm, Statistic, Row, Col, App, Tag, Tooltip,
-  Descriptions, Alert,
+  Descriptions, Alert, Upload,
 } from "antd";
 import {
   PlusOutlined, ReloadOutlined, FileExcelOutlined, DeleteOutlined, EditOutlined,
-  ThunderboltOutlined, EyeOutlined,
+  ThunderboltOutlined, EyeOutlined, ImportOutlined,
 } from "@ant-design/icons";
 import dayjs, { type Dayjs } from "dayjs";
 import type { ColumnsType } from "antd/es/table";
@@ -89,6 +89,53 @@ interface FlowEntry {
 const fmt = (n: number | null | undefined) =>
   n == null ? "—" : n.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+// ── D-279 导入财务月表 ──────────────────────────────────────────────────────
+
+interface ImportRowView {
+  rowNo: number;
+  date: string;
+  payee: string;
+  acct: string;
+  cny: number | null;
+  usd: number | null;
+  note: string;
+}
+
+interface ImportProposalView {
+  status: "auto" | "review" | "exists" | "unmatched" | "usd" | "no_method";
+  rows: ImportRowView[];
+  methodId: string | null;
+  methodLabel: string | null;
+  amount: number;
+  currency: "CNY" | "USD";
+  platform: string | null;
+  txnDate: string | null;
+  sourceDate: string | null;
+  breakdown: BreakdownItem[];
+  expected: number;
+  fee: number;
+  feeRate: number | null;
+  matchNote: string;
+  warnings: string[];
+}
+
+interface ImportSheetView {
+  name: string;
+  rowCount: number;
+  skipped: number;
+  stats: Record<ImportProposalView["status"], number>;
+  proposals: ImportProposalView[];
+}
+
+const IMPORT_STATUS_META: Record<ImportProposalView["status"], { label: string; color: string; importable: boolean }> = {
+  auto: { label: "可自动入账", color: "green", importable: true },
+  review: { label: "命中·需复核", color: "orange", importable: true },
+  exists: { label: "已录过", color: "default", importable: false },
+  usd: { label: "美金行·暂不导入", color: "blue", importable: false },
+  unmatched: { label: "对不上", color: "red", importable: false },
+  no_method: { label: "无收款方式", color: "magenta", importable: false },
+};
+
 export default function BankFlowTab() {
   const { message } = App.useApp();
   const [month, setMonth] = useState<Dayjs>(dayjs());
@@ -114,6 +161,12 @@ export default function BankFlowTab() {
   const [candLoading, setCandLoading] = useState(false);
   const [candItems, setCandItems] = useState<CandidateItem[]>([]);
   const [candSelected, setCandSelected] = useState<string[]>([]);
+  // D-279 导入财务月表
+  const [importParsing, setImportParsing] = useState(false);
+  const [importSheets, setImportSheets] = useState<ImportSheetView[] | null>(null);
+  const [importSheetName, setImportSheetName] = useState<string>("");
+  const [importSelected, setImportSelected] = useState<string[]>([]);
+  const [importing, setImporting] = useState(false);
 
   const monthStr = month.format("YYYY-MM");
 
@@ -390,6 +443,99 @@ export default function BankFlowTab() {
     }
   };
 
+  // ── D-279 导入财务月表：上传 → 服务端解析+金额比对 → 预览勾选 → 逐条走既有登记接口 ──
+  const handleImportFile = async (file: File) => {
+    setImportParsing(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/user/team/report/bank-flow/import", { method: "POST", body: fd }).then((r) => r.json());
+      if (res.code !== 0) {
+        message.error(res.message || "解析失败");
+        return;
+      }
+      const sheets = res.data.sheets as ImportSheetView[];
+      // 默认选中：可导入提案最多的 sheet（财务工作簿常含逐人/逐笔两张冗余视图）
+      const best = [...sheets].sort(
+        (a, b) => (b.stats.auto + b.stats.review) - (a.stats.auto + a.stats.review),
+      )[0];
+      setImportSheets(sheets);
+      setImportSheetName(best.name);
+      setImportSelected(
+        best.proposals.map((p, i) => ({ p, i })).filter(({ p }) => p.status === "auto").map(({ i }) => String(i)),
+      );
+    } catch {
+      message.error("网络错误");
+    } finally {
+      setImportParsing(false);
+    }
+  };
+
+  const importCurrentSheet = useMemo(
+    () => importSheets?.find((s) => s.name === importSheetName) ?? null,
+    [importSheets, importSheetName],
+  );
+
+  const switchImportSheet = (name: string) => {
+    setImportSheetName(name);
+    const sheet = importSheets?.find((s) => s.name === name);
+    setImportSelected(
+      (sheet?.proposals ?? []).map((p, i) => ({ p, i })).filter(({ p }) => p.status === "auto").map(({ i }) => String(i)),
+    );
+  };
+
+  const runImport = async () => {
+    if (!importCurrentSheet) return;
+    const chosen = importCurrentSheet.proposals.filter((_, i) => importSelected.includes(String(i)));
+    if (chosen.length === 0) {
+      message.warning("请先勾选要入账的行");
+      return;
+    }
+    setImporting(true);
+    let ok = 0;
+    const failed: string[] = [];
+    try {
+      for (const p of chosen) {
+        const label = `${p.txnDate} ¥${fmt(p.amount)}`;
+        try {
+          const res = await fetch("/api/user/team/report/bank-flow", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              month: (p.txnDate || "").slice(0, 7),
+              paymentMethodId: p.methodId,
+              platform: p.platform,
+              txnAt: dayjs(`${p.txnDate} 10:00`).toISOString(),
+              amount: p.amount,
+              counterparty: "",
+              summary: "佣金结算",
+              remark: `导入财务月表：${importCurrentSheet.name} 第${p.rows.map((r) => r.rowNo).join("/")}行`,
+              breakdown: p.breakdown,
+              sourceDate: p.sourceDate,
+            }),
+          }).then((r) => r.json());
+          if (res.code === 0) ok++;
+          else failed.push(`${label}：${res.message || "保存失败"}`);
+        } catch {
+          failed.push(`${label}：网络错误`);
+        }
+      }
+    } finally {
+      setImporting(false);
+    }
+    if (failed.length === 0) {
+      message.success(`已入账 ${ok} 条（跨月的行已各自记入所属月份）`);
+      setImportSheets(null);
+      fetchAll();
+    } else {
+      Modal.warning({
+        title: `入账完成：成功 ${ok} 条，失败 ${failed.length} 条`,
+        content: <div style={{ maxHeight: 240, overflow: "auto" }}>{failed.map((f, i) => <div key={i}>{f}</div>)}</div>,
+      });
+      fetchAll();
+    }
+  };
+
   const handleExport = async (methodId?: string) => {
     setExporting(true);
     try {
@@ -565,6 +711,18 @@ export default function BankFlowTab() {
         <Button type="primary" icon={<PlusOutlined />} onClick={openAdd} disabled={methods.length === 0}>
           登记平台打款
         </Button>
+        <Upload
+          accept=".xls,.xlsx"
+          showUploadList={false}
+          disabled={methods.length === 0}
+          beforeUpload={(f) => { handleImportFile(f as unknown as File); return false; }}
+        >
+          <Tooltip title="上传财务每月从银行拉取的流水表格，系统按金额比对打款记录自动填充流水（含合并/拆分打款），入库前可逐行确认">
+            <Button icon={<ImportOutlined />} loading={importParsing} disabled={methods.length === 0}>
+              导入财务月表
+            </Button>
+          </Tooltip>
+        </Upload>
         <Button
           icon={<FileExcelOutlined />}
           onClick={() => handleExport()}
@@ -883,6 +1041,145 @@ export default function BankFlowTab() {
             )}
           </Card>
         </Form>
+      </Modal>
+
+      {/* D-279 导入财务月表预览弹窗 */}
+      <Modal
+        title="导入财务月表 — 金额比对预览（尚未入库）"
+        open={!!importSheets}
+        onCancel={() => setImportSheets(null)}
+        width={1100}
+        footer={[
+          <Button key="cancel" onClick={() => setImportSheets(null)}>取消</Button>,
+          <Button
+            key="ok" type="primary" loading={importing}
+            disabled={importSelected.length === 0}
+            onClick={runImport}
+          >
+            确认入账所选（{importSelected.length} 条）
+          </Button>,
+        ]}
+      >
+        {importSheets && importCurrentSheet && (
+          <Space direction="vertical" size={12} style={{ width: "100%" }}>
+            <Space wrap>
+              <Text>工作表：</Text>
+              <Select
+                style={{ minWidth: 280 }}
+                value={importSheetName}
+                onChange={switchImportSheet}
+                options={importSheets.map((s) => ({
+                  value: s.name,
+                  label: `${s.name}（${s.rowCount} 笔，可入账 ${s.stats.auto + s.stats.review}）`,
+                }))}
+              />
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {(Object.keys(IMPORT_STATUS_META) as ImportProposalView["status"][])
+                  .filter((k) => importCurrentSheet.stats[k] > 0)
+                  .map((k) => `${IMPORT_STATUS_META[k].label} ${importCurrentSheet.stats[k]}`)
+                  .join(" · ")}
+              </Text>
+            </Space>
+            <Alert
+              type="info" showIcon
+              message={
+                <Text style={{ fontSize: 12 }}>
+                  按金额比对打款记录自动认账（不依赖表格平台标注）：整批到账、多人合并打款、一批拆多笔、跨平台合并提现都会自动识别。
+                  「可自动入账」默认勾选；「需复核」的行请点开明细核对后再勾；对不上的行请用「登记平台打款」手工处理；
+                  美金账户行本期不自动入账。手续费入库时按既有规则自动计算，多平台明细自动拆分（带「合」标记）。
+                </Text>
+              }
+            />
+            <Table<ImportProposalView>
+              dataSource={importCurrentSheet.proposals}
+              rowKey={(_, i) => String(i)}
+              size="small"
+              pagination={false}
+              scroll={{ y: 420, x: "max-content" }}
+              rowSelection={{
+                selectedRowKeys: importSelected,
+                onChange: (keys) => setImportSelected(keys as string[]),
+                getCheckboxProps: (p) => ({ disabled: !IMPORT_STATUS_META[p.status].importable }),
+              }}
+              expandable={{
+                rowExpandable: (p) => p.breakdown.length > 0 || p.warnings.length > 0,
+                expandedRowRender: (p) => (
+                  <Space direction="vertical" size={8} style={{ width: "100%" }}>
+                    {p.warnings.map((w, i) => <Alert key={i} type="warning" showIcon message={<Text style={{ fontSize: 12 }}>{w}</Text>} />)}
+                    {p.breakdown.length > 0 && (
+                      <Table<BreakdownItem>
+                        columns={[
+                          { title: "组员", key: "m", width: 100, render: (_, b) => b.displayName || b.username },
+                          { title: "平台", dataIndex: "platform", width: 64, render: (v: string) => <Tag color="green">{v}</Tag> },
+                          { title: "平台账号", dataIndex: "account", ellipsis: true },
+                          { title: "批次日", dataIndex: "sourceDate", width: 100 },
+                          { title: "金额(¥)", dataIndex: "amount", width: 110, align: "right", render: (v: number) => `¥${fmt(v)}` },
+                        ]}
+                        dataSource={p.breakdown}
+                        rowKey={(b, i) => `${b.userId}-${b.account}-${i}`}
+                        size="small"
+                        pagination={false}
+                        bordered
+                      />
+                    )}
+                  </Space>
+                ),
+              }}
+              columns={[
+                {
+                  title: "状态", key: "status", width: 110,
+                  render: (_, p) => <Tag color={IMPORT_STATUS_META[p.status].color}>{IMPORT_STATUS_META[p.status].label}</Tag>,
+                },
+                {
+                  title: "银行到账", key: "bank", width: 230,
+                  render: (_, p) => (
+                    <Space direction="vertical" size={0}>
+                      {p.rows.map((r, i) => (
+                        <Text key={i} style={{ fontSize: 12 }}>
+                          {r.date} {r.payee} {r.cny != null ? `¥${fmt(r.cny)}` : `$${fmt(r.usd)}`}
+                          <Text type="secondary" style={{ fontSize: 11 }}>（第{r.rowNo}行）</Text>
+                        </Text>
+                      ))}
+                    </Space>
+                  ),
+                },
+                {
+                  title: "合计", key: "amount", width: 120, align: "right",
+                  render: (_, p) => <Text strong>{p.currency === "CNY" ? `¥${fmt(p.amount)}` : `$${fmt(p.amount)}`}</Text>,
+                },
+                {
+                  title: "收款方式", key: "method", width: 170, ellipsis: true,
+                  render: (_, p) => p.methodLabel || <Text type="secondary">—</Text>,
+                },
+                {
+                  title: "匹配结果", key: "match", ellipsis: false,
+                  render: (_, p) => (
+                    <Space direction="vertical" size={0}>
+                      <Text style={{ fontSize: 12 }}>{p.matchNote}</Text>
+                      {p.rows.some((r) => r.note) && (
+                        <Text type="secondary" style={{ fontSize: 11 }}>表格标注：{p.rows.map((r) => r.note).filter(Boolean).join("；")}</Text>
+                      )}
+                    </Space>
+                  ),
+                },
+                {
+                  title: "手续费", key: "fee", width: 130, align: "right",
+                  render: (_, p) =>
+                    p.breakdown.length === 0 ? <Text type="secondary">—</Text> : (
+                      <Space direction="vertical" size={0} style={{ lineHeight: 1.2 }}>
+                        <Text style={{ color: p.fee > 0 ? "#cf1322" : undefined, fontSize: 12 }}>
+                          {p.fee >= 0 ? `¥${fmt(p.fee)}` : `-¥${fmt(-p.fee)}`}
+                        </Text>
+                        <Text type="secondary" style={{ fontSize: 11 }}>
+                          {p.feeRate != null ? `${(p.feeRate * 100).toFixed(2)}%` : "—"}
+                        </Text>
+                      </Space>
+                    ),
+                },
+              ]}
+            />
+          </Space>
+        )}
       </Modal>
 
       {/* C-180 手动添加候选弹层 */}
