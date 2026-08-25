@@ -1027,6 +1027,7 @@ export const Kyads_proxiesScalarFieldEnum = {
   country_code_map: 'country_code_map',
   session_mode: 'session_mode',
   usage_scene: 'usage_scene',
+  alert_enabled: 'alert_enabled',
   status: 'status',
   is_deleted: 'is_deleted',
   created_at: 'created_at',

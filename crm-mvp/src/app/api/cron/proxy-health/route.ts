@@ -15,6 +15,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { checkAllProxiesHealth } from '@/lib/suffix-engine/proxy-health'
 import { checkKookeeyTraffic } from '@/lib/suffix-engine/kookeey-quota'
+import { checkTnbTraffic } from '@/lib/suffix-engine/tnbproxy-quota'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
@@ -70,8 +71,10 @@ export async function GET(req: NextRequest) {
     const report = await checkAllProxiesHealth()
     let notified = 0
 
-    // 1) 逐个不可用供应商 → 单独提醒（疑似到期/认证失败），文案按场景区分（D-271）
+    // 1) 逐个不可用供应商 → 单独提醒（疑似到期/认证失败），文案按场景区分（D-271）。
+    //    D-273：代理管理页「提醒」开关关闭的供应商静音（探活/熔断照常，只是不吵人）。
     for (const f of report.failed) {
+      if (!f.alertEnabled) continue
       const isAi = f.scene === 'AI爬取'
       const sceneLabel = isAi ? 'AI爬取代理' : '换链接代理'
       const title = `[${sceneLabel}] ${f.name} 不可用（疑似到期/认证失败）`
@@ -113,8 +116,17 @@ export async function GET(req: NextRequest) {
     //    2026-07-24 07 定调升级：此前「只做页面横幅、不发通知」，结果流量真实耗尽当天无人知晓、
     //    换链接补货断供才被动发现。现改为提前主动推送（24h 同标题去重防刷屏）；剩余 ≤5GB 时
     //    标题升级为「即将耗尽」，可在同一天内再触发一次更高优先级提醒。页面横幅保留不变。
+    // D-273 提醒开关：流量告警按供应商行的 alert_enabled 门控（行不存在按开提醒处理，危险不静默）
+    const alertOn = async (nameContains: string): Promise<boolean> => {
+      const row = await prisma.kyads_proxies.findFirst({
+        where: { name: { contains: nameContains }, is_deleted: 0 },
+        select: { alert_enabled: true },
+      })
+      return row ? row.alert_enabled !== 0 : true
+    }
+
     const traffic = await checkKookeeyTraffic()
-    if (traffic.ok && traffic.low.length > 0) {
+    if (traffic.ok && traffic.low.length > 0 && (await alertOn('kookeey'))) {
       const critical = traffic.low.some((s) => s.trafficLeftGB <= 5)
       const title = critical
         ? '[换链接代理] kookeey 动态住宅流量即将耗尽'
@@ -137,15 +149,41 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // 4) TnbProxy 剩余流量 ≤ 阈值（默认 20GB）→ 同 kookeey 的提前预警（D-272），受提醒开关门控
+    const tnbTraffic = await checkTnbTraffic()
+    if (tnbTraffic.ok && tnbTraffic.low && (await alertOn('tnb'))) {
+      const critical = (tnbTraffic.remainingGB ?? 0) <= 5
+      const title = critical
+        ? '[换链接代理] tnbproxy 动态住宅流量即将耗尽'
+        : '[换链接代理] tnbproxy 动态住宅流量偏低'
+      const content = [
+        `TnbProxy 动态住宅流量已低于告警阈值 ${tnbTraffic.thresholdGB} GB：`,
+        `  • 套餐剩余 ${tnbTraffic.remainingGB} GB（已用 ${tnbTraffic.usedGB} GB）`,
+        '',
+        '流量耗尽后 SOCKS5 会认证失败；tnbproxy 是 kookeey 的兜底供应商，两家同时见底=换链接断供。',
+        '请尽快登录 dash.tnbproxy.com 购买流量包。',
+      ].join('\n')
+      const meta = {
+        source: 'proxy-health',
+        scope: 'tnbproxy_traffic_low',
+        thresholdGB: tnbTraffic.thresholdGB,
+        remainingGB: tnbTraffic.remainingGB,
+      }
+      if (await notifyAdminOnce(title, content, meta)) {
+        notified++
+      }
+    }
+
     console.log(
       `[cron/proxy-health] active=${report.activeCount} healthy=${report.healthy.length} failed=${report.failed.length}` +
         ` notified=${notified} cost=${Date.now() - startedAt}ms` +
         (report.failed.length ? ` downList=${report.failed.map((f) => f.name).join(',')}` : '') +
         (traffic.ok
           ? ` kookeeyTraffic=[${traffic.subAccounts.map((s) => s.authname + ':' + s.trafficLeftGB + 'GB').join(',')}]`
-          : ` kookeeyTraffic=skip(${traffic.message})`),
+          : ` kookeeyTraffic=skip(${traffic.message})`) +
+        (tnbTraffic.ok ? ` tnbTraffic=${tnbTraffic.remainingGB}GB` : ` tnbTraffic=skip(${tnbTraffic.message})`),
     )
-    return NextResponse.json({ code: 0, data: { ...report, notified, kookeeyTraffic: traffic } })
+    return NextResponse.json({ code: 0, data: { ...report, notified, kookeeyTraffic: traffic, tnbTraffic } })
   } catch (error) {
     console.error('[cron/proxy-health] error:', error)
     return NextResponse.json(

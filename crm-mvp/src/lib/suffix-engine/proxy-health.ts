@@ -27,6 +27,8 @@ export interface ProviderHealth {
   port: number
   /** 应用场景（换链接 / AI爬取，D-271）：告警文案按场景区分影响面 */
   scene: string | null
+  /** 是否提醒（D-273）：false=该代理的告警静音（探活与熔断照常，只是不通知） */
+  alertEnabled: boolean
   ok: boolean
   message: string
   exitIp?: string | null
@@ -46,7 +48,7 @@ export interface ProxyHealthReport {
 export async function checkAllProxiesHealth(): Promise<ProxyHealthReport> {
   const providers = await prisma.kyads_proxies.findMany({
     where: { status: 'active', is_deleted: 0 },
-    select: { id: true, name: true, host: true, port: true, usage_scene: true },
+    select: { id: true, name: true, host: true, port: true, usage_scene: true, alert_enabled: true },
     orderBy: { priority: 'asc' },
   })
 
@@ -60,6 +62,7 @@ export async function checkAllProxiesHealth(): Promise<ProxyHealthReport> {
       host: p.host,
       port: p.port,
       scene: p.usage_scene ?? null,
+      alertEnabled: p.alert_enabled !== 0,
       ok: false,
       message: '未探活',
     }
@@ -72,6 +75,7 @@ export async function checkAllProxiesHealth(): Promise<ProxyHealthReport> {
           host: p.host,
           port: p.port,
           scene: p.usage_scene ?? null,
+          alertEnabled: p.alert_enabled !== 0,
           ok: r.ok,
           message: r.message,
           exitIp: r.exitIp ?? null,

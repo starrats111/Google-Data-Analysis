@@ -27,6 +27,7 @@ interface Proxy {
   countryCodeMap: Record<string, string> | null;
   sessionMode: string;
   usageScene: string;
+  alertEnabled: boolean;
   trafficLeftGB: number | null;
   userCount: number;
   createdAt: string;
@@ -207,6 +208,25 @@ export default function ProxiesPage() {
     }
   };
 
+  // D-273 提醒开关：关=该代理的流量不足/不可用提醒全部静音（横幅+站内通知+飞书），探活熔断不受影响
+  const handleToggleAlert = async (proxy: Proxy) => {
+    try {
+      const res = await fetch("/api/admin/proxies", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: proxy.id, alertEnabled: !proxy.alertEnabled }),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        message.success(proxy.alertEnabled ? `${proxy.name} 提醒已静音` : `${proxy.name} 提醒已恢复`);
+        fetchProxies();
+      } else {
+        message.error(res.message ?? "切换失败");
+      }
+    } catch {
+      message.error("网络异常，请重试");
+    }
+  };
+
   const handleBind = async () => {
     if (!bindUserId || !selectedProxy) return;
     setBindLoading(true);
@@ -275,6 +295,19 @@ export default function ProxiesPage() {
           checkedChildren="启用"
           unCheckedChildren="停用"
           onChange={() => handleToggleStatus(row)}
+        />
+      ),
+    },
+    {
+      title: "提醒",
+      dataIndex: "alertEnabled",
+      render: (alertEnabled: boolean, row) => (
+        <Switch
+          size="small"
+          checked={alertEnabled}
+          checkedChildren="提醒"
+          unCheckedChildren="静音"
+          onChange={() => handleToggleAlert(row)}
         />
       ),
     },
