@@ -35,6 +35,8 @@ const DFS_BUDGET = 300000;
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const DAY = 86400000;
 const daysBetween = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) / DAY;
+/** 有符号天数差：a 比 b 晚多少天（正 = a 在 b 之后） */
+const signedDays = (a: string, b: string) => (Date.parse(a) - Date.parse(b)) / DAY;
 
 // ── xls 解析 ─────────────────────────────────────────────────────────────────
 
@@ -589,8 +591,14 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
     if (c.tier === 1) {
       warnings.push(`表格卡号对应的卡在打款记录里对不上，按金额比对归属到同收款人的「${m.payChannel || "另一张卡"}」，请复核`);
     }
+    // 表格日期早于库内打款日 = 物理不可能（钱不会先到账后打款），判定表格日期有误，
+    // 入账日按库内打款日（07 2026-08-26「表格确实有误，按照库内收款日导」）；留 2 天时区/记账余量
+    const sheetDateTooEarly = !isUsd && signedDays(sourceDate, rs[0].date) > 2;
+    const useDbDate = c.rescued || sheetDateTooEarly;
     if (c.rescued) {
       warnings.push(`表格日期 ${rs[0].date} 与库内打款日 ${sourceDate} 相差 ${Math.round(c.dateDist)} 天，判定表格日期有误，已按库内打款日入账，请复核`);
+    } else if (sheetDateTooEarly) {
+      warnings.push(`表格日期 ${rs[0].date} 早于库内打款日 ${sourceDate}（到账不可能早于打款），判定表格日期有误，已按库内打款日入账，请复核`);
     } else if (c.dateDist > 7) {
       warnings.push(`打款日与到账日相差 ${Math.round(c.dateDist)} 天，请复核`);
     }
@@ -614,8 +622,8 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
       amount,
       currency: isUsd ? "USD" : "CNY",
       platform,
-      // 补捞命中：表格日期判定有误，入账日按库内打款日（07 2026-08-26 拍板）
-      txnDate: c.rescued ? sourceDate : rs[0].date,
+      // 表格日期判定有误（补捞命中/早于打款日）：入账日按库内打款日（07 2026-08-26 拍板）
+      txnDate: useDbDate ? sourceDate : rs[0].date,
       sourceDate,
       breakdown,
       expected,
