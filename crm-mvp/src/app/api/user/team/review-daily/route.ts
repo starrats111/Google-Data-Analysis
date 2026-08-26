@@ -66,6 +66,8 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     select: {
       date: true, impressions: true, clicks: true, cost: true,
       orders: true, commission: true, rejected_commission: true,
+      // 徐克 2026-08-26：弹窗逐日表补日预算与 IS_Bgt/IS_Rnk（库内 Sheet 同步的逐日值）
+      budget: true, is_budget: true, is_rank: true,
     },
     orderBy: { date: "asc" },
   });

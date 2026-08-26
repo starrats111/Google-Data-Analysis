@@ -108,6 +108,11 @@ export interface ReviewDailyRow {
   rejectedCommission: number;
   avgCpc: number;
   roi: number | null;
+  /** 当日预算（USD，Sheet 逐日快照）；当天未采集为 null，不用当前预算冒充 */
+  budget: number | null;
+  /** IS_Bgt / IS_Rnk 当日值（0-1 分数）；未采集为 null */
+  isBudget: number | null;
+  isRank: number | null;
 }
 
 export interface ReviewTotals {
@@ -128,6 +133,10 @@ export interface RawStatRow {
   orders: number | null;
   commission: unknown;
   rejected_commission: unknown;
+  /** 可选：眼睛弹窗需要，AI 点评调用方不查（保持 undefined 即可） */
+  budget?: unknown;
+  is_budget?: unknown;
+  is_rank?: unknown;
 }
 
 /** 把窗口内的日表行补齐为完整逐日序列（缺日补零行，图表/表格不断档；天数由窗口决定，D-268） */
@@ -152,6 +161,10 @@ export function buildDailyRows(window: PauseWindow, stats: RawStatRow[]): Review
       rejectedCommission: Number(Number(s?.rejected_commission || 0).toFixed(2)),
       avgCpc: clicks > 0 ? Number((spend / clicks).toFixed(4)) : 0,
       roi: spend > 0 ? Number(((commission - spend) / spend).toFixed(2)) : null,
+      // 缺日/未采集一律 null（前端显示「—」），不造数
+      budget: s?.budget == null ? null : Number(Number(s.budget).toFixed(2)),
+      isBudget: s?.is_budget == null ? null : Number(s.is_budget),
+      isRank: s?.is_rank == null ? null : Number(s.is_rank),
     });
   }
   return rows;

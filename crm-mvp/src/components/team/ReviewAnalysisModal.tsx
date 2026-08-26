@@ -8,10 +8,12 @@
  *        复用 tableColumnPrefs 共享列定义与合计渲染，列序一致）
  * D-268：日期窗口可自由选择（徐克需求），默认暂停前 7 个完整投放日，清空即恢复默认；
  *        AI 点评口径不变，始终基于默认窗口。
+ * 2026-08-26（徐克）：逐日表固定加「日预算」列（ads_daily_stats.budget 逐日快照），
+ *        IS_Bgt/IS_Rnk 由写死 null 改为接口返回的逐日真实值；未采集显示「—」。
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Modal, Table, Typography, Tag, Button, Space, Spin, Empty, App, DatePicker } from "antd";
+import { Modal, Table, Typography, Tag, Button, Space, Spin, Empty, App, DatePicker, Tooltip } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
 import { RobotOutlined, HistoryOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
@@ -36,6 +38,10 @@ interface DailyRow {
   rejectedCommission: number;
   avgCpc: number;
   roi: number | null;
+  /** 当日预算（USD）与 IS 当日值；当天未采集为 null，显示「—」 */
+  budget: number | null;
+  isBudget: number | null;
+  isRank: number | null;
 }
 
 interface ReviewInfo {
@@ -74,8 +80,8 @@ interface Props {
   onClose: () => void;
 }
 
-/** 逐日行适配成共享指标列需要的字段形状（is_budget/is_rank 无逐日数据，显示「—」） */
-type DailyMetricRow = MetricRow & { date: string };
+/** 逐日行适配成共享指标列需要的字段形状（含逐日 is_budget/is_rank 与当日预算） */
+type DailyMetricRow = MetricRow & { date: string; budget: number | null };
 
 const statusLabels: Record<string, string> = { PAUSED: "暂停", REMOVED: "移除" };
 const statusColors: Record<string, string> = { PAUSED: "orange", REMOVED: "red" };
@@ -182,8 +188,9 @@ export default function ReviewAnalysisModal({ open, campaignId, campaignName, me
     rejected_commission: d.rejectedCommission,
     cpc: d.avgCpc,
     roi: d.roi ?? 0,
-    is_budget: null,
-    is_rank: null,
+    budget: d.budget,
+    is_budget: d.isBudget,
+    is_rank: d.isRank,
   })), [data]);
 
   const metricRegistry = useMemo(() => buildMetricColumns<DailyMetricRow>(), []);
@@ -191,6 +198,14 @@ export default function ReviewAnalysisModal({ open, campaignId, campaignName, me
     {
       title: "日期", key: "date", dataIndex: "date", width: 90, fixed: "left" as const,
       render: (v: string) => <Text style={{ fontSize: 12 }}>{v.slice(5)}</Text>,
+    },
+    {
+      // 徐克 2026-08-26：逐日表固定展示当日预算（Sheet 逐日快照，当天未采集显示「—」）
+      title: <Tooltip title="当日预算（来自 Sheet 逐日同步）。当天未采集显示「—」，不用当前预算冒充历史值"><span>日预算</span></Tooltip>,
+      key: "budget", dataIndex: "budget", width: 80, align: "right" as const,
+      render: (v: number | null) => v == null
+        ? <Text type="secondary" style={{ fontSize: 12 }}>—</Text>
+        : <Text style={{ fontSize: 12 }}>${v.toFixed(2)}</Text>,
     },
     ...metricKeys
       .map((k) => metricRegistry[k as MetricColumnKey])
@@ -280,8 +295,10 @@ export default function ReviewAnalysisModal({ open, campaignId, campaignName, me
               <Table.Summary fixed>
                 <Table.Summary.Row>
                   <Table.Summary.Cell index={0}><Text strong style={{ fontSize: 12 }}>合计</Text></Table.Summary.Cell>
+                  {/* 日预算列无合计意义，留空 */}
+                  <Table.Summary.Cell index={1} />
                   {metricKeys.map((k, i) => (
-                    <Table.Summary.Cell key={k} index={i + 1} align="right">
+                    <Table.Summary.Cell key={k} index={i + 2} align="right">
                       {renderColumnSummary(k, totals)}
                     </Table.Summary.Cell>
                   ))}
