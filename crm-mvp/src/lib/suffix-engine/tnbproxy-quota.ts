@@ -1,5 +1,5 @@
 /**
- * TnbProxy 动态住宅流量余额监控（D-272，对齐 kookeey-quota 的「快用完就提醒」能力）
+ * TnbProxy 动态住宅流量余额监控（D-280，对齐 kookeey-quota 的「快用完就提醒」能力）
  *
  * TnbProxy（dash.tnbproxy.com，Thordata 白标）无公开 API 文档，接口为拆解其
  * 仪表盘前端实测得出（2026-08-22 生产服务器验证通过）：

@@ -1110,7 +1110,7 @@ model kyads_proxies {
   country_code_map  Json? // 国家代码映射（如 {"GB":"uk"}），用户名模板替换用
   session_mode      String?  @db.VarChar(16) // sticky / rotating，会话粘性策略
   usage_scene       String?  @db.VarChar(64) // 应用场景（换链接/AI爬取），D-271 起为选路路由键
-  alert_enabled     Int      @default(1) @db.TinyInt // 是否提醒（D-273）：0=该代理的流量不足/不可用提醒全部静音（横幅+通知+飞书），探活熔断不受影响
+  alert_enabled     Int      @default(1) @db.TinyInt // 是否提醒（D-281）：0=该代理的流量不足/不可用提醒全部静音（横幅+通知+飞书），探活熔断不受影响
   status            String   @default("active") @db.VarChar(16) // active / disabled / testing
   is_deleted        Int      @default(0) @db.TinyInt
   created_at        DateTime @default(now()) @db.DateTime(0)

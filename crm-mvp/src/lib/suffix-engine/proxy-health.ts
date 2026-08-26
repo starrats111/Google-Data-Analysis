@@ -27,7 +27,7 @@ export interface ProviderHealth {
   port: number
   /** 应用场景（换链接 / AI爬取，D-271）：告警文案按场景区分影响面 */
   scene: string | null
-  /** 是否提醒（D-273）：false=该代理的告警静音（探活与熔断照常，只是不通知） */
+  /** 是否提醒（D-281）：false=该代理的告警静音（探活与熔断照常，只是不通知） */
   alertEnabled: boolean
   ok: boolean
   message: string

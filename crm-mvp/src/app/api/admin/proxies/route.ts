@@ -29,7 +29,7 @@ export async function GET(req: NextRequest) {
   })
   const countMap = new Map(userCounts.map((r) => [r.proxy_id.toString(), r._count.user_id]))
 
-  // 剩余流量（D-254 kookeey / D-272 tnbproxy，均 10 分钟缓存）；其余供应商未接入返回 null
+  // 剩余流量（D-254 kookeey / D-280 tnbproxy，均 10 分钟缓存）；其余供应商未接入返回 null
   let kookeeyTrafficGB: number | null = null
   try {
     const report = await getKookeeyTrafficCached()

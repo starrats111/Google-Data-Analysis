@@ -413,7 +413,7 @@ export async function GET(req: NextRequest) {
   const clickDebt = await computeClickDebtSummary(userId)
 
   // 换链接住宅代理 kookeey 剩余流量：≤ 阈值时前端顶部横幅提醒重置（带缓存，不每次外呼）。
-  // D-273：代理管理页 kookeey 行「提醒」开关关闭时横幅静音（行不存在按开提醒处理，危险不静默）。
+  // D-281：代理管理页 kookeey 行「提醒」开关关闭时横幅静音（行不存在按开提醒处理，危险不静默）。
   const kk = await getKookeeyTrafficCached()
   const kkAlertRow = await prisma.kyads_proxies.findFirst({
     where: { name: { contains: 'kookeey' }, is_deleted: 0 },

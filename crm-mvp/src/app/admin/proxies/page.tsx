@@ -1,4 +1,4 @@
-﻿"use client";
+﻿﻿"use client";
 
 import {
   Table, Button, Modal, Form, Input, Select, Tag, Space, Typography,
@@ -208,7 +208,7 @@ export default function ProxiesPage() {
     }
   };
 
-  // D-273 提醒开关：关=该代理的流量不足/不可用提醒全部静音（横幅+站内通知+飞书），探活熔断不受影响
+  // D-281 提醒开关：关=该代理的流量不足/不可用提醒全部静音（横幅+站内通知+飞书），探活熔断不受影响
   const handleToggleAlert = async (proxy: Proxy) => {
     try {
       const res = await fetch("/api/admin/proxies", {

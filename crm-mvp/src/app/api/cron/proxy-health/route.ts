@@ -72,7 +72,7 @@ export async function GET(req: NextRequest) {
     let notified = 0
 
     // 1) 逐个不可用供应商 → 单独提醒（疑似到期/认证失败），文案按场景区分（D-271）。
-    //    D-273：代理管理页「提醒」开关关闭的供应商静音（探活/熔断照常，只是不吵人）。
+    //    D-281：代理管理页「提醒」开关关闭的供应商静音（探活/熔断照常，只是不吵人）。
     for (const f of report.failed) {
       if (!f.alertEnabled) continue
       const isAi = f.scene === 'AI爬取'
@@ -116,7 +116,7 @@ export async function GET(req: NextRequest) {
     //    2026-07-24 07 定调升级：此前「只做页面横幅、不发通知」，结果流量真实耗尽当天无人知晓、
     //    换链接补货断供才被动发现。现改为提前主动推送（24h 同标题去重防刷屏）；剩余 ≤5GB 时
     //    标题升级为「即将耗尽」，可在同一天内再触发一次更高优先级提醒。页面横幅保留不变。
-    // D-273 提醒开关：流量告警按供应商行的 alert_enabled 门控（行不存在按开提醒处理，危险不静默）
+    // D-281 提醒开关：流量告警按供应商行的 alert_enabled 门控（行不存在按开提醒处理，危险不静默）
     const alertOn = async (nameContains: string): Promise<boolean> => {
       const row = await prisma.kyads_proxies.findFirst({
         where: { name: { contains: nameContains }, is_deleted: 0 },
@@ -149,7 +149,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // 4) TnbProxy 剩余流量 ≤ 阈值（默认 20GB）→ 同 kookeey 的提前预警（D-272），受提醒开关门控
+    // 4) TnbProxy 剩余流量 ≤ 阈值（默认 20GB）→ 同 kookeey 的提前预警（D-280），受提醒开关门控
     const tnbTraffic = await checkTnbTraffic()
     if (tnbTraffic.ok && tnbTraffic.low && (await alertOn('tnb'))) {
       const critical = (tnbTraffic.remainingGB ?? 0) <= 5
