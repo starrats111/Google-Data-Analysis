@@ -20,6 +20,12 @@
 export const IMPORT_WINDOW_DAYS = 14;
 /** 一批拆多笔时，各笔到账日与批次日的最大距离（WISE 实测 6/12 批拖到 6/24 才到最后一笔） */
 export const SPLIT_WINDOW_DAYS = 14;
+/**
+ * 补捞窗口（07 2026-08-26 拍板）：表格日期可能写错（实证：月表把 03-04 到账写成 02-12，
+ * 早于打款日 20 天），常规窗口没对上的行放宽到此窗口再捞一遍；
+ * 捞到的入账日按库内打款日（不是表格日期），必标 review 请 07 复核。
+ */
+export const RESCUE_WINDOW_DAYS = 45;
 const FEE_MIN = -0.0015; // 汇差可造成轻微负手续费（D-274 实证 −0.03%）
 const FEE_MAX = 0.025;
 const REVIEW_FEE = 0.015;
@@ -247,6 +253,8 @@ interface Candidate {
   kind: "single" | "split";
   /** 0=卡号直配；1=同收款人跨渠道回退（如平台打到 PingPong 再提到银行卡），命中必标 review */
   tier: 0 | 1;
+  /** 补捞命中（表格日期超常规窗口，07 2026-08-26 拍板：入账日按库内打款日，必标 review） */
+  rescued?: boolean;
 }
 
 /** 带容差子集和：在 items 中找合计落进 [target, target×(1+FEE_MAX)]（含轻微负差）的子集，返回费率最小解 */
@@ -344,9 +352,10 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
 
   // ── 1. 已录过判定：单行金额 ≈ 既有条目；或同卡多行合计 ≈ 既有条目（L4 历史录法） ──
   const usedEntries = new Set<number>();
-  const markExists = (rs: ParsedBankRow[], entryIdx: number, entryMethodId: string) => {
+  const markExists = (rs: ParsedBankRow[], entryIdx: number, entryMethodId: string, entryTxnDate?: string) => {
     usedEntries.add(entryIdx);
     for (const r of rs) assigned.add(r.key);
+    const gap = entryTxnDate ? Math.round(daysBetween(rs[0].date, entryTxnDate)) : 0;
     proposals.push({
       status: "exists",
       rows: rs,
@@ -355,7 +364,9 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
       currency: rs[0].cny != null ? "CNY" : "USD",
       platform: null, txnDate: rs[0].date, sourceDate: null,
       breakdown: [], expected: 0, fee: 0, feeRate: null,
-      matchNote: "与已登记流水金额一致，跳过",
+      matchNote: gap > 10
+        ? `与已登记流水金额一致（登记日 ${entryTxnDate}，与表格日期差 ${gap} 天，表格日期疑有误），跳过`
+        : "与已登记流水金额一致，跳过",
       warnings: [],
     });
   };
@@ -366,17 +377,20 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
     const em = methodById.get(entryMethodId);
     return !!em && em.payeeName === r.payee;
   };
-  existingEntries.forEach((e, idx) => {
-    if (usedEntries.has(idx)) return;
-    for (const r of rows) {
-      if (assigned.has(r.key) || r.cny == null) continue;
-      if (!entryMatchesRow(r, e.methodId)) continue;
-      if (Math.abs(r.cny - e.amount) <= 0.05 && daysBetween(r.date, e.txnDate) <= 10) {
-        markExists([r], idx, e.methodId);
-        return;
+  // 两轮窗口：先近距（10 天）优先配对，再宽窗（表格日期可能写错，实证差 12~20 天），金额都要求 ±0.05 精确一致
+  for (const existsWindow of [10, RESCUE_WINDOW_DAYS]) {
+    existingEntries.forEach((e, idx) => {
+      if (usedEntries.has(idx)) return;
+      for (const r of rows) {
+        if (assigned.has(r.key) || r.cny == null) continue;
+        if (!entryMatchesRow(r, e.methodId)) continue;
+        if (Math.abs(r.cny - e.amount) <= 0.05 && daysBetween(r.date, e.txnDate) <= existsWindow) {
+          markExists([r], idx, e.methodId, e.txnDate);
+          return;
+        }
       }
-    }
-  });
+    });
+  }
   // 多行合计 = 既有条目（历史上 WISE 拆 5 笔录成一条）
   existingEntries.forEach((e, idx) => {
     if (usedEntries.has(idx)) return;
@@ -448,43 +462,47 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
   };
 
   // ── 阶段一：单笔匹配（循环补捞：某行的最优子集被别的行抢走后，用剩余池重算次优解） ──
-  for (let round = 0; round < 8; round++) {
-    const singles: Candidate[] = [];
-    for (const r of rows) {
-      if (assigned.has(r.key)) continue;
-      for (const { m, tier } of candidateMethodsOf(r)) {
-        const mp = (poolByMethod.get(m.id) ?? []).filter(
-          (p) => daysBetween(p.date, r.date) <= IMPORT_WINDOW_DAYS && !consumedPayments.has(`${m.id}\u0000${p.paymentKey}`),
-        );
-        if (mp.length === 0) continue;
-        const isUsd = r.cny == null;
-        const target = isUsd ? r.usd! : r.cny!;
-        const items = mp
-          .filter((p) => (isUsd ? p.usd : p.cny) > 0.005)
-          .map((p) => ({ key: `${m.id}\u0000${p.paymentKey}`, amt: isUsd ? p.usd : p.cny }));
-        if (items.length === 0) continue;
-        const best = bestSubset(items, target);
-        if (best) {
-          const paymentsHit = best.keys.map((k) => paymentByKey.get(k)!);
-          const batchSet = new Set(paymentsHit.map((p) => `${p.platform}|${p.date}`));
-          const dateDist = Math.min(...paymentsHit.map((p) => daysBetween(p.date, r.date)));
-          singles.push({
-            rowKeys: [r.key],
-            paymentKeys: best.keys,
-            fee: best.fee,
-            sortFee: sortFeeOf(best.fee),
-            dateDist,
-            batchCount: batchSet.size,
-            kind: "single",
-            tier,
-          });
+  const runSingles = (windowDays: number, rescued: boolean, rounds: number) => {
+    for (let round = 0; round < rounds; round++) {
+      const singles: Candidate[] = [];
+      for (const r of rows) {
+        if (assigned.has(r.key)) continue;
+        for (const { m, tier } of candidateMethodsOf(r)) {
+          const mp = (poolByMethod.get(m.id) ?? []).filter(
+            (p) => daysBetween(p.date, r.date) <= windowDays && !consumedPayments.has(`${m.id}\u0000${p.paymentKey}`),
+          );
+          if (mp.length === 0) continue;
+          const isUsd = r.cny == null;
+          const target = isUsd ? r.usd! : r.cny!;
+          const items = mp
+            .filter((p) => (isUsd ? p.usd : p.cny) > 0.005)
+            .map((p) => ({ key: `${m.id}\u0000${p.paymentKey}`, amt: isUsd ? p.usd : p.cny }));
+          if (items.length === 0) continue;
+          const best = bestSubset(items, target);
+          if (best) {
+            const paymentsHit = best.keys.map((k) => paymentByKey.get(k)!);
+            const batchSet = new Set(paymentsHit.map((p) => `${p.platform}|${p.date}`));
+            const dateDist = Math.min(...paymentsHit.map((p) => daysBetween(p.date, r.date)));
+            singles.push({
+              rowKeys: [r.key],
+              paymentKeys: best.keys,
+              fee: best.fee,
+              sortFee: sortFeeOf(best.fee),
+              dateDist,
+              batchCount: batchSet.size,
+              kind: "single",
+              tier,
+              rescued,
+            });
+          }
         }
       }
+      const before = applied.length;
+      sortAndApply(singles);
+      if (applied.length === before) break;
     }
-    const before = applied.length;
-    sortAndApply(singles);
-    if (applied.length === before) break;
-  }
+  };
+  runSingles(IMPORT_WINDOW_DAYS, false, 8);
 
   // ── 阶段二：一批拆多笔（L4，按 CNY；目标额 = 批次未消费余额；同样循环补捞） ──
   for (let round = 0; round < 4; round++) {
@@ -531,6 +549,9 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
     if (applied.length === before) break;
   }
 
+  // ── 阶段三：宽窗补捞（表格日期写错的行；入账日按库内打款日，必标 review） ──
+  runSingles(RESCUE_WINDOW_DAYS, true, 2);
+
   // ── 5. 生成提案 ──
   for (const c of applied) {
     const rs = c.rowKeys.map((k) => rowByKey.get(k)!).sort((a, b) => a.date.localeCompare(b.date));
@@ -568,7 +589,11 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
     if (c.tier === 1) {
       warnings.push(`表格卡号对应的卡在打款记录里对不上，按金额比对归属到同收款人的「${m.payChannel || "另一张卡"}」，请复核`);
     }
-    if (c.dateDist > 7) warnings.push(`打款日与到账日相差 ${Math.round(c.dateDist)} 天，请复核`);
+    if (c.rescued) {
+      warnings.push(`表格日期 ${rs[0].date} 与库内打款日 ${sourceDate} 相差 ${Math.round(c.dateDist)} 天，判定表格日期有误，已按库内打款日入账，请复核`);
+    } else if (c.dateDist > 7) {
+      warnings.push(`打款日与到账日相差 ${Math.round(c.dateDist)} 天，请复核`);
+    }
     if (c.kind === "split" && rs.length >= 2) {
       const span = daysBetween(rs[0].date, rs[rs.length - 1].date);
       if (span > 5) warnings.push(`拆分组合跨 ${Math.round(span)} 天（${rs.length} 笔到账），请逐笔核对`);
@@ -589,7 +614,8 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
       amount,
       currency: isUsd ? "USD" : "CNY",
       platform,
-      txnDate: rs[0].date,
+      // 补捞命中：表格日期判定有误，入账日按库内打款日（07 2026-08-26 拍板）
+      txnDate: c.rescued ? sourceDate : rs[0].date,
       sourceDate,
       breakdown,
       expected,
