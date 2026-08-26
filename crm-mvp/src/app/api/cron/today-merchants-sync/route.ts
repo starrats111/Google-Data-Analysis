@@ -92,6 +92,8 @@ async function backfillNewCampaigns(
               status: "active",
               google_status: "ENABLED",
               customer_id: row.customerId || undefined,
+              // D-282：Sheet 有 Budget 列（账户币种）就一并刷新，软删期间的旧值不可信
+              ...(row.budget != null ? { daily_budget: row.budget } : {}),
               last_google_sync_at: new Date(),
             },
           });
@@ -108,6 +110,10 @@ async function backfillNewCampaigns(
         }
 
         // 全新系列：补录
+        // D-282：Sheet 有 Budget 列（账户币种，D-264 新脚本）时以真值入库；老脚本无此列
+        // 只能落表默认值 2.00——该默认值语义是美元时代的遗产，在非美元 MCC 上展示层
+        // 折美元会失真（yz01 ¥ MCC 显示 $0.30 事件根因），等 MCC 换新脚本后由
+        // syncCampaignNames 的预算回写自动纠正。
         const parsed = parseCampaignNameFull(row.campaignName || "");
         await prisma.campaigns.create({
           data: {
@@ -117,6 +123,7 @@ async function backfillNewCampaigns(
             mcc_id: BigInt(row.mccDbId),
             customer_id: row.customerId || null,
             campaign_name: row.campaignName || gcid,
+            ...(row.budget != null ? { daily_budget: row.budget } : {}),
             target_country: parsed?.country || "US",
             google_status: ["ENABLED", "PAUSED", "REMOVED"].includes(gStatus) ? gStatus : "ENABLED",
             last_google_sync_at: new Date(),
