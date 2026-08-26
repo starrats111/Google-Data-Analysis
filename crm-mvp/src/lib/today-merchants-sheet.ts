@@ -28,9 +28,12 @@ export interface CampaignInfoRow {
  * 解析 CampaignInfo 表的全部行（不做日期过滤，日期筛选由调用方按需做）。
  * 列结构：CampaignId | CampaignName | Status | CreationDateCST | CustomerId | Budget(可选)
  * CreationDateCST 由脚本将账户时区的 creation_time 转为 Asia/Shanghai 日期。
+ *
+ * D-285：hasBudgetCol 区分脚本新旧（新脚本=D-264 加了 Budget 列）。
+ * null = 表头不是 CRM CampaignInfo 结构（jy 组另类表等），新旧无从判定。
  */
-function parseCampaignInfoRows(rows: string[][]): CampaignInfoRow[] {
-  if (rows.length < 2) return [];
+function parseCampaignInfoRows(rows: string[][]): { list: CampaignInfoRow[]; hasBudgetCol: boolean | null } {
+  if (rows.length < 2) return { list: [], hasBudgetCol: null };
 
   const headers = rows[0].map((h) => h.trim());
   const campaignIdIdx = headers.indexOf("CampaignId");
@@ -40,7 +43,7 @@ function parseCampaignInfoRows(rows: string[][]): CampaignInfoRow[] {
   const customerIdx = headers.indexOf("CustomerId");
   const budgetIdx = headers.indexOf("Budget");
 
-  if (campaignIdIdx < 0 || creationDateIdx < 0) return [];
+  if (campaignIdIdx < 0 || creationDateIdx < 0) return { list: [], hasBudgetCol: null };
 
   const result: CampaignInfoRow[] = [];
   for (const row of rows.slice(1)) {
@@ -65,7 +68,7 @@ function parseCampaignInfoRows(rows: string[][]): CampaignInfoRow[] {
       budget,
     });
   }
-  return result;
+  return { list: result, hasBudgetCol: budgetIdx >= 0 };
 }
 
 export interface TodayMerchantsResult {
@@ -86,6 +89,12 @@ export interface TodayMerchantsResult {
    * 只能靠这张全量清单刷新——否则永远停在建单初值（yz01 $2 案例的病根之一）。
    */
   budgetByUserGcid: Map<string, Map<string, number>>;
+  /**
+   * D-285：mccDbId → 脚本新旧检测结果（hasBudgetCol=false 即旧脚本，需换）。
+   * 只收录 CampaignInfo 表头可识别的 MCC；另类表结构（jy 组）不在其中。
+   * 消费方：today-merchants-sync 落库标记 + 旧脚本定向弹窗；budget-fix 接口读标记做闸门。
+   */
+  scriptStatusByMcc: Map<string, { mccId: string; mccName: string | null; userId: string; hasBudgetCol: boolean }>;
   /** 参与同步的 MCC 数量 */
   mccCount: number;
   /** 有数据的 MCC 数量 */
@@ -119,6 +128,7 @@ export async function fetchTodayMerchantsFromSheets(): Promise<TodayMerchantsRes
       id: true,
       user_id: true,
       mcc_id: true,
+      mcc_name: true,
       sheet_url: true,
     },
   });
@@ -130,6 +140,7 @@ export async function fetchTodayMerchantsFromSheets(): Promise<TodayMerchantsRes
   const recentRows: TodayMerchantsResult["recentRows"] = [];
   const nameByUserGcid: TodayMerchantsResult["nameByUserGcid"] = new Map();
   const budgetByUserGcid: TodayMerchantsResult["budgetByUserGcid"] = new Map();
+  const scriptStatusByMcc: TodayMerchantsResult["scriptStatusByMcc"] = new Map();
 
   for (const mcc of mccs) {
     if (!mcc.sheet_url) continue;
@@ -150,7 +161,14 @@ export async function fetchTodayMerchantsFromSheets(): Promise<TodayMerchantsRes
         errors.push(`MCC ${mcc.mcc_id} [MISSING_TAB]: sheet 缺 CampaignInfo tab（需 Google Ads Script 生成）`);
         continue;
       }
-      const allRows = parseCampaignInfoRows(rows);
+      const parsed = parseCampaignInfoRows(rows);
+      const allRows = parsed.list;
+      // D-285：表头可识别才记录脚本新旧；另类结构（jy 组）不判定不弹
+      if (parsed.hasBudgetCol != null) {
+        scriptStatusByMcc.set(mccDbId, {
+          mccId: mcc.mcc_id, mccName: mcc.mcc_name, userId, hasBudgetCol: parsed.hasBudgetCol,
+        });
+      }
       const parsedRows = allRows.filter((r) => recentDates.has(r.creationDate));
 
       const todayRows = parsedRows.filter((r) => r.creationDate === todayStr);
@@ -205,5 +223,5 @@ export async function fetchTodayMerchantsFromSheets(): Promise<TodayMerchantsRes
     byUser.set(userId, merchantIds.size);
   }
 
-  return { byUser, recentRows, nameByUserGcid, budgetByUserGcid, mccCount, mccWithData, date: todayStr, errors };
+  return { byUser, recentRows, nameByUserGcid, budgetByUserGcid, scriptStatusByMcc, mccCount, mccWithData, date: todayStr, errors };
 }

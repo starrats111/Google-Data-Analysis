@@ -163,6 +163,29 @@ export async function broadcastSheetFailure(
 }
 
 /**
+ * D-285 弹窗一：MCC 还在旧版统一脚本（CampaignInfo 无 Budget 列）→ 定向弹窗催归属人换脚本。
+ * 近期活跃闸门与其他 MCC 告警一致（废弃 MCC 的旧账不弹）；每周提醒一次；
+ * 换上新脚本后检测不再触发，提醒自动停止。today-merchants-sync 每半小时接线调用。
+ */
+export async function notifyOldScriptMcc(
+  mccInternalId: bigint,
+  mccId: string,
+  mccName: string | null,
+  userId: bigint,
+): Promise<void> {
+  if (!(await mccRecentlyActive(mccInternalId))) return;
+  const label = mccName ? `${mccName}（${mccId}）` : mccId;
+  await sendCriticalAlert({
+    key: `old_script_${mccId}`,
+    userIds: [userId],
+    dedupeHours: 7 * 24,
+    level: "warning",
+    title: `你的 MCC ${label} 还在旧版统一脚本，请尽快更换`,
+    content: `该 MCC 的数据表 CampaignInfo 缺 Budget 列（旧版脚本），零花费/停投系列的预算无法同步回 CRM，数据中心的预算列会失真（例如实际 ¥13.46 显示成 $0.30）。请到「设置 → MCC 账户」对该 MCC 点「复制脚本」，把新脚本粘贴到 Google Ads 后台替换旧脚本（脚本功能不变，只是多导出预算等列）。换完后预算半小时内自动刷正，此提醒自动消失。`,
+  });
+}
+
+/**
  * 统一脚本停更检测（daily-sync 每日一次）：DailyData 最新日期落后于昨天
  * → 脚本超过一整天没跑（被停用/被更换/持续报错）。
  * Sheet 拉不到 / 无 DailyData tab 的不在这里报（被封与结构问题由 broadcastSheetFailure 负责）。

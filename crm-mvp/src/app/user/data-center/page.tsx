@@ -283,6 +283,66 @@ export default function DataCenterPage() {
     const timer = setInterval(poll, 60000);
     return () => { clearTimeout(init); clearInterval(timer); };
   }, []);
+
+  // ========== D-285 弹窗二：预算异常确认 + 一键调整 ==========
+  // 历史 bug 把「$2」发成账户币种 2（人民币 MCC 实际 ¥2≈$0.28 在跑）。后端只对
+  // 已换新脚本的 MCC（库内预算=Google 真值）给出清单；确认才动 Google，当天可暂缓。
+  interface BudgetFixRow {
+    campaign_id: string; campaign_name: string; currency: string;
+    current_account: number; current_usd: number; target_account: number; target_usd: number;
+  }
+  const [budgetFixRows, setBudgetFixRows] = useState<BudgetFixRow[]>([]);
+  const [budgetFixOpen, setBudgetFixOpen] = useState(false);
+  const [budgetFixApplying, setBudgetFixApplying] = useState(false);
+  const budgetFixCheckedRef = useRef(false);
+  useEffect(() => {
+    if (budgetFixCheckedRef.current) return;
+    budgetFixCheckedRef.current = true;
+    const SNOOZE_KEY = "dc_budget_fix_snooze";
+    const today = dayjs().tz(TZ).format("YYYY-MM-DD");
+    try { if (localStorage.getItem(SNOOZE_KEY) === today) return; } catch { /* 隐私模式等取不到就照常弹 */ }
+    fetch("/api/user/data-center/budget-fix")
+      .then((r) => r.json())
+      .then((res) => {
+        const rows: BudgetFixRow[] = res?.data?.rows || [];
+        if (res.code === 0 && rows.length > 0) {
+          setBudgetFixRows(rows);
+          setBudgetFixOpen(true);
+        }
+      })
+      .catch(() => {});
+  }, []);
+  const snoozeBudgetFix = useCallback(() => {
+    try { localStorage.setItem("dc_budget_fix_snooze", dayjs().tz(TZ).format("YYYY-MM-DD")); } catch { /* 存不上就下次再弹 */ }
+    setBudgetFixOpen(false);
+  }, []);
+  const applyBudgetFix = useCallback(async () => {
+    setBudgetFixApplying(true);
+    try {
+      const res = await fetch("/api/user/data-center/budget-fix", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ campaign_ids: budgetFixRows.map((r) => r.campaign_id) }),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        const { succeeded, failed, results } = res.data || {};
+        if (failed > 0) {
+          const firstErr = (results || []).find((x: { success: boolean }) => !x.success);
+          message.warning(`已调整 ${succeeded} 条，失败 ${failed} 条${firstErr ? `（${firstErr.campaign_name}: ${firstErr.message}）` : ""}`);
+        } else {
+          message.success(`已调整 ${succeeded} 条系列的 Google 实际预算`);
+        }
+        setBudgetFixOpen(false);
+        refreshApi(/\/api\/user\/data-center/);
+      } else {
+        message.error(res.message || "调整失败");
+      }
+    } catch (e) {
+      message.error(`调整失败: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBudgetFixApplying(false);
+    }
+  }, [budgetFixRows, message]);
   const summary = campaignData?.summary || {
     totalCost: 0,
     totalCommission: 0,
@@ -1315,6 +1375,41 @@ export default function DataCenterPage() {
         mccAccountId={selectedMcc || mccAccounts[0]?.id || ""} onSuccess={handleEditSuccess}
         onCancel={() => setEditModal({ open: false, campaign: null, field: "budget" })}
       />
+
+      {/* ========== D-285 弹窗二：预算异常确认 + 一键调整 ========== */}
+      <Modal
+        title={<Space><WarningOutlined style={{ color: "#faad14" }} />预算异常：以下系列 Google 实际预算过低</Space>}
+        open={budgetFixOpen}
+        onCancel={snoozeBudgetFix}
+        width={640}
+        footer={[
+          <Button key="snooze" onClick={snoozeBudgetFix}>今天暂不处理</Button>,
+          <Button key="apply" type="primary" loading={budgetFixApplying} onClick={applyBudgetFix}>
+            确认调整（{budgetFixRows.length} 条）
+          </Button>,
+        ]}
+      >
+        <Alert
+          type="warning" showIcon style={{ marginBottom: 12 }}
+          message="这些在投系列受历史 bug 影响，Google 上的实际日预算远低于设定意图（如 $2 被发成 ¥2≈$0.28）。"
+          description="点「确认调整」后系统会把下列系列的 Google 实际预算改成目标值（按当日汇率折账户币种），并同步更新 CRM。不点则不做任何改动。"
+        />
+        <Table<BudgetFixRow>
+          size="small" rowKey="campaign_id" pagination={false} scroll={{ y: 320 }}
+          dataSource={budgetFixRows}
+          columns={[
+            { title: "广告系列", dataIndex: "campaign_name", ellipsis: true },
+            {
+              title: "当前实际", dataIndex: "current_usd", width: 130, align: "right",
+              render: (v: number, r) => <Text type="danger">${v.toFixed(2)}（{r.current_account} {r.currency}）</Text>,
+            },
+            {
+              title: "调整为", dataIndex: "target_usd", width: 130, align: "right",
+              render: (v: number, r) => <Text type="success">${v.toFixed(2)}（{r.target_account} {r.currency}）</Text>,
+            },
+          ]}
+        />
+      </Modal>
 
       {/* ========== D-238 眼睛弹窗：逐日明细 + AI 分析报告 ========== */}
       <CampaignAnalysisModal

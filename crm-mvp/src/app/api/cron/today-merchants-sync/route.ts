@@ -329,6 +329,31 @@ export async function GET(req: NextRequest) {
 
     await Promise.all(writeOps);
 
+    // D-285：脚本新旧检测——按 MCC 落库标记（budget-fix 接口做闸门用）+ 旧脚本定向弹窗催换。
+    // 标记每半小时刷新：换上新脚本后 hasBudgetCol 翻 true，弹窗自动停、budget-fix 自动放行。
+    let oldScriptCount = 0;
+    try {
+      const { notifyOldScriptMcc } = await import("@/lib/system-broadcast");
+      for (const [mccDbId, info] of result.scriptStatusByMcc) {
+        const key = `mcc_script_budget_col_${mccDbId}`;
+        const value = JSON.stringify({ hasBudgetCol: info.hasBudgetCol, mccId: info.mccId, checkedAt: syncedAt });
+        await prisma.system_configs.upsert({
+          where: { config_key: key },
+          create: { config_key: key, config_value: value, description: `MCC ${info.mccId} 统一脚本 Budget 列检测（D-285）`, is_deleted: 0 },
+          update: { config_value: value, is_deleted: 0 },
+        });
+        if (!info.hasBudgetCol) {
+          oldScriptCount++;
+          await notifyOldScriptMcc(BigInt(mccDbId), info.mccId, info.mccName, BigInt(info.userId));
+        }
+      }
+      if (oldScriptCount > 0) {
+        log(`脚本检测：${result.scriptStatusByMcc.size} 个 MCC 可判定，旧脚本 ${oldScriptCount} 个（已定向提醒归属人，周去重）`);
+      }
+    } catch (e) {
+      log(`脚本检测失败: ${e instanceof Error ? e.message : String(e)}`);
+    }
+
     // 新广告快速回填（Sheet 近两日新建 → campaigns 表 + 自动关联商家）
     const backfill = await backfillNewCampaigns(result.recentRows);
     if (backfill.created > 0 || backfill.resurrected > 0) {
@@ -408,6 +433,7 @@ export async function GET(req: NextRequest) {
         updated: nameSync.updated,
         errors: nameSync.errors,
       },
+      script_check: { judged: result.scriptStatusByMcc.size, old_script: oldScriptCount },
       today_cost: cost && {
         mcc_with_data: cost.mccWithData,
         upserted: cost.upserted,
