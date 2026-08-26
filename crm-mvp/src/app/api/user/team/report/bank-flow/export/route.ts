@@ -5,26 +5,37 @@ import { resolveBankFlowScope, scopeEntryWhere } from "@/lib/bank-flow-scope";
 import ExcelJS from "exceljs";
 import {
   buildBankStatementSheet, buildPayeeStatementSheet,
-  type BankFlowExportMethod, type BankFlowExportEntry,
+  buildYearOverviewSheet, buildYearMonthDetailSheet,
+  type BankFlowExportMethod, type BankFlowExportEntry, type BankFlowYearEntry,
 } from "@/lib/bank-flow-xlsx";
 
 export const dynamic = "force-dynamic";
 
 /**
  * GET /api/user/team/report/bank-flow/export?month=YYYY-MM[&methodId=]
+ * GET /api/user/team/report/bank-flow/export?year=YYYY          （D-287 年度导出）
  * 导出银行流水（C-179 精简为每收款人一张 sheet）：
  * - 整体导出：每个收款人一张「账户交易明细清单」合并流水单（该人所有卡/渠道入账合并、
  *   带打款方式(卡号)列、期初余额=各卡合计逐笔滚动）
  * - methodId 指定时（单卡导出按钮）：仍导出该卡单独一张流水单
+ * - year 指定时：一个工作簿 = 「年度总览」（12 个月 × 各收款人到账合计）+ 有到账的
+ *   月份各一张逐笔明细（含收款人列），供财务全年上报
  */
 export const GET = withUser(async (req: NextRequest, { user }) => {
   // D-275.1 双口径：组长=团队卡全量；组员=只导自己的自填卡
   const scope = await resolveBankFlowScope(user);
   if (!scope) return new NextResponse("未关联小组", { status: 400 });
   const { searchParams } = new URL(req.url);
+  const yearParam = searchParams.get("year");
   const month = searchParams.get("month") || "";
   const methodIdParam = searchParams.get("methodId");
-  if (!/^\d{4}-\d{2}$/.test(month)) return new NextResponse("month 格式必须为 YYYY-MM", { status: 400 });
+  if (yearParam) {
+    if (!/^\d{4}$/.test(yearParam)) return new NextResponse("year 格式必须为 YYYY", { status: 400 });
+  } else if (!/^\d{4}-\d{2}$/.test(month)) {
+    return new NextResponse("month 格式必须为 YYYY-MM", { status: 400 });
+  }
+  // 年度导出按 month 前缀取全年条目；月度导出精确匹配
+  const monthWhere = yearParam ? { startsWith: `${yearParam}-` } : month;
 
   const entryWhere = await scopeEntryWhere(scope);
   const [methodRows, entryRows, openings] = await Promise.all([
@@ -35,15 +46,17 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
     }),
     prisma.bank_flow_entries.findMany({
       where: {
-        ...entryWhere, month, is_deleted: 0,
+        ...entryWhere, month: monthWhere, is_deleted: 0,
         ...(methodIdParam ? { payment_method_id: BigInt(methodIdParam) } : {}),
       },
       orderBy: { txn_at: "asc" },
     }),
-    prisma.report_overrides.findMany({
-      where: { user_id: scope.userId, month, scope_key: { startsWith: "bank_open:" }, is_deleted: 0 },
-      select: { scope_key: true, value: true },
-    }),
+    yearParam
+      ? Promise.resolve([])
+      : prisma.report_overrides.findMany({
+          where: { user_id: scope.userId, month, scope_key: { startsWith: "bank_open:" }, is_deleted: 0 },
+          select: { scope_key: true, value: true },
+        }),
   ]);
   if (methodRows.length === 0) return new NextResponse("暂无收款方式", { status: 404 });
 
@@ -55,11 +68,12 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
     cardNo: m.card_no,
     openingBalance: openMap.get(String(m.id)) ?? null,
   }));
-  const rawEntries: BankFlowExportEntry[] = entryRows.map((e) => {
+  const rawEntries: (BankFlowExportEntry & { month: string })[] = entryRows.map((e) => {
     let breakdown: BankFlowExportEntry["breakdown"] = [];
     try { breakdown = e.breakdown ? JSON.parse(e.breakdown) : []; } catch { /* 脏数据容错 */ }
     return {
       id: String(e.id),
+      month: e.month,
       paymentMethodId: String(e.payment_method_id),
       txnAt: e.txn_at,
       platform: e.platform,
@@ -77,8 +91,8 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
 
   // C-180：同一笔银行到账按平台拆分的条目（同卡同 txn_group）导出时合并回一行，
   // 与真实银行流水一致（银行只到账一笔总额）
-  const entries: BankFlowExportEntry[] = [];
-  const grouped = new Map<string, BankFlowExportEntry>();
+  const entries: (BankFlowExportEntry & { month: string })[] = [];
+  const grouped = new Map<string, BankFlowExportEntry & { month: string }>();
   for (const e of rawEntries) {
     if (!e.txnGroup) {
       entries.push(e);
@@ -107,16 +121,38 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
   wb.creator = "CRM System";
   wb.created = new Date();
 
-  if (methodIdParam) {
+  const payeeOfMethod = (m: BankFlowExportMethod) => m.payeeName.replace(/[（(].*$/, "").trim() || m.payeeName;
+
+  if (yearParam) {
+    // D-287 年度导出：年度总览 + 有到账的月份各一张明细
+    const methodById = new Map(methods.map((m) => [m.id, m]));
+    const yearEntries: BankFlowYearEntry[] = entries.map((e) => {
+      const m = methodById.get(e.paymentMethodId);
+      return { ...e, payee: m ? payeeOfMethod(m) : "—" };
+    });
+    // 收款人列顺序按收款方式创建先后；仅全年有到账的出列（无到账收款人不出空列）
+    const payeeOrder = [...new Set(methods.map(payeeOfMethod))];
+    const withData = new Set(yearEntries.map((e) => e.payee));
+    let payees = payeeOrder.filter((p) => withData.has(p));
+    if (payees.length === 0) payees = payeeOrder; // 全年无到账：仍出全员空总览
+    buildYearOverviewSheet(wb, yearParam, payees, yearEntries);
+    const monthsWithData = [...new Set(yearEntries.map((e) => e.month))].sort();
+    for (const ym of monthsWithData) {
+      buildYearMonthDetailSheet(
+        wb, yearParam, Number(ym.slice(5)), payees, methods,
+        yearEntries.filter((e) => e.month === ym),
+      );
+    }
+  } else if (methodIdParam) {
     // 单卡导出：该卡单独一张流水单
     const m = methods[0];
     const name = `${m.payeeName}${m.payChannel ? "-" + m.payChannel : ""}${m.cardNo ? "-" + m.cardNo.slice(-4) : ""}`.slice(0, 28);
     buildBankStatementSheet(wb, month, m, entries.filter((e) => e.paymentMethodId === m.id), name);
   } else {
     // C-179：每收款人一张合并流水单（该人所有卡/渠道入账合并）
-    // C-178 后 payee_name 已是纯名字；保留去括号逻辑兼容未迁移的旧文本
+    // C-178 后 payee_name 已是纯名字；去括号逻辑兼容未迁移的旧文本
     const used = new Set<string>();
-    const payeeOf = (m: BankFlowExportMethod) => m.payeeName.replace(/[（(].*$/, "").trim() || m.payeeName;
+    const payeeOf = payeeOfMethod;
     const payees = [...new Set(methods.map(payeeOf))];
     for (const payee of payees) {
       const payeeMethods = methods.filter((m) => payeeOf(m) === payee);
@@ -139,7 +175,9 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
 
   const buffer = await wb.xlsx.writeBuffer();
   const filename = encodeURIComponent(
-    `银行流水-${month}${methodIdParam ? `-${methods[0].payeeName}${methods[0].payChannel ? `(${methods[0].payChannel})` : ""}` : ""}.xlsx`,
+    yearParam
+      ? `银行流水-${yearParam}年度.xlsx`
+      : `银行流水-${month}${methodIdParam ? `-${methods[0].payeeName}${methods[0].payChannel ? `(${methods[0].payChannel})` : ""}` : ""}.xlsx`,
   );
   return new NextResponse(new Uint8Array(buffer as ArrayBuffer), {
     status: 200,

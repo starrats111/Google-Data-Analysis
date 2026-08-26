@@ -280,6 +280,154 @@ export function buildPayeeStatementSheet(
   ws.getRow(r).height = 26;
 }
 
+/** D-287 年度导出用：条目附归属月份与收款人 */
+export interface BankFlowYearEntry extends BankFlowExportEntry {
+  /** YYYY-MM */
+  month: string;
+  /** 收款人（payment_methods.payee_name 去括号后） */
+  payee: string;
+}
+
+/**
+ * D-287 年度总览 sheet：1-12 月逐行 × 各收款人到账合计列 + 当月合计/手续费/笔数，
+ * 底部年度合计行；无到账月份显示「—」；仅给全年有到账的收款人出列。
+ */
+export function buildYearOverviewSheet(
+  wb: ExcelJS.Workbook,
+  year: string,
+  payees: string[],
+  entries: BankFlowYearEntry[],
+) {
+  const ws = wb.addWorksheet("年度总览");
+  const widths = [10, ...payees.map(() => 16), 16, 13, 8];
+  widths.forEach((w, i) => (ws.getColumn(i + 1).width = w));
+  const NC = widths.length;
+
+  ws.mergeCells(1, 1, 1, NC);
+  cell(ws, 1, 1, `${year} 年度银行流水总览表`, { sz: 16, bold: true, noBorder: true });
+  ws.getRow(1).height = 34;
+  const now = new Date();
+  ws.mergeCells(2, 1, 2, NC);
+  cell(ws, 2, 1, `单位：人民币元　　统计期间：${year}-01-01 至 ${year}-12-31　　制表时间：${fmtDate(now)} ${fmtTime(now)}`, { h: "left", noBorder: true, sz: 10 });
+  ws.getRow(2).height = 20;
+
+  const HEAD = ["月份", ...payees.map((p) => `${p} 到账(¥)`), "当月合计(¥)", "手续费(¥)", "笔数"];
+  HEAD.forEach((h, i) => cell(ws, 4, 1 + i, h, { bold: true, fill: GRAY }));
+  ws.getRow(4).height = 24;
+
+  const R2 = (n: number) => Math.round(n * 100) / 100;
+  let r = 5;
+  const yearByPayee = new Map(payees.map((p) => [p, 0]));
+  let yearTotal = 0, yearFee = 0, yearCnt = 0;
+  for (let m = 1; m <= 12; m++) {
+    const ym = `${year}-${String(m).padStart(2, "0")}`;
+    const es = entries.filter((e) => e.month === ym);
+    cell(ws, r, 1, `${m}月`, {});
+    payees.forEach((p, i) => {
+      const v = R2(es.filter((e) => e.payee === p).reduce((s, e) => s + e.amount, 0));
+      yearByPayee.set(p, R2((yearByPayee.get(p) ?? 0) + v));
+      if (es.length) cell(ws, r, 2 + i, v, { numFmt: MONEY, h: "right" });
+      else cell(ws, r, 2 + i, "—", {});
+    });
+    const tot = R2(es.reduce((s, e) => s + e.amount, 0));
+    const fee = R2(es.reduce((s, e) => s + e.fee, 0));
+    yearTotal = R2(yearTotal + tot); yearFee = R2(yearFee + fee); yearCnt += es.length;
+    if (es.length) {
+      cell(ws, r, 2 + payees.length, tot, { numFmt: MONEY, h: "right", bold: true });
+      cell(ws, r, 3 + payees.length, fee, { numFmt: MONEY, h: "right" });
+      cell(ws, r, 4 + payees.length, es.length, {});
+    } else {
+      cell(ws, r, 2 + payees.length, "—", {});
+      cell(ws, r, 3 + payees.length, "—", {});
+      cell(ws, r, 4 + payees.length, "—", {});
+    }
+    ws.getRow(r).height = 22;
+    r++;
+  }
+  cell(ws, r, 1, "年度合计", { bold: true, fill: GRAY });
+  payees.forEach((p, i) => cell(ws, r, 2 + i, yearByPayee.get(p) ?? 0, { bold: true, fill: GRAY, numFmt: MONEY, h: "right" }));
+  cell(ws, r, 2 + payees.length, yearTotal, { bold: true, fill: GRAY, numFmt: MONEY, h: "right" });
+  cell(ws, r, 3 + payees.length, yearFee, { bold: true, fill: GRAY, numFmt: MONEY, h: "right" });
+  cell(ws, r, 4 + payees.length, yearCnt, { bold: true, fill: GRAY });
+  ws.getRow(r).height = 24;
+  r++;
+
+  ws.mergeCells(r, 1, r, NC);
+  cell(ws, r, 1, "注：到账金额为银行/渠道实际入账净额；手续费在平台打款时已预扣，不计入到账金额。逐笔明细见后续各月份表。", { h: "left", sz: 10, noBorder: true });
+  r += 2;
+  ws.mergeCells(r, 1, r, NC);
+  cell(ws, r, 1, "制表人：＿＿＿＿＿＿　　　复核人：＿＿＿＿＿＿　　　日期：＿＿＿＿年＿＿月＿＿日", { h: "left", noBorder: true });
+  ws.getRow(r).height = 26;
+}
+
+/**
+ * D-287 年度导出的单月明细 sheet：当月全部收款人逐笔（含收款人列），
+ * 末尾各收款人小计 + 当月合计。txn_group 合并已在调用方完成。
+ */
+export function buildYearMonthDetailSheet(
+  wb: ExcelJS.Workbook,
+  year: string,
+  monthNum: number,
+  payees: string[],
+  methods: BankFlowExportMethod[],
+  entries: BankFlowYearEntry[],
+) {
+  const ws = wb.addWorksheet(`${monthNum}月`);
+  const widths = [6, 12, 8, 10, 24, 12, 14, 16, 15, 13, 20];
+  widths.forEach((w, i) => (ws.getColumn(i + 1).width = w));
+  const NC = widths.length;
+  const methodById = new Map(methods.map((m) => [m.id, m]));
+  const R2 = (n: number) => Math.round(n * 100) / 100;
+  const ym = `${year}-${String(monthNum).padStart(2, "0")}`;
+
+  ws.mergeCells(1, 1, 1, NC);
+  cell(ws, 1, 1, `${year} 年 ${monthNum} 月银行流水明细`, { sz: 15, bold: true, noBorder: true });
+  ws.getRow(1).height = 30;
+  ws.mergeCells(2, 1, 2, NC);
+  const { start, end } = monthRange(ym);
+  cell(ws, 2, 1, `单位：人民币元　　期间：${start} 至 ${end}`, { h: "left", noBorder: true, sz: 10 });
+
+  const HEAD = ["序号", "交易日期", "时间", "收款人", "打款方式(卡号)", "平台", "交易摘要", "对方户名", "到账金额(¥)", "手续费(¥)", "备注"];
+  HEAD.forEach((h, i) => cell(ws, 4, 1 + i, h, { bold: true, fill: GRAY }));
+  ws.getRow(4).height = 24;
+
+  const sorted = [...entries].sort((a, b) => a.txnAt.getTime() - b.txnAt.getTime());
+  let r = 5;
+  sorted.forEach((e, i) => {
+    const m = methodById.get(e.paymentMethodId);
+    cell(ws, r, 1, i + 1, {});
+    cell(ws, r, 2, fmtDate(e.txnAt), {});
+    cell(ws, r, 3, fmtTime(e.txnAt), {});
+    cell(ws, r, 4, e.payee, {});
+    cell(ws, r, 5, m ? `${m.payChannel || "—"} ${m.cardNo ? "尾号" + m.cardNo.slice(-4) : ""}`.trim() : "—", { sz: 10 });
+    cell(ws, r, 6, e.platform, {});
+    cell(ws, r, 7, e.summary || "佣金结算", {});
+    cell(ws, r, 8, e.counterparty || e.platform, {});
+    cell(ws, r, 9, e.amount, { numFmt: MONEY, h: "right" });
+    cell(ws, r, 10, e.fee, { numFmt: MONEY, h: "right" });
+    cell(ws, r, 11, e.remark || `${e.platform} 平台佣金打款`, { h: "left", sz: 10, wrap: true });
+    ws.getRow(r).height = 22;
+    r++;
+  });
+
+  for (const p of payees) {
+    const pes = sorted.filter((e) => e.payee === p);
+    if (pes.length === 0) continue;
+    ws.mergeCells(r, 1, r, 8);
+    cell(ws, r, 1, `${p} 小计（${pes.length} 笔）`, { bold: true, h: "right" });
+    cell(ws, r, 9, R2(pes.reduce((s, e) => s + e.amount, 0)), { bold: true, numFmt: MONEY, h: "right" });
+    cell(ws, r, 10, R2(pes.reduce((s, e) => s + e.fee, 0)), { bold: true, numFmt: MONEY, h: "right" });
+    cell(ws, r, 11, "", {});
+    r++;
+  }
+  ws.mergeCells(r, 1, r, 8);
+  cell(ws, r, 1, `当月合计（${sorted.length} 笔）`, { bold: true, fill: GRAY, h: "right" });
+  cell(ws, r, 9, R2(sorted.reduce((s, e) => s + e.amount, 0)), { bold: true, fill: GRAY, numFmt: MONEY, h: "right" });
+  cell(ws, r, 10, R2(sorted.reduce((s, e) => s + e.fee, 0)), { bold: true, fill: GRAY, numFmt: MONEY, h: "right" });
+  cell(ws, r, 11, "", { fill: GRAY });
+  ws.getRow(r).height = 24;
+}
+
 /** 打款对账明细 sheet（核对应到/实到/手续费 + 逐人明细）；按收款人分表时传 sheetName/payeeName */
 export function buildBankReconSheet(
   wb: ExcelJS.Workbook,

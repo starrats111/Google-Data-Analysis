@@ -144,6 +144,7 @@ export default function BankFlowTab() {
   const [entries, setEntries] = useState<FlowEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [exportingYear, setExportingYear] = useState(false);
   const [prefilling, setPrefilling] = useState(false);
 
   // 新增/编辑弹窗
@@ -557,6 +558,28 @@ export default function BankFlowTab() {
     }
   };
 
+  // D-287 年度导出：年度总览（12 个月 × 各收款人）+ 有到账的月份各一张明细
+  const handleExportYear = async () => {
+    const year = month.format("YYYY");
+    setExportingYear(true);
+    try {
+      const resp = await fetch(`/api/user/team/report/bank-flow/export?year=${year}`);
+      if (!resp.ok) {
+        message.error((await resp.text().catch(() => "")) || "导出失败");
+        return;
+      }
+      const blob = await resp.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `银行流水-${year}年度.xlsx`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      message.success("已导出全年流水");
+    } finally {
+      setExportingYear(false);
+    }
+  };
+
   // ── 汇总数字 ──
   const totals = useMemo(() => {
     const amount = entries.reduce((s, e) => s + e.amount, 0);
@@ -732,6 +755,16 @@ export default function BankFlowTab() {
         >
           导出银行流水
         </Button>
+        <Tooltip title={`导出 ${month.format("YYYY")} 年全年：年度总览（各收款人逐月到账合计）+ 每月逐笔明细`}>
+          <Button
+            icon={<FileExcelOutlined />}
+            onClick={handleExportYear}
+            loading={exportingYear}
+            disabled={methods.length === 0}
+          >
+            导出全年
+          </Button>
+        </Tooltip>
       </Space>
 
       {loading && !loaded ? (
