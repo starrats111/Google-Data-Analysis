@@ -691,6 +691,33 @@ function rowKeyOf(row) {
   return row[0] + '|' + row[1] + '|' + row[3];
 }
 
+/**
+ * D-286：归档表读回来的日期列会被 Sheets 识别成 Date 对象，直接 toString 是
+ * "Thu Aug 07 2026..."，导致 rowKeyOf 去重与窗口过滤全部失配——每轮把 30 天
+ * 窗口整体重复追加，归档表滚雪球（wj11 199k 行灌水事故根因）。
+ * 所有从表格读回的日期一律先归一成补零的 yyyy-MM-dd 文本；识别不了返回空串。
+ */
+function normalizeRowDate(value) {
+  if (value && typeof value.getFullYear === 'function') {
+    var mm = value.getMonth() + 1;
+    var dd = value.getDate();
+    return value.getFullYear() + '-' + (mm < 10 ? '0' + mm : '' + mm) + '-' + (dd < 10 ? '0' + dd : '' + dd);
+  }
+  var s = (value === null || value === undefined ? '' : String(value)).trim();
+  var m = s.match(/^(\\d{4})-(\\d{1,2})-(\\d{1,2})/);
+  if (!m) return '';
+  return m[1] + '-' + (m[2].length < 2 ? '0' + m[2] : m[2]) + '-' + (m[3].length < 2 ? '0' + m[3] : m[3]);
+}
+
+/** D-286：进度表 key（yyyy-MM）同样可能被识别成 Date，读写两侧统一归一 */
+function normalizeMetaKey(value) {
+  if (value && typeof value.getFullYear === 'function') {
+    var mm = value.getMonth() + 1;
+    return value.getFullYear() + '-' + (mm < 10 ? '0' + mm : '' + mm);
+  }
+  return (value === null || value === undefined ? '' : String(value)).trim();
+}
+
 // ===== 归档进度表 =====
 function getBackfillMetaSheet(spreadsheet) {
   var sheet = spreadsheet.getSheetByName(BACKFILL_META_SHEET);
@@ -710,7 +737,7 @@ function readBackfillMeta(spreadsheet) {
   if (lastRow < 2) return meta;
   var values = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
   for (var i = 0; i < values.length; i++) {
-    var key = (values[i][0] || '').toString().trim();
+    var key = normalizeMetaKey(values[i][0]);
     if (key) meta[key] = (values[i][1] || '').toString().trim();
   }
   return meta;
@@ -722,14 +749,18 @@ function upsertBackfillMeta(spreadsheet, monthKey, status, rowCount, source) {
   var newRow = [monthKey, status, rowCount, stamp, source];
   var lastRow = sheet.getLastRow();
   if (lastRow >= 2) {
+    // D-286：key 读回可能是 Date 对象，归一后再比对；历史事故留下重复 key 行时
+    // 更新最后一行（readBackfillMeta 循环也是后行覆盖前行，两侧口径一致）
     var keys = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
-    for (var i = 0; i < keys.length; i++) {
-      if ((keys[i][0] || '').toString().trim() === monthKey) {
+    for (var i = keys.length - 1; i >= 0; i--) {
+      if (normalizeMetaKey(keys[i][0]) === monthKey) {
+        sheet.getRange(i + 2, 1, 1, 1).setNumberFormat('@');
         sheet.getRange(i + 2, 1, 1, newRow.length).setValues([newRow]);
         return;
       }
     }
   }
+  sheet.getRange(lastRow + 1, 1, 1, 1).setNumberFormat('@');
   sheet.getRange(lastRow + 1, 1, 1, newRow.length).setValues([newRow]);
 }
 
@@ -739,7 +770,17 @@ function readMonthArchive(spreadsheet, monthKey) {
   if (!sheet) return [];
   var lastRow = sheet.getLastRow();
   if (lastRow < 2) return [];
-  return sheet.getRange(2, 1, lastRow - 1, DATA_HEADERS.length).getValues();
+  var values = sheet.getRange(2, 1, lastRow - 1, DATA_HEADERS.length).getValues();
+  // D-286：日期归一成 yyyy-MM-dd 文本；识别不了或不属于本月 Tab 的行
+  // （历史事故垃圾签名）直接丢弃
+  var rows = [];
+  for (var i = 0; i < values.length; i++) {
+    var d = normalizeRowDate(values[i][0]);
+    if (!d || d.slice(0, 7) !== monthKey) continue;
+    values[i][0] = d;
+    rows.push(values[i]);
+  }
+  return rows;
 }
 
 function writeMonthArchive(spreadsheet, monthKey, rows) {
@@ -747,7 +788,11 @@ function writeMonthArchive(spreadsheet, monthKey, rows) {
   var sheet = spreadsheet.getSheetByName(name) || spreadsheet.insertSheet(name);
   sheet.clearContents();
   sheet.getRange(1, 1, 1, DATA_HEADERS.length).setValues([DATA_HEADERS]);
-  if (rows.length > 0) sheet.getRange(2, 1, rows.length, DATA_HEADERS.length).setValues(rows);
+  if (rows.length > 0) {
+    // D-286：日期列锁纯文本，防止被 Sheets 识别成日期后再读回变 Date 对象
+    sheet.getRange(2, 1, rows.length, 1).setNumberFormat('@');
+    sheet.getRange(2, 1, rows.length, DATA_HEADERS.length).setValues(rows);
+  }
   sheet.setFrozenRows(1);
 }
 
@@ -770,15 +815,29 @@ function mergeMonthArchive(spreadsheet, monthKey, freshRows, windowStart, window
 
   if (windowStart) {
     var existing = readMonthArchive(spreadsheet, monthKey);
-    for (var j = 0; j < existing.length; j++) {
-      var date = (existing[j][0] || '').toString().slice(0, 10);
-      if (!date) continue;
-      // 窗口内的旧数据已被本次采集覆盖，丢弃；窗口外的保留
-      if (date >= windowStart && date <= windowEnd) continue;
-      var k = rowKeyOf(existing[j]);
-      if (seen[k]) continue;
-      seen[k] = true;
-      merged.push(existing[j]);
+    // D-286 自愈：旧行出现重复 key = 该表已被旧版脚本写坏（每轮重复追加），
+    // 旧行日期与数值均不可信——整表丢弃旧行、本次采集重建，并把该月进度
+    // 复位成 reset，交给历史回补用 Google 真值把窗口外的日期整月重建。
+    var corrupted = false;
+    var seenOld = {};
+    for (var c = 0; c < existing.length; c++) {
+      var ck = rowKeyOf(existing[c]);
+      if (seenOld[ck]) { corrupted = true; break; }
+      seenOld[ck] = true;
+    }
+    if (corrupted) {
+      console.log('   月度归档 ' + monthKey + ': 检测到重复行（历史写坏），丢弃旧行整表重建');
+      try { upsertBackfillMeta(spreadsheet, monthKey, 'reset', 0, 'heal'); } catch (e) {}
+    } else {
+      for (var j = 0; j < existing.length; j++) {
+        var date = existing[j][0];
+        // 窗口内的旧数据已被本次采集覆盖，丢弃；窗口外的保留
+        if (date >= windowStart && date <= windowEnd) continue;
+        var k = rowKeyOf(existing[j]);
+        if (seen[k]) continue;
+        seen[k] = true;
+        merged.push(existing[j]);
+      }
     }
   }
 

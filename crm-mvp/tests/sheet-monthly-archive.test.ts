@@ -92,17 +92,31 @@ describe("syncFromSheet 月度归档", () => {
     const result = await syncFromSheet(SHEET_URL, "2025-11-01", daysAgo(0));
     assert.equal(result.success, false);
   });
+
+  test("归档表里非补零日期与错月行一律拒收（D-286 灌水事故止血）", async () => {
+    tabs["DailyData_2025-11"] = [
+      HEADERS,
+      dataRow("2025-11-05", "C_NOV_A", 2),
+      dataRow("2025-11-6", "C_BAD_PAD", 7),
+      dataRow("2025-12-01", "C_WRONG_MONTH", 8),
+    ].join("\n");
+    const result = await syncFromSheet(SHEET_URL, "2025-11-01", daysAgo(0));
+    const ids = result.rows.map((r) => r.campaign_id);
+    assert.ok(ids.includes("C_NOV_A"));
+    assert.ok(!ids.includes("C_BAD_PAD"));
+    assert.ok(!ids.includes("C_WRONG_MONTH"));
+  });
 });
 
 // ============================================================
 // 写入端：把生成脚本里的纯函数抠出来，配一个假的 Spreadsheet 跑
 // ============================================================
 
-type Row = (string | number)[];
+type Row = (string | number | Date)[];
 
 /** 最小可用的 SpreadsheetApp 替身，只实现归档逻辑用到的那几个方法 */
 function fakeSpreadsheet(initial: Record<string, Row[]> = {}) {
-  const store: Record<string, Row[]> = JSON.parse(JSON.stringify(initial));
+  const store: Record<string, Row[]> = structuredClone(initial);
   const makeSheet = (name: string) => ({
     getLastRow: () => store[name].length,
     clearContents: () => {
@@ -115,6 +129,7 @@ function fakeSpreadsheet(initial: Record<string, Row[]> = {}) {
       setValues: (vals: Row[]) => {
         for (let i = 0; i < vals.length; i++) store[name][row - 1 + i] = vals[i].slice();
       },
+      setNumberFormat: () => {},
     }),
   });
   return {
@@ -135,27 +150,36 @@ function extractFn(script: string, name: string) {
 
 function loadArchiveFns() {
   const script = generateUnifiedAdsScript("ky_live_x", undefined, SHEET_URL);
-  const src = [
-    script.match(/var DATA_HEADERS = \[[^\]]*\];/)![0],
-    extractFn(script, "rowKeyOf"),
-    extractFn(script, "readMonthArchive"),
-    extractFn(script, "writeMonthArchive"),
-    extractFn(script, "mergeMonthArchive"),
-    extractFn(script, "monthAdd"),
-    extractFn(script, "monthLastDay"),
-    "return { mergeMonthArchive: mergeMonthArchive, monthAdd: monthAdd, monthLastDay: monthLastDay };",
-  ].join("\n");
-  return new Function(src)() as {
+  const metaWrites: [string, string][] = [];
+  const fns = new Function(
+    "metaWrites",
+    [
+      script.match(/var DATA_HEADERS = \[[^\]]*\];/)![0],
+      "function upsertBackfillMeta(ss, key, status) { metaWrites.push([key, status]); }",
+      extractFn(script, "rowKeyOf"),
+      extractFn(script, "normalizeRowDate"),
+      extractFn(script, "normalizeMetaKey"),
+      extractFn(script, "readMonthArchive"),
+      extractFn(script, "writeMonthArchive"),
+      extractFn(script, "mergeMonthArchive"),
+      extractFn(script, "monthAdd"),
+      extractFn(script, "monthLastDay"),
+      "return { mergeMonthArchive: mergeMonthArchive, monthAdd: monthAdd, monthLastDay: monthLastDay, normalizeRowDate: normalizeRowDate, normalizeMetaKey: normalizeMetaKey };",
+    ].join("\n")
+  )(metaWrites) as {
     mergeMonthArchive: (
       ss: unknown, month: string, fresh: Row[], winStart: string, winEnd: string
     ) => number;
     monthAdd: (m: string, d: number) => string;
     monthLastDay: (m: string) => string;
+    normalizeRowDate: (v: unknown) => string;
+    normalizeMetaKey: (v: unknown) => string;
   };
+  return Object.assign(fns, { metaWrites });
 }
 
 /** 造一行归档数据，字段顺序与 DATA_HEADERS 一致 */
-function archiveRow(date: string, campaignId: string, costMicros: number, cid = "111"): Row {
+function archiveRow(date: string | Date, campaignId: string, costMicros: number, cid = "111"): Row {
   return [date, cid, "acct", campaignId, "RW_US_1", "ENABLED", 10000000, 100, 10, costMicros, 1, 5, "USD"];
 }
 
@@ -227,6 +251,66 @@ describe("脚本内的月度归档合并", () => {
     const ss = fakeSpreadsheet({});
     fns.mergeMonthArchive(ss, "2026-08", [archiveRow("2026-08-10", "C", 123456789)], "", "");
     assert.equal(ss.store["DailyData_2026-08"][1][9], 123456789);
+  });
+
+  // ===== D-286：wj11 灌水事故回归 =====
+
+  test("旧行日期读回是 Date 对象时归一成补零文本，去重与窗口过滤恢复正常（D-286 滚雪球根因）", () => {
+    const ss = fakeSpreadsheet({
+      "DailyData_2026-08": [
+        ["Date"],
+        archiveRow(new Date(2026, 7, 1), "C1", 1_000_000), // 窗口外，应保留且转成文本
+        archiveRow(new Date(2026, 7, 5), "C1", 8_000_000), // 窗口内，应被本次采集替换
+      ],
+    });
+    const fresh = [archiveRow("2026-08-05", "C1", 2_000_000)];
+    const count = fns.mergeMonthArchive(ss, "2026-08", fresh, "2026-08-03", "2026-08-31");
+    assert.equal(count, 2);
+    const rows = ss.store["DailyData_2026-08"].slice(1);
+    assert.deepEqual(rows.map((r) => r[0]), ["2026-08-01", "2026-08-05"]);
+    assert.equal(rows[1][9], 2_000_000);
+  });
+
+  test("非补零日期字符串归一参与合并，错月行（事故垃圾）丢弃", () => {
+    const ss = fakeSpreadsheet({
+      "DailyData_2026-08": [
+        ["Date"],
+        archiveRow("2026-8-1", "C1", 1_000_000),
+        archiveRow("2025-10-2", "BAD_MONTH", 9_000_000),
+      ],
+    });
+    const count = fns.mergeMonthArchive(ss, "2026-08", [archiveRow("2026-08-05", "C2", 1)], "2026-08-03", "2026-08-31");
+    assert.equal(count, 2);
+    assert.deepEqual(
+      ss.store["DailyData_2026-08"].slice(1).map((r) => r[0]),
+      ["2026-08-01", "2026-08-05"]
+    );
+  });
+
+  test("旧行出现重复 key 视为已写坏：丢弃全部旧行整表重建并复位进度（D-286 自愈）", () => {
+    const ss = fakeSpreadsheet({
+      "DailyData_2026-08": [
+        ["Date"],
+        archiveRow("2026-08-01", "C1", 1_000_000),
+        archiveRow("2026-08-01", "C1", 1_000_000),
+        archiveRow("2026-08-02", "WOULD_KEEP", 2_000_000),
+      ],
+    });
+    fns.metaWrites.length = 0;
+    const count = fns.mergeMonthArchive(ss, "2026-08", [archiveRow("2026-08-20", "NEW", 1)], "2026-08-10", "2026-08-31");
+    assert.equal(count, 1);
+    assert.equal(ss.store["DailyData_2026-08"][1][3], "NEW");
+    assert.deepEqual(fns.metaWrites, [["2026-08", "reset"]]);
+  });
+
+  test("normalizeRowDate / normalizeMetaKey 归一口径", () => {
+    assert.equal(fns.normalizeRowDate("2026-8-7"), "2026-08-07");
+    assert.equal(fns.normalizeRowDate("2026-08-07 00:00:00"), "2026-08-07");
+    assert.equal(fns.normalizeRowDate(new Date(2026, 7, 7)), "2026-08-07");
+    assert.equal(fns.normalizeRowDate("Thu Aug 07 2026"), "");
+    assert.equal(fns.normalizeRowDate(""), "");
+    assert.equal(fns.normalizeMetaKey(new Date(2026, 7, 1)), "2026-08");
+    assert.equal(fns.normalizeMetaKey(" 2026-08 "), "2026-08");
   });
 
   test("月份推算正确（含跨年与闰月）", () => {

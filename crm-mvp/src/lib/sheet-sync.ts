@@ -28,6 +28,12 @@ const CRM_MONTHLY_TAB_PREFIX = "DailyData_";
 const DAILY_TAB_COVERAGE_DAYS = 25;
 /** 单次同步最多读取的月份表数量，防止误传超长区间打爆请求数 */
 const MAX_MONTHLY_TABS = 36;
+/**
+ * D-286：只认严格补零的 YYYY-MM-DD。被旧脚本写坏的归档表里，日期经
+ * Date 对象往返会导出成「2026-8-7」这类非补零格式，且这类行数值错配到
+ * 错误日期上（wj11 2026-08-26 灌水事故），必须整行拒收。
+ */
+const STRICT_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export type SheetFormat = "crm" | "kyads" | "unknown";
 
@@ -288,8 +294,14 @@ function parseCrmDailyData(values: string[][], startDate: string, endDate: strin
       const campaignName = (row[col["campaignname"]] || "").trim();
       if (!dateStr || !campaignId || !campaignName) continue;
 
-      const rowDate = new Date(dateStr.slice(0, 10));
-      if (rowDate < start || rowDate > end) continue;
+      // D-286：归档表被旧脚本写坏后，日期经 Date 对象往返会导出成「2026-8-7」
+      // 这类非补零格式，且这类行的日期不可信（数值被复制到错误日期上）。
+      // 只收严格 YYYY-MM-DD，其余一律拒收，宁缺勿错。
+      const dateKey = dateStr.slice(0, 10);
+      if (!STRICT_DATE_RE.test(dateKey)) continue;
+
+      const rowDate = new Date(dateKey);
+      if (isNaN(rowDate.getTime()) || rowDate < start || rowDate > end) continue;
 
       const cost = safeFloat(row[col["cost"]]) / 1_000_000; // micros → currency
       const clicks = safeFloat(row[col["clicks"]]);
@@ -321,7 +333,7 @@ function parseCrmDailyData(values: string[][], startDate: string, endDate: strin
       }
 
       results.push({
-        date: dateStr.slice(0, 10),
+        date: dateKey,
         campaign_id: campaignId,
         campaign_name: campaignName,
         customer_id: customerId,
@@ -363,6 +375,9 @@ function parseKyadsReport(values: string[][], startDate: string, endDate: string
       const campaignId = (row[col["campaign_id"]] || "").trim();
       const campaignName = (row[col["campaign_name"]] || "").trim();
       if (!dateStr || !campaignId) continue;
+
+      // D-286：同 parseCrmDailyData，只收严格 YYYY-MM-DD
+      if (!STRICT_DATE_RE.test(dateStr)) continue;
 
       const rowDate = new Date(dateStr);
       if (isNaN(rowDate.getTime()) || rowDate < start || rowDate > end) continue;
@@ -460,7 +475,8 @@ async function readMonthlyArchives(
       const values = await readSheetCsv(spreadsheetId, `${CRM_MONTHLY_TAB_PREFIX}${month}`);
       if (values.length < 2) continue;
       if (!hasAll(buildColIndex(values[0]), CRM_REQUIRED)) continue;
-      collected.push(...parseCrmDailyData(values, startDate, endDate));
+      // D-286：归档表里的行日期必须属于该月 Tab，错月行（事故垃圾签名之一）拒收
+      collected.push(...parseCrmDailyData(values, startDate, endDate).filter((r) => r.date.slice(0, 7) === month));
     } catch {
       // 单个月份读取失败不应让整次同步失败，跳过继续
       continue;
