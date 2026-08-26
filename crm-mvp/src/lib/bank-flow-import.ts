@@ -153,12 +153,27 @@ const normDigits = (s: string) => (s || "").replace(/\D/g, "");
 const normText = (s: string) => (s || "").replace(/（/g, "(").replace(/）/g, ")").replace(/\s/g, "");
 
 /**
+ * 户名别名映射（07 2026-08-26 拍板）：月表里「龚建成-恒生」实际就是系统里「张文俊-香港」这张卡。
+ * 命中别名的行直接归属到目标收款方式，不再走通用匹配。
+ */
+const PAYEE_ALIASES: { payee: string; acct: string; toPayee: string; toChannel: string }[] = [
+  { payee: "龚建成", acct: "恒生", toPayee: "张文俊", toChannel: "香港" },
+];
+
+/**
  * 表格行 → 候选收款方式列表：账号列是卡号数字则按卡号匹配（同一卡号可能挂多个渠道，
  * 如 张文俊 的 工商 与 WISE 在库内共用同一卡号——表格只写卡号分不出渠道，
  * 全部作为候选交给金额比对定夺，谁的打款批次对得上就是谁）；
  * 是渠道文字（恒生/汇丰/PingPong…）则按 收款人+渠道 匹配。空数组 = 对不上（预览人工处理）。
  */
 export function resolveMethodCandidates(row: { payee: string; acct: string }, methods: ImportMethod[]): ImportMethod[] {
+  const rowAcctText = normText(row.acct);
+  for (const a of PAYEE_ALIASES) {
+    if (row.payee === a.payee && rowAcctText.includes(a.acct)) {
+      const hit = methods.filter((m) => m.payeeName === a.toPayee && normText(m.payChannel).includes(a.toChannel));
+      if (hit.length > 0) return hit;
+    }
+  }
   const digits = normDigits(row.acct);
   if (digits.length >= 6) {
     const byPayee = methods.filter((m) => normDigits(m.cardNo) === digits && m.payeeName === row.payee);
