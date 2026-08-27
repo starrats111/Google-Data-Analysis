@@ -185,7 +185,7 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
     if (rawParts.length < 2) return apiError("至少要拆成 2 笔");
     if (rawParts.length > 20) return apiError("拆分笔数过多");
 
-    interface ParsedPart { txnAt: Date; month: string; amount: number; sourceDate: string | null; items: BankFlowBreakdownItem[] }
+    interface ParsedPart { txnAt: Date; month: string; amount: number; sourceDate: string | null; items: BankFlowBreakdownItem[]; remark: string | null }
     const parts: ParsedPart[] = [];
     for (const raw of rawParts) {
       const d = new Date(raw?.txnAt);
@@ -196,7 +196,9 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
       if (sd != null && !/^\d{4}-\d{2}-\d{2}$/.test(sd)) return apiError("sourceDate 格式必须为 YYYY-MM-DD");
       const bd = parseBreakdown(raw?.breakdown ?? []);
       if (!bd || bd.items.length === 0) return apiError("拆分的员工明细格式无效");
-      parts.push({ txnAt: d, month: d.toISOString().slice(0, 7), amount: r2(amt), sourceDate: sd, items: bd.items });
+      // D-292：拆出的每笔各自带备注（导入时写对方户名），没给就沿用原条目备注 + 拆分说明
+      const rk = typeof raw?.remark === "string" ? raw.remark.trim().slice(0, 255) : "";
+      parts.push({ txnAt: d, month: d.toISOString().slice(0, 7), amount: r2(amt), sourceDate: sd, items: bd.items, remark: rk || null });
     }
     // 拆完必须与原条目对得上：到账合计 = 原到账，明细合计 = 原明细合计（一分钱都不许丢）
     const sumAmount = r2(parts.reduce((t, p) => t + p.amount, 0));
@@ -234,7 +236,7 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
               expected_amount: g.expected,
               fee: g.fee,
               breakdown: JSON.stringify(g.items),
-              remark: `${src.remark ? `${src.remark}；` : ""}D-290 按银行到账拆分（原 ${srcDay} ¥${Number(src.amount).toFixed(2)}）`.slice(0, 255),
+              remark: p.remark ?? `${src.remark ? `${src.remark}；` : ""}D-290 按银行到账拆分（原 ${srcDay} ¥${Number(src.amount).toFixed(2)}）`.slice(0, 255),
               created_by: BigInt(user.userId),
             },
           }));

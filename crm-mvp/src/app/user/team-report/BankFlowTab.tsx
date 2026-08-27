@@ -109,6 +109,7 @@ interface ImportSplitPartView {
   sourceDate: string | null;
   breakdown: BreakdownItem[];
   members: string[];
+  counterparty: string;
 }
 
 interface ImportProposalView {
@@ -131,6 +132,8 @@ interface ImportProposalView {
   entryIds?: string[];
   /** D-290 split_existing：拆出的子条目 */
   parts?: ImportSplitPartView[];
+  /** D-292：到账行的对方户名，入库写进备注 */
+  counterparty?: string;
 }
 
 interface ImportSkippedSheetView {
@@ -549,6 +552,7 @@ export default function BankFlowTab() {
                   amount: part.amount,
                   breakdown: part.breakdown,
                   sourceDate: part.sourceDate,
+                  remark: part.counterparty,
                 })),
               }),
             }).then((r) => r.json());
@@ -564,7 +568,7 @@ export default function BankFlowTab() {
                 amount: p.amount,
                 counterparty: "",
                 summary: "佣金结算",
-                remark: `导入财务月表：${importCurrentSheet.name} 第${p.rows.map((r) => r.rowNo).join("/")}行`,
+                remark: p.counterparty || "",
                 breakdown: p.breakdown,
                 sourceDate: p.sourceDate,
               }),

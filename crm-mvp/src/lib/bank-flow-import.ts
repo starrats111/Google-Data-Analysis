@@ -69,6 +69,8 @@ export interface ParsedBankRow {
   usd: number | null;
   /** 该行金额列之外的全部标注文本（平台标注等，仅辅助校验） */
   note: string;
+  /** D-292：「对方户名」列原文（上海汇 / 连连银通 …）；表里没这列时为空，回退从 note 里抽 */
+  counterparty: string;
 }
 
 export interface ParsedSheet {
@@ -102,7 +104,7 @@ export function parseBankSheet(name: string, data: unknown[][]): ParsedSheet | n
   if (!data || data.length < 2) return null;
   // 表头行：出现「时间」和「户名」类列名的第一行
   let headIdx = -1;
-  let cols: { date: number; payee: number; acct: number; usd: number; cny: number; dealer: number; rate: number } | null = null;
+  let cols: { date: number; payee: number; acct: number; usd: number; cny: number; dealer: number; rate: number; counterparty: number } | null = null;
   for (let i = 0; i < Math.min(data.length, 5); i++) {
     const row = (data[i] || []).map((c) => String(c ?? "").trim());
     const date = row.findIndex((c) => c.includes("时间") || c.includes("日期"));
@@ -116,12 +118,13 @@ export function parseBankSheet(name: string, data: unknown[][]): ParsedSheet | n
       date, payee, acct, usd, cny,
       dealer: row.findIndex((c) => c.includes("投手")),
       rate: row.findIndex((c) => c.includes("汇率")),
+      counterparty: row.findIndex((c) => c.includes("对方")),
     };
     break;
   }
   if (headIdx < 0 || !cols || cols.cny < 0) return null;
 
-  interface RawRow { rowNo: number; m: number; d: number; y: number; payee: string; acct: string; cny: number | null; usd: number | null; note: string }
+  interface RawRow { rowNo: number; m: number; d: number; y: number; payee: string; acct: string; cny: number | null; usd: number | null; note: string; counterparty: string }
   const raw: RawRow[] = [];
   let skipped = 0;
   // D-290：按投手分摊的明细表判据 —— 到账行里「投手」「汇率」有值的比例
@@ -157,6 +160,7 @@ export function parseBankSheet(name: string, data: unknown[][]): ParsedSheet | n
       cny: cny != null ? cny : null,
       usd: cny == null ? usd : null, // 人民币列有值时以人民币为准
       note,
+      counterparty: cols.counterparty >= 0 ? String(row[cols.counterparty] ?? "").trim() : "",
     });
   }
   if (raw.length === 0) return null;
@@ -176,6 +180,7 @@ export function parseBankSheet(name: string, data: unknown[][]): ParsedSheet | n
     cny: r.cny,
     usd: r.usd,
     note: r.note,
+    counterparty: r.counterparty,
   }));
 
   // D-290：投手/汇率填满的是财务按人分摊的推导表（金额与真实到账差几分钱），不是银行流水
@@ -285,6 +290,8 @@ export interface ImportSplitPart {
   breakdown: ExistingBreakdownItem[];
   /** 该笔归属的人（预览展示用） */
   members: string[];
+  /** 该笔到账行的对方户名（D-292 备注用） */
+  counterparty: string;
 }
 
 export interface ImportProposal {
@@ -310,6 +317,8 @@ export interface ImportProposal {
   entryIds?: string[];
   /** D-290 split_existing：按银行到账拆出的子条目（合计 = 原条目金额） */
   parts?: ImportSplitPart[];
+  /** D-292：到账行的对方户名（上海汇 / 连连银通 …），入库写进条目备注 */
+  counterparty?: string;
 }
 
 interface Candidate {
@@ -337,18 +346,57 @@ const PLATFORM_CODE_RE = /\b(CG|BSH|RW|LH|LB|PM|MUI|EV|CF|DF)\b/gi;
 /** 标注里的数字与分隔符（金额、单号、括号等），抽词前一律去掉 */
 const NOTE_NOISE_RE = /[\s0-9.,;:%/\\_·、（）()[\]{}<>+*=&#@!?~"'`|^$—–-]+/g;
 
-function counterpartyTokens(note: string): Set<string> {
-  const cleaned = (note || "").replace(PLATFORM_CODE_RE, " ").replace(NOTE_NOISE_RE, " ");
-  return new Set(
-    cleaned.split(" ").map((t) => t.trim().toLowerCase()).filter((t) => t.length >= 2),
-  );
+/** 平台码集合：抽对方户名时这些词要剔掉（「上海汇（rw52.39）」这种连在数字上的靠分词后再滤一遍） */
+const PLATFORM_CODES = new Set(["CG", "BSH", "RW", "LH", "LB", "PM", "MUI", "EV", "CF", "DF"]);
+/**
+ * 财务偶尔把整句话写进标注（实证「实际发生日是3.4号」），这种不是户名。
+ * 含句子虚词的词一律不当户名用。
+ */
+const NOT_A_NAME_RE = /[是的了在与和还但因为所以号第行笔天]/;
+
+/** 标注里剩下的词 = 对方户名（上海汇 / 连连银通 / 易生 / YIWS …），保留原文 */
+function counterpartyWords(text: string): string[] {
+  const cleaned = (text || "").replace(PLATFORM_CODE_RE, " ").replace(NOTE_NOISE_RE, " ");
+  return cleaned
+    .split(" ")
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2 && !PLATFORM_CODES.has(t.toUpperCase()) && !NOT_A_NAME_RE.test(t));
+}
+
+/** 一行的对方户名词：有「对方户名」列就用那列，没有才从标注里抽 */
+function rowCounterpartyWords(r: { note: string; counterparty?: string }): string[] {
+  return counterpartyWords(r.counterparty || r.note);
+}
+
+function counterpartyTokens(r: { note: string; counterparty?: string }): Set<string> {
+  return new Set(rowCounterpartyWords(r).map((t) => t.toLowerCase()));
+}
+
+/**
+ * D-292（07 2026-08-27）：条目备注不写 sheet 名与行号，写对方户名 —— 财务对账时看的是
+ * 「这笔钱从上海汇还是连连银通来的」，sheet 名对他们没用。多行去重后用「、」连起来。
+ */
+export function counterpartyOf(rows: { note: string; counterparty?: string }[]): string {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const r of rows) {
+    // 有「对方户名」列时原样用（户名里带括号说明也照抄），否则用从标注里抽出来的词
+    const parts = r.counterparty ? [r.counterparty.trim()] : counterpartyWords(r.note);
+    for (const w of parts) {
+      const k = w.toLowerCase();
+      if (!w || seen.has(k)) continue;
+      seen.add(k);
+      out.push(w);
+    }
+  }
+  return out.join("、");
 }
 
 /** 两行的标注是否可能属于同一笔批次（见 counterpartyTokens） */
 export function notesCompatible(a: ParsedBankRow, b: ParsedBankRow): boolean {
-  const ta = counterpartyTokens(a.note);
+  const ta = counterpartyTokens(a);
   if (ta.size === 0) return true;
-  const tb = counterpartyTokens(b.note);
+  const tb = counterpartyTokens(b);
   if (tb.size === 0) return true;
   for (const t of ta) if (tb.has(t)) return true;
   return false;
@@ -520,6 +568,7 @@ function assignPartsByMember(e: ExistingEntry, rs: ParsedBankRow[]): ImportSplit
       sourceDate: dates[0] ?? null,
       breakdown: items,
       members: items.map((it) => it.displayName || it.username),
+      counterparty: counterpartyOf([r]),
     };
   });
 }
@@ -920,6 +969,9 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
       warnings: [],
     });
   }
+
+  // D-292：每条提案带上到账行的对方户名，入库写进备注
+  for (const p of proposals) p.counterparty = counterpartyOf(p.rows);
 
   // 展示顺序：到账日升序
   proposals.sort((a, b) => (a.txnDate || "").localeCompare(b.txnDate || "") || a.amount - b.amount);

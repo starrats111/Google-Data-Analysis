@@ -17,7 +17,7 @@ const METHOD_WISE: ImportMethod = { id: "9", payeeName: "张三", payChannel: "W
 const METHODS = [METHOD_BANK, METHOD_WISE];
 
 function row(i: number, date: string, cny: number): ParsedBankRow {
-  return { key: `s#${i}`, sheet: "s", rowNo: i + 2, date, payee: "张三", acct: METHOD_BANK.cardNo, cny, usd: null, note: "" };
+  return { key: `s#${i}`, sheet: "s", rowNo: i + 2, date, payee: "张三", acct: METHOD_BANK.cardNo, cny, usd: null, note: "", counterparty: "" };
 }
 
 /** 一条 PM 条目：3 人明细，费率 0.2823%（真实 6-16 那笔） */
