@@ -327,37 +327,93 @@ interface Candidate {
   rescued?: boolean;
 }
 
-/** 带容差子集和：在 items 中找合计落进 [target, target×(1+FEE_MAX)]（含轻微负差）的子集，返回费率最小解 */
+/**
+ * D-291（07 2026-08-27 反馈）：表格里的「平台 / 对方户名」标注是判断"这几笔到账是不是同一批"的硬信号 ——
+ * PM 的钱都从连连银通来，上海汇那笔不可能是同一批 PM。
+ * 从标注里抽掉平台码与数字后剩下的词（连连银通 / 上海汇 / 易生 / YIWS / 龚建成 …）做交集判定：
+ * 两行都有标注且完全不相交 → 不许凑成一笔批次；有一边没标注就不拦（财务经常漏填）。
+ */
+const PLATFORM_CODE_RE = /\b(CG|BSH|RW|LH|LB|PM|MUI|EV|CF|DF)\b/gi;
+/** 标注里的数字与分隔符（金额、单号、括号等），抽词前一律去掉 */
+const NOTE_NOISE_RE = /[\s0-9.,;:%/\\_·、（）()[\]{}<>+*=&#@!?~"'`|^$—–-]+/g;
+
+function counterpartyTokens(note: string): Set<string> {
+  const cleaned = (note || "").replace(PLATFORM_CODE_RE, " ").replace(NOTE_NOISE_RE, " ");
+  return new Set(
+    cleaned.split(" ").map((t) => t.trim().toLowerCase()).filter((t) => t.length >= 2),
+  );
+}
+
+/** 两行的标注是否可能属于同一笔批次（见 counterpartyTokens） */
+export function notesCompatible(a: ParsedBankRow, b: ParsedBankRow): boolean {
+  const ta = counterpartyTokens(a.note);
+  if (ta.size === 0) return true;
+  const tb = counterpartyTokens(b.note);
+  if (tb.size === 0) return true;
+  for (const t of ta) if (tb.has(t)) return true;
+  return false;
+}
+
+/**
+ * 带容差子集和：在 items 中找合计落进 [target, target×(1+FEE_MAX)]（含轻微负差）的子集，返回费率最小解。
+ *
+ * D-291（07 2026-08-27 反馈）分层搜索：先只在单个批次（平台×批次日）里找，找不到再放宽到单个平台，
+ * 最后才是全池。原来直接全池搜最低费率，会把别的批次的人凑进来——实测 8-12 到账 ¥8,370.44 被凑成
+ * 「PM 8-12 + PM 8-20 + RW 8-24」四个人 0.08%，把 8-20 那笔的钱吃掉，剩下的人又跟毫不相干的
+ * 上海汇到账凑成一笔。同一笔银行到账绝大多数就是一个批次，跨批次只能是兜底。
+ */
 function bestSubset(
-  items: { key: string; amt: number }[],
+  items: { key: string; amt: number; batch?: string; platform?: string }[],
   target: number,
 ): { keys: string[]; sum: number; fee: number } | null {
-  const sorted = [...items].sort((a, b) => b.amt - a.amt);
-  const n = sorted.length;
-  const suffix = new Array<number>(n + 1).fill(0);
-  for (let i = n - 1; i >= 0; i--) suffix[i] = suffix[i + 1] + sorted[i].amt;
-  const lo = target * (1 + FEE_MIN);
-  const hi = target / (1 - FEE_MAX);
-  let best: { keys: string[]; sum: number; fee: number } | null = null;
-  let budget = DFS_BUDGET;
-  const picked: number[] = [];
-  const dfs = (i: number, sum: number) => {
-    if (budget-- <= 0) return;
-    if (sum >= lo && sum <= hi && picked.length > 0) {
-      const fee = (sum - target) / sum;
-      if (fee >= FEE_MIN && fee <= FEE_MAX && (!best || Math.abs(fee) < Math.abs(best.fee))) {
-        best = { keys: picked.map((p) => sorted[p].key), sum: r2(sum), fee };
+  const search = (list: { key: string; amt: number }[]): { keys: string[]; sum: number; fee: number } | null => {
+    const sorted = [...list].sort((a, b) => b.amt - a.amt);
+    const n = sorted.length;
+    const suffix = new Array<number>(n + 1).fill(0);
+    for (let i = n - 1; i >= 0; i--) suffix[i] = suffix[i + 1] + sorted[i].amt;
+    const lo = target * (1 + FEE_MIN);
+    const hi = target / (1 - FEE_MAX);
+    let best: { keys: string[]; sum: number; fee: number } | null = null;
+    let budget = DFS_BUDGET;
+    const picked: number[] = [];
+    const dfs = (i: number, sum: number) => {
+      if (budget-- <= 0) return;
+      if (sum >= lo && sum <= hi && picked.length > 0) {
+        const fee = (sum - target) / sum;
+        if (fee >= FEE_MIN && fee <= FEE_MAX && (!best || Math.abs(fee) < Math.abs(best.fee))) {
+          best = { keys: picked.map((p) => sorted[p].key), sum: r2(sum), fee };
+        }
       }
-    }
-    if (i >= n || sum > hi || sum + suffix[i] < lo) return;
-    if (best && Math.abs(best.fee) < 0.0001) return; // 已找到近乎精确解
-    picked.push(i);
-    dfs(i + 1, sum + sorted[i].amt);
-    picked.pop();
-    dfs(i + 1, sum);
+      if (i >= n || sum > hi || sum + suffix[i] < lo) return;
+      if (best && Math.abs(best.fee) < 0.0001) return; // 已找到近乎精确解
+      picked.push(i);
+      dfs(i + 1, sum + sorted[i].amt);
+      picked.pop();
+      dfs(i + 1, sum);
+    };
+    dfs(0, 0);
+    return best;
   };
-  dfs(0, 0);
-  return best;
+
+  /** 按 keyOf 分组各搜一遍，取费率最小的组解 */
+  const byGroup = (keyOf: (it: { batch?: string; platform?: string }) => string | undefined) => {
+    const groups = new Map<string, typeof items>();
+    for (const it of items) {
+      const g = keyOf(it);
+      if (g == null) return null; // 没有分组信息（既有条目明细等场景）→ 直接走全池
+      const arr = groups.get(g) ?? [];
+      arr.push(it);
+      groups.set(g, arr);
+    }
+    let best: { keys: string[]; sum: number; fee: number } | null = null;
+    for (const arr of groups.values()) {
+      const hit = search(arr);
+      if (hit && (!best || Math.abs(hit.fee) < Math.abs(best.fee))) best = hit;
+    }
+    return best;
+  };
+
+  return byGroup((it) => it.batch) ?? byGroup((it) => it.platform) ?? search(items);
 }
 
 /**
@@ -365,7 +421,7 @@ function bestSubset(
  * 与 bestSubset 方向相反：这里手续费 = (批次额 − 到账合计) / 批次额。
  */
 function bestRowGroup(
-  rows: { key: string; amt: number; date: string }[],
+  rows: { key: string; amt: number; date: string; row: ParsedBankRow }[],
   target: number,
 ): { keys: string[]; sum: number; fee: number } | null {
   const sorted = [...rows].sort((a, b) => b.amt - a.amt);
@@ -386,9 +442,12 @@ function bestRowGroup(
       }
     }
     if (i >= n || picked.length >= 8 || sum > hi || sum + suffix[i] < lo) return;
-    picked.push(i);
-    dfs(i + 1, sum + sorted[i].amt);
-    picked.pop();
+    // D-291：标注互斥的行（PM/连连银通 vs 上海汇）不许凑成同一批
+    if (picked.every((pi) => notesCompatible(sorted[pi].row, sorted[i].row))) {
+      picked.push(i);
+      dfs(i + 1, sum + sorted[i].amt);
+      picked.pop();
+    }
     dfs(i + 1, sum);
   };
   dfs(0, 0);
@@ -614,9 +673,12 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
       if (hit || budget-- <= 0) return;
       if (picked.length >= 2 && Math.abs(sum - e.amount) <= 0.05) { hit = picked.map((p) => sorted[p]); return; }
       if (i >= sorted.length || sum > e.amount + 0.05 || sum + suffix[i] < e.amount - 0.05) return;
-      picked.push(i);
-      dfs(i + 1, sum + (sorted[i].cny ?? 0));
-      picked.pop();
+      // D-291：标注互斥的行不许凑成同一条既有条目
+      if (picked.every((pi) => notesCompatible(sorted[pi], sorted[i]))) {
+        picked.push(i);
+        dfs(i + 1, sum + (sorted[i].cny ?? 0));
+        picked.pop();
+      }
       dfs(i + 1, sum);
     };
     dfs(0, 0);
@@ -679,7 +741,7 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
           const target = isUsd ? r.usd! : r.cny!;
           const items = mp
             .filter((p) => (isUsd ? p.usd : p.cny) > 0.005)
-            .map((p) => ({ key: `${m.id}\u0000${p.paymentKey}`, amt: isUsd ? p.usd : p.cny }));
+            .map((p) => ({ key: `${m.id}\u0000${p.paymentKey}`, amt: isUsd ? p.usd : p.cny, batch: `${p.platform}|${p.date}`, platform: p.platform }));
           if (items.length === 0) continue;
           const best = bestSubset(items, target);
           if (best) {
@@ -729,7 +791,7 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
             const cands = candidateMethodsOf(r).filter((c) => c.tier === tier);
             return cands.some((c) => c.m.id === b.methodId);
           })
-          .map((r) => ({ key: r.key, amt: r.cny!, date: r.date }));
+          .map((r) => ({ key: r.key, amt: r.cny!, date: r.date, row: r }));
         if (groupRows.length < 2) continue;
         const best = bestRowGroup(groupRows, b.cny);
         if (best && best.keys.length >= 2) {
