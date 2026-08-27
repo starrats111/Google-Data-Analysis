@@ -169,6 +169,85 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
     return apiSuccess(null, "期初余额已保存");
   }
 
+  // D-290（07 2026-08-27 拍板）：一条条目按银行实际到账拆成多笔
+  // { kind:"split_entry", id, parts:[{ txnAt, amount, breakdown, sourceDate }] }
+  // 场景：平台把一批打款分开汇款（如 PM 6-16 分 413.03 + 46,180.05），银行流水是两笔、
+  // 系统当初录成一条。拆分 = 软删原条目 + 按各笔重建，一个事务内完成，避免中途失败对不上账。
+  // （WISE 那种「平台一笔打款、我们分批回款」不走这里，保持一条。）
+  if (body.kind === "split_entry") {
+    const entryWhere = await scopeEntryWhere(scope);
+    const src = await prisma.bank_flow_entries.findFirst({
+      where: { id: BigInt(body.id || 0), ...entryWhere, is_deleted: 0 },
+    });
+    if (!src) return apiError("流水记录不存在");
+    if (src.txn_group) return apiError("该条目是按平台拆分（C-180）的组，请先手工处理");
+    const rawParts = Array.isArray(body.parts) ? body.parts : [];
+    if (rawParts.length < 2) return apiError("至少要拆成 2 笔");
+    if (rawParts.length > 20) return apiError("拆分笔数过多");
+
+    interface ParsedPart { txnAt: Date; month: string; amount: number; sourceDate: string | null; items: BankFlowBreakdownItem[] }
+    const parts: ParsedPart[] = [];
+    for (const raw of rawParts) {
+      const d = new Date(raw?.txnAt);
+      if (isNaN(d.getTime())) return apiError("拆分的到账时间无效");
+      const amt = Number(raw?.amount);
+      if (!isFinite(amt) || amt < 0 || amt > 999999999) return apiError("拆分的到账金额无效");
+      const sd = raw?.sourceDate == null ? null : String(raw.sourceDate);
+      if (sd != null && !/^\d{4}-\d{2}-\d{2}$/.test(sd)) return apiError("sourceDate 格式必须为 YYYY-MM-DD");
+      const bd = parseBreakdown(raw?.breakdown ?? []);
+      if (!bd || bd.items.length === 0) return apiError("拆分的员工明细格式无效");
+      parts.push({ txnAt: d, month: d.toISOString().slice(0, 7), amount: r2(amt), sourceDate: sd, items: bd.items });
+    }
+    // 拆完必须与原条目对得上：到账合计 = 原到账，明细合计 = 原明细合计（一分钱都不许丢）
+    const sumAmount = r2(parts.reduce((t, p) => t + p.amount, 0));
+    const sumExpected = r2(parts.reduce((t, p) => t + p.items.reduce((s, it) => s + (it.amount || 0), 0), 0));
+    if (Math.abs(sumAmount - Number(src.amount)) > 0.05) {
+      return apiError(`拆分后到账合计 ¥${sumAmount.toFixed(2)} 与原条目 ¥${Number(src.amount).toFixed(2)} 对不上`);
+    }
+    if (Math.abs(sumExpected - Number(src.expected_amount)) > 0.05) {
+      return apiError(`拆分后明细合计 ¥${sumExpected.toFixed(2)} 与原条目 ¥${Number(src.expected_amount).toFixed(2)} 对不上`);
+    }
+
+    const srcDay = src.txn_at.toISOString().slice(0, 10);
+    const created = await prisma.$transaction(async (tx) => {
+      await tx.bank_flow_entries.update({ where: { id: src.id }, data: { is_deleted: 1 } });
+      const rows = [];
+      for (const p of parts) {
+        // 每笔内部仍可能混平台 → 沿用 C-180 按平台拆，组内共享 txn_group
+        const groups = splitByPlatform(absorbIntoItems(p.items, p.amount), p.amount, src.platform, p.sourceDate);
+        if (groups.some((g) => !/^[A-Z]{2,8}$/.test(g.platform))) throw new Error("明细行 platform 无效");
+        const txnGroup = groups.length > 1 ? newTxnGroup() : null;
+        for (const g of groups) {
+          rows.push(await tx.bank_flow_entries.create({
+            data: {
+              team_id: src.team_id,
+              month: p.month,
+              payment_method_id: src.payment_method_id,
+              txn_at: p.txnAt,
+              platform: g.platform,
+              txn_group: txnGroup,
+              source_date: g.sourceDate ? new Date(`${g.sourceDate}T00:00:00Z`) : null,
+              counterparty: src.counterparty,
+              summary: src.summary,
+              amount: g.amount,
+              currency: src.currency,
+              expected_amount: g.expected,
+              fee: g.fee,
+              breakdown: JSON.stringify(g.items),
+              remark: `${src.remark ? `${src.remark}；` : ""}D-290 按银行到账拆分（原 ${srcDay} ¥${Number(src.amount).toFixed(2)}）`.slice(0, 255),
+              created_by: BigInt(user.userId),
+            },
+          }));
+        }
+      }
+      return rows;
+    });
+    return apiSuccess(
+      created.map(serializeEntry),
+      `已按银行到账拆成 ${created.length} 条：${parts.map((p) => `${p.txnAt.toISOString().slice(0, 10)} ¥${p.amount.toFixed(2)}`).join(" + ")}`,
+    );
+  }
+
   const { month, paymentMethodId, platform, txnAt, amount, currency, counterparty, summary, remark, breakdown, sourceDate } = body;
   if (sourceDate != null && !/^\d{4}-\d{2}-\d{2}$/.test(String(sourceDate))) return apiError("sourceDate 格式必须为 YYYY-MM-DD");
   if (!/^\d{4}-\d{2}$/.test(month || "")) return apiError("month 格式必须为 YYYY-MM");
@@ -247,6 +326,9 @@ export const PUT = withUser(async (req: NextRequest, { user }) => {
     const d = new Date(body.txnAt);
     if (isNaN(d.getTime())) return apiError("到账时间无效");
     data.txn_at = d;
+    // D-290：改到账日跨月时 month 跟着走，否则条目会留在原月份的表里（月度/年度导出都按 month 取数）
+    const ym = d.toISOString().slice(0, 7);
+    if (ym !== existing.month) data.month = ym;
   }
   if (body.platform !== undefined) {
     if (typeof body.platform !== "string" || !/^[A-Z]{2,8}$/.test(body.platform)) return apiError("platform 无效");

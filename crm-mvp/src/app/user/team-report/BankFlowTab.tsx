@@ -101,8 +101,18 @@ interface ImportRowView {
   note: string;
 }
 
+/** D-290：按银行到账拆开既有条目时的一条子条目 */
+interface ImportSplitPartView {
+  txnDate: string;
+  amount: number;
+  platform: string;
+  sourceDate: string | null;
+  breakdown: BreakdownItem[];
+  members: string[];
+}
+
 interface ImportProposalView {
-  status: "auto" | "review" | "exists" | "unmatched" | "usd" | "no_method";
+  status: "auto" | "review" | "exists" | "unmatched" | "usd" | "no_method" | "date_fix" | "split_existing";
   rows: ImportRowView[];
   methodId: string | null;
   methodLabel: string | null;
@@ -117,6 +127,16 @@ interface ImportProposalView {
   feeRate: number | null;
   matchNote: string;
   warnings: string[];
+  /** D-290 date_fix / split_existing：要改动的既有条目 id */
+  entryIds?: string[];
+  /** D-290 split_existing：拆出的子条目 */
+  parts?: ImportSplitPartView[];
+}
+
+interface ImportSkippedSheetView {
+  name: string;
+  rowCount: number;
+  reason: string;
 }
 
 interface ImportSheetView {
@@ -130,6 +150,8 @@ interface ImportSheetView {
 const IMPORT_STATUS_META: Record<ImportProposalView["status"], { label: string; color: string; importable: boolean }> = {
   auto: { label: "可自动入账", color: "green", importable: true },
   review: { label: "命中·需复核", color: "orange", importable: true },
+  date_fix: { label: "校正到账日", color: "gold", importable: true },
+  split_existing: { label: "按银行拆分", color: "purple", importable: true },
   exists: { label: "已录过", color: "default", importable: false },
   usd: { label: "美金行·暂不导入", color: "blue", importable: false },
   unmatched: { label: "对不上", color: "red", importable: false },
@@ -165,6 +187,8 @@ export default function BankFlowTab() {
   // D-279 导入财务月表
   const [importParsing, setImportParsing] = useState(false);
   const [importSheets, setImportSheets] = useState<ImportSheetView[] | null>(null);
+  /** D-290：被判定为「按投手分摊明细表」而跳过的 sheet（如实告知，避免以为漏读） */
+  const [importSkipped, setImportSkipped] = useState<ImportSkippedSheetView[]>([]);
   const [importSheetName, setImportSheetName] = useState<string>("");
   const [importSelected, setImportSelected] = useState<string[]>([]);
   const [importing, setImporting] = useState(false);
@@ -456,10 +480,10 @@ export default function BankFlowTab() {
         return;
       }
       const sheets = res.data.sheets as ImportSheetView[];
+      setImportSkipped((res.data.skippedSheets ?? []) as ImportSkippedSheetView[]);
       // 默认选中：可导入提案最多的 sheet（财务工作簿常含逐人/逐笔两张冗余视图）
-      const best = [...sheets].sort(
-        (a, b) => (b.stats.auto + b.stats.review) - (a.stats.auto + a.stats.review),
-      )[0];
+      const todo = (x: ImportSheetView) => x.stats.auto + x.stats.review + x.stats.date_fix + x.stats.split_existing;
+      const best = [...sheets].sort((a, b) => todo(b) - todo(a))[0];
       setImportSheets(sheets);
       setImportSheetName(best.name);
       setImportSelected(
@@ -499,22 +523,53 @@ export default function BankFlowTab() {
       for (const p of chosen) {
         const label = `${p.txnDate} ¥${fmt(p.amount)}`;
         try {
-          const res = await fetch("/api/user/team/report/bank-flow", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              month: (p.txnDate || "").slice(0, 7),
-              paymentMethodId: p.methodId,
-              platform: p.platform,
-              txnAt: dayjs(`${p.txnDate} 10:00`).toISOString(),
-              amount: p.amount,
-              counterparty: "",
-              summary: "佣金结算",
-              remark: `导入财务月表：${importCurrentSheet.name} 第${p.rows.map((r) => r.rowNo).join("/")}行`,
-              breakdown: p.breakdown,
-              sourceDate: p.sourceDate,
-            }),
-          }).then((r) => r.json());
+          let res: { code: number; message?: string };
+          if (p.status === "date_fix") {
+            // D-290：金额已对上，只把登记日改成银行流水的到账日（≤5 天以银行为准）
+            const ids = p.entryIds ?? [];
+            res = { code: 0 };
+            for (const id of ids) {
+              const r = await fetch("/api/user/team/report/bank-flow", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ id, txnAt: dayjs(`${p.txnDate} 10:00`).toISOString() }),
+              }).then((r) => r.json());
+              if (r.code !== 0) { res = r; break; }
+            }
+          } else if (p.status === "split_existing") {
+            // D-290：原条目按银行的分笔拆开（软删原条目 + 重建，服务端一个事务）
+            res = await fetch("/api/user/team/report/bank-flow", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                kind: "split_entry",
+                id: (p.entryIds ?? [])[0],
+                parts: (p.parts ?? []).map((part) => ({
+                  txnAt: dayjs(`${part.txnDate} 10:00`).toISOString(),
+                  amount: part.amount,
+                  breakdown: part.breakdown,
+                  sourceDate: part.sourceDate,
+                })),
+              }),
+            }).then((r) => r.json());
+          } else {
+            res = await fetch("/api/user/team/report/bank-flow", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                month: (p.txnDate || "").slice(0, 7),
+                paymentMethodId: p.methodId,
+                platform: p.platform,
+                txnAt: dayjs(`${p.txnDate} 10:00`).toISOString(),
+                amount: p.amount,
+                counterparty: "",
+                summary: "佣金结算",
+                remark: `导入财务月表：${importCurrentSheet.name} 第${p.rows.map((r) => r.rowNo).join("/")}行`,
+                breakdown: p.breakdown,
+                sourceDate: p.sourceDate,
+              }),
+            }).then((r) => r.json());
+          }
           if (res.code === 0) ok++;
           else failed.push(`${label}：${res.message || "保存失败"}`);
         } catch {
@@ -525,7 +580,7 @@ export default function BankFlowTab() {
       setImporting(false);
     }
     if (failed.length === 0) {
-      message.success(`已入账 ${ok} 条（跨月的行已各自记入所属月份）`);
+      message.success(`已处理 ${ok} 条（新增入账 / 校正到账日 / 按银行拆分，跨月的行各自记入所属月份）`);
       setImportSheets(null);
       fetchAll();
     } else {
@@ -1103,7 +1158,7 @@ export default function BankFlowTab() {
                 onChange={switchImportSheet}
                 options={importSheets.map((s) => ({
                   value: s.name,
-                  label: `${s.name}（${s.rowCount} 笔，可入账 ${s.stats.auto + s.stats.review}）`,
+                  label: `${s.name}（${s.rowCount} 笔，待处理 ${s.stats.auto + s.stats.review + s.stats.date_fix + s.stats.split_existing}）`,
                 }))}
               />
               <Text type="secondary" style={{ fontSize: 12 }}>
@@ -1120,9 +1175,24 @@ export default function BankFlowTab() {
                   按金额比对打款记录自动认账（不依赖表格平台标注）：整批到账、多人合并打款、一批拆多笔、跨平台合并提现都会自动识别。
                   「可自动入账」默认勾选；「需复核」的行请点开明细核对后再勾；对不上的行请用「登记平台打款」手工处理；
                   美金账户行本期不自动入账。手续费入库时按既有规则自动计算，多平台明细自动拆分（带「合」标记）。
+                  <br />
+                  「校正到账日」= 金额已对上、登记日与银行差 ≤5 天，勾选后把登记日改成银行流水的日期（差更多的按实际到账时间保留现值）；
+                  「按银行拆分」= 银行分多笔到账、系统录成一条，勾选后按明细净额把人落到各笔上重建（WISE 那种一笔打款分批回款保持一条不拆）。
+                  这两类会改动已有条目，默认不勾，请点开逐笔核对后再勾。
                 </Text>
               }
             />
+            {importSkipped.length > 0 && (
+              <Alert
+                type="warning" showIcon
+                message={
+                  <Text style={{ fontSize: 12 }}>
+                    已跳过 {importSkipped.length} 张非流水表：
+                    {importSkipped.map((s) => `${s.name}（${s.rowCount} 行，${s.reason}）`).join("；")}
+                  </Text>
+                }
+              />
+            )}
             <Table<ImportProposalView>
               dataSource={importCurrentSheet.proposals}
               rowKey={(_, i) => String(i)}
@@ -1135,10 +1205,33 @@ export default function BankFlowTab() {
                 getCheckboxProps: (p) => ({ disabled: !IMPORT_STATUS_META[p.status].importable }),
               }}
               expandable={{
-                rowExpandable: (p) => p.breakdown.length > 0 || p.warnings.length > 0,
+                rowExpandable: (p) => p.breakdown.length > 0 || p.warnings.length > 0 || (p.parts?.length ?? 0) > 0,
                 expandedRowRender: (p) => (
                   <Space direction="vertical" size={8} style={{ width: "100%" }}>
                     {p.warnings.map((w, i) => <Alert key={i} type="warning" showIcon message={<Text style={{ fontSize: 12 }}>{w}</Text>} />)}
+                    {(p.parts ?? []).map((part, pi) => (
+                      <Table<BreakdownItem>
+                        key={pi}
+                        title={() => (
+                          <Text strong style={{ fontSize: 12 }}>
+                            第 {pi + 1} 笔：{part.txnDate} 到账 ¥{fmt(part.amount)}
+                            <Tag color="green" style={{ marginInlineStart: 8 }}>{part.platform}</Tag>
+                          </Text>
+                        )}
+                        columns={[
+                          { title: "组员", key: "m", width: 100, render: (_, b) => b.displayName || b.username },
+                          { title: "平台", dataIndex: "platform", width: 64, render: (v: string) => <Tag color="green">{v}</Tag> },
+                          { title: "平台账号", dataIndex: "account", ellipsis: true },
+                          { title: "批次日", dataIndex: "sourceDate", width: 100, render: (v: string | null) => v || "—" },
+                          { title: "明细金额(¥)", dataIndex: "amount", width: 120, align: "right", render: (v: number) => `¥${fmt(v)}` },
+                        ]}
+                        dataSource={part.breakdown}
+                        rowKey={(b, i) => `${pi}-${b.userId}-${b.account}-${i}`}
+                        size="small"
+                        pagination={false}
+                        bordered
+                      />
+                    ))}
                     {p.breakdown.length > 0 && (
                       <Table<BreakdownItem>
                         columns={[

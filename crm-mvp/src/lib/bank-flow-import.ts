@@ -15,6 +15,14 @@
  * - 手续费率容差 [FEE_MIN, FEE_MAX]（实测 WISE 大额批费率 2.08%，故上限 2.5%）；
  *   费率 >REVIEW_FEE 的命中标 review，绝不静默；
  * - 对不上的行如实返回 unmatched，不猜着入账（数据真实性规范）。
+ *
+ * D-290（07 2026-08-27 拍板）三项补充：
+ * - 工作簿里「按投手分摊」的那张明细表（投手/汇率两列都填满）不是银行流水，解析成 detail sheet 不参与匹配
+ *   （实证：2-5 月工作簿第一张 351.09011 与真表 351.14 只差几分钱，混进来会串账）；
+ * - 既有条目登记日与银行差 ≤DATE_FIX_MAX_DAYS 天 → 出「校正到账日」提案，差更多 → 保留现值只跳过；
+ * - 银行分多笔到账、合计等于某个既有条目时：WISE 卡是「平台一笔打款、我们分批回款」保持一条不拆；
+ *   其余（平台自己分开汇款，如 PM）按明细净额把人精确落到各笔上，出「按银行拆分」提案，
+ *   落不到人就如实跳过请人工处理，绝不按比例硬摊。
  */
 
 export const IMPORT_WINDOW_DAYS = 14;
@@ -26,6 +34,11 @@ export const SPLIT_WINDOW_DAYS = 14;
  * 捞到的入账日按库内打款日（不是表格日期），必标 review 请 07 复核。
  */
 export const RESCUE_WINDOW_DAYS = 45;
+/**
+ * D-290（07 2026-08-27 拍板）：既有条目的登记日与银行流水相差 ≤5 天的以银行为准（给校正提案），
+ * 差太多的以实际到账时间为准（保留库内现值，只跳过）——实证 3/19 那三笔表格写错，实际 3/31 到账。
+ */
+export const DATE_FIX_MAX_DAYS = 5;
 const FEE_MIN = -0.0015; // 汇差可造成轻微负手续费（D-274 实证 −0.03%）
 const FEE_MAX = 0.025;
 const REVIEW_FEE = 0.015;
@@ -63,7 +76,17 @@ export interface ParsedSheet {
   rows: ParsedBankRow[];
   /** 无法解析成到账行的非空行数（合计行/散落备注等，正常现象） */
   skipped: number;
+  /**
+   * D-290：flow = 银行流水表；detail = 按投手分摊的明细表（不是银行到账，不参与匹配）。
+   * 判据见 DETAIL_COL_RATIO。
+   */
+  kind: "flow" | "detail";
+  /** detail 时的判定说明（预览里告诉 07 为什么跳过这张） */
+  detailReason?: string;
 }
+
+/** 「投手」「汇率」列在多数行都有值 → 这张是按人分摊的明细表，不是银行流水 */
+const DETAIL_COL_RATIO = 0.6;
 
 const parseNum = (s: unknown): number | null => {
   const v = parseFloat(String(s ?? "").replace(/[,\s￥¥$]/g, ""));
@@ -79,7 +102,7 @@ export function parseBankSheet(name: string, data: unknown[][]): ParsedSheet | n
   if (!data || data.length < 2) return null;
   // 表头行：出现「时间」和「户名」类列名的第一行
   let headIdx = -1;
-  let cols: { date: number; payee: number; acct: number; usd: number; cny: number } | null = null;
+  let cols: { date: number; payee: number; acct: number; usd: number; cny: number; dealer: number; rate: number } | null = null;
   for (let i = 0; i < Math.min(data.length, 5); i++) {
     const row = (data[i] || []).map((c) => String(c ?? "").trim());
     const date = row.findIndex((c) => c.includes("时间") || c.includes("日期"));
@@ -89,7 +112,11 @@ export function parseBankSheet(name: string, data: unknown[][]): ParsedSheet | n
     const usd = row.findIndex((c) => c.includes("美金") || c.toUpperCase().includes("USD"));
     const cny = row.findIndex((c) => c.includes("人民币") || c.toUpperCase().includes("CNY"));
     headIdx = i;
-    cols = { date, payee, acct, usd, cny };
+    cols = {
+      date, payee, acct, usd, cny,
+      dealer: row.findIndex((c) => c.includes("投手")),
+      rate: row.findIndex((c) => c.includes("汇率")),
+    };
     break;
   }
   if (headIdx < 0 || !cols || cols.cny < 0) return null;
@@ -97,6 +124,9 @@ export function parseBankSheet(name: string, data: unknown[][]): ParsedSheet | n
   interface RawRow { rowNo: number; m: number; d: number; y: number; payee: string; acct: string; cny: number | null; usd: number | null; note: string }
   const raw: RawRow[] = [];
   let skipped = 0;
+  // D-290：按投手分摊的明细表判据 —— 到账行里「投手」「汇率」有值的比例
+  let dealerFilled = 0;
+  let rateFilled = 0;
   for (let i = headIdx + 1; i < data.length; i++) {
     const row = data[i] || [];
     const dateMatch = String(row[cols.date] ?? "").trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
@@ -115,6 +145,8 @@ export function parseBankSheet(name: string, data: unknown[][]): ParsedSheet | n
       .map(({ c }) => String(c).trim())
       .filter((t) => !/^[\d,.\s]+$/.test(t)) // 纯数字（右侧合计等散落数字）不进标注
       .join(" / ");
+    if (cols.dealer >= 0 && String(row[cols.dealer] ?? "").trim() !== "") dealerFilled++;
+    if (cols.rate >= 0 && String(row[cols.rate] ?? "").trim() !== "") rateFilled++;
     raw.push({
       rowNo: i + 1,
       m: parseInt(dateMatch[1], 10),
@@ -145,7 +177,17 @@ export function parseBankSheet(name: string, data: unknown[][]): ParsedSheet | n
     usd: r.usd,
     note: r.note,
   }));
-  return { name, rows, skipped };
+
+  // D-290：投手/汇率填满的是财务按人分摊的推导表（金额与真实到账差几分钱），不是银行流水
+  const dealerRatio = dealerFilled / raw.length;
+  const rateRatio = rateFilled / raw.length;
+  if (dealerRatio >= DETAIL_COL_RATIO || rateRatio >= DETAIL_COL_RATIO) {
+    const why = dealerRatio >= DETAIL_COL_RATIO
+      ? `「投手」列 ${dealerFilled}/${raw.length} 行有值`
+      : `「汇率」列 ${rateFilled}/${raw.length} 行有值`;
+    return { name, rows, skipped, kind: "detail", detailReason: `${why}，判定为按人分摊的明细表，不参与流水匹配` };
+  }
+  return { name, rows, skipped, kind: "flow" };
 }
 
 // ── 收款卡归属 ────────────────────────────────────────────────────────────────
@@ -223,8 +265,30 @@ export interface MatchedBreakdownItem {
   sourceDate: string;
 }
 
+/** 既有条目的明细行（库内 breakdown，老条目可能没有 sourceDate） */
+export interface ExistingBreakdownItem {
+  userId: string;
+  username: string;
+  displayName: string;
+  platform: string;
+  account: string;
+  amount: number;
+  sourceDate?: string | null;
+}
+
+/** D-290：既有条目按银行到账拆出的一条子条目 */
+export interface ImportSplitPart {
+  txnDate: string;
+  amount: number;
+  platform: string;
+  sourceDate: string | null;
+  breakdown: ExistingBreakdownItem[];
+  /** 该笔归属的人（预览展示用） */
+  members: string[];
+}
+
 export interface ImportProposal {
-  status: "auto" | "review" | "exists" | "unmatched" | "usd" | "no_method";
+  status: "auto" | "review" | "exists" | "unmatched" | "usd" | "no_method" | "date_fix" | "split_existing";
   /** 组成本条目的到账行（L4 拆分时多行） */
   rows: ParsedBankRow[];
   methodId: string | null;
@@ -242,6 +306,10 @@ export interface ImportProposal {
   /** 命中层级说明（预览展示） */
   matchNote: string;
   warnings: string[];
+  /** D-290 date_fix / split_existing：要改动的既有条目 id（C-180 同组给组内全部 id） */
+  entryIds?: string[];
+  /** D-290 split_existing：按银行到账拆出的子条目（合计 = 原条目金额） */
+  parts?: ImportSplitPart[];
 }
 
 interface Candidate {
@@ -338,8 +406,85 @@ export interface MatchInput {
    * 命中的打款单不再参与匹配（与 prefill/candidates 防重复口径一致）
    */
   usedBatchKeys: Set<string>;
-  /** 既有条目（本口径全部未删），用于「已录过」判定 */
-  existingEntries: { methodId: string; amount: number; txnDate: string }[];
+  /** 既有条目（本口径全部未删），用于「已录过」判定与 D-290 的校正日期/按银行拆分提案 */
+  existingEntries: ExistingEntry[];
+}
+
+/** 既有条目（C-180 同 txn_group 的多条按组合并成一项，ids 给组内全部 id） */
+export interface ExistingEntry {
+  ids: string[];
+  methodId: string;
+  /** 收款方式渠道：WISE = 平台一笔打款、我们分批回款（07 2026-08-27：不拆） */
+  payChannel: string;
+  amount: number;
+  txnDate: string;
+  expected: number;
+  fee: number;
+  breakdown: ExistingBreakdownItem[];
+  /** C-180 组条目已按平台拆过，不再按银行拆 */
+  splittable: boolean;
+}
+
+const isTrancheChannel = (ch: string) => /WISE/i.test(ch || "");
+
+/**
+ * D-290：把既有条目的明细按「净额」精确分配到银行的各笔到账上。
+ * 净额 = 明细金额 × (1 − 条目费率)，实证 6/16 PM（413.03 = 蓝晨馨）与 8/12 PM 都能整除到人。
+ * 有一笔落不到人就整体返回 null —— 宁可跳过请人工处理，也不按比例硬摊（数据真实性规范）。
+ */
+function assignPartsByMember(e: ExistingEntry, rs: ParsedBankRow[]): ImportSplitPart[] | null {
+  if (e.breakdown.length === 0) return null;
+  const feeRate = e.expected > 0 ? e.fee / e.expected : 0;
+  const nets = e.breakdown.map((it) => r2((it.amount || 0) * (1 - feeRate)));
+  const remaining = new Set(e.breakdown.map((_, i) => i));
+  const picks = new Map<string, number[]>();
+  // 金额大的先认领：小额行更容易被子集凑出来，先认大额可减少歧义
+  for (const r of [...rs].sort((a, b) => (b.cny ?? 0) - (a.cny ?? 0))) {
+    if (r.cny == null) return null;
+    const pool = [...remaining].map((i) => ({ key: String(i), amt: nets[i] }));
+    // 每行净额各带 ≤0.005 的四舍五入误差，容差随参与行数放宽
+    const hit = exactSubset(pool, r.cny, Math.max(0.05, 0.011 * pool.length));
+    if (!hit) return null;
+    for (const k of hit) remaining.delete(Number(k));
+    picks.set(r.key, hit.map(Number));
+  }
+  if (remaining.size > 0) return null; // 有人没被任何一笔认领 → 落不到人
+  return rs.map((r) => {
+    const items = picks.get(r.key)!.map((i) => e.breakdown[i]);
+    const platSum = new Map<string, number>();
+    for (const it of items) platSum.set(it.platform, (platSum.get(it.platform) ?? 0) + (it.amount || 0));
+    const dates = [...new Set(items.map((it) => it.sourceDate || "").filter(Boolean))].sort();
+    return {
+      txnDate: r.date,
+      amount: r2(r.cny!),
+      platform: [...platSum.entries()].sort((a, b) => b[1] - a[1])[0][0],
+      sourceDate: dates[0] ?? null,
+      breakdown: items,
+      members: items.map((it) => it.displayName || it.username),
+    };
+  });
+}
+
+/** 精确子集和（目标 ±tol），用于把明细净额落到银行的某一笔到账上 */
+function exactSubset(items: { key: string; amt: number }[], target: number, tol: number): string[] | null {
+  const sorted = [...items].sort((a, b) => b.amt - a.amt);
+  const n = sorted.length;
+  const suffix = new Array<number>(n + 1).fill(0);
+  for (let i = n - 1; i >= 0; i--) suffix[i] = suffix[i + 1] + sorted[i].amt;
+  let hit: string[] | null = null;
+  let budget = DFS_BUDGET;
+  const picked: number[] = [];
+  const dfs = (i: number, sum: number) => {
+    if (hit || budget-- <= 0) return;
+    if (picked.length > 0 && Math.abs(sum - target) <= tol) { hit = picked.map((p) => sorted[p].key); return; }
+    if (i >= n || sum > target + tol || sum + suffix[i] < target - tol) return;
+    picked.push(i);
+    dfs(i + 1, sum + sorted[i].amt);
+    picked.pop();
+    dfs(i + 1, sum);
+  };
+  dfs(0, 0);
+  return hit;
 }
 
 export function matchBankRows(input: MatchInput): ImportProposal[] {
@@ -352,24 +497,80 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
   const methodsOf = new Map<string, ImportMethod[]>();
   for (const r of rows) methodsOf.set(r.key, resolveMethodCandidates(r, methods));
 
-  // ── 1. 已录过判定：单行金额 ≈ 既有条目；或同卡多行合计 ≈ 既有条目（L4 历史录法） ──
+  // ── 1. 已录过判定：单行金额 ≈ 既有条目；或同卡多行合计 ≈ 既有条目（银行分多笔到账） ──
   const usedEntries = new Set<number>();
-  const markExists = (rs: ParsedBankRow[], entryIdx: number, entryMethodId: string, entryTxnDate?: string) => {
+  /**
+   * D-290：既有条目与银行行对上之后的三种结论 ——
+   * 单行日期差 ≤5 天 → 校正到账日；多行合计对上且非 WISE → 按银行拆分；其余照旧跳过。
+   */
+  const resolveExisting = (rs: ParsedBankRow[], entryIdx: number, e: ExistingEntry) => {
     usedEntries.add(entryIdx);
     for (const r of rs) assigned.add(r.key);
-    const gap = entryTxnDate ? Math.round(daysBetween(rs[0].date, entryTxnDate)) : 0;
-    proposals.push({
-      status: "exists",
+    const base = {
       rows: rs,
-      methodId: entryMethodId,
+      methodId: e.methodId,
       amount: r2(rs.reduce((s, r) => s + (r.cny ?? r.usd ?? 0), 0)),
-      currency: rs[0].cny != null ? "CNY" : "USD",
-      platform: null, txnDate: rs[0].date, sourceDate: null,
+      currency: (rs[0].cny != null ? "CNY" : "USD") as "CNY" | "USD",
+      platform: null as string | null,
+      sourceDate: null,
       breakdown: [], expected: 0, fee: 0, feeRate: null,
-      matchNote: gap > 10
-        ? `与已登记流水金额一致（登记日 ${entryTxnDate}，与表格日期差 ${gap} 天，表格日期疑有误），跳过`
-        : "与已登记流水金额一致，跳过",
-      warnings: [],
+      warnings: [] as string[],
+    };
+    const batchDate = [...new Set(e.breakdown.map((it) => it.sourceDate || "").filter(Boolean))].sort()[0];
+
+    if (rs.length === 1) {
+      const gap = Math.round(signedDays(e.txnDate, rs[0].date)); // 正 = 库内登记日晚于银行
+      if (gap === 0) {
+        proposals.push({ ...base, status: "exists", txnDate: e.txnDate, matchNote: "与已登记流水金额一致，跳过" });
+        return;
+      }
+      // 银行日期早于打款日 = 物理不可能，按表格日期改反而错（留 2 天时区/记账余量）
+      const impossible = !!batchDate && signedDays(batchDate, rs[0].date) > 2;
+      if (Math.abs(gap) <= DATE_FIX_MAX_DAYS && !impossible) {
+        proposals.push({
+          ...base, status: "date_fix", entryIds: e.ids, txnDate: rs[0].date,
+          matchNote: `金额与已登记流水一致，登记日 ${e.txnDate} 与银行 ${rs[0].date} 差 ${Math.abs(gap)} 天（≤${DATE_FIX_MAX_DAYS} 天以银行为准），校正到账日`,
+        });
+        return;
+      }
+      proposals.push({
+        ...base, status: "exists", txnDate: e.txnDate,
+        matchNote: impossible
+          ? `与已登记流水金额一致（表格日期 ${rs[0].date} 早于打款日 ${batchDate}，表格有误），保留登记日 ${e.txnDate}，跳过`
+          : `与已登记流水金额一致（登记日 ${e.txnDate} 与表格差 ${Math.abs(gap)} 天，超 ${DATE_FIX_MAX_DAYS} 天以实际到账时间为准），保留现值，跳过`,
+      });
+      return;
+    }
+
+    // 多行合计 = 一个既有条目
+    const rowsText = rs.map((r) => `${r.date} ¥${(r.cny ?? 0).toFixed(2)}`).join("、");
+    if (isTrancheChannel(e.payChannel)) {
+      proposals.push({
+        ...base, status: "exists", txnDate: e.txnDate,
+        matchNote: `银行分 ${rs.length} 笔到账（${rowsText}），合计与已登记流水一致；${e.payChannel} 是平台一笔打款、分批回款，保持一条，跳过`,
+      });
+      return;
+    }
+    if (!e.splittable) {
+      proposals.push({
+        ...base, status: "exists", txnDate: e.txnDate,
+        matchNote: `银行分 ${rs.length} 笔到账（${rowsText}），合计与已登记流水一致；该条目已按平台拆分（C-180），需人工处理，跳过`,
+      });
+      return;
+    }
+    const parts = assignPartsByMember(e, rs);
+    if (!parts) {
+      proposals.push({
+        ...base, status: "exists", txnDate: e.txnDate,
+        matchNote: `银行分 ${rs.length} 笔到账（${rowsText}），合计一致但明细金额落不到具体的人，未自动拆分，请手工处理`,
+        warnings: ["按明细净额凑不出银行的分笔金额，没有按比例硬摊"],
+      });
+      return;
+    }
+    proposals.push({
+      ...base, status: "split_existing", entryIds: e.ids, parts,
+      txnDate: parts[0].txnDate, platform: parts[0].platform,
+      matchNote: `银行分 ${rs.length} 笔到账，按明细净额拆开：${parts.map((p) => `${p.txnDate} ¥${p.amount.toFixed(2)}（${p.members.join("+")}）`).join("；")}`,
     });
   };
   // 已录过判定按「同收款人」放宽：历史条目可能登记在同人的另一渠道（如到账进银行卡、
@@ -387,7 +588,7 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
         if (assigned.has(r.key) || r.cny == null) continue;
         if (!entryMatchesRow(r, e.methodId)) continue;
         if (Math.abs(r.cny - e.amount) <= 0.05 && daysBetween(r.date, e.txnDate) <= existsWindow) {
-          markExists([r], idx, e.methodId, e.txnDate);
+          resolveExisting([r], idx, e);
           return;
         }
       }
@@ -419,7 +620,7 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
       dfs(i + 1, sum);
     };
     dfs(0, 0);
-    if (hit) markExists(hit, idx, e.methodId);
+    if (hit) resolveExisting((hit as ParsedBankRow[]).sort((a, b) => a.date.localeCompare(b.date)), idx, e);
   });
 
   // ── 2. 候选打款池（剔除已登记批次） ──
@@ -591,14 +792,15 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
     if (c.tier === 1) {
       warnings.push(`表格卡号对应的卡在打款记录里对不上，按金额比对归属到同收款人的「${m.payChannel || "另一张卡"}」，请复核`);
     }
-    // 表格日期早于库内打款日 = 物理不可能（钱不会先到账后打款），判定表格日期有误，
-    // 入账日按库内打款日（07 2026-08-26「表格确实有误，按照库内收款日导」）；留 2 天时区/记账余量
-    const sheetDateTooEarly = !isUsd && signedDays(sourceDate, rs[0].date) > 2;
+    // 表格日期早于库内打款日：小幅早于是常态（平台记的 paid_date 会晚于实际到账，实测 LH 6-22 批 6-18 就到账），
+    // 07 2026-08-27 拍板「相差 ≤5 天以银行流水为准」，故只有超过这个阈值才判表格有误、
+    // 改按库内打款日入账（07 2026-08-26「表格确实有误，按照库内收款日导」，实证 2/12 vs 3/4 差 20 天）。
+    const sheetDateTooEarly = !isUsd && signedDays(sourceDate, rs[0].date) > DATE_FIX_MAX_DAYS;
     const useDbDate = c.rescued || sheetDateTooEarly;
     if (c.rescued) {
       warnings.push(`表格日期 ${rs[0].date} 与库内打款日 ${sourceDate} 相差 ${Math.round(c.dateDist)} 天，判定表格日期有误，已按库内打款日入账，请复核`);
     } else if (sheetDateTooEarly) {
-      warnings.push(`表格日期 ${rs[0].date} 早于库内打款日 ${sourceDate}（到账不可能早于打款），判定表格日期有误，已按库内打款日入账，请复核`);
+      warnings.push(`表格日期 ${rs[0].date} 早于库内打款日 ${sourceDate} 超过 ${DATE_FIX_MAX_DAYS} 天，判定表格日期有误，已按库内打款日入账，请复核`);
     } else if (c.dateDist > 7) {
       warnings.push(`打款日与到账日相差 ${Math.round(c.dateDist)} 天，请复核`);
     }

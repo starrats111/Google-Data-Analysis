@@ -8,6 +8,7 @@ import { resolveBankFlowScope, scopeMembers, scopeEntryWhere } from "@/lib/bank-
 import {
   parseBankSheet, matchBankRows, SPLIT_WINDOW_DAYS,
   type ImportMethod, type ImportPayment, type ParsedSheet,
+  type ExistingEntry, type ExistingBreakdownItem,
 } from "@/lib/bank-flow-import";
 
 export const dynamic = "force-dynamic";
@@ -57,8 +58,15 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
     return apiError(`表格解析失败：${e instanceof Error ? e.message : String(e)}`);
   }
   sheets = sheets.filter((s) => s.rows.length > 0);
+  // D-290：按投手分摊的明细表不是银行流水，解析出来只为了在预览里说明「这张跳过了」
+  const detailSheets = sheets.filter((s) => s.kind === "detail");
+  sheets = sheets.filter((s) => s.kind === "flow");
   if (sheets.length === 0) {
-    return apiError("没有解析到任何到账行（需要含「时间 / 收款人户名 / 人民币」列的表头），本次不做任何改动");
+    return apiError(
+      detailSheets.length > 0
+        ? `只解析到按投手分摊的明细表（${detailSheets.map((s) => s.name).join("、")}），里面不是银行到账金额，本次不做任何改动`
+        : "没有解析到任何到账行（需要含「时间 / 收款人户名 / 人民币」列的表头），本次不做任何改动",
+    );
   }
 
   // ── 基础数据 ──
@@ -228,12 +236,16 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
   const entryWhere = await scopeEntryWhere(scope);
   const existing = await prisma.bank_flow_entries.findMany({
     where: { ...entryWhere, team_id: teamId, is_deleted: 0 },
-    select: { payment_method_id: true, platform: true, txn_group: true, source_date: true, txn_at: true, amount: true, breakdown: true },
+    select: {
+      id: true, payment_method_id: true, platform: true, txn_group: true, source_date: true, txn_at: true,
+      amount: true, expected_amount: true, fee: true, breakdown: true,
+    },
   });
+  const channelOf = new Map(methodRows.map((m) => [String(m.id), m.pay_channel || ""]));
   const usedBatchKeys = new Set<string>();
   // C-180：同一笔银行到账拆分出的多条目（共享 txn_group）合并回一笔再比金额，否则拆分条目对不上到账行
-  const groupAgg = new Map<string, { methodId: string; amount: number; txnDate: string }>();
-  const existingEntries: { methodId: string; amount: number; txnDate: string }[] = [];
+  const groupAgg = new Map<string, ExistingEntry>();
+  const existingEntries: ExistingEntry[] = [];
   for (const e of existing) {
     const mid = String(e.payment_method_id);
     usedBatchKeys.add(`${mid}\u0000${e.platform}\u0000${(e.source_date ?? e.txn_at).toISOString().slice(0, 10)}`);
@@ -246,11 +258,36 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
         }
       }
     } catch { /* 脏数据跳过 */ }
-    const item = { methodId: mid, amount: Number(e.amount), txnDate: e.txn_at.toISOString().slice(0, 10) };
+    // D-290：条目明细与费率一并带上，供「按银行拆分」把人精确落到各笔到账
+    let bd: ExistingBreakdownItem[] = [];
+    try {
+      const parsed = e.breakdown ? JSON.parse(e.breakdown) : [];
+      if (Array.isArray(parsed)) bd = parsed as ExistingBreakdownItem[];
+    } catch { /* 脏数据：明细置空，拆分提案自然不会出 */ }
+    const item: ExistingEntry = {
+      ids: [String(e.id)],
+      methodId: mid,
+      payChannel: channelOf.get(mid) ?? "",
+      amount: Number(e.amount),
+      txnDate: e.txn_at.toISOString().slice(0, 10),
+      expected: Number(e.expected_amount),
+      fee: Number(e.fee),
+      breakdown: bd,
+      splittable: true,
+    };
     if (e.txn_group) {
+      // C-180 同组的多条合并成一项比金额；组条目已按平台拆过，不再按银行拆
       const g = groupAgg.get(e.txn_group);
-      if (g) g.amount = Math.round((g.amount + item.amount) * 100) / 100;
-      else groupAgg.set(e.txn_group, { ...item });
+      if (g) {
+        g.amount = Math.round((g.amount + item.amount) * 100) / 100;
+        g.expected = Math.round((g.expected + item.expected) * 100) / 100;
+        g.fee = Math.round((g.fee + item.fee) * 100) / 100;
+        g.ids.push(...item.ids);
+        g.breakdown.push(...item.breakdown);
+        if (item.txnDate < g.txnDate) g.txnDate = item.txnDate;
+      } else {
+        groupAgg.set(e.txn_group, { ...item, splittable: false });
+      }
     } else {
       existingEntries.push(item);
     }
@@ -265,7 +302,7 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
   };
   const resultSheets = sheets.map((s) => {
     const proposals = matchBankRows({ rows: s.rows, methods, payments, usedBatchKeys, existingEntries });
-    const stats = { auto: 0, review: 0, exists: 0, unmatched: 0, usd: 0, no_method: 0 };
+    const stats = { auto: 0, review: 0, exists: 0, unmatched: 0, usd: 0, no_method: 0, date_fix: 0, split_existing: 0 };
     for (const p of proposals) stats[p.status]++;
     return {
       name: s.name,
@@ -285,6 +322,8 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
 
   return apiSuccess({
     sheets: resultSheets,
+    // D-290：跳过的按人分摊明细表如实告知，避免 07 以为漏读了一张
+    skippedSheets: detailSheets.map((s) => ({ name: s.name, rowCount: s.rows.length, reason: s.detailReason ?? "" })),
     note: "以上为金额比对结果预览，尚未入库；勾选确认后才会写入银行流水",
   });
 });
