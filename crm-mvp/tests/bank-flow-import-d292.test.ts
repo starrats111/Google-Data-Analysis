@@ -46,3 +46,10 @@ describe("D-292 对方户名提取", () => {
     assert.deepEqual(sheet?.rows.map((r) => r.counterparty), ["连连银通", "上海汇"]);
   });
 });
+
+describe("D-292 HT 是 LH 的笔误（07 2026-08-27 确认）", () => {
+  it("HT 当平台码剔掉，不进对方户名", () => {
+    assert.equal(counterpartyOf([{ note: "HT", counterparty: "" }]), "");
+    assert.equal(counterpartyOf([{ note: "HT / 上海汇", counterparty: "" }]), "上海汇");
+  });
+});

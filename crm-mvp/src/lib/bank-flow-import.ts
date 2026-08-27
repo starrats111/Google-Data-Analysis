@@ -342,12 +342,15 @@ interface Candidate {
  * 从标注里抽掉平台码与数字后剩下的词（连连银通 / 上海汇 / 易生 / YIWS / 龚建成 …）做交集判定：
  * 两行都有标注且完全不相交 → 不许凑成一笔批次；有一边没标注就不拦（财务经常漏填）。
  */
-const PLATFORM_CODE_RE = /\b(CG|BSH|RW|LH|LB|PM|MUI|EV|CF|DF)\b/gi;
+/** 财务表里写过的平台码，含笔误别名：HT 就是 LH（07 2026-08-27 确认「当时备注错了」） */
+const PLATFORM_CODE_RE = /\b(CG|BSH|RW|LH|LB|PM|MUI|EV|CF|DF|HT)\b/gi;
+const PLATFORM_ALIAS: Record<string, string> = { HT: "LH" };
+const normPlatformCode = (c: string) => PLATFORM_ALIAS[c.toUpperCase()] ?? c.toUpperCase();
 /** 标注里的数字与分隔符（金额、单号、括号等），抽词前一律去掉 */
 const NOTE_NOISE_RE = /[\s0-9.,;:%/\\_·、（）()[\]{}<>+*=&#@!?~"'`|^$—–-]+/g;
 
 /** 平台码集合：抽对方户名时这些词要剔掉（「上海汇（rw52.39）」这种连在数字上的靠分词后再滤一遍） */
-const PLATFORM_CODES = new Set(["CG", "BSH", "RW", "LH", "LB", "PM", "MUI", "EV", "CF", "DF"]);
+const PLATFORM_CODES = new Set(["CG", "BSH", "RW", "LH", "LB", "PM", "MUI", "EV", "CF", "DF", "HT"]);
 /**
  * 财务偶尔把整句话写进标注（实证「实际发生日是3.4号」），这种不是户名。
  * 含句子虚词的词一律不当户名用。
@@ -921,7 +924,8 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
     }
     // 平台标注辅助校验：标注里出现的平台码与匹配结果不符时提醒
     const noteText = rs.map((r) => r.note).join(" ").toUpperCase();
-    const notedPlats = [...new Set((noteText.match(/\b(CG|BSH|RW|LH|LB|PM|MUI|EV|CF|DF)\b/g) ?? []))];
+    // HT 等笔误别名归一后再比，免得报假冲突（07：HT 就是 LH）
+    const notedPlats = [...new Set((noteText.match(PLATFORM_CODE_RE) ?? []).map(normPlatformCode))];
     const matchedPlats = new Set(breakdown.map((b) => b.platform));
     const conflict = notedPlats.filter((p) => !matchedPlats.has(p));
     if (notedPlats.length > 0 && conflict.length > 0) {
