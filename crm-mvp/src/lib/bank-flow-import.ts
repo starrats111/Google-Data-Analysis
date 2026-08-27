@@ -208,11 +208,14 @@ const normDigits = (s: string) => (s || "").replace(/\D/g, "");
 const normText = (s: string) => (s || "").replace(/（/g, "(").replace(/）/g, ")").replace(/\s/g, "");
 
 /**
- * 户名别名映射（07 2026-08-26 拍板）：月表里「龚建成-恒生」实际就是系统里「张文俊-香港」这张卡。
- * 命中别名的行直接归属到目标收款方式，不再走通用匹配。
+ * 香港卡别名映射：月表的「收款人账号」列写的是银行名（恒生/汇丰），户名列财务一律写龚建成，
+ * 实际对应的是哪张香港卡由银行决定（07 2026-08-27：恒生 = 张文俊的香港卡，汇丰 = 龚建成的香港卡；
+ * 恒生那条 07 2026-08-26 已确认过）。命中别名的行直接归属到目标收款方式，不再走通用匹配。
+ * payee 为 null = 不看户名列（财务写谁都算）。
  */
-const PAYEE_ALIASES: { payee: string; acct: string; toPayee: string; toChannel: string }[] = [
-  { payee: "龚建成", acct: "恒生", toPayee: "张文俊", toChannel: "香港" },
+const PAYEE_ALIASES: { payee: string | null; acct: string; toPayee: string; toChannel: string }[] = [
+  { payee: null, acct: "恒生", toPayee: "张文俊", toChannel: "香港" },
+  { payee: null, acct: "汇丰", toPayee: "龚建成", toChannel: "香港" },
 ];
 
 /**
@@ -221,10 +224,16 @@ const PAYEE_ALIASES: { payee: string; acct: string; toPayee: string; toChannel: 
  * 全部作为候选交给金额比对定夺，谁的打款批次对得上就是谁）；
  * 是渠道文字（恒生/汇丰/PingPong…）则按 收款人+渠道 匹配。空数组 = 对不上（预览人工处理）。
  */
+/** 该行是不是命中了香港卡别名（命中即权威：不再往同收款人的其它卡兜底） */
+export function isAliasRow(row: { payee: string; acct: string }): boolean {
+  const t = normText(row.acct);
+  return PAYEE_ALIASES.some((a) => (a.payee == null || row.payee === a.payee) && t.includes(a.acct));
+}
+
 export function resolveMethodCandidates(row: { payee: string; acct: string }, methods: ImportMethod[]): ImportMethod[] {
   const rowAcctText = normText(row.acct);
   for (const a of PAYEE_ALIASES) {
-    if (row.payee === a.payee && rowAcctText.includes(a.acct)) {
+    if ((a.payee == null || row.payee === a.payee) && rowAcctText.includes(a.acct)) {
       const hit = methods.filter((m) => m.payeeName === a.toPayee && normText(m.payChannel).includes(a.toChannel));
       if (hit.length > 0) return hit;
     }
@@ -771,7 +780,11 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
   const candidateMethodsOf = (r: ParsedBankRow): { m: ImportMethod; tier: 0 | 1 }[] => {
     const primary = methodsOf.get(r.key) ?? [];
     const primaryIds = new Set(primary.map((m) => m.id));
-    const fallback = methods.filter((m) => m.payeeName === r.payee && !primaryIds.has(m.id));
+    // 香港卡别名（恒生/汇丰）是 07 指定的硬映射，命中就不许再往同收款人的其它卡兜底 ——
+    // 实测 8-20 恒生 $1,338.74 会被兜到「龚建成-PingPong」，拿 7 月的 BSH/CG 打款凑出 1.65%
+    const fallback = primary.length > 0 && isAliasRow(r)
+      ? []
+      : methods.filter((m) => m.payeeName === r.payee && !primaryIds.has(m.id));
     return [
       ...primary.map((m) => ({ m, tier: 0 as const })),
       ...fallback.map((m) => ({ m, tier: 1 as const })),
