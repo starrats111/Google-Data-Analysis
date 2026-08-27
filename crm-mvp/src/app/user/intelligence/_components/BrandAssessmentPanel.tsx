@@ -30,12 +30,13 @@ import {
   message,
 } from "antd";
 import { ExperimentOutlined, ReloadOutlined } from "@ant-design/icons";
+import { COUNTRY_OPTIONS as COUNTRY_SELECT_OPTIONS, countryFilterOption, countryFilterSort } from "@/lib/countries";
 
 const { Text, Paragraph } = Typography;
 
-const COUNTRY_OPTIONS = [
-  "US", "GB", "DE", "FR", "IT", "ES", "NL", "CA", "AU", "JP", "KR", "BR", "MX", "IN", "SG",
-].map((c) => ({ value: c, label: c }));
+// D-288：原先这里硬编码 15 国，与领取弹窗 / 文章发布页的清单各不相同。
+// 现统一取 lib/countries.ts 的全量清单，输入代码或中英文名都能搜到。
+const COUNTRY_OPTIONS = COUNTRY_SELECT_OPTIONS;
 
 const STATUS_META: Record<string, { color: string; text: string }> = {
   pending: { color: "default", text: "排队中" },
@@ -168,7 +169,10 @@ export default function BrandAssessmentPanel() {
               value={countries}
               onChange={setCountries}
               options={COUNTRY_OPTIONS}
-              placeholder="投放国家（可多选）"
+              showSearch
+              filterOption={countryFilterOption}
+              filterSort={countryFilterSort}
+              placeholder="投放国家（可多选，输入代码或名称）"
               style={{ width: "100%" }}
               maxTagCount={4}
             />

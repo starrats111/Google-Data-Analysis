@@ -6,15 +6,13 @@ import { callAiWithFallback } from "@/lib/ai-service";
 import { humanize } from "@/lib/humanizer";
 import prisma from "@/lib/prisma";
 import { emphasizeArticleHyperlinks, stripReasoningArtifacts } from "@/lib/sanitize";
+import { marketLanguage } from "@/lib/countries";
 
-const COUNTRY_LANG_MAP: Record<string, string> = {
-  US: "English", UK: "English", CA: "English", AU: "English",
-  DE: "German", FR: "French", JP: "Japanese", BR: "Portuguese",
-  ES: "Spanish", IT: "Italian", NL: "Dutch", SE: "Swedish",
-  NO: "Norwegian", DK: "Danish", FI: "Finnish", PL: "Polish",
-  KR: "Korean", SG: "English", NZ: "English", AT: "German",
-  CH: "German", BE: "French", IE: "English", PT: "Portuguese",
-};
+// D-288：投放国 → 出稿语言统一走 lib/countries.ts（原先这里自存 24 国，
+// 与文章发布页的另一份不同步；HK/TW/CN 等都缺，选了也只会出英文稿）
+function countryLangLabel(country: string): string {
+  return marketLanguage(country).enName;
+}
 
 function extractJson(raw: string): string {
   let text = raw.trim();
@@ -137,10 +135,15 @@ function simpleMarkdownToHtml(md: string): string {
   return out.join("\n");
 }
 
-/** 分析商家 URL，推断品牌/品类/关键词/标题 */
+/**
+ * 分析商家 URL，推断品牌/品类/关键词/标题
+ *
+ * 第二个形参原名 language，但 4 个调用方传进来的一直都是投放国代码（US / DE / HK…），
+ * D-288 顺手正名，免得下次改语言映射时又按「语言码」去理解它。
+ */
 export async function analyzeUrl(
   url: string,
-  language = "en",
+  country = "US",
 ): Promise<{
   brandName: string; category: string; products: string[];
   sellingPoints: string[]; titles: { title: string; titleEn: string }[];
@@ -149,7 +152,7 @@ export async function analyzeUrl(
   let domain: string;
   try { domain = new URL(url).hostname.replace("www.", ""); } catch { domain = url; }
   const brandGuess = domain.split(".")[0].charAt(0).toUpperCase() + domain.split(".")[0].slice(1);
-  const langLabel = COUNTRY_LANG_MAP[language.toUpperCase()] || language;
+  const langLabel = countryLangLabel(country);
   const year = new Date().getFullYear();
 
   const prompt = `You are a JSON API. Respond with ONLY a valid JSON object.
@@ -208,7 +211,7 @@ export async function generateMerchantArticle(params: {
   metaDescription: string; metaKeywords: string; category: string;
 }> {
   const { title, merchantName, trackingLink, country, products = [], sellingPoints = [], keywords = [], images = [] } = params;
-  const langLabel = COUNTRY_LANG_MAP[country.toUpperCase()] || "English";
+  const langLabel = countryLangLabel(country);
   const year = new Date().getFullYear();
 
   const articleType = "review", articleLength: string = "medium";

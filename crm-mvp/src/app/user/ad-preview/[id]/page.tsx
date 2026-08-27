@@ -17,6 +17,7 @@ import {
 import { useApiWithParams, mutateApi } from "@/lib/swr";
 import { describeClientError } from "@/lib/client-error";
 import { BIDDING_STRATEGIES } from "@/lib/constants";
+import { COUNTRY_OPTIONS, countryFilterOption, countryFilterSort } from "@/lib/countries";
 import { getAdMarketConfig, getCurrencyCodeByCountry, getLanguageCodeByCountry, getSnippetHeaderByCountry } from "@/lib/ad-market";
 import { rankCidsForAutoPick, isCidSelectable } from "@/lib/google-ads/cid-availability";
 
@@ -3384,13 +3385,13 @@ export default function AdPreviewPage() {
                   <Row gutter={8}>
                     <Col span={8}>
                       <Text type="secondary" style={{ fontSize: 12 }}>国家代码</Text>
+                      {/* D-288：原先只列 8 国（没有 HK），投别的国家就选不出致电扩展的国家码。
+                          改用全站统一清单；区号提示去掉了——号码框本来就要求填完整国际号码。 */}
                       <Select size="small" value={callCountryCode} onChange={setCallCountryCode} style={{ width: "100%", marginTop: 4 }}
-                        options={[
-                          { value: "US", label: "US (+1)" }, { value: "GB", label: "GB (+44)" },
-                          { value: "CA", label: "CA (+1)" }, { value: "AU", label: "AU (+61)" },
-                          { value: "DE", label: "DE (+49)" }, { value: "FR", label: "FR (+33)" },
-                          { value: "JP", label: "JP (+81)" }, { value: "BR", label: "BR (+55)" },
-                        ]} />
+                        showSearch
+                        filterOption={countryFilterOption}
+                        filterSort={countryFilterSort}
+                        options={COUNTRY_OPTIONS} />
                     </Col>
                     <Col span={16}>
                       <Text type="secondary" style={{ fontSize: 12 }}>电话号码</Text>

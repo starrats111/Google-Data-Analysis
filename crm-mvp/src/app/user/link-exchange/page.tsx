@@ -13,7 +13,7 @@ import {
   AimOutlined, LoadingOutlined, EditOutlined, HistoryOutlined,
 } from "@ant-design/icons";
 import AppPageHeader from "@/components/AppPageHeader";
-import { ALL_COUNTRIES } from "@/lib/constants";
+import { COUNTRY_OPTIONS, countryFilterOption, countryFilterSort } from "@/lib/countries";
 
 const { Text, Paragraph } = Typography;
 
@@ -1110,10 +1110,9 @@ export default function LinkExchangePage() {
                 onChange={(v) => setFetchLinkCountry((v || "").toUpperCase().slice(0, 2))}
                 style={{ width: 130 }}
                 placeholder="国家代码"
-                options={ALL_COUNTRIES.map((c) => ({ value: c.code, label: `${c.flag} ${c.code} ${c.name}` }))}
-                filterOption={(input, option) =>
-                  !!option && String(option.label).toUpperCase().includes(input.toUpperCase())
-                }
+                options={COUNTRY_OPTIONS}
+                filterOption={countryFilterOption}
+                filterSort={countryFilterSort}
               />
               <Button type="primary" loading={fetchLinkLoading} onClick={handleFetchLink}>
                 {fetchLinkLoading ? "跟链中" : "验证"}

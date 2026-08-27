@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { getUserFromRequest } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import { callAiWithFallback } from "@/lib/ai-service";
+import { marketLanguage, normalizeCountryCode, zhCountryName } from "@/lib/countries";
 
 function safeParseJson(raw: string): Record<string, unknown> {
   let text = raw.trim();
@@ -67,21 +68,25 @@ function safeParseJson(raw: string): Record<string, unknown> {
   throw new Error(`Expected ',' or '}' — AI returned invalid JSON that could not be repaired`);
 }
 
-const COUNTRY_LANGUAGE_MAP: Record<string, { name: string; language: string }> = {
-  CN: { name: "中国", language: "Simplified Chinese (中文)" },
-  US: { name: "美国", language: "English (US)" },
-  UK: { name: "英国", language: "English (UK)" },
-  CA: { name: "加拿大", language: "English (CA)" },
-  AU: { name: "澳大利亚", language: "English (AU)" },
-  DE: { name: "德国", language: "German" },
-  FR: { name: "法国", language: "French" },
-  JP: { name: "日本", language: "Japanese" },
-  BR: { name: "巴西", language: "Portuguese (BR)" },
-  ES: { name: "西班牙", language: "Spanish" },
-  IT: { name: "意大利", language: "Italian" },
-  NL: { name: "荷兰", language: "Dutch" },
-  KR: { name: "韩国", language: "Korean" },
+/**
+ * 投放国 → 翻译目标语言 + 中文国名。
+ *
+ * D-288：原先这里硬编码 13 国，选了表外的国家（HK、SG、PL…）会静默按美国 / 英文翻译。
+ * 现在国名和语言都从 lib/countries.ts 现取，只保留 US/UK/CA/AU 的英语变体区分——
+ * 这四个市场的广告文案讲究拼写差异（color vs colour），值得单独点名。
+ */
+const ENGLISH_VARIANT: Record<string, string> = {
+  US: "English (US)", GB: "English (UK)", CA: "English (CA)", AU: "English (AU)",
 };
+
+function countryLanguage(country: string | null | undefined): { name: string; language: string } {
+  const code = normalizeCountryCode(country) || "US";
+  const lang = marketLanguage(code);
+  return {
+    name: zhCountryName(code),
+    language: ENGLISH_VARIANT[code] ?? (code === "CN" ? "Simplified Chinese (中文)" : lang.enName),
+  };
+}
 
 /**
  * POST /api/user/ad-creation/translate
@@ -97,7 +102,7 @@ export async function POST(req: NextRequest) {
     return apiError("没有需要翻译的内容");
   }
 
-  const lang = COUNTRY_LANGUAGE_MAP[target_country?.toUpperCase()] || COUNTRY_LANGUAGE_MAP.US;
+  const lang = countryLanguage(target_country);
   const isChinese = target_country?.toUpperCase() === "CN";
 
   const calloutsSection = (callouts?.length > 0)

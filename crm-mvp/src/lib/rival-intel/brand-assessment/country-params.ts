@@ -1,17 +1,22 @@
 import type { CountryParams } from "./types";
 import { AD_CREATE_COUNTRY_CODES } from "@/lib/rival-intel/ad-create/country-options";
+import {
+  enCountryName,
+  isValidCountryCode,
+  marketLanguage,
+  normalizeCountryCode as normalizeIsoCode,
+} from "@/lib/countries";
 
 /**
  * 品牌评估支持的国家白名单（ISO-2，大写），与广告创建/广告生成保持一致。
+ * D-288 起 = ISO 3166-1 全量国家 / 地区；下方 `*_BY_COUNTRY` 表保留为「精调覆写」，
+ * 表里没有的国家由 `buildCountryParams` 按 ISO 码 + 英文国名现算（见该函数注释）。
  */
 export const COUNTRY_WHITELIST = AD_CREATE_COUNTRY_CODES;
 
-export type SupportedCountry = (typeof COUNTRY_WHITELIST)[number];
+export type SupportedCountry = string;
 
-export function normalizeCountryCode(country: string): string {
-  const upper = country?.trim().toUpperCase();
-  return upper === "UK" ? "GB" : upper;
-}
+export const normalizeCountryCode = normalizeIsoCode;
 
 export function countryLookupCodes(country: string): string[] {
   const normalized = normalizeCountryCode(country);
@@ -203,14 +208,21 @@ const SERPAPI_LOCATION_BY_COUNTRY: Record<string, string> = {
   PE: "Peru",
 };
 
+/**
+ * D-288：白名单放开到全量国家后，长尾国家不在上面三张精调表里，
+ * 但**不能**因此把 `location` 落回 "United States"——那会拿美国的 SERP 冒充
+ * 目标国的结果，且每次查询都是真金白银。没有覆写时按 ISO 英文国名现算：
+ *   - location：`lib/countries.ts` 的英文国名（已按 SerpApi 惯用写法覆写过 Hong Kong 等）
+ *   - hl：该国市场主语言；google_domain：回退 google.com（配合 gl + location 依然定位到该国）
+ */
 function serpapiLocationForCountry(country: string): string {
-  return SERPAPI_LOCATION_BY_COUNTRY[country] ?? "United States";
+  return SERPAPI_LOCATION_BY_COUNTRY[country] ?? enCountryName(country);
 }
 
 function buildCountryParams(country: string) {
   return {
     gl: country.toLowerCase(),
-    hl: HL_BY_COUNTRY[country] ?? "en",
+    hl: HL_BY_COUNTRY[country] ?? marketLanguage(country).code,
     google_domain: GOOGLE_DOMAIN_BY_COUNTRY[country] ?? "google.com",
     trends_geo: country,
     serpapi_location: serpapiLocationForCountry(country),
@@ -247,9 +259,8 @@ export function countryToParams(country: string): CountryParams {
 }
 
 /**
- * 校验一个 ISO-2 是否属于白名单。
+ * 校验一个 ISO-2 是否属于白名单（D-288 起等价于「是不是合法 ISO 3166-1 代码」）。
  */
 export function isSupportedCountry(country: string): country is SupportedCountry {
-  const normalized = normalizeCountryCode(country);
-  return (COUNTRY_WHITELIST as readonly string[]).includes(normalized);
+  return isValidCountryCode(country);
 }

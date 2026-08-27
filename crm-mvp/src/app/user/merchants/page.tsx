@@ -2,7 +2,8 @@
 import { useState, useCallback, useMemo, useEffect } from "react";
 import { Card, Row, Col, Table, Input, Select, Button, Space, Tag, Modal, Form, Typography, Popconfirm, Switch, InputNumber, Tabs, App, Tooltip, Radio, DatePicker, Slider, Progress, Alert, AutoComplete } from "antd";
 import { ShopOutlined, SearchOutlined, CheckOutlined, DollarOutlined, ExperimentOutlined, SaveOutlined, SyncOutlined, WarningOutlined, StarOutlined, ReloadOutlined, RobotOutlined, DeleteOutlined, CloseCircleOutlined, ThunderboltOutlined, EditOutlined, RedoOutlined, FireOutlined, CalendarOutlined } from "@ant-design/icons";
-import { PLATFORMS, BIDDING_STRATEGIES, ALL_COUNTRIES } from "@/lib/constants";
+import { PLATFORMS, BIDDING_STRATEGIES } from "@/lib/constants";
+import { buildCountryOptions, countryFilterOption, countryFilterSort } from "@/lib/countries";
 import { CATEGORY_CN, catCn } from "@/lib/category-cn";
 import { POLICY_CATEGORY_MAP, POLICY_CATEGORY_LABELS } from "@/lib/policy-hub/policy-categories";
 import { compareConnections, connectionLabel, type ConnectionLabelInput } from "@/lib/connection-label";
@@ -73,7 +74,7 @@ const AD_LANGUAGES = [
   { code: "bg", name: "Български 保加利亚语" }, { code: "hi", name: "हिन्दी 印地语" },
   { code: "uk", name: "Українська 乌克兰语" },
 ];
-// D-004：ALL_COUNTRIES 已抽到 @/lib/constants，下方代码统一 import 复用
+// D-288：国家清单（全量 ISO 3166-1）与 ⭐ 置顶排序统一走 @/lib/countries
 // 0佣金判定（07/徐克 2026-08-10「只要有0佣金的，都不跑」）：佣金串里能解析出数值且全为0
 // 才算（"0%"、"Up to 0%"、"0.00 %"、"EUR0"）。混合档 "0%/Up to USD10.5" 有固定赏金不算；
 // 空值=佣金未知也不算。与 Hermes 侧 isZeroCommission 同口径
@@ -1638,28 +1639,17 @@ export default function MerchantsPage() {
         <Form.Item name="target_country" label="目标国家" rules={[{ required: true, message: "请选择目标国家" }]}>
           <Select
             showSearch
-            placeholder="选择或输入国家代码（如 US / GB / AU）"
-            optionFilterProp="label"
+            placeholder="输入国家代码或名称，如 HK / 香港 / Hong"
+            filterOption={countryFilterOption}
+            filterSort={countryFilterSort}
+            // D-288：⭐ 置顶 + 全量国家清单统一由 lib/countries.ts 出，
+            // 与 MerchantClaimModal 共用同一实现，不再两处各拼一遍
             options={(() => {
               const regions = claimM?.supported_regions;
               const codes = regions && Array.isArray(regions)
-                ? regions.map((r) => (typeof r === "string" ? r : (r as { code?: string }).code || String(r))).map((c) => String(c).toUpperCase())
+                ? regions.map((r) => (typeof r === "string" ? r : (r as { code?: string }).code || String(r)))
                 : [];
-              const codeSet = new Set(codes);
-              const star = ALL_COUNTRIES.filter((c) => codeSet.has(c.code)).map((c) => ({
-                value: c.code, label: `⭐ ${c.flag} ${c.code} - ${c.name}`,
-              }));
-              const rest = ALL_COUNTRIES.filter((c) => !codeSet.has(c.code)).map((c) => ({
-                value: c.code, label: `${c.flag} ${c.code} - ${c.name}`,
-              }));
-              // supported_regions 里有 ALL_COUNTRIES 没收录的国家时也保留
-              const extra: Array<{ value: string; label: string }> = [];
-              for (const code of codes) {
-                if (!ALL_COUNTRIES.find((c) => c.code === code)) {
-                  extra.push({ value: code, label: `⭐ ${code} - 支持地区` });
-                }
-              }
-              return [...star, ...extra, ...rest];
+              return buildCountryOptions(codes);
             })()}
           />
         </Form.Item>

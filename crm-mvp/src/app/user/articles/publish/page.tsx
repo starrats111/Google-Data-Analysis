@@ -13,6 +13,7 @@ import {
   InboxOutlined, LinkOutlined,
 } from "@ant-design/icons";
 import { compareConnections, connectionLabel } from "@/lib/connection-label";
+import { COUNTRY_OPTIONS, countryFilterOption, countryFilterSort, marketLanguage } from "@/lib/countries";
 import { sanitizeHtml, proxifyImgSrcs } from "@/lib/sanitize";
 import PublishSiteSelect from "@/components/PublishSiteSelect";
 import AppPageHeader from "@/components/AppPageHeader";
@@ -540,54 +541,13 @@ export default function ArticlePublishPage() {
 
   const activeSites = sites.filter((s) => s.status === "active" && s.verified === 1);
 
-  const COUNTRY_LANG: Record<string, string> = {
-    US: "en", GB: "en", UK: "en", CA: "en", AU: "en", NZ: "en", IE: "en", SG: "en",
-    DE: "de", AT: "de", CH: "de",
-    FR: "fr", BE: "fr",
-    ES: "es", MX: "es", AR: "es", CL: "es", CO: "es",
-    IT: "it", PT: "pt", BR: "pt", NL: "nl",
-    JP: "ja", KR: "ko",
-    SE: "sv", NO: "no", DK: "da", FI: "fi", PL: "pl", CZ: "cs",
-    TR: "tr", TH: "th", VN: "vi", ID: "id",
-    RU: "ru", IN: "en", PH: "en",
-  };
-  const LANG_NAME: Record<string, string> = {
-    en: "English", de: "Deutsch", fr: "Français", es: "Español",
-    it: "Italiano", pt: "Português", nl: "Nederlands", ja: "日本語",
-    ko: "한국어", sv: "Svenska", no: "Norsk", da: "Dansk", fi: "Suomi",
-    pl: "Polski", cs: "Čeština", tr: "Türkçe", th: "ไทย", vi: "Tiếng Việt",
-    id: "Bahasa Indonesia", ru: "Русский",
-  };
-  const getLang = (c: string) => COUNTRY_LANG[c.toUpperCase()] || "en";
+  // D-288：投放国 → 文章语言统一走 lib/countries.ts，别再页内自存一份——
+  // 后端 lib/article-gen.ts 用的是同一份，页面显示的语言才等于实际出稿语言。
+  const getLang = (c: string) => marketLanguage(c).code;
 
-  const countryOptions = [
-    { value: "US", label: "美国 (US)" },
-    { value: "GB", label: "英国 (GB)" },
-    { value: "AU", label: "澳洲 (AU)" },
-    { value: "CA", label: "加拿大 (CA)" },
-    { value: "NZ", label: "新西兰 (NZ)" },
-    { value: "DE", label: "德国 (DE)" },
-    { value: "FR", label: "法国 (FR)" },
-    { value: "ES", label: "西班牙 (ES)" },
-    { value: "IT", label: "意大利 (IT)" },
-    { value: "NL", label: "荷兰 (NL)" },
-    { value: "JP", label: "日本 (JP)" },
-    { value: "KR", label: "韩国 (KR)" },
-    { value: "BR", label: "巴西 (BR)" },
-    { value: "MX", label: "墨西哥 (MX)" },
-    { value: "SE", label: "瑞典 (SE)" },
-    { value: "NO", label: "挪威 (NO)" },
-    { value: "DK", label: "丹麦 (DK)" },
-    { value: "FI", label: "芬兰 (FI)" },
-    { value: "PL", label: "波兰 (PL)" },
-    { value: "AT", label: "奥地利 (AT)" },
-    { value: "CH", label: "瑞士 (CH)" },
-    { value: "BE", label: "比利时 (BE)" },
-    { value: "IE", label: "爱尔兰 (IE)" },
-    { value: "PT", label: "葡萄牙 (PT)" },
-    { value: "SG", label: "新加坡 (SG)" },
-    { value: "IN", label: "印度 (IN)" },
-  ];
+  // D-288：原先这里硬编码 26 国（没有 HK），与领取弹窗的清单对不上，07 反馈
+  // 「文章生成地区选择没有 HK」就是这里。现统一取 lib/countries.ts 的全量清单。
+  const countryOptions = COUNTRY_OPTIONS;
 
   // 从广告页跳转过来时显示加载状态
   if (loadingArticle) {
@@ -728,9 +688,10 @@ export default function ArticlePublishPage() {
               </Form.Item>
               <Form.Item label="目标国家" required style={{ marginBottom: 12 }}>
                 <Select
-                  placeholder="选择国家"
+                  placeholder="输入国家代码或名称，如 HK / 香港 / Hong"
                   showSearch
-                  optionFilterProp="label"
+                  filterOption={countryFilterOption}
+                  filterSort={countryFilterSort}
                   value={urlFormCountry || undefined}
                   onChange={(v) => setUrlFormCountry(v || "")}
                   options={countryOptions}
@@ -842,7 +803,9 @@ export default function ArticlePublishPage() {
               <Select
                 value={country}
                 showSearch
-                optionFilterProp="label"
+                placeholder="输入国家代码或名称，如 HK / 香港 / Hong"
+                filterOption={countryFilterOption}
+                filterSort={countryFilterSort}
                 onChange={(v) => {
                   setCountry(v);
                   setLanguage(getLang(v));
@@ -852,7 +815,7 @@ export default function ArticlePublishPage() {
             </Form.Item>
             <div style={{ marginBottom: 16, padding: "8px 12px", background: "#f6f8fa", borderRadius: 6 }}>
               <Text type="secondary">文章语言：</Text>
-              <Text strong>{LANG_NAME[getLang(country)] || "English"}</Text>
+              <Text strong>{marketLanguage(country).nativeName}</Text>
             </div>
             <Space>
               <Button onClick={() => setStep(0)}>上一步</Button>

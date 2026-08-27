@@ -3,6 +3,7 @@ import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { getAdMarketConfig } from "@/lib/ad-market";
+import { geoTargetConstantId, marketLanguage } from "@/lib/countries";
 import { sanitizeAdText, isSitelinkLocaleCompatible, isBadSitelinkUrl } from "@/lib/crawl-pipeline";
 import { isLowValueSitelink } from "@/lib/sitelink-filter";
 import { tryValidateUrl } from "@/lib/url-validator";
@@ -1053,17 +1054,14 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
     ro: "1032", th: "1044", tr: "1037", uk: "1036", vi: "1040",
     ms: "1102",
   };
-  // 国家 → 语言 ID（兜底映射）
-  const COUNTRY_TO_LANG_ID: Record<string, string> = {
-    US: "1000", UK: "1000", GB: "1000", CA: "1000", AU: "1000",
-    NZ: "1000", IE: "1000", SG: "1000",
-    DE: "1001", AT: "1001", CH: "1001",
-    FR: "1002", BE: "1002",
-    ES: "1003", MX: "1003", AR: "1003",
-    IT: "1004", JP: "1005",
-    BR: "1014", PT: "1014",
-    NL: "1010", SE: "1015", NO: "1013", DK: "1009",
-    FI: "1011", PL: "1030", KR: "1012", IN: "1023",
+  // 国家 → 语言 ID（用户没显式选广告语言时的兜底）
+  // D-288：原先是一张 28 国的硬编码表，表外国家一律按英语（1000）投。
+  // 现在先查该国市场主语言（lib/countries.ts），再用上面的 LANG_CODE_TO_ID 换 ID，
+  // 查不到才落回英语——HK 因此会正确定向繁中（1018）而不是英语。
+  const countryToLangId = (country: string): string | undefined => {
+    const code = marketLanguage(country).code;           // en / de / zh-TW / pt-BR …
+    return LANG_CODE_TO_ID[code.replace("-", "_")]       // zh-TW → zh_TW
+      ?? LANG_CODE_TO_ID[code.split("-")[0]];            // pt-BR → pt
   };
 
   const campaignNameToUse = formalName || campaignFresh.campaign_name || `Campaign-${Date.now()}`;
@@ -1268,27 +1266,26 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
     });
 
     // ─── 3. 地理定向 ───
-    const geoTargetMap: Record<string, string> = {
-      US: "2840", UK: "2826", GB: "2826", CA: "2124", AU: "2036",
-      DE: "2276", FR: "2250", JP: "2392", BR: "2076", IT: "2380",
-      ES: "2724", NL: "2528", SE: "2752", NO: "2578", DK: "2208",
-      FI: "2246", PL: "2616", AT: "2040", CH: "2756", BE: "2056",
-      IE: "2372", PT: "2620", NZ: "2554", SG: "2702", KR: "2410",
-      IN: "2356", MX: "2484",
-    };
-    const geoId = geoTargetMap[countryCode] || "2840";
+    // D-288：原先是一张 27 国的硬编码表 + 「查不到就用 2840（美国）」。
+    // 国家下拉放开到全量后这个兜底会变成事故：选了 HK 却把广告投到美国，钱照烧。
+    // geoTargetConstantId 按「2000 + ISO 3166-1 数字码」现算（与旧表 27 条逐条比对一致），
+    // 只有代码本身非法时才落回美国，并打日志留痕。
+    const geoId = geoTargetConstantId(countryCode);
+    if (!geoId) {
+      console.warn(`[Submit] 无法解析投放国 "${countryCode}" 的 geo target，回退美国（2840）`);
+    }
     operations.push({
       campaign_criterion_operation: {
         create: {
           campaign: campaignTempRn,
-          location: { geo_target_constant: `geoTargetConstants/${geoId}` },
+          location: { geo_target_constant: `geoTargetConstants/${geoId ?? "2840"}` },
         },
       },
     });
 
     // ─── 4. 语言定向（优先用户选择的语言，兜底按国家推断）───
     const langId = (ad_language && LANG_CODE_TO_ID[ad_language])
-      || COUNTRY_TO_LANG_ID[countryCode]
+      || countryToLangId(countryCode)
       || "1000";
     operations.push({
       campaign_criterion_operation: {

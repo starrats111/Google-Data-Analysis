@@ -16,7 +16,7 @@ import { useEffect, useState } from "react";
 import { App, Form, Input, Modal, Select, Space, Tag, Typography, Tooltip } from "antd";
 import { WarningOutlined } from "@ant-design/icons";
 import { useRouter } from "next/navigation";
-import { ALL_COUNTRIES } from "@/lib/constants";
+import { buildCountryOptions, countryFilterOption, countryFilterSort } from "@/lib/countries";
 import { compareConnections, connectionLabel, type ConnectionLabelInput } from "@/lib/connection-label";
 import { mutateApi } from "@/lib/swr";
 
@@ -147,22 +147,8 @@ export default function MerchantClaimModal({
       .map((r) => (typeof r === "string" ? r : ((r as { code?: string })?.code ?? String(r))))
       .map((c) => String(c).toUpperCase());
   })();
-  const supportedSet = new Set(supportedRegionCodes);
-  const starOptions = ALL_COUNTRIES.filter((c) => supportedSet.has(c.code)).map((c) => ({
-    value: c.code,
-    label: `⭐ ${c.flag} ${c.code} - ${c.name}`,
-  }));
-  const restOptions = ALL_COUNTRIES.filter((c) => !supportedSet.has(c.code)).map((c) => ({
-    value: c.code,
-    label: `${c.flag} ${c.code} - ${c.name}`,
-  }));
-  const extraOptions: Array<{ value: string; label: string }> = [];
-  for (const code of supportedRegionCodes) {
-    if (!ALL_COUNTRIES.find((c) => c.code === code)) {
-      extraOptions.push({ value: code, label: `⭐ ${code} - 支持地区` });
-    }
-  }
-  const countryOptions = [...starOptions, ...extraOptions, ...restOptions];
+  // D-288：⭐ 置顶逻辑抽到 lib/countries.ts，与 merchants 页那份共用同一个实现
+  const countryOptions = buildCountryOptions(supportedRegionCodes);
 
   return (
     <Modal
@@ -194,8 +180,9 @@ export default function MerchantClaimModal({
         <Form.Item name="target_country" label="目标国家" rules={[{ required: true, message: "请选择目标国家" }]}>
           <Select
             showSearch
-            placeholder="选择或输入国家代码（如 US / GB / AU）"
-            optionFilterProp="label"
+            placeholder="输入国家代码或名称，如 HK / 香港 / Hong"
+            filterOption={countryFilterOption}
+            filterSort={countryFilterSort}
             options={countryOptions}
           />
         </Form.Item>
