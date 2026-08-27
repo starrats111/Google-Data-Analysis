@@ -344,7 +344,11 @@ export async function GET(req: NextRequest) {
         });
         if (!info.hasBudgetCol) {
           oldScriptCount++;
-          await notifyOldScriptMcc(BigInt(mccDbId), info.mccId, info.mccName, BigInt(info.userId));
+          // 表本身就是坏的（空表等）时不催换脚本：CampaignInfo 故障弹窗已经在让他修脚本，
+          // 再叠一条「换新版脚本」只会把人搞晕。表修好后这条自然恢复。
+          if (!result.sheetIssueByMcc.has(mccDbId)) {
+            await notifyOldScriptMcc(BigInt(mccDbId), info.mccId, info.mccName, BigInt(info.userId));
+          }
         }
       }
       if (oldScriptCount > 0) {
@@ -352,6 +356,24 @@ export async function GET(req: NextRequest) {
       }
     } catch (e) {
       log(`脚本检测失败: ${e instanceof Error ? e.message : String(e)}`);
+    }
+
+    // CampaignInfo 故障定向弹窗：脚本没铺好的 MCC，其新广告不会计入「今日投放数」。
+    // 此前只有 HTTP 400/403 进得了 errors，表头不对与空表完全静默——成员只看到数字偏小。
+    let issueNotified = 0;
+    const issueByKind: Record<string, number> = {};
+    try {
+      const { notifyCampaignInfoIssue } = await import("@/lib/system-broadcast");
+      for (const [mccDbId, issue] of result.sheetIssueByMcc) {
+        issueByKind[issue.kind] = (issueByKind[issue.kind] || 0) + 1;
+        if (await notifyCampaignInfoIssue(BigInt(mccDbId), issue)) issueNotified++;
+      }
+      if (result.sheetIssueByMcc.size > 0) {
+        const brief = Object.entries(issueByKind).map(([k, n]) => `${k}=${n}`).join(" ");
+        log(`CampaignInfo 故障：${result.sheetIssueByMcc.size} 个 MCC（${brief}），本轮定向提醒 ${issueNotified} 人次（周去重/废弃 MCC 不弹）`);
+      }
+    } catch (e) {
+      log(`CampaignInfo 故障通知失败: ${e instanceof Error ? e.message : String(e)}`);
     }
 
     // 新广告快速回填（Sheet 近两日新建 → campaigns 表 + 自动关联商家）
@@ -434,6 +456,7 @@ export async function GET(req: NextRequest) {
         errors: nameSync.errors,
       },
       script_check: { judged: result.scriptStatusByMcc.size, old_script: oldScriptCount },
+      sheet_issues: { total: result.sheetIssueByMcc.size, by_kind: issueByKind, notified: issueNotified },
       today_cost: cost && {
         mcc_with_data: cost.mccWithData,
         upserted: cost.upserted,

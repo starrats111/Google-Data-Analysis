@@ -14,6 +14,7 @@
  */
 import prisma from "@/lib/prisma";
 import { sendAlert, type AlertLevel } from "@/lib/alert";
+import type { SheetIssue } from "@/lib/today-merchants-sheet";
 
 export interface CriticalAlertInput {
   /** 去重键，如 sheet_blocked_218-718-2682 */
@@ -243,4 +244,66 @@ export async function checkSheetScriptFreshness(log: (msg: string) => void): Pro
     log(`  [Freshness] ⚠️ ${label}: DailyData 最新 ${maxDate}，疑似脚本停更（已通知归属人）`);
   }
   log(`  [Freshness] 检查 ${mccs.length} 个 MCC，停更 ${stale} 个`);
+}
+
+/**
+ * CampaignInfo 读不到 → 定向弹窗催归属人修脚本（today-merchants-sync 每半小时接线调用）。
+ *
+ * 背景（2026-08-27 全量扫描）：59 个在用 MCC 里 29 个的 CampaignInfo 是坏的，
+ * 但 cron 只报得出 14 个——HTTP 200 表头不对（11 个）与空表（4 个）三层告警全哑
+ * （不进 errors、hasBudgetCol 为 null 连 D-285 旧脚本弹窗也跳过），
+ * 成员只看到「今日投放数」偏小，无从知道是哪个 MCC 掉了（李金娜 2026-08-26 反馈根因）。
+ *
+ * 口径与同类告警一致：只发 MCC 归属人（D-269 数据隔离）、近期活跃闸门（废弃 MCC 旧账不弹）、
+ * 每周提醒一次。脚本修好后检测不再触发，提醒自动停止。
+ * PERM_DENIED 复用 broadcastSheetFailure 的 sheet_blocked_ 去重键，同一件事不弹两次。
+ */
+export async function notifyCampaignInfoIssue(
+  mccInternalId: bigint,
+  issue: SheetIssue,
+): Promise<boolean> {
+  if (!(await mccRecentlyActive(mccInternalId))) {
+    console.log(`[SystemBroadcast] MCC ${issue.mccId} CampaignInfo 故障(${issue.kind})但近 7 天无数据（废弃 MCC），不弹窗`);
+    return false;
+  }
+  const label = issue.mccName ? `${issue.mccName}（${issue.mccId}）` : issue.mccId;
+  const WEEKLY = 7 * 24;
+  const tail = `修好前，该 MCC 新上的广告不会计入数据中心的「今日投放数」，其它 MCC 不受影响。`;
+
+  if (issue.kind === "PERM_DENIED") {
+    return sendCriticalAlert({
+      key: `sheet_blocked_${issue.mccId}`,
+      userIds: [BigInt(issue.userId)],
+      dedupeHours: WEEKLY,
+      title: `你的 MCC ${label} 的 Google Sheet 无法访问（疑似被封）`,
+      content: `CRM 拉取该 MCC 的数据表时被拒绝（权限不足/403）。请检查该 Sheet 是否被 Google 封禁，或分享权限是否被改——需设为「知道链接的任何人都可以查看」。${tail}`,
+    });
+  }
+  if (issue.kind === "BAD_URL") {
+    return sendCriticalAlert({
+      key: `sheet_bad_url_${issue.mccId}`,
+      userIds: [BigInt(issue.userId)],
+      dedupeHours: WEEKLY,
+      title: `你的 MCC ${label} 的表格链接无效`,
+      content: `CRM 从该 MCC 配置的 Google Sheet 链接里解析不出表格 ID。请到「设置 → MCC 账户」重新粘贴完整的表格链接。${tail}`,
+    });
+  }
+  if (issue.kind === "EMPTY_SHEET") {
+    return sendCriticalAlert({
+      key: `campaigninfo_empty_${issue.mccId}`,
+      userIds: [BigInt(issue.userId)],
+      dedupeHours: WEEKLY,
+      level: "warning",
+      title: `你的 MCC ${label} 的统一脚本没有产出数据`,
+      content: `该 MCC 数据表的 CampaignInfo 只有表头、一条广告系列都没有，说明统一脚本装了但没跑起来（或每次运行都失败）。请到 Google Ads 后台该 MCC 的 Scripts 页面，检查脚本的运行记录与报错，并手动点一次「运行」。${tail}`,
+    });
+  }
+  // MISSING_TAB
+  return sendCriticalAlert({
+    key: `campaigninfo_missing_${issue.mccId}`,
+    userIds: [BigInt(issue.userId)],
+    dedupeHours: WEEKLY,
+    title: `你的 MCC ${label} 的数据表缺 CampaignInfo`,
+    content: `CRM 在该 MCC 的 Google Sheet 里找不到 CampaignInfo 这张表——统一脚本没装、装的是旧版/别的脚本，或脚本从未成功运行过。请到「设置 → MCC 账户」对该 MCC 点「复制脚本」，把脚本粘贴到 Google Ads 后台该 MCC 的 Scripts 里运行一次。${tail}`,
+  });
 }

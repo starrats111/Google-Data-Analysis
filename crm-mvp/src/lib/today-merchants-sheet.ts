@@ -13,6 +13,22 @@ import prisma from "@/lib/prisma";
 import { todayCST } from "@/lib/date-utils";
 import { readSheetCsv, extractSheetId } from "@/lib/sheet-sync";
 
+/**
+ * CampaignInfo 读取故障类型（统一脚本没铺好的四种形态）。
+ * MISSING_TAB 含两种：HTTP 400（tab 真的不存在）与 HTTP 200 但表头认不出
+ * ——后者是 gviz 在 tab 不存在时回退到第一个 tab，此前一路静默当成「读到了但没今日行」。
+ */
+export type SheetIssueKind = "MISSING_TAB" | "EMPTY_SHEET" | "PERM_DENIED" | "BAD_URL";
+
+export interface SheetIssue {
+  mccId: string;
+  mccName: string | null;
+  userId: string;
+  kind: SheetIssueKind;
+  /** 原始错误信息（PERM_DENIED 等），供日志与飞书用 */
+  detail: string;
+}
+
 /** CampaignInfo 单行（近两日 CST 创建的系列） */
 export interface CampaignInfoRow {
   campaignId: string;
@@ -32,8 +48,9 @@ export interface CampaignInfoRow {
  * D-285：hasBudgetCol 区分脚本新旧（新脚本=D-264 加了 Budget 列）。
  * null = 表头不是 CRM CampaignInfo 结构（jy 组另类表等），新旧无从判定。
  */
-function parseCampaignInfoRows(rows: string[][]): { list: CampaignInfoRow[]; hasBudgetCol: boolean | null } {
-  if (rows.length < 2) return { list: [], hasBudgetCol: null };
+function parseCampaignInfoRows(rows: string[][]): { list: CampaignInfoRow[]; hasBudgetCol: boolean | null; headerOk: boolean } {
+  // rows.length === 1（只有表头）不再当成解析失败：交给调用方判为 EMPTY_SHEET
+  if (rows.length === 0) return { list: [], hasBudgetCol: null, headerOk: false };
 
   const headers = rows[0].map((h) => h.trim());
   const campaignIdIdx = headers.indexOf("CampaignId");
@@ -43,7 +60,8 @@ function parseCampaignInfoRows(rows: string[][]): { list: CampaignInfoRow[]; has
   const customerIdx = headers.indexOf("CustomerId");
   const budgetIdx = headers.indexOf("Budget");
 
-  if (campaignIdIdx < 0 || creationDateIdx < 0) return { list: [], hasBudgetCol: null };
+  // 表头认不出 = gviz 在 CampaignInfo tab 不存在时回退到了第一个 tab（HTTP 200，非 400）
+  if (campaignIdIdx < 0 || creationDateIdx < 0) return { list: [], hasBudgetCol: null, headerOk: false };
 
   const result: CampaignInfoRow[] = [];
   for (const row of rows.slice(1)) {
@@ -68,7 +86,7 @@ function parseCampaignInfoRows(rows: string[][]): { list: CampaignInfoRow[]; has
       budget,
     });
   }
-  return { list: result, hasBudgetCol: budgetIdx >= 0 };
+  return { list: result, hasBudgetCol: budgetIdx >= 0, headerOk: true };
 }
 
 export interface TodayMerchantsResult {
@@ -95,6 +113,12 @@ export interface TodayMerchantsResult {
    * 消费方：today-merchants-sync 落库标记 + 旧脚本定向弹窗；budget-fix 接口读标记做闸门。
    */
   scriptStatusByMcc: Map<string, { mccId: string; mccName: string | null; userId: string; hasBudgetCol: boolean }>;
+  /**
+   * mccDbId → CampaignInfo 读取故障。消费方：today-merchants-sync 定向弹窗催归属人修脚本。
+   * 有故障的 MCC 对「今日投放数」贡献恒为 0，此前只有 HTTP 400/403 两种会进 errors，
+   * 表头不对与空表（生产实测 15 个）完全静默——成员只看到数字偏小，无从知道是哪个 MCC。
+   */
+  sheetIssueByMcc: Map<string, SheetIssue>;
   /** 参与同步的 MCC 数量 */
   mccCount: number;
   /** 有数据的 MCC 数量 */
@@ -141,27 +165,49 @@ export async function fetchTodayMerchantsFromSheets(): Promise<TodayMerchantsRes
   const nameByUserGcid: TodayMerchantsResult["nameByUserGcid"] = new Map();
   const budgetByUserGcid: TodayMerchantsResult["budgetByUserGcid"] = new Map();
   const scriptStatusByMcc: TodayMerchantsResult["scriptStatusByMcc"] = new Map();
+  const sheetIssueByMcc: TodayMerchantsResult["sheetIssueByMcc"] = new Map();
 
   for (const mcc of mccs) {
     if (!mcc.sheet_url) continue;
 
-    const sheetId = extractSheetId(mcc.sheet_url);
-    if (!sheetId) {
-      errors.push(`MCC ${mcc.mcc_id}: 无效 sheet_url`);
-      continue;
-    }
-
     const mccDbId = String(mcc.id);
     const userId = String(mcc.user_id);
+    const recordIssue = (kind: SheetIssueKind, note: string) => {
+      sheetIssueByMcc.set(mccDbId, { mccId: mcc.mcc_id, mccName: mcc.mcc_name, userId, kind, detail: note });
+      errors.push(`MCC ${mcc.mcc_id} [${kind}]: ${note}`);
+    };
+
+    const sheetId = extractSheetId(mcc.sheet_url);
+    if (!sheetId) {
+      recordIssue("BAD_URL", "无效 sheet_url");
+      continue;
+    }
 
     try {
       // readSheetCsv：Tab 不存在时返回 []（HTTP 400 静默），权限不足抛错
       const rows = await readSheetCsv(sheetId, "CampaignInfo");
       if (rows.length === 0) {
-        errors.push(`MCC ${mcc.mcc_id} [MISSING_TAB]: sheet 缺 CampaignInfo tab（需 Google Ads Script 生成）`);
+        recordIssue("MISSING_TAB", "sheet 缺 CampaignInfo tab（需 Google Ads Script 生成）");
         continue;
       }
       const parsed = parseCampaignInfoRows(rows);
+      if (!parsed.headerOk) {
+        // HTTP 200 但读到的不是 CampaignInfo——gviz 在 tab 不存在时回退到第一个 tab。
+        // 此前这里一路当成「读到了、只是没有今日行」，静默贡献 0（生产实测 11 个 MCC）。
+        const got = (rows[0] || []).slice(0, 3).join(" / ").slice(0, 60);
+        recordIssue("MISSING_TAB", `sheet 缺 CampaignInfo tab（实际读到另一张表：${got}）`);
+        continue;
+      }
+      if (parsed.list.length === 0) {
+        // 表头对但一条系列都没有：脚本装了没跑 / 跑失败（生产实测 4 个 MCC）
+        recordIssue("EMPTY_SHEET", "CampaignInfo tab 只有表头、无任何系列（统一脚本未运行或运行失败）");
+        if (parsed.hasBudgetCol != null) {
+          scriptStatusByMcc.set(mccDbId, {
+            mccId: mcc.mcc_id, mccName: mcc.mcc_name, userId, hasBudgetCol: parsed.hasBudgetCol,
+          });
+        }
+        continue;
+      }
       const allRows = parsed.list;
       // D-285：表头可识别才记录脚本新旧；另类结构（jy 组）不判定不弹
       if (parsed.hasBudgetCol != null) {
@@ -191,7 +237,12 @@ export async function fetchTodayMerchantsFromSheets(): Promise<TodayMerchantsRes
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      errors.push(`MCC ${mcc.mcc_id}: ${msg.slice(0, 200)}`);
+      if (msg.includes("权限不足")) {
+        recordIssue("PERM_DENIED", msg.slice(0, 200));
+      } else {
+        // 网络超时等瞬态失败不登记故障、不弹窗（质量闸：不确定 ≠ 危险，防狼来了），仅进日志
+        errors.push(`MCC ${mcc.mcc_id}: ${msg.slice(0, 200)}`);
+      }
     }
   }
 
@@ -223,5 +274,5 @@ export async function fetchTodayMerchantsFromSheets(): Promise<TodayMerchantsRes
     byUser.set(userId, merchantIds.size);
   }
 
-  return { byUser, recentRows, nameByUserGcid, budgetByUserGcid, scriptStatusByMcc, mccCount, mccWithData, date: todayStr, errors };
+  return { byUser, recentRows, nameByUserGcid, budgetByUserGcid, scriptStatusByMcc, sheetIssueByMcc, mccCount, mccWithData, date: todayStr, errors };
 }
