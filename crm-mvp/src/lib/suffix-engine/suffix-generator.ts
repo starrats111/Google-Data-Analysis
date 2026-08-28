@@ -12,7 +12,8 @@
 import { resolveAffiliateLink } from '@/lib/affiliate-link-resolver'
 import { STOCK_CONFIG } from './config'
 import { getUsedExitIps, acquireDedupedProxy, probeExitIp, type DedupScope } from './exit-ip'
-import { reportProviderResult, PROXY_HARD_ERR } from './proxy-circuit'
+import { reportProviderResult } from './proxy-circuit'
+import { isProxyHardFailure } from './failure-classify'
 
 export type GenFailReason =
   | 'no_tracking'
@@ -210,12 +211,18 @@ export async function generateOneSuffix(
     // 黑名单命中（forbidden_network）与跳板 4xx（tracker_forbidden，已在上方返回）都是 HTTP 阶段
     // 即已成立的确定判定，不受本条影响。
     if (r.browserBlocked && r.status !== 'forbidden_network') {
-      // 浏览器点击压根没发起：对代理健康度保持中性，不上报成败
+      // 浏览器点击压根没发起（或发起了但一步没导航成）：对代理健康度保持中性，不上报成败
       const blockedReason: GenFailReason = r.browserBlocked === 'proxy_unavailable' ? 'proxy_unavailable' : 'local_resource'
+      // D-298：browser_nav_error 是「起飞了但没连上」，其余四种是「压根没起飞」，文案要分开——
+      // 否则排障时看到「本机资源不足」会往内存/槽位方向查，而真凶在代理链路上。
+      const detail =
+        r.browserBlocked === 'browser_nav_error'
+          ? `浏览器已启动但一步都没导航成（${r.browserBlocked}，多为代理连不上），本轮未检验该链接`
+          : `本机资源不足，未能启动浏览器跟链（${r.browserBlocked}），本轮未检验该链接`
       return {
         ok: false,
         reason: blockedReason,
-        error: `本机资源不足，未能启动浏览器跟链（${r.browserBlocked}），本轮未检验该链接`,
+        error: detail,
         finalUrl: r.finalUrl,
       }
     }
@@ -243,7 +250,16 @@ export async function generateOneSuffix(
       return { ok: false, reason: 'proxy_unavailable', error: resolveErr, finalUrl: null }
     }
     // 仅当错误是硬代理错误（SOCKS5 认证失败/连接被拒/reset）才判代理失败，避免误伤
-    reportProxy(!PROXY_HARD_ERR.test(resolveErr))
+    const proxyHardErr = isProxyHardFailure(resolveErr)
+    reportProxy(!proxyHardErr)
+    if (proxyHardErr) {
+      return {
+        ok: false,
+        reason: 'proxy_unavailable',
+        error: `proxy_unavailable: 代理硬失败（${resolveErr.slice(0, 120)}），本次不判定链接死活`,
+        finalUrl: null,
+      }
+    }
     return {
       ok: false,
       reason: 'resolve_failed',
@@ -256,7 +272,15 @@ export async function generateOneSuffix(
       // 超时不归因代理（慢目标站也会超时），保持中性不上报
       return { ok: false, reason: 'timeout', error: `生成超时（>${STOCK_CONFIG.GEN_TIMEOUT_MS}ms）` }
     }
-    if (PROXY_HARD_ERR.test(msg)) reportProxy(false)
+    // D-298：抛出来的硬代理错误与上面同档处理——同样是「没出去」，不是「链接死了」
+    if (isProxyHardFailure(msg)) {
+      reportProxy(false)
+      return {
+        ok: false,
+        reason: 'proxy_unavailable',
+        error: `proxy_unavailable: 代理硬失败（${msg.slice(0, 120)}），本次不判定链接死活`,
+      }
+    }
     return { ok: false, reason: 'resolve_failed', error: msg.slice(0, 200) }
   }
 }

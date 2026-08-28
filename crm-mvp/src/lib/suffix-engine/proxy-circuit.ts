@@ -27,8 +27,12 @@ const PROBE_COOLDOWN_MS = 12 * 60_000
  * ⚠️ 有意区别于 click-brush 的 TRANSIENT_PROXY_ERR：此处**不含 timeout**——慢目标站也会超时，
  * 若把 timeout 计入会误伤健康代理。只对确定性的代理故障信号熔断。
  */
+// D-298 补一条：`socks` 库实际抛的是「Socks5 proxy rejected connection - Failure」，
+// 而这里原先只认「rejected by the socks5 server」——两句话都存在，措辞由失败阶段决定。
+// 漏掉的后果双重：熔断器不跳（坏代理继续被选中），失败归因也认不出（记成链接疑似失效）。
+// 2026-08-28 实测该措辞出现 6 次，全部被误算到联盟链接头上。
 export const PROXY_HARD_ERR =
-  /socks5 authentication failed|rejected by the socks5 server|econnrefused|econnreset|socket hang up|tunneling socket could not be established/i
+  /socks5 authentication failed|rejected by the socks5 server|socks5? proxy rejected connection|econnrefused|econnreset|socket hang up|tunneling socket could not be established/i
 
 interface Breaker {
   /** 连续硬失败计数（成功清零 = 删除条目） */

@@ -1190,14 +1190,27 @@ export async function batchFetchMetaViaPuppeteer(
     return result;
   }
 
+  // D-298 内存瘦身：站点隔离（site-per-process）让 Chrome 每遇到一个新站点就多起一个渲染器。
+  // 2026-08-28 实测本机爬虫单实例 11 进程 / 5 渲染器 / 1010→1374MB，是这台 3.66G 机器上
+  // 最大的一块常驻内存，直接决定 puppeteer 池能开几个（D-220 内存反压水位 500MB）。
+  // 爬虫是一次性 headless 抓取、抓完即杀，不存在「同时开着受害者和攻击者页面」的威胁模型，
+  // 站点隔离在这里零收益。
+  // ⚠️ 必须并进已有的 --disable-features，不能另起一个：Chrome 只认最后一个同名 flag，
+  // 分开写会把 VizDisplayCompositor 这条静默丢掉。
+  // 不加 --js-flags 限堆：爬虫要解析整页 DOM，压堆会换来 OOM 崩页（换链接只读跳转链，才敢限）。
   const launchArgs = [
     "--no-sandbox", "--disable-setuid-sandbox",
     "--disable-blink-features=AutomationControlled",
     "--window-size=1920,1080",
     "--disable-dev-shm-usage",
     "--disable-web-security",
-    "--disable-features=VizDisplayCompositor",
+    "--disable-features=VizDisplayCompositor,site-per-process,IsolateOrigins,SitePerProcess",
+    "--disable-site-isolation-trials",
     "--disable-infobars", "--disable-extensions",
+    "--disable-background-networking",
+    "--disable-component-update",
+    "--disable-default-apps",
+    "--mute-audio",
     "--disable-background-timer-throttling",
     "--disable-backgrounding-occluded-windows",
     "--disable-renderer-backgrounding",
@@ -1441,14 +1454,27 @@ export async function fetchImagesViaPuppeteerBatch(
     return result;
   }
 
+  // D-298 内存瘦身：站点隔离（site-per-process）让 Chrome 每遇到一个新站点就多起一个渲染器。
+  // 2026-08-28 实测本机爬虫单实例 11 进程 / 5 渲染器 / 1010→1374MB，是这台 3.66G 机器上
+  // 最大的一块常驻内存，直接决定 puppeteer 池能开几个（D-220 内存反压水位 500MB）。
+  // 爬虫是一次性 headless 抓取、抓完即杀，不存在「同时开着受害者和攻击者页面」的威胁模型，
+  // 站点隔离在这里零收益。
+  // ⚠️ 必须并进已有的 --disable-features，不能另起一个：Chrome 只认最后一个同名 flag，
+  // 分开写会把 VizDisplayCompositor 这条静默丢掉。
+  // 不加 --js-flags 限堆：爬虫要解析整页 DOM，压堆会换来 OOM 崩页（换链接只读跳转链，才敢限）。
   const launchArgs = [
     "--no-sandbox", "--disable-setuid-sandbox",
     "--disable-blink-features=AutomationControlled",
     "--window-size=1920,1080",
     "--disable-dev-shm-usage",
     "--disable-web-security",
-    "--disable-features=VizDisplayCompositor",
+    "--disable-features=VizDisplayCompositor,site-per-process,IsolateOrigins,SitePerProcess",
+    "--disable-site-isolation-trials",
     "--disable-infobars", "--disable-extensions",
+    "--disable-background-networking",
+    "--disable-component-update",
+    "--disable-default-apps",
+    "--mute-audio",
     "--disable-background-timer-throttling",
     "--disable-backgrounding-occluded-windows",
     "--disable-renderer-backgrounding",
@@ -1652,14 +1678,27 @@ export async function harvestImagesFromPagesWithPuppeteer(
     return result;
   }
 
+  // D-298 内存瘦身：站点隔离（site-per-process）让 Chrome 每遇到一个新站点就多起一个渲染器。
+  // 2026-08-28 实测本机爬虫单实例 11 进程 / 5 渲染器 / 1010→1374MB，是这台 3.66G 机器上
+  // 最大的一块常驻内存，直接决定 puppeteer 池能开几个（D-220 内存反压水位 500MB）。
+  // 爬虫是一次性 headless 抓取、抓完即杀，不存在「同时开着受害者和攻击者页面」的威胁模型，
+  // 站点隔离在这里零收益。
+  // ⚠️ 必须并进已有的 --disable-features，不能另起一个：Chrome 只认最后一个同名 flag，
+  // 分开写会把 VizDisplayCompositor 这条静默丢掉。
+  // 不加 --js-flags 限堆：爬虫要解析整页 DOM，压堆会换来 OOM 崩页（换链接只读跳转链，才敢限）。
   const launchArgs = [
     "--no-sandbox", "--disable-setuid-sandbox",
     "--disable-blink-features=AutomationControlled",
     "--window-size=1920,1080",
     "--disable-dev-shm-usage",
     "--disable-web-security",
-    "--disable-features=VizDisplayCompositor",
+    "--disable-features=VizDisplayCompositor,site-per-process,IsolateOrigins,SitePerProcess",
+    "--disable-site-isolation-trials",
     "--disable-infobars", "--disable-extensions",
+    "--disable-background-networking",
+    "--disable-component-update",
+    "--disable-default-apps",
+    "--mute-audio",
     "--disable-background-timer-throttling",
     "--disable-backgrounding-occluded-windows",
     "--disable-renderer-backgrounding",

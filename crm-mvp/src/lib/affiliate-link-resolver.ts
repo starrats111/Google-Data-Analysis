@@ -81,8 +81,31 @@ export const BROWSER_BLOCKED_REASONS = [
   "no_browser",
   "no_puppeteer_slot",
   "low_memory",
+  // D-298：浏览器起飞了、但一步都没导航成（Chrome 的 chrome-error://chromewebdata/ 错误页）。
+  // 与上面四种「压根没 launch」不同，但对**链接死活**的证据价值完全一样：零。
+  // chromewebdata 是 Chrome 在传输层失败时的兜底页——ERR_PROXY_CONNECTION_FAILED /
+  // ERR_TUNNEL_CONNECTION_FAILED / ERR_CONNECTION_RESET / ERR_TIMED_OUT 都渲染成它，
+  // 即「没连上」，而不是「对方说了不」。2026-08-28 实测：同一分钟内 linkbux / rewardoo /
+  // ultrainfluence / partnermatic 四家跳板同时 chromewebdata，同期 HTTP 侧报的是
+  // Socks5 Authentication failed —— 挂的是我们的代理，不是这四家。
+  "browser_nav_error",
 ] as const;
 export type BrowserBlockedReason = (typeof BROWSER_BLOCKED_REASONS)[number];
+
+/**
+ * D-298：把 browser 兜底的 error 归一到 BrowserBlockedReason。
+ *
+ * 前四种是裸串精确匹配；browser_nav_error 落库时带具体错误页（`browser_nav_error: chrome-error://…`），
+ * 故按前缀认。写成独立函数而不是内联 find，是因为漏掉这一支的代价是**静默**的：
+ * 我方代理挂了会被记成「联盟链接不记点击」，攒够 3 轮就误报 no_tracking_stuck +
+ * 冻结该系列 8 小时（2026-08-28 一次性误伤 101 个系列的根因）。
+ */
+export function classifyBrowserBlocked(err: string | null | undefined): BrowserBlockedReason | null {
+  if (!err) return null;
+  const exact = BROWSER_BLOCKED_REASONS.find((r) => r === err);
+  if (exact) return exact;
+  return err.startsWith("browser_nav_error") ? "browser_nav_error" : null;
+}
 
 export interface ResolveResult {
   status: LinkStatus;
@@ -1594,7 +1617,9 @@ export async function resolveAffiliateLink(
     // 起飞前就失败的几种情况没有产生点击，不打标。
     // D-231：原判定漏了 low_memory —— 内存反压时浏览器根本没 launch，却仍被记成一次升级点击，
     // 污染点击对账；同时把阻塞原因回传给调用方，供其区分「链接有问题」与「我方没资源去验」。
-    const blocked = BROWSER_BLOCKED_REASONS.find((r) => r === br.error) ?? null;
+    // D-298：browser_nav_error 也归进 blocked —— 导航一步都没成，既没产生真实点击
+    // （故不打 escalated，否则污染点击对账），也没对链接做出任何检验（故不得判死活）。
+    const blocked = classifyBrowserBlocked(br.error);
     if (blocked) result.browserBlocked = blocked;
     else result.escalated = true;
     if (br.finalUrl) {
