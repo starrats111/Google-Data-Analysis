@@ -29,22 +29,30 @@ export async function GET(req: NextRequest) {
   })
   const countMap = new Map(userCounts.map((r) => [r.proxy_id.toString(), r._count.user_id]))
 
-  // 剩余流量（D-254 kookeey / D-280 tnbproxy，均 10 分钟缓存）；其余供应商未接入返回 null
+  // 剩余流量（D-254 kookeey / D-280 tnbproxy，均 10 分钟缓存）；其余供应商未接入返回 null。
+  // D-297：某家代理已从本页删除（如 kookeey 换成 tnbproxy）时不再外呼它的余量接口——
+  // 列表里都没有这一行，查回来的数字没有任何去处，白白多一次外部请求。
+  const hasProvider = (kw: string) => proxies.some((p) => p.name.toLowerCase().includes(kw))
+
   let kookeeyTrafficGB: number | null = null
-  try {
-    const report = await getKookeeyTrafficCached()
-    if (report.ok) {
-      kookeeyTrafficGB = Math.round(
-        report.subAccounts.filter((s) => s.status === 1).reduce((sum, s) => sum + s.trafficLeftGB, 0) * 100,
-      ) / 100
-    }
-  } catch { /* 余量查询失败不影响列表 */ }
+  if (hasProvider('kookeey')) {
+    try {
+      const report = await getKookeeyTrafficCached()
+      if (report.ok) {
+        kookeeyTrafficGB = Math.round(
+          report.subAccounts.filter((s) => s.status === 1).reduce((sum, s) => sum + s.trafficLeftGB, 0) * 100,
+        ) / 100
+      }
+    } catch { /* 余量查询失败不影响列表 */ }
+  }
 
   let tnbTrafficGB: number | null = null
-  try {
-    const report = await getTnbTrafficCached()
-    if (report.ok) tnbTrafficGB = report.remainingGB
-  } catch { /* 余量查询失败不影响列表 */ }
+  if (hasProvider('tnb')) {
+    try {
+      const report = await getTnbTrafficCached()
+      if (report.ok) tnbTrafficGB = report.remainingGB
+    } catch { /* 余量查询失败不影响列表 */ }
+  }
 
   const trafficFor = (name: string): number | null => {
     const n = name.toLowerCase()
