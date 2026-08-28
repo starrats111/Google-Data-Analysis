@@ -889,6 +889,14 @@ async function resolveViaBrowser(
     return { finalUrl: "", chain, error: "proxy_unavailable" };
   }
 
+  // D-298 单会话内存瘦身：换链接跟链是「一条链路连跳好几个域名」，而 Chrome 默认按站点隔离，
+  // **每跳一个新域名就再起一个渲染器进程** —— D-199 实测单会话 1 gpu + 5 renderer + 2 utility
+  // 共 352MB，比爬虫的 323MB 还重，重就重在这个进程数上（跟页面里有没有图基本无关，
+  // 重资源拦截省的是流量不是内存）。跟链只读跳转链、不执行跨站脚本，站点隔离对我们零收益。
+  //
+  // 关掉后单会话回落到 1 renderer 量级，是这台 3.6G 机器上唯一不花钱就能把并发提上去的办法。
+  // 安全影响：站点隔离防的是跨站数据窃取（Spectre 类），威胁模型是「浏览器同时开着受害者和
+  // 攻击者的页面」；这里每个会话是一次性的、只跟一条链、跟完即杀，没有可被窃取的第二方数据。
   const args = [
     "--no-sandbox",
     "--disable-setuid-sandbox",
@@ -896,6 +904,18 @@ async function resolveViaBrowser(
     "--disable-gpu",
     "--no-zygote",
     "--disable-blink-features=AutomationControlled",
+    // 站点隔离关闭：三个开关要一起给，只给 --disable-site-isolation-trials 在新版 Chrome 上不生效
+    "--disable-site-isolation-trials",
+    "--disable-features=site-per-process,IsolateOrigins,SitePerProcess",
+    "--renderer-process-limit=1",
+    // 渲染器堆上限：跟链只读 URL 与跳转链，不需要给落地页正文留大堆
+    "--js-flags=--max-old-space-size=192",
+    // 后台网络/组件更新/同步等常驻开销，headless 一次性会话全都用不上
+    "--disable-background-networking",
+    "--disable-component-update",
+    "--disable-extensions",
+    "--disable-default-apps",
+    "--mute-audio",
   ];
   if (proxyAuth) args.push(`--proxy-server=${proxyAuth.server}`);
 
