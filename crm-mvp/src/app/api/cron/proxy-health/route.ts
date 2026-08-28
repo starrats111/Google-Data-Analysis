@@ -16,6 +16,7 @@ import { prisma } from '@/lib/prisma'
 import { checkAllProxiesHealth } from '@/lib/suffix-engine/proxy-health'
 import { checkKookeeyTraffic } from '@/lib/suffix-engine/kookeey-quota'
 import { checkTnbTraffic } from '@/lib/suffix-engine/tnbproxy-quota'
+import { isProxyAlertOn } from '@/lib/suffix-engine/proxy-alert-gate'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
@@ -116,17 +117,9 @@ export async function GET(req: NextRequest) {
     //    2026-07-24 07 定调升级：此前「只做页面横幅、不发通知」，结果流量真实耗尽当天无人知晓、
     //    换链接补货断供才被动发现。现改为提前主动推送（24h 同标题去重防刷屏）；剩余 ≤5GB 时
     //    标题升级为「即将耗尽」，可在同一天内再触发一次更高优先级提醒。页面横幅保留不变。
-    // D-281 提醒开关：流量告警按供应商行的 alert_enabled 门控（行不存在按开提醒处理，危险不静默）
-    const alertOn = async (nameContains: string): Promise<boolean> => {
-      const row = await prisma.kyads_proxies.findFirst({
-        where: { name: { contains: nameContains }, is_deleted: 0 },
-        select: { alert_enabled: true },
-      })
-      return row ? row.alert_enabled !== 0 : true
-    }
-
+    // D-281 提醒开关 + D-297 已删代理不再告警：统一走 isProxyAlertOn（代理管理页无此行=不用了=静音）
     const traffic = await checkKookeeyTraffic()
-    if (traffic.ok && traffic.low.length > 0 && (await alertOn('kookeey'))) {
+    if (traffic.ok && traffic.low.length > 0 && (await isProxyAlertOn('kookeey'))) {
       const critical = traffic.low.some((s) => s.trafficLeftGB <= 5)
       const title = critical
         ? '[换链接代理] kookeey 动态住宅流量即将耗尽'
@@ -151,7 +144,7 @@ export async function GET(req: NextRequest) {
 
     // 4) TnbProxy 剩余流量 ≤ 阈值（默认 20GB）→ 同 kookeey 的提前预警（D-280），受提醒开关门控
     const tnbTraffic = await checkTnbTraffic()
-    if (tnbTraffic.ok && tnbTraffic.low && (await alertOn('tnb'))) {
+    if (tnbTraffic.ok && tnbTraffic.low && (await isProxyAlertOn('tnb'))) {
       const critical = (tnbTraffic.remainingGB ?? 0) <= 5
       const title = critical
         ? '[换链接代理] tnbproxy 动态住宅流量即将耗尽'

@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { getUserFromRequest } from '@/lib/auth'
 import { getAlertSummary } from '@/lib/suffix-engine/alerts'
 import { getKookeeyTrafficCached } from '@/lib/suffix-engine/kookeey-quota'
+import { isProxyAlertOn } from '@/lib/suffix-engine/proxy-alert-gate'
 import { STOCK_CONFIG } from '@/lib/suffix-engine/config'
 import { parseCampaignNameFull } from '@/lib/campaign-merchant-link'
 import { loadConnectionAliasMap, pickCampaignAffiliateLink } from '@/lib/merchant-connection'
@@ -413,17 +414,15 @@ export async function GET(req: NextRequest) {
   const clickDebt = await computeClickDebtSummary(userId)
 
   // 换链接住宅代理 kookeey 剩余流量：≤ 阈值时前端顶部横幅提醒重置（带缓存，不每次外呼）。
-  // D-281：代理管理页 kookeey 行「提醒」开关关闭时横幅静音（行不存在按开提醒处理，危险不静默）。
-  const kk = await getKookeeyTrafficCached()
-  const kkAlertRow = await prisma.kyads_proxies.findFirst({
-    where: { name: { contains: 'kookeey' }, is_deleted: 0 },
-    select: { alert_enabled: true },
-  })
-  const kkAlertOn = kkAlertRow ? kkAlertRow.alert_enabled !== 0 : true
-  const kkActive = kk.ok ? kk.subAccounts.filter((s) => s.status === 1) : []
-  const proxyStatus = kk.ok
+  // D-281：代理管理页 kookeey 行「提醒」开关关闭时横幅静音。
+  // D-297：kookeey 已从代理管理页删除（换成 tnbproxy）时整段跳过——连 API 都不外呼，
+  //        横幅不再挂一条作废的 0GB 告警；哪天把 kookeey 加回来，横幅自动恢复。
+  const kkAlertOn = await isProxyAlertOn('kookeey')
+  const kk = kkAlertOn ? await getKookeeyTrafficCached() : null
+  const kkActive = kk?.ok ? kk.subAccounts.filter((s) => s.status === 1) : []
+  const proxyStatus = kk?.ok
     ? {
-        kookeeyLow: kkAlertOn && kk.low.length > 0,
+        kookeeyLow: kk.low.length > 0,
         kookeeyLeftGB: kkActive.length > 0 ? Math.min(...kkActive.map((s) => s.trafficLeftGB)) : null,
         thresholdGB: kk.thresholdGB,
       }
