@@ -16,6 +16,11 @@ export type SuffixAlertType =
   | 'replenish_failed' // 补货批量全部失败
   | 'brush_blocked' // 有订单需当天净化转化率，但补刷无法进行（无链接/任务创建失败），需人工介入
   | 'link_forbidden' // 联盟跳板在自己的重定向端点返回 4xx（403 等）拒绝点击：商家目录仍在但 token 已失效/被停用，需人工到平台重新获取链接
+  // D-299 与该商家已无合作关系：跳板 4xx 的拒绝页正文明说「No business partnership with merchants」。
+  // 单列的理由是**处置与 link_forbidden 相反**——那个重新取一条链接就好，这个取多少次都还是 403，
+  // 必须重新申请合作或下架系列。原先两者同报「需重新获取链接」，wj07 jymsupplementscience 因此
+  // 被反复催了 2744 次、人照做也没用、广告一直在烧钱而佣金为零（07 2026-08-28 反馈「提示不到位」）。
+  | 'merchant_partnership_ended'
   | 'no_tracking_stuck' // D-201 连续多轮跟链都落到商家官网但零追踪参数：链接「活着但不记点击」，此前无任何告警可覆盖，系列会静默死并每天白开上百次浏览器
   // D-230 补刷连续全败：有订单要净化、任务也建得出来，但排出去的点击一次都没成过。
   // 既有告警全是「链接层」的（跟链失败/被拒/零参数），补刷这一层的成功率此前无人看守——
@@ -226,6 +231,7 @@ export async function getAlertSummary(userId: bigint) {
     brush_blocked: 0,
     brush_failing: 0,
     link_forbidden: 0,
+    merchant_partnership_ended: 0,
     no_tracking_stuck: 0,
     script_auth_failed: 0,
     connection_mismatch: 0,

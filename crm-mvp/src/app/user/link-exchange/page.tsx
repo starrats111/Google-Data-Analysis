@@ -117,6 +117,7 @@ const ALERT_TYPE_LABEL: Record<string, string> = {
   brush_blocked: "补刷受阻·挂人工",
   brush_failing: "补刷刷不动·换链接",
   link_forbidden: "链接被联盟拒绝·换链接",
+  merchant_partnership_ended: "与商家无合作关系",
   no_tracking_stuck: "链接不记点击·换链接",
   script_auth_failed: "脚本被拒·重发脚本",
   connection_mismatch: "归属账号与系列名不符",
@@ -777,7 +778,7 @@ export default function LinkExchangePage() {
 
   // ───────── 告警中心列（D-178：每类告警配处理动作，不止报警） ─────────
   const alertColumns: ColumnsType<AlertRow> = [
-    { title: "类型", dataIndex: "type", width: 130, render: (t: string) => <Tag color={t === "merchant_not_found" || t === "invalid_link" || t === "brush_blocked" || t === "brush_failing" || t === "link_forbidden" || t === "no_tracking_stuck" || t === "script_auth_failed" || t === "connection_mismatch" ? "red" : t === "replenish_failed" ? "volcano" : "orange"}>{ALERT_TYPE_LABEL[t] ?? t}</Tag> },
+    { title: "类型", dataIndex: "type", width: 130, render: (t: string) => <Tag color={t === "merchant_not_found" || t === "invalid_link" || t === "brush_blocked" || t === "brush_failing" || t === "link_forbidden" || t === "merchant_partnership_ended" || t === "no_tracking_stuck" || t === "script_auth_failed" || t === "connection_mismatch" ? "red" : t === "replenish_failed" ? "volcano" : "orange"}>{ALERT_TYPE_LABEL[t] ?? t}</Tag> },
     { title: "级别", dataIndex: "level", width: 80, render: (l: string) => <Tag color={l === "error" ? "error" : l === "warning" ? "warning" : "default"}>{l}</Tag> },
     { title: "告警内容", dataIndex: "message", ellipsis: true, render: (m: string) => <Tooltip title={m}><Text style={{ fontSize: 13 }}>{m}</Text></Tooltip> },
     { title: "次数", dataIndex: "occurCount", width: 70, align: "center", render: (c: number) => <Badge count={c} overflowCount={999} style={{ backgroundColor: "#faad14" }} /> },
@@ -786,8 +787,8 @@ export default function LinkExchangePage() {
       title: "操作", width: 260, align: "center",
       render: (_: unknown, row) => {
         const cid = row.campaignId;
-        const canRecheck = !!cid && (row.type === "invalid_link" || row.type === "replenish_failed" || row.type === "link_forbidden" || row.type === "no_tracking_stuck" || row.type === "brush_failing");
-        const canEditLink = !!cid && (row.type === "invalid_link" || row.type === "replenish_failed" || row.type === "merchant_not_found" || row.type === "brush_blocked" || row.type === "brush_failing" || row.type === "link_forbidden" || row.type === "no_tracking_stuck" || row.type === "connection_mismatch");
+        const canRecheck = !!cid && (row.type === "invalid_link" || row.type === "replenish_failed" || row.type === "link_forbidden" || row.type === "merchant_partnership_ended" || row.type === "no_tracking_stuck" || row.type === "brush_failing");
+        const canEditLink = !!cid && (row.type === "invalid_link" || row.type === "replenish_failed" || row.type === "merchant_not_found" || row.type === "brush_blocked" || row.type === "brush_failing" || row.type === "link_forbidden" || row.type === "merchant_partnership_ended" || row.type === "no_tracking_stuck" || row.type === "connection_mismatch");
         const canReplenish = !!cid && row.type === "low_stock";
         const canFixConn = !!cid && row.type === "connection_mismatch";
         const ctxFix = (row.context ?? {}) as { targetLabel?: string; currentLabel?: string };
@@ -872,6 +873,13 @@ export default function LinkExchangePage() {
       "② 去联盟平台（BSH/LB/CG 等）后台找到该商家，重新生成一条追踪链接。",
       "③ 点「换链接」粘贴新链接保存，系统立即验证 + 补货，验证通过本告警自动解除。",
       "④ 若平台里该 offer 已下架/停止合作：暂停该系列广告，关掉换链开关，然后点「已处理」。",
+    ],
+    merchant_partnership_ended: [
+      "① 含义：联盟直接回了「未建立/已终止合作」——你这个联盟账号和这家商家现在没有合作关系。点击一次都不会算数，广告继续跑就是纯烧钱、佣金为零。",
+      "② 与「链接被联盟拒绝」的区别：那个是 token 过期，后台重新生成一条链接就能用；这个重新取多少次都还是被拒，因为问题不在链接上，在合作关系上。",
+      "③ 想继续投：到联盟平台后台重新申请这家商家的合作，通过之后再点「换链接」贴新链接，系统验证通过本告警自动解除。",
+      "④ 不打算继续投：暂停该系列广告，关掉换链开关，然后点「已处理」。",
+      "⑤ 提醒：在你处理之前，这个系列每天仍在花广告费且不会有任何佣金收入，建议先暂停再慢慢决定。",
     ],
     no_tracking_stuck: [
       "① 含义：跟链能到商家官网首页，但连一个追踪参数都拿不到——链接「活着却不记点击」，佣金归零。系列会悄悄断供，同时每天白开上百次浏览器烧代理流量。",

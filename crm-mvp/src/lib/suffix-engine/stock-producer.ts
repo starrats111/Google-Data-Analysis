@@ -444,7 +444,7 @@ async function doReplenish(
     // 只要出现过重复即证明内容静态、库存无法超过不同内容数，本轮零星代理失败不改变结论。
     // 不是故障——现有库存即是全部可能内容，消费后 lease 会触发按需重生成。
     // 清掉此前误报的告警，并交由调用方长冷却，停止每轮空烧 20 次生成。
-    await resolveAlertsByType(campaign.user_id, campaignId, ['low_stock', 'replenish_failed', 'invalid_link', 'merchant_not_found', 'link_forbidden', 'no_tracking_stuck'])
+    await resolveAlertsByType(campaign.user_id, campaignId, ['low_stock', 'replenish_failed', 'invalid_link', 'merchant_not_found', 'link_forbidden', 'merchant_partnership_ended', 'no_tracking_stuck'])
     // 学习「静态后缀」标记：写回 campaigns，前端库存列据此不再按低水位误标红（1⚠）。
     await setStaticFlag(campaign, 1)
     return { campaignId: cid, skipped: false, reason: 'static_suffix', before, generated: 0, after: before, failed: 0, needsBrowser: probe.usedBrowser }
@@ -476,7 +476,7 @@ async function doReplenish(
     }
   } else {
     // 有产出：解决该系列旧的库存类告警（含 link_forbidden——能产出即证明新链接已被联盟接受）
-    await resolveAlertsByType(campaign.user_id, campaignId, ['low_stock', 'replenish_failed', 'invalid_link', 'merchant_not_found', 'link_forbidden', 'no_tracking_stuck'])
+    await resolveAlertsByType(campaign.user_id, campaignId, ['low_stock', 'replenish_failed', 'invalid_link', 'merchant_not_found', 'link_forbidden', 'merchant_partnership_ended', 'no_tracking_stuck'])
     // 双向学习「静态后缀」：批量产出全为新内容（零重复）说明落地参数随会话变化（商家换了带 token 的链接），清 0 恢复正常水位口径。
     // need=1 的单条按需生成无法判定静态性（静态商家消费后重生成同样是 1 条新内容），不作依据。
     if (duplicates === 0 && need > 1) await setStaticFlag(campaign, 0)
@@ -593,6 +593,34 @@ async function handleProbeFailure(
   // 1b) 联盟跳板 4xx 拒绝点击（tracker_forbidden）：不同于代理抖动/慢站，这是跳板对该 token 的确定性
   //     拒绝——不必等连续阈值，立刻升级 link_forbidden 高优告警并长冷却（8h），停止每 5min 空刷死链。
   //     商家目录仍在但 token 失效，需人工到平台重取链接（新链首次补货成功会自动清此告警）。
+  // 1b-0) D-299 与该商家已无合作关系：跳板 4xx 的拒绝页正文明说了。
+  //   与下面的 tracker_forbidden 同为「点击没登记」，但**人工要做的事相反**——
+  //   那个是到平台后台重取一条链接；这个取多少次都还是 403，必须重新申请合作或把系列下架。
+  //   原先两者共用一条文案「需人工到平台重新获取链接」，人照做白跑、告警永不停
+  //   （wj07 jymsupplementscience 自 08-12 累计 2744 次，7 天烧 $70 而佣金为零）。
+  //   冷却同样取 8h：合作关系不会在几小时内恢复，但重新申请通过后能自动复活。
+  if (fail.reason === 'partnership_ended') {
+    await setFailCooldown(campaign, campaign.suffix_fail_count + 1, new Date(Date.now() + STOCK_CONFIG.DEAD_LINK_COOLDOWN_MS))
+    await raiseAlert(campaign.user_id, {
+      type: 'merchant_partnership_ended',
+      campaignId: campaign.id,
+      level: 'error',
+      message:
+        `广告系列「${campaign.campaign_name ?? cid}」与商家${merchantName ? `「${merchantName}」` : ''}已无合作关系：` +
+        `联盟返回「未建立/已终止合作」。重新获取链接无效——需到联盟平台重新申请该商家合作，` +
+        `或直接下架该系列。系列仍在投放的话，点击不会产生任何佣金`,
+      context: {
+        campaignName: campaign.campaign_name,
+        merchantName,
+        country: campaign.target_country,
+        affiliateUrl: affiliateUrl.slice(0, 300),
+        reason: fail.reason,
+        detail: fail.error,
+      },
+    })
+    return 'partnership_ended'
+  }
+
   if (fail.reason === 'tracker_forbidden') {
     await setFailCooldown(campaign, campaign.suffix_fail_count + 1, new Date(Date.now() + STOCK_CONFIG.DEAD_LINK_COOLDOWN_MS))
     await raiseAlert(campaign.user_id, {

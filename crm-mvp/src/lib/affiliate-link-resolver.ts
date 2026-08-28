@@ -130,6 +130,9 @@ export interface ResolveResult {
   /** D-231：浏览器兜底本该跑，却因本机条件（内存反压/槽位耗尽/无代理）没跑成。
    *  非空即表示「本轮没检验过这条链接」，调用方据此避免把自家资源不足误判成链接失效。 */
   browserBlocked?: BrowserBlockedReason | null;
+  /** D-299：跳板 4xx 的正文明说「与该商家无合作关系/合作已终止」。
+   *  与普通 tracker_forbidden 处置相反——重新取链接无效，需重新申请合作或下架系列。 */
+  partnershipEnded?: boolean;
 }
 
 // 跟链/换链一律用「移动端」UA（安卓 Chrome + iPhone Safari，见 @/lib/mobile-user-agents），不再用 Windows 桌面：
@@ -518,6 +521,38 @@ interface ChainResult {
   chain: string[];
   status: number;
   error?: string;
+  /** D-299：4xx 拒绝页的正文头部（仅 4xx 且 HTML/文本时有值），用于判「为什么被拒」 */
+  bodySnippet?: string;
+}
+
+/** D-299：4xx 拒绝页最多收多少字节。联盟的拒绝页都是极小静态页，8KB 绰绰有余。 */
+const FORBIDDEN_BODY_CAP = 8192;
+
+/**
+ * D-299：从跳板 4xx 的拒绝页正文里认出「你和这个商家已经没有合作关系了」。
+ *
+ * 为什么值得单独认这一种：它和普通的 403（token 过期/被停用）**处置完全相反**——
+ * 普通 403 到平台后台重新取一条链接就好；而合作关系没了的话，重新取多少次都还是 403，
+ * 必须去重新申请合作、或者干脆把这个广告下架。
+ * 原先两者都报「链接失效，需人工重新获取链接」，人照着做只会白跑，报错也永远不会停
+ * （wj07 的 jymsupplementscience 自 2026-08-12 起累计报了 2744 次，钱一直在烧、佣金为零）。
+ *
+ * 匹配只认明确表达「无合作关系」的措辞，宁可漏判退回普通 403，也不误判——
+ * 误判成「关系没了」会让人去下架一条其实只是 token 过期的好广告。
+ */
+const NO_PARTNERSHIP_PATTERNS = [
+  /no\s+business\s+partnership/i,
+  /no\s+partnership\s+with/i,
+  /partnership\s+(has\s+)?(been\s+)?(ended|terminated)/i,
+  /not\s+(an?\s+)?approved\s+(partner|affiliate)/i,
+  /无合作关系|未建立合作|合作已(终止|结束)|合作关系已(终止|结束)/,
+];
+
+/** 该 4xx 拒绝页是否在说「没有合作关系」。传空/无正文一律返回 false（退回普通 403 处置）。 */
+export function isNoPartnershipBody(body: string | null | undefined): boolean {
+  if (!body) return false;
+  const sample = body.length > FORBIDDEN_BODY_CAP ? body.slice(0, FORBIDDEN_BODY_CAP) : body;
+  return NO_PARTNERSHIP_PATTERNS.some((re) => re.test(sample));
 }
 
 function sleep(ms: number): Promise<void> {
@@ -613,7 +648,11 @@ export async function fetchChain(
   type HopResult =
     | { type: "redirect"; location: string; status: number }
     | { type: "body"; body: string; status: number }
-    | { type: "final"; status: number };
+    // D-299：4xx 时带回正文头部片段。跳板的拒绝页里写着**为什么**拒绝
+    // （LinkHaitao 403 实测正文仅 1599 字节，内容是 "No business partnership with merchants"），
+    // 只看状态码 403 就只能笼统报「链接失效，去平台重新取」——而合作关系没了的话，
+    // 取多少次链接都还是 403，人白跑一趟。见 FORBIDDEN_BODY_CAP。
+    | { type: "final"; status: number; bodySnippet?: string };
 
   // 单跳一次网络请求（成功 resolve，网络层失败 reject）
   // skipBody：这一跳注定是最后一跳（目标域早停），只要状态码，正文一个字节都不收
@@ -688,8 +727,32 @@ export async function fetchChain(
           source.on("end", finish);
           source.on("error", finish);
           res.on("error", finish);
+        } else if (status >= 400 && status < 500 && (ctype.includes("html") || ctype.includes("text") || ctype === "")) {
+          // D-299：4xx 的正文是**唯一**能说明「为什么被拒」的地方，只收头部 8KB。
+          // 联盟的拒绝页都是极小的静态提示页（LinkHaitao 实测 1599 字节），这点流量换来的是
+          // 「合作关系已终止」和「token 失效」两种完全不同处置的区分——前者重新取链接没用，
+          // 后者取一次就好。仍然攒够就断开，不给大页面任何机会（省流量的初衷不变）。
+          const chunks: Buffer[] = [];
+          let total = 0;
+          let settled = false;
+          const finish = () => {
+            if (settled) return;
+            settled = true;
+            resolve({ type: "final", status, bodySnippet: Buffer.concat(chunks).toString("utf8") });
+          };
+          res.on("data", (c: Buffer) => {
+            if (settled) return;
+            chunks.push(c);
+            total += c.length;
+            if (total >= FORBIDDEN_BODY_CAP) {
+              finish();
+              res.destroy();
+            }
+          });
+          res.on("end", finish);
+          res.on("error", finish);
         } else {
-          // 非 HTML/非 2xx：body 无用途。旧逻辑 res.resume() 会把整个 body（403 挑战页/大文件）拉完才 resolve，
+          // 其余非 HTML / 5xx / 大文件：body 无用途。旧逻辑 res.resume() 会把整个 body 拉完才 resolve，
           // 状态码此刻已知，直接断开省流量。
           resolve({ type: "final", status });
           res.destroy();
@@ -786,7 +849,8 @@ export async function fetchChain(
         continue;
       }
     }
-    return { finalUrl: targetUrl, chain, status: res.status };
+    // D-299：把 4xx 拒绝页正文带上去，交 evaluate 判「token 失效」还是「合作关系没了」
+    return { finalUrl: targetUrl, chain, status: res.status, bodySnippet: res.bodySnippet };
   }
 
   return { finalUrl: targetUrl, chain, status: 0, error: "max_redirects" };
@@ -1242,7 +1306,8 @@ export async function resolveAffiliateLink(
   }
 
   const evaluate = async (
-    res: { finalUrl: string; chain: string[]; error?: string; status?: number },
+    // D-299：bodySnippet 仅 HTTP 路径的 4xx 有值（浏览器路径不带），用于区分「合作关系没了」与「token 失效」
+    res: { finalUrl: string; chain: string[]; error?: string; status?: number; bodySnippet?: string },
     usedProxy: boolean,
     usedBrowser: boolean,
   ): Promise<ResolveResult> => {
@@ -1356,7 +1421,19 @@ export async function resolveAffiliateLink(
     const chainStatus = res.status ?? 0;
     if (chainStatus >= 400 && chainStatus < 500 && finalParsed.hostname === startAffiliateHost) {
       r.status = "tracker_forbidden";
-      r.error = `联盟跳板拒绝点击：${finalParsed.hostname} 返回 HTTP ${chainStatus}（追踪链接可能已失效/被联盟停用，商家目录仍在但需人工重新获取链接）`;
+      // D-299：分两种拒绝，因为处置相反——
+      //   合作关系没了 → 重新取链接没用，要么重新申请合作、要么下架该广告；
+      //   其余 4xx     → token 失效/被停用，到平台后台重取一条即可。
+      // 原先一律报后者，导致 wj07 jymsupplementscience 那种已终止合作的广告被反复催「去重新取链接」，
+      // 人照做也没用，报错永不停（累计 2744 次），广告还一直在烧钱。
+      if (isNoPartnershipBody(res.bodySnippet)) {
+        r.partnershipEnded = true;
+        r.error =
+          `与该商家已无合作关系：${finalParsed.hostname} 返回 HTTP ${chainStatus} 并提示未建立/已终止合作。` +
+          `重新获取链接无效，需到联盟平台重新申请该商家的合作，或下架此广告系列`;
+      } else {
+        r.error = `联盟跳板拒绝点击：${finalParsed.hostname} 返回 HTTP ${chainStatus}（追踪链接可能已失效/被联盟停用，商家目录仍在但需人工重新获取链接）`;
+      }
       r.landingUrl = null;
       r.trackingLink = null;
       r.finalUrl = null;

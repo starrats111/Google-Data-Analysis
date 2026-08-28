@@ -24,6 +24,9 @@ export type GenFailReason =
   // 联盟跳板在自己的重定向端点 4xx 拒绝点击（403 等）：链接失效/被停用，需人工重新获取。
   // 与 no_tracking 区分——no_tracking 是「到站了但页面没参数」，此项是「点击根本没登记」。
   | 'tracker_forbidden'
+  // D-299：跳板 4xx 的正文明说「与该商家无合作关系/合作已终止」。是 tracker_forbidden 的子类，
+  // 但人工处置相反：重新取链接无效，必须重新申请合作或下架系列。混在一起报会让人反复白跑后台。
+  | 'partnership_ended'
   // D-177：换链接代理不可用（kookeey 余额耗尽/熔断/供应商池空）。瞬时环境故障，
   // 不代表链接死活——调用方短冷却重试即可，绝不计入死链失败计数/invalid_link 告警。
   | 'proxy_unavailable'
@@ -198,6 +201,16 @@ export async function generateOneSuffix(
     }
     if (r.status === 'tracker_forbidden') {
       reportProxy(true) // 代理健康：请求已送达跳板，是跳板自己 4xx 拒绝（非代理故障）
+      // D-299：拒绝页明说「无合作关系」时单列——它和普通 4xx 的**人工处置相反**
+      // （重新取链接无效，必须重新申请合作或下架），混在一起报只会让人白跑平台后台。
+      if (r.partnershipEnded) {
+        return {
+          ok: false,
+          reason: 'partnership_ended',
+          error: r.error || '与该商家已无合作关系，重新获取链接无效，需重新申请合作或下架该系列',
+          finalUrl: r.finalUrl,
+        }
+      }
       return {
         ok: false,
         reason: 'tracker_forbidden',
