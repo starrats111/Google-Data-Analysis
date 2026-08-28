@@ -174,14 +174,20 @@ export async function runAutoClickForUser(
   const cpoMin = Math.max(1, Math.round(100 / maxPct)) // 达标所需最少点击/订单（C≥O×cpoMin ⇒ 转化率≤maxPct）
   const cpoMax = Math.max(cpoMin + 1, Math.round(100 / minPct)) // 补刷目标上限点击/订单
 
-  // 候选系列：已启用换链、已匹配商家。
+  // 候选系列：已启用换链、已匹配商家、已真正投放到 Google（有 gcid）。
   // ★ active + paused 都参与：广告暂停后订单仍随 cookie 归因回传数天，联盟侧转化率风控
   //   与 Google 状态无关；只看 active 会造成「暂停商家只有订单没有点击」（wj02 Ballboyz 事故）。
+  // ★ gcid 为空的系列（DRAFT 草稿 / 未提交）必须排除：它们从没上过 Google，跟踪链接也没被真正投放，
+  //   却因为 status=active+google_status=ENABLED 拿到 rankOf 最高档，把同 (商家×连接) 的真实系列
+  //   顶掉载体位 → 补刷全落在草稿上、每次必失败。实测 513 条无 gcid 系列顶掉 191 组载体位
+  //   （jymsupplementscience/SharkNinja 等 brush_failing 近 3 天 0 成功即此因）。
+  //   stock-producer.ts / click-brush.ts 本就有此过滤，这里属漏改补齐。
   const allCampaigns = await prisma.campaigns.findMany({
     where: {
       user_id: userId,
       status: { in: ['active', 'paused'] },
       is_deleted: 0,
+      google_campaign_id: { not: null },
       suffix_exchange_enabled: 1,
       user_merchant_id: { not: BigInt(0) },
     },
