@@ -2,16 +2,17 @@ import { NextRequest } from "next/server";
 import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
-import { getMonthlyProgressForUser, recomputeMonthlySettlementForUser } from "@/lib/monthly-settlement-tracker";
+import { getMonthlyProgressLive } from "@/lib/monthly-settlement-tracker";
 
 /**
  * GET /api/user/data-center/settlement-progress
  *
  * 返回当前用户每月结算进度。
  *
- * 行为：
- *   - 首次访问且 monthly_settlement_status 为空 → 实时计算一次后返回
- *   - 否则直接读快照表（每天 daily-sync 后会自动刷新）
+ * 行为（D-294 改）：每次都从 affiliate_transactions 实时聚合，与结算查询汇总、
+ * 按月份表、数据中心佣金卡同源同口径。改造前读的是 daily-sync 每天刷一次的
+ * monthly_settlement_status 快照，daily-sync 一挂卡片就停在旧数（2026-08-26 起
+ * 连挂三天，团队 1 的 8 月少了 $7808.37）；快照表现在只负责驱动同步和记 settled_at。
  *
  * 组长：可传 ?member_id=<userId> 查看团队某成员
  *   - 没传 member_id → 返回全组聚合（按月把所有成员合并）
@@ -39,13 +40,7 @@ export async function GET(req: NextRequest) {
       if (!member) return apiError("无权访问该成员数据", 403);
     }
 
-    let months = await getMonthlyProgressForUser(targetUserId);
-
-    // 首次访问：从 affiliate_transactions 实时初始化
-    if (months.length === 0) {
-      await recomputeMonthlySettlementForUser(targetUserId);
-      months = await getMonthlyProgressForUser(targetUserId);
-    }
+    const months = await getMonthlyProgressLive([targetUserId]);
 
     return apiSuccess(serializeData({
       months,
@@ -69,58 +64,8 @@ export async function GET(req: NextRequest) {
     }));
   }
 
-  // 把所有成员的月份数据按 month 维度聚合
-  type Aggr = ReturnType<typeof emptyAggr>;
-  const monthMap = new Map<string, Aggr>();
-
-  for (const m of members) {
-    const myMonths = await getMonthlyProgressForUser(m.id);
-    for (const row of myMonths) {
-      const cur = monthMap.get(row.month) ?? emptyAggr(row.month);
-      cur.total_count += row.total_count;
-      cur.total_amount += row.total_amount;
-      cur.pending_count += row.pending_count;
-      cur.pending_amount += row.pending_amount;
-      cur.approved_count += row.approved_count;
-      cur.approved_amount += row.approved_amount;
-      cur.paid_count += row.paid_count;
-      cur.paid_amount += row.paid_amount;
-      cur.rejected_count += row.rejected_count;
-      cur.rejected_amount += row.rejected_amount;
-      cur.last_synced_at_max =
-        cur.last_synced_at_max && row.last_synced_at && cur.last_synced_at_max > row.last_synced_at
-          ? cur.last_synced_at_max
-          : row.last_synced_at ?? cur.last_synced_at_max;
-      // 团队聚合的"已结算"= 所有成员该月都没有 pending
-      cur.is_settled = cur.is_settled && row.is_settled;
-      monthMap.set(row.month, cur);
-    }
-  }
-
-  const months = Array.from(monthMap.values())
-    .map((a) => {
-      const settledAmt = a.approved_amount + a.paid_amount + a.rejected_amount;
-      const progress = a.total_amount > 0 ? +((settledAmt / a.total_amount) * 100).toFixed(2) : 0;
-      return {
-        month: a.month,
-        total_count: a.total_count,
-        total_amount: +a.total_amount.toFixed(2),
-        pending_count: a.pending_count,
-        pending_amount: +a.pending_amount.toFixed(2),
-        approved_count: a.approved_count,
-        approved_amount: +a.approved_amount.toFixed(2),
-        paid_count: a.paid_count,
-        paid_amount: +a.paid_amount.toFixed(2),
-        rejected_count: a.rejected_count,
-        rejected_amount: +a.rejected_amount.toFixed(2),
-        is_settled: a.is_settled,
-        settled_at: null,
-        last_synced_at: a.last_synced_at_max,
-        settled_amount: +settledAmt.toFixed(2),
-        settle_progress: progress,
-      };
-    })
-    .sort((a, b) => (a.month < b.month ? 1 : -1));
+  // 全组一次查完：按月合并，"已结算"= 该月全组都没有 pending（同一条 SQL 天然满足）
+  const months = await getMonthlyProgressLive(members.map((m) => m.id));
 
   return apiSuccess(serializeData({
     months,
@@ -128,24 +73,6 @@ export async function GET(req: NextRequest) {
     teamMembers: members.map((m) => ({ id: String(m.id), name: m.display_name || m.username })),
     isLeader: true,
   }));
-}
-
-function emptyAggr(month: string) {
-  return {
-    month,
-    total_count: 0,
-    total_amount: 0,
-    pending_count: 0,
-    pending_amount: 0,
-    approved_count: 0,
-    approved_amount: 0,
-    paid_count: 0,
-    paid_amount: 0,
-    rejected_count: 0,
-    rejected_amount: 0,
-    is_settled: true, // 初值 true，遇到任一成员该月有 pending 即翻为 false
-    last_synced_at_max: null as string | null,
-  };
 }
 
 function buildSummary(
