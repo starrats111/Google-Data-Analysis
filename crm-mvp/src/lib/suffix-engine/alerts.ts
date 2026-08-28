@@ -142,9 +142,45 @@ export async function resolveAlertsForInactiveCampaigns(): Promise<number> {
       WHERE a.status = 'open' AND a.is_deleted = 0 AND a.campaign_id IS NOT NULL
         AND (c.is_deleted = 1 OR c.status <> 'active' OR c.google_status IS NULL OR c.google_status <> 'ENABLED')
     `
-    return typeof affected === 'number' ? affected : 0
+    return (typeof affected === 'number' ? affected : 0) + (await resolveAlertsForExchangeDisabled())
   } catch (err) {
     console.error('[suffix-alerts] resolveAlertsForInactiveCampaigns failed:', err instanceof Error ? err.message : err)
+    return 0
+  }
+}
+
+/**
+ * D-299.1 收敛「开关已关却还在报」的告警：系列的换链接开关(suffix_exchange_enabled)已关，
+ * 但换链接流水线的旧告警仍挂在页面上。
+ *
+ * 背景（07 2026-08-28 反馈「频繁报错」的一大来源）：处理告警的标准动作之一就是
+ * 「暂停广告 / 关掉换链开关，然后点已处理」。可关开关只是让流水线不再跑，**不会**清掉
+ * 已经堆起来的告警——于是人以为处理完了，告警还在屏幕上待着，看起来永远处理不完。
+ * 实测 45 个系列已关开关，却仍挂着 56 条告警、累计 6324 次报错。
+ *
+ * 为什么这些告警确实作废：补货(stock-producer)、刷点击(auto-click / click-brush)三条路径
+ * 都硬过滤 `suffix_exchange_enabled = 1`，开关一关就都不再执行，告警描述的故障不可能再发生。
+ *
+ * ⚠️ 刻意不含 connection_mismatch：它讲的是「系列名里的账号与实际归属对不上」，
+ * 影响的是佣金记在哪个联盟账号名下——广告还在投就依然成立，与换链接开关无关。
+ */
+async function resolveAlertsForExchangeDisabled(): Promise<number> {
+  try {
+    const affected = await prisma.$executeRaw`
+      UPDATE suffix_alerts a
+      JOIN campaigns c ON c.id = a.campaign_id
+      SET a.status = 'resolved', a.resolved_at = NOW(), a.updated_at = NOW()
+      WHERE a.status = 'open' AND a.is_deleted = 0 AND a.campaign_id IS NOT NULL
+        AND c.suffix_exchange_enabled = 0
+        AND a.type IN (
+          'low_stock', 'replenish_failed', 'invalid_link', 'merchant_not_found',
+          'link_forbidden', 'merchant_partnership_ended', 'no_tracking_stuck',
+          'brush_blocked', 'brush_failing'
+        )
+    `
+    return typeof affected === 'number' ? affected : 0
+  } catch (err) {
+    console.error('[suffix-alerts] resolveAlertsForExchangeDisabled failed:', err instanceof Error ? err.message : err)
     return 0
   }
 }
