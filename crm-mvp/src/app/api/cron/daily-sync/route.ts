@@ -153,45 +153,19 @@ async function syncMerchantSheet(): Promise<unknown> {
     const batchTs = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
 
     // 违规
-    let vioNew = 0, vioUpdated = 0, vioMarked = 0;
+    let vioNew = 0, vioUpdated = 0, vioMarked = 0, vioUnmarked = 0;
     const violations = await fetchViolations(cfg.sheet_url);
     log(`  Fetched ${violations.length} violations from sheet`);
-    const violationNames = new Set(violations.map(v => v.name.toLowerCase()));
-    const violationBaseNames = new Set(violations.map(v => stripCountrySuffix(v.name).toLowerCase()));
 
-    // 批量清除不再违规的商家
-    const prevViolated = await prisma.user_merchants.findMany({
-      where: { is_deleted: 0, violation_status: "violated" },
-      select: { id: true, merchant_name: true },
-    });
-    const idsToUnmark = prevViolated
-      .filter((m) => {
-        const n = (m.merchant_name || "").toLowerCase();
-        const b = stripCountrySuffix(m.merchant_name || "").toLowerCase();
-        return !violationNames.has(n) && !violationBaseNames.has(b);
-      })
-      .map((m) => m.id);
-    if (idsToUnmark.length > 0) {
-      await prisma.user_merchants.updateMany({
-        where: { id: { in: idsToUnmark } },
-        data: { violation_status: "normal", violation_time: null },
-      });
-      log(`  Unmarked ${idsToUnmark.length} merchants no longer violated`);
-    }
-
-    // 预加载现有违规记录
+    // ── 违规名单落库（merchant_violations 只有几千行，逐条 upsert 无压力）──
     const existingViolations = await prisma.merchant_violations.findMany({
       where: { is_deleted: 0 },
       select: { id: true, merchant_name: true, platform: true, merchant_domain: true, violation_time: true, source: true },
     });
     const existingMap = new Map(existingViolations.map((v) => [v.merchant_name, v]));
 
-    // 预加载 user_merchants
-    const allUserMerchants = await prisma.user_merchants.findMany({
-      where: { is_deleted: 0 },
-      select: { id: true, merchant_name: true, merchant_url: true, violation_status: true },
-    });
-
+    // 每条违规的生效时间，后面标记 user_merchants 时要用同一份
+    const vtimeOf = new Map<string, Date | null>();
     for (const v of violations) {
       let vtime: Date | null = null;
       if (v.time) {
@@ -199,6 +173,8 @@ async function syncMerchantSheet(): Promise<unknown> {
         if (/^\d{8}$/.test(raw)) vtime = new Date(`${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`);
         else { const d = new Date(raw); if (!isNaN(d.getTime())) vtime = d; }
       }
+      vtimeOf.set(v.name, vtime);
+
       const exists = existingMap.get(v.name);
       if (exists) {
         await prisma.merchant_violations.update({
@@ -213,30 +189,151 @@ async function syncMerchantSheet(): Promise<unknown> {
         existingMap.set(v.name, { id: created.id, merchant_name: v.name, platform: v.platform, merchant_domain: v.domain || null, violation_time: vtime, source: v.source || null });
         vioNew++;
       }
+    }
 
-      // 在内存中匹配 user_merchants，用 updateMany 批量更新
-      const baseName = stripCountrySuffix(v.name);
-      const nameL = v.name.toLowerCase();
-      const baseL = baseName.toLowerCase();
-      const basePrefix = baseL + " ";
-      const toMark = allUserMerchants.filter((m) => {
-        if (m.violation_status === "violated") return false;
-        const mn = (m.merchant_name || "").toLowerCase();
-        if (mn === nameL) return true;
-        if (baseName !== v.name && mn === baseL) return true;
-        if (mn.startsWith(basePrefix)) return true;
-        if (v.domain && m.merchant_url && m.merchant_url.includes(v.domain)) return true;
-        return false;
-      });
-      if (toMark.length > 0) {
-        await prisma.user_merchants.updateMany({
-          where: { id: { in: toMark.map((m) => m.id) } },
-          data: { violation_status: "violated", violation_time: vtime || new Date() },
-        });
-        for (const m of toMark) m.violation_status = "violated";
-        vioMarked += toMark.length;
+    // ── 标记 user_merchants（D-295 重写）────────────────────────────────────
+    // 原写法把 user_merchants 全表（现 156 万行 / 1.87GB）findMany 进内存，再跑
+    // 「每条违规 × 全表」的两两比对（约 73 亿次，每行现开 toLowerCase 字符串）。
+    // 进程堆上限 768MB，必爆——2026-08-26 起连续三天在这里 OOM 被 pm2 重启，
+    // Step 2 之后的所有步骤（广告数据、交易同步、月度结算重算）三天没跑过。
+    //
+    // 现在：判定只看 merchant_name 与 merchant_url，与挂在哪个用户名下无关，
+    // 而 156 万行里只有约 11.8 万个不同的商家名 —— 先按 (名字, 网址) 去重再判定，
+    // 然后按商家名走 idx_merchant_name 批量更新，内存和比对量都降一个量级。
+    //
+    // 另修一个口径 bug：原先「标记」用 4 条规则（同名 / 去国家后缀同名 / 名字前缀 /
+    // 网址含域名），「取消标记」只用前两条，靠后两条命中的商家每天被取消再重标
+    // （8/25 标 118,669 条，8/26 开头取消 113,226 条）。现在两边同用一份判定结果。
+    const violationNames = new Set(violations.map((v) => v.name.toLowerCase()));
+    const violationBaseNames = new Set(violations.map((v) => stripCountrySuffix(v.name).toLowerCase()));
+    // 名字→生效时间：同名多条取第一条，与原先「后命中的违规覆盖前一次标记」同量级，
+    // 差别只在多条违规同时命中一个商家时取哪个时间，业务上等价
+    const vtimeByLower = new Map<string, Date | null>();
+    for (const v of violations) {
+      const k = v.name.toLowerCase();
+      if (!vtimeByLower.has(k)) vtimeByLower.set(k, vtimeOf.get(v.name) ?? null);
+      const b = stripCountrySuffix(v.name).toLowerCase();
+      if (!vtimeByLower.has(b)) vtimeByLower.set(b, vtimeOf.get(v.name) ?? null);
+    }
+    // 域名规则保持原样：网址里出现该域名字符串即命中（07 2026-08-28 拍板不收紧成主机名）
+    const violationDomains = [...new Set(violations.map((v) => v.domain).filter((d): d is string => !!d))];
+    const urlHitCache = new Map<string, boolean>();
+    const urlHitsViolation = (url: string): boolean => {
+      const cached = urlHitCache.get(url);
+      if (cached !== undefined) return cached;
+      let hit = false;
+      for (const d of violationDomains) { if (url.includes(d)) { hit = true; break; } }
+      urlHitCache.set(url, hit);
+      return hit;
+    };
+    /** 命中则返回该违规的生效时间（可能为 null），不命中返回 undefined */
+    const violationHit = (name: string, url: string | null): { vtime: Date | null } | undefined => {
+      const mn = (name || "").toLowerCase();
+      if (violationNames.has(mn) || violationBaseNames.has(mn)) return { vtime: vtimeByLower.get(mn) ?? null };
+      // 名字前缀：原式为 mn.startsWith(违规基名 + " ")，等价于 mn 按空格切出的
+      // 某个词前缀正好是某个违规基名 —— 反过来查集合，不必逐条违规扫一遍
+      for (let i = mn.indexOf(" "); i > 0; i = mn.indexOf(" ", i + 1)) {
+        const prefix = mn.slice(0, i);
+        if (violationBaseNames.has(prefix)) return { vtime: vtimeByLower.get(prefix) ?? null };
+      }
+      if (url && urlHitsViolation(url)) return { vtime: null };
+      return undefined;
+    };
+
+    // 去重后的 (商家名, 网址) 组合 —— 判定的全部输入
+    const distinctPairs = await prisma.$queryRawUnsafe<{ merchant_name: string; merchant_url: string | null }[]>(`
+      SELECT DISTINCT merchant_name, merchant_url FROM user_merchants WHERE is_deleted = 0
+    `);
+
+    // 按商家名归拢判定结果：整名全中 / 全不中 可以直接按名字批量更新（走 idx_merchant_name），
+    // 只有同名不同网址、结果又不一致的少数情况才退化成按 (名字, 网址) 精确更新
+    const allHit = new Map<string, Date | null>();   // 该名字下所有网址都命中
+    const noneHit = new Set<string>();               // 该名字下所有网址都不命中
+    const mixedHitUrls = new Map<string, { urls: (string | null)[]; vtime: Date | null }>();
+    const mixedMissUrls = new Map<string, (string | null)[]>();
+    {
+      const byName = new Map<string, { url: string | null; hit: { vtime: Date | null } | undefined }[]>();
+      for (const p of distinctPairs) {
+        const list = byName.get(p.merchant_name) ?? [];
+        list.push({ url: p.merchant_url, hit: violationHit(p.merchant_name, p.merchant_url) });
+        byName.set(p.merchant_name, list);
+      }
+      for (const [name, list] of byName) {
+        const hits = list.filter((x) => x.hit);
+        if (hits.length === 0) { noneHit.add(name); continue; }
+        if (hits.length === list.length) { allHit.set(name, hits[0].hit!.vtime); continue; }
+        mixedHitUrls.set(name, { urls: hits.map((x) => x.url), vtime: hits[0].hit!.vtime });
+        mixedMissUrls.set(name, list.filter((x) => !x.hit).map((x) => x.url));
       }
     }
+
+    const NAME_BATCH = 500;
+    const chunk = <T,>(arr: T[]): T[][] => {
+      const out: T[][] = [];
+      for (let i = 0; i < arr.length; i += NAME_BATCH) out.push(arr.slice(i, i + NAME_BATCH));
+      return out;
+    };
+
+    // 标记：按「同一生效时间」分组，避免逐名一条 UPDATE
+    const markByTime = new Map<number, { vtime: Date | null; names: string[] }>();
+    for (const [name, vtime] of allHit) {
+      const key = vtime ? vtime.getTime() : 0;
+      const g = markByTime.get(key) ?? { vtime, names: [] };
+      g.names.push(name);
+      markByTime.set(key, g);
+    }
+    const nowTs = new Date();
+    for (const g of markByTime.values()) {
+      for (const names of chunk(g.names)) {
+        const r = await prisma.user_merchants.updateMany({
+          where: { is_deleted: 0, merchant_name: { in: names }, violation_status: { not: "violated" } },
+          data: { violation_status: "violated", violation_time: g.vtime || nowTs },
+        });
+        vioMarked += r.count;
+      }
+    }
+    // merchant_url 可能为 NULL，而 SQL 的 IN 永远匹配不上 NULL，故拆成两条
+    const urlWheres = (urls: (string | null)[]) => {
+      const out: object[] = [];
+      const nonNull = urls.filter((u): u is string => u !== null);
+      if (nonNull.length > 0) out.push({ merchant_url: { in: nonNull } });
+      if (urls.length !== nonNull.length) out.push({ merchant_url: null });
+      return out;
+    };
+    for (const [name, { urls, vtime }] of mixedHitUrls) {
+      for (const urlWhere of urlWheres(urls)) {
+        const r = await prisma.user_merchants.updateMany({
+          where: { is_deleted: 0, merchant_name: name, ...urlWhere, violation_status: { not: "violated" } },
+          data: { violation_status: "violated", violation_time: vtime || nowTs },
+        });
+        vioMarked += r.count;
+      }
+    }
+
+    // 取消标记：只看当前已被标违规的那批名字（走 idx_violation_status，几千个名字），
+    // 判定用的是上面同一份结果，不会再出现「标了又取消」的来回刷
+    const violatedNames = await prisma.$queryRawUnsafe<{ merchant_name: string }[]>(`
+      SELECT DISTINCT merchant_name FROM user_merchants WHERE is_deleted = 0 AND violation_status = 'violated'
+    `);
+    const namesToUnmark = violatedNames.map((r) => r.merchant_name).filter((n) => noneHit.has(n));
+    for (const names of chunk(namesToUnmark)) {
+      const r = await prisma.user_merchants.updateMany({
+        where: { is_deleted: 0, merchant_name: { in: names }, violation_status: "violated" },
+        data: { violation_status: "normal", violation_time: null },
+      });
+      vioUnmarked += r.count;
+    }
+    for (const [name, urls] of mixedMissUrls) {
+      for (const urlWhere of urlWheres(urls)) {
+        const r = await prisma.user_merchants.updateMany({
+          where: { is_deleted: 0, merchant_name: name, ...urlWhere, violation_status: "violated" },
+          data: { violation_status: "normal", violation_time: null },
+        });
+        vioUnmarked += r.count;
+      }
+    }
+    log(`  Merchant names: ${distinctPairs.length} distinct pairs, ${allHit.size} violating, ${mixedHitUrls.size} mixed`);
+    log(`  Unmarked ${vioUnmarked} merchants no longer violated`);
 
     // 推荐
     // 单独兜错：推荐表读取失败不应连累已经写入的黑名单结果，但必须在日志和返回值里显性暴露
@@ -279,14 +376,14 @@ async function syncMerchantSheet(): Promise<unknown> {
     }
 
     await prisma.sheet_configs.update({ where: { id: cfg.id }, data: { last_synced_at: new Date() } });
-    log(`  Violations: ${violations.length} total, ${vioNew} new, ${vioUpdated} updated, ${vioMarked} marked`);
+    log(`  Violations: ${violations.length} total, ${vioNew} new, ${vioUpdated} updated, ${vioMarked} marked, ${vioUnmarked} unmarked`);
     if (recError) {
       log(`  Recommendations: SYNC FAILED — ${recError}`);
     } else {
       log(`  Recommendations: ${recTotal} total, ${recNew} new, ${recSkipped} skipped, ${recMarked} marked`);
     }
     return {
-      violation: { total: violations.length, new: vioNew, updated: vioUpdated, marked: vioMarked },
+      violation: { total: violations.length, new: vioNew, updated: vioUpdated, marked: vioMarked, unmarked: vioUnmarked },
       recommendation: recError
         ? { error: recError, new: recNew, marked: recMarked }
         : { total: recTotal, new: recNew, skipped: recSkipped, marked: recMarked },
