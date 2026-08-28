@@ -107,6 +107,16 @@ const PLATFORM_API_CONFIG: Record<string, PlatformApiConfig> = {
     assumeAllJoined: true,
     requiresRelationshipParam: true,
   },
+  // D-296 FS (Famesta)：与 CG/CF/BSH/PM/MUI/EV 完全同构的 SaaS 形态。
+  // 实测 relationship:"Joined" 正常返回（135 商家 / 45 页），字段与 CG 逐个对齐。
+  FS: {
+    mode: "post_json",
+    url: "https://api.famesta.com/api/monetization",
+    source: "famesta",
+    pageKey: "curPage", sizeKey: "perPage", maxSize: 2000,
+    assumeAllJoined: true,
+    requiresRelationshipParam: true,
+  },
   // C-183 PB (PartnerBoost)：与 LB 同引擎的 Legacy 形态（app.partnerboost.com/api.php）。
   // 官方文档确认 monetization_api 端点与参数同 LB；relationship 同样大小写敏感须传 "Joined"。
   PB: {
@@ -632,6 +642,20 @@ const PLATFORM_TXN_CONFIG: Record<string, PlatformTxnConfig> = {
     source: "engagevantage",
     dateFormat: "camel", pageKey: "curPage", sizeKey: "perPage", maxSize: 2000,
   },
+  // D-296 FS：Famesta 交易接口与 CG/CF/PM/BSH 的 /api/transaction 完全同构——
+  //   同 POST JSON、同 source+token+beginDate/endDate+curPage/perPage+status:["All"]、
+  //   同 {code,message,data:{total,curPage,totalPage,hasNext,list}} 扁平响应。
+  //   实测：错 token → 1001 Invalid token；跨度 63 天 → 1006（同 CG 的 62 天上限，
+  //   默认 60 天切片已覆盖）；唯一 ID 字段 famesta_id（已入 txnId 候选链）；
+  //   order_time 为 Unix 秒 → parseTimestamp 走真 UTC 入库，不进 CST_FACE_PLATFORMS。
+  //   注：FS 的「审核期」参数叫 beginApproveDate/endApproveDate（CG v3 叫 updateBeginDate），
+  //   本同步只用交易期（beginDate/endDate），两边命名差异不影响复用。
+  FS: {
+    mode: "post_json",
+    url: "https://api.famesta.com/api/transaction",
+    source: "famesta",
+    dateFormat: "camel", pageKey: "curPage", sizeKey: "perPage", maxSize: 2000,
+  },
   // C-183 PB：对齐 kyads 实测适配器（kyads lib/affiliates/partnerboost.ts）：
   //   - 仅传 token/begin_date/end_date/page/limit，无 status/source/dataScope → omitStatusAll
   //   - limit 上限 2000，响应 data.total_page 翻页
@@ -897,6 +921,7 @@ function parseTransactions(platform: string, data: Record<string, unknown>): Pla
       item.linkbux_id || item.linkbuxId ||
       item.rewardoo_id || item.rewardooId ||
       item.partnerboost_id || item.partnerboostId ||
+      item.famesta_id || item.famestaId ||
       item.sign_id || item.action_id ||
       item.order_id || item.transaction_id || item.orderId ||
       item.id || ""
@@ -1163,6 +1188,8 @@ const PLATFORM_CLICK_CONFIG: Record<string, PlatformClickConfig> = {
   CF:  { mode: "post_json", url: "https://api.creatorflare.com/api/click_report", source: "creatorflare", dateFormat: "camel", withTime: true, pageKey: "curPage", sizeKey: "perPage", maxSize: 2000, rateLimitMs: CLICK_RATE_SAAS, maxWindowHours: 1, listPath: "data" },
   BSH: { mode: "post_json", url: "https://api.brandsparkhub.com/api/click_report", source: "brandsparkhub", dateFormat: "camel", withTime: true, pageKey: "curPage", sizeKey: "perPage", maxSize: 2000, rateLimitMs: CLICK_RATE_SAAS, maxWindowHours: 1, listPath: "data" },
   EV:  { mode: "post_json", url: "https://api.engagevantage.com/api/click_report", source: "engagevantage", dateFormat: "camel", withTime: true, pageKey: "curPage", sizeKey: "perPage", maxSize: 2000, rateLimitMs: CLICK_RATE_SAAS, maxWindowHours: 1, listPath: "data" },
+  // D-296 FS：/api/click_report 实测存在且为 SaaS 同构响应（{code:"0",data:{total_page,total_items,list}}）
+  FS:  { mode: "post_json", url: "https://api.famesta.com/api/click_report", source: "famesta", dateFormat: "camel", withTime: true, pageKey: "curPage", sizeKey: "perPage", maxSize: 2000, rateLimitMs: CLICK_RATE_SAAS, maxWindowHours: 1, listPath: "data" },
   // ── 独立文档平台 ──
   // LB：只接受纯日期(withTime=false)，窗口≤24h；否则返回 status 1007 Wrong time format
   LB:  { mode: "get", url: "https://www.linkbux.com/api.php?mod=medium&op=user_click", dateFormat: "snake", withTime: false, pageKey: "page", sizeKey: "per_page", maxSize: 2000, rateLimitMs: CLICK_RATE_LEGACY, maxWindowHours: 24, listPath: "payliad" },

@@ -3,7 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { getUserFromRequest } from '@/lib/auth'
 import { resolveMerchantReferer } from '@/lib/suffix-engine/referer-resolver'
 
-const VALID_NETWORKS = ['RW', 'LH', 'PM', 'LB', 'CG', 'CF', 'BSH', 'TJ', 'AW', 'MUI', 'EV']
+const VALID_NETWORKS = ['RW', 'LH', 'PM', 'LB', 'CG', 'CF', 'BSH', 'TJ', 'AW', 'MUI', 'EV', 'FS']
 
 function parseMid(name: string): { platform: string; mid: string; parsed: boolean } {
   if (!name) return { platform: '', mid: '', parsed: false }

@@ -4,6 +4,7 @@ import { ALL_COUNTRY_ENTRIES, getCountry } from "@/lib/countries";
 // LH: linkhaitao.com | LB: linkbux.com | RW: rewardoo.com
 // CG: collabglow.com | PM: partnermatic.com | BSH: brandsparkhub.com | CF: creatorflare.com
 // MUI: ultrainfluence.com | EV: engagevantage.com | PB: partnerboost.com
+// FS: famesta.com（D-296：与 CG/CF/BSH/PM 同引擎的 SaaS 形态，四套接口全等价复用）
 // D-073：AD (AdsDoubler) 已全线下线，不再支持
 export const PLATFORMS = [
   { code: "CG", name: "CollabGlow", domain: "collabglow.com" },
@@ -16,6 +17,7 @@ export const PLATFORMS = [
   { code: "MUI", name: "UltraInfluence", domain: "ultrainfluence.com" },
   { code: "EV", name: "EngageVantage", domain: "engagevantage.com" },
   { code: "PB", name: "PartnerBoost", domain: "partnerboost.com" },
+  { code: "FS", name: "Famesta", domain: "famesta.com" },
 ] as const;
 
 export type PlatformCode = (typeof PLATFORMS)[number]["code"];
@@ -79,6 +81,12 @@ const _PLATFORM_ALIAS_ENTRIES: [string, PlatformCode][] = [
   ["PartnerBoost", "PB"], ["partnerboost", "PB"], ["Partnerboost", "PB"],
   ["Partner Boost", "PB"], ["partner boost", "PB"],
   ["partnerboost.com", "PB"], ["www.partnerboost.com", "PB"], ["app.partnerboost.com", "PB"],
+
+  // FS = Famesta (famesta.com)
+  ["FS", "FS"], ["fs", "FS"],
+  ["Famesta", "FS"], ["famesta", "FS"], ["FaMesta", "FS"],
+  ["famesta.com", "FS"], ["www.famesta.com", "FS"], ["app.famesta.com", "FS"],
+  ["api.famesta.com", "FS"],
 ];
 
 export const PLATFORM_ALIASES: ReadonlyMap<string, PlatformCode> = new Map(_PLATFORM_ALIAS_ENTRIES);

@@ -3,7 +3,7 @@
  *
  * 与 platform-api.ts（商家 / 交易）并列，专门拉取各平台「已支付/打款」记录。
  * 三种接口形态：
- *   1. payment_summary（打款单级）：CG / PM / BSH / CF / MUI / EV
+ *   1. payment_summary（打款单级）：CG / PM / BSH / CF / MUI / EV / FS
  *      POST JSON {source, token, paidDateBegin, paidDateEnd, curPage, perPage}
  *      → data.list[]: {payment_id, paid_date, request_date, amount, status:"paid", payment_type}
  *   2. withdrawal（提现级）：RW / LH
@@ -52,6 +52,8 @@ const PAYMENT_SUMMARY_HOSTS: Record<string, { host: string; source: string }> = 
   CF: { host: "api.creatorflare.com", source: "creatorflare" },
   MUI: { host: "api.ultrainfluence.com", source: "ultrainfluence" },
   EV: { host: "api.engagevantage.com", source: "engagevantage" },
+  // D-296 FS：/api/payment_summary 实测同构（{code:"0",data:{total_items,page,limit,list}}）
+  FS: { host: "api.famesta.com", source: "famesta" },
 };
 
 const PAYMENT_API_TIMEOUT = 60000;

@@ -89,7 +89,7 @@ var CONFIG = {
   DEBUG_LEASE: false,
 
   // Campaign 名称解析配置
-  VALID_NETWORKS: ['RW', 'LH', 'PM', 'LB', 'CG', 'CF', 'BSH', 'TJ', 'AW', 'MUI', 'EV'],
+  VALID_NETWORKS: ['RW', 'LH', 'PM', 'LB', 'CG', 'CF', 'BSH', 'TJ', 'AW', 'MUI', 'EV', 'FS'],
 
   // 时间检查间隔配置
   TIME_CHECK_ACCOUNTS_INTERVAL: 5,
