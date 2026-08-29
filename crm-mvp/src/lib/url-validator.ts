@@ -1,3 +1,5 @@
+import { fetchCompat, isHttpParseError } from "@/lib/lenient-fetch";
+
 const UA_POOL = [
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
@@ -163,7 +165,7 @@ async function getAndCheck(url: string, ua: string): Promise<GetResult> {
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 12000);
-    const res = await fetch(url, {
+    const res = await fetchCompat(url, {
       method: "GET", redirect: "follow", signal: ctrl.signal,
       headers: buildStealthHeaders(ua),
     });
@@ -243,7 +245,7 @@ export async function tryValidateUrl(url: string): Promise<UrlCheckResult> {
     try {
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), 10000);
-      const res = await fetch(url, {
+      const res = await fetchCompat(url, {
         method: "HEAD", redirect: "follow", signal: ctrl.signal, headers,
       });
       clearTimeout(t);
@@ -320,6 +322,11 @@ export async function tryValidateUrl(url: string): Promise<UrlCheckResult> {
         if (i < UA_POOL.length - 1) continue;
         break;
       }
+      // 站点响应头不合规，连宽容解析都没救回来——这是对方站点的问题，
+      // 不是链接失效。如实说明，别让用户去删一条其实能打开的链接。
+      lastDirectFailReason = isHttpParseError(err)
+        ? "目标站点返回的 HTTP 响应头不合规，无法自动校验（浏览器可正常打开）"
+        : `请求异常: ${msg.slice(0, 60)}`;
       if (i < UA_POOL.length - 1) continue;
     }
   }
@@ -398,7 +405,7 @@ export async function quickCheckUrl(url: string): Promise<UrlCheckResult> {
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 15000);
-    const res = await fetch(url, {
+    const res = await fetchCompat(url, {
       method: "GET", redirect: "follow", signal: ctrl.signal, headers,
     });
     clearTimeout(t);
@@ -428,6 +435,9 @@ export async function quickCheckUrl(url: string): Promise<UrlCheckResult> {
     const msg = err instanceof Error ? err.message : "";
     if (msg.includes("abort")) {
       return { ok: false, status: 0, finalUrl: url, reason: "请求超时" };
+    }
+    if (isHttpParseError(err)) {
+      return { ok: false, status: 0, finalUrl: url, reason: "目标站点返回的 HTTP 响应头不合规，无法自动校验（浏览器可正常打开）" };
     }
     return { ok: false, status: 0, finalUrl: url, reason: `请求异常: ${msg.slice(0, 80)}` };
   }

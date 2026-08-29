@@ -426,6 +426,9 @@ export async function fetchViaProxy(
         method,
         headers: mergedHeaders,
         agent,
+        // 部分站点（如 promodirect.com）响应头用裸 LF 折行，Node 严格解析器会整条拒收，
+        // 表现为「浏览器能打开、我们说打不开」。这里放宽分帧解析，TLS 校验不受影响。
+        insecureHTTPParser: true,
         // 单跳 socket 超时不得超过链级剩余预算
         timeout: Math.min(18000, remainingMs),
       };

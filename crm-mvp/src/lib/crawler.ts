@@ -5,6 +5,7 @@ import { normalizeImageUrl } from "@/lib/image-url-normalize";
 import { getHostKey, isHostChallenged, markHostChallenged } from "@/lib/crawl-host-cache";
 import { matchParkedTextSignal } from "@/lib/country-url-resolver";
 import { registerBrowser, closeBrowserSafely, closePageSafely, getStealthLauncher, refreshBrowserAge } from "@/lib/puppeteer-browser-registry";
+import { fetchCompat } from "@/lib/lenient-fetch";
 
 export interface PuppeteerPageData {
   html: string;
@@ -406,7 +407,7 @@ async function crawlWithHttp(url: string, country?: string, proxyUrl?: string): 
         // 若配置了目标国家代理，走代理发出请求（让目标网站按 IP 地理位置返回正确 locale）
         const res = proxyUrl
           ? await fetchViaProxy(tryUrl, { headers: headers as Record<string, string>, signal: ctrl.signal }, proxyUrl)
-          : await fetch(tryUrl, { signal: ctrl.signal, headers, redirect: "follow" });
+          : await fetchCompat(tryUrl, { signal: ctrl.signal, headers, redirect: "follow" });
         clearTimeout(t);
 
         if (res.status === 403) {
@@ -469,7 +470,7 @@ async function crawlWithHttp(url: string, country?: string, proxyUrl?: string): 
       const gbHeaders = { "User-Agent": GOOGLEBOT_UA, "Accept": "text/html,*/*;q=0.8" };
       const res = proxyUrl
         ? await fetchViaProxy(tryUrl, { headers: gbHeaders, signal: ctrl.signal }, proxyUrl)
-        : await fetch(tryUrl, { signal: ctrl.signal, headers: gbHeaders, redirect: "follow" });
+        : await fetchCompat(tryUrl, { signal: ctrl.signal, headers: gbHeaders, redirect: "follow" });
       clearTimeout(t);
       const html = await readHtmlText(res);
       const score = contentQualityScore(html);
@@ -945,7 +946,7 @@ export async function fetchPageImages(pageUrl: string): Promise<string[]> {
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), 12000);
       const headers = buildStealthHeaders(pageUrl, ua);
-      const res = await fetch(pageUrl, { signal: ctrl.signal, headers, redirect: "follow" });
+      const res = await fetchCompat(pageUrl, { signal: ctrl.signal, headers, redirect: "follow" });
       clearTimeout(t);
       if (!res.ok && res.status !== 403) continue;
 
@@ -2875,7 +2876,7 @@ export async function fetchUrlMeta(
         const headers = buildStealthHeaders(url, ua);
         const res = currentProxy
           ? await fetchViaProxy(url, { headers: headers as Record<string, string>, signal: ctrl.signal }, currentProxy)
-          : await fetch(url, { signal: ctrl.signal, headers, redirect: "follow" });
+          : await fetchCompat(url, { signal: ctrl.signal, headers, redirect: "follow" });
         clearTimeout(t);
 
         const finalUrl = res.url || url;
@@ -2986,12 +2987,12 @@ export async function verifyLinks(urls: string[]): Promise<Map<string, boolean>>
         const ctrl = new AbortController();
         const t = setTimeout(() => ctrl.abort(), 8000);
         const headers = buildStealthHeaders(url);
-        const res = await fetch(url, { method: "HEAD", signal: ctrl.signal, headers, redirect: "follow" });
+        const res = await fetchCompat(url, { method: "HEAD", signal: ctrl.signal, headers, redirect: "follow" });
         clearTimeout(t);
         if (res.ok || res.status === 403) {
           results.set(url, true);
         } else {
-          const getRes = await fetch(url, { signal: new AbortController().signal, headers, redirect: "follow" });
+          const getRes = await fetchCompat(url, { signal: new AbortController().signal, headers, redirect: "follow" });
           results.set(url, getRes.ok || getRes.status === 403);
         }
       } catch {
