@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { serializeData } from "@/lib/auth";
+import { serializeData, type TokenPayload } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import { withUser } from "@/lib/api-handler";
 import prisma from "@/lib/prisma";
@@ -310,12 +310,52 @@ async function enrichWithTeamAtc(
 }
 
 /**
+ * D-301：搜索条件构造。纯数字的搜索词在业务上就是 MID（员工从联盟后台抄下来的那串数字），
+ * 先给它一条 merchant_id 等值分支——既比 LIKE '%数字%' 语义准（不会把 1156132 也捞出来），
+ * 也让优化器有一条走 idx_user_plat_mid 的路可选，不必只靠 LIKE 逐行过滤。
+ * 名称/域名的模糊匹配保留，纯数字商家名（如 "1001 Hobbies"）照样搜得到。
+ */
+function buildSearchOr(search: string): Record<string, unknown>[] {
+  const or: Record<string, unknown>[] = [];
+  if (/^\d+$/.test(search)) or.push({ merchant_id: search });
+  or.push(
+    { merchant_name: { contains: search } },
+    { merchant_id: { contains: search } },
+    { merchant_url: { contains: search } }, // C-094.8：允许按域名搜索
+  );
+  return or;
+}
+
+/**
+ * D-301：同一用户、同一组查询参数的请求在飞行中时，不再往库里叠第二条。
+ *
+ * 事故现场（2026-08-31 09:08）：yz08 搜 MID 156132 撞上 ORDER BY 选错索引（见同编号迁移），
+ * 单条语句 288s 未返回；前端每重试一次就再压一条五分钟的查询进去，processlist 里堆了 3 份，
+ * 2 核机器 load 冲到 7.26，其余接口一起挨饿。索引已经根治了那条慢查询，
+ * 这道闸是防下一次——慢查询本身可以再出现，但不该被重试放大成 N 倍。
+ */
+const _inflightMerchantQueries = new Set<string>();
+
+export const GET = withUser(async (req, ctx) => {
+  const inflightKey = `${ctx.user.userId}:${new URL(req.url).searchParams.toString()}`;
+  if (_inflightMerchantQueries.has(inflightKey)) {
+    return apiError("上一次查询还没返回，请稍候再试", 429);
+  }
+  _inflightMerchantQueries.add(inflightKey);
+  try {
+    return await handleMerchantsGet(req, ctx);
+  } finally {
+    _inflightMerchantQueries.delete(inflightKey);
+  }
+});
+
+/**
  * GET /api/user/merchants
  *
  * tab=claimed  → "我的商家"：从 campaigns 表提取 MID，关联 user_merchants，附带广告系列状态
  * tab=available → "选取商家"：user_merchants 中排除"我的商家"已有的 MID
  */
-export const GET = withUser(async (req: NextRequest, { user }) => {
+async function handleMerchantsGet(req: NextRequest, { user }: { user: TokenPayload }) {
   const { searchParams } = new URL(req.url);
   const tab = searchParams.get("tab") || "claimed";
   const platform = searchParams.get("platform") || "";
@@ -371,13 +411,7 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
       status: { in: ["claimed", "paused"] },
     };
     if (platform) where.platform = platform;
-    if (search) {
-      where.OR = [
-        { merchant_name: { contains: search } },
-        { merchant_id: { contains: search } },
-        { merchant_url: { contains: search } }, // C-094.8：允许按域名搜索
-      ];
-    }
+    if (search) where.OR = buildSearchOr(search);
 
     // ─── 全量获取商家 + 广告系列，计算 ad_status 后再分页 ───
     // 必须先计算所有商家的 ad_status 才能正确排序，否则 ENABLED 商家可能被分页截断
@@ -532,13 +566,7 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
       platform: { in: connectedPlatforms },
     };
     if (platform) where.platform = platform;
-    if (search) {
-      where.OR = [
-        { merchant_name: { contains: search } },
-        { merchant_id: { contains: search } },
-        { merchant_url: { contains: search } }, // C-094.8：允许按域名搜索
-      ];
-    }
+    if (search) where.OR = buildSearchOr(search);
     // D-278：品类扩展层——按品类圈同类商家，且只圈可投状态（07 第 5 问拍板：排除违规/禁投/下架）
     if (category) {
       const cats = category.split(",").map((c) => c.trim()).filter(Boolean);
@@ -669,7 +697,7 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
       stats: { total: totalAll, claimed: claimedCount, byPlatform: platformStats },
     }));
   }
-});
+}
 
 // 领取商家
 export const POST = withUser(async (req: NextRequest, { user }) => {

@@ -212,6 +212,10 @@ model user_merchants {
   // D-218：admin/merchant-sheet 同步推荐商家时按 merchant_name 跨用户找匹配行，
   // 上面几个索引全以 user_id / merchant_id 打头，这个查询只能全表扫 163 万行、单次 29s。
   @@index([merchant_name], map: "idx_merchant_name")
+  // D-301：「选取商家」搜索的专用索引。前缀是三个等值条件，末位 merchant_name 直接提供
+  // ORDER BY platform, merchant_name 需要的顺序。没有它时优化器会被 ORDER BY + LIMIT 骗去走
+  // idx_merchant_name 全索引扫描，搜一个稀有词要扫穿 187 万行（实测 288s 未返回）。
+  @@index([user_id, status, is_deleted, platform, merchant_name], map: "idx_um_avail_search")
 }
 
 // -----------------------------------------------------------
