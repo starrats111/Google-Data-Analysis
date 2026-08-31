@@ -657,7 +657,8 @@ export async function queryCampaignBoard(
     }),
   ]);
 
-  // 今日投放数（今日 CST 新建且历史无同名系列，按 gcid 去重）；缓存缺失/非当日 → null
+  // 今日投放数（今日 CST 投出且历史无同名系列，按 gcid 去重；库内今日新建 ∪ Sheet 今日行）；
+  // 缓存缺失/非当日 → null
   let todayAdsCount: number | null = null;
   if (todayAdsCache?.config_value) {
     try {

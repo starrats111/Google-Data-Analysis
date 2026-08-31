@@ -213,9 +213,19 @@ async function syncCampaignNames(
 }
 
 /**
- * 今日投放广告数：今日（CST）创建、且历史（今日之前）没出现过同名系列的广告数，按 gcid 去重。
+ * 今日投放广告数：今日（CST）投出、且历史（今日之前）没出现过同名系列的广告数，按 gcid 去重。
  * 「历史同名」以 campaigns 表为准（含软删行）：同 user、同 campaign_name、
  * created_at 早于今日 CST 零点即视为历史已有，复用旧名字重开的系列不计入。
+ *
+ * 数据源取**并集**，缺一不可（wj11 2026-08-31 反馈根因）：
+ *   ① campaigns 表 —— 今日 CST 建单且已拿到 gcid（真提交到 Google 了）的系列。
+ *      广告是 CRM 自己建的，建单当场就落 campaigns 行，不依赖任何外部表格。
+ *   ② Sheet CampaignInfo 今日行 —— 覆盖不走 CRM、直接在 Google 后台建系列的成员。
+ * 此前只有 ②：某个 MCC 的统一脚本一停更，它的 CampaignInfo 就冻在最后一次运行的快照上，
+ * 表还在、表头也对、读得到旧行，故不进 sheetIssueByMcc 的故障名单——今天新建的系列却永远
+ * 不会出现，计数**静默**少算，成员只看到数字比表格里的条数小。
+ * 实证：wj11(user 39) 的 代理商MCC(577-319-9400) DailyData/CampaignInfo 自 2026-08-27 冻结，
+ * 当天该 MCC 投的 2 条全部漏计，卡片显示 2 条、表格里实为 4 条。
  */
 async function countTodayNewAds(
   rows: Array<CampaignInfoRow & { userId: string; mccDbId: string }>,
@@ -224,8 +234,30 @@ async function countTodayNewAds(
   const out = new Map<string, number>();
   const todayStartCST = new Date(`${todayStr}T00:00:00+08:00`);
 
-  // userId → (gcid → campaignName)，仅今日创建的行
+  // userId → (gcid → campaignName)，仅今日投出的行
   const byUser = new Map<string, Map<string, string>>();
+
+  // ① 库内今日新建并已提交 Google 的系列（gcid 非空 = 真发出去了；草稿不算投放）
+  try {
+    const dbRows = await prisma.campaigns.findMany({
+      where: {
+        is_deleted: 0,
+        created_at: { gte: todayStartCST },
+        google_campaign_id: { not: null },
+      },
+      select: { user_id: true, google_campaign_id: true, campaign_name: true },
+    });
+    for (const c of dbRows) {
+      const uid = String(c.user_id);
+      if (!byUser.has(uid)) byUser.set(uid, new Map());
+      byUser.get(uid)!.set(c.google_campaign_id!, c.campaign_name || "");
+    }
+  } catch (e) {
+    log(`今日投放广告 库内今日新建查询失败: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`);
+  }
+
+  // ② Sheet 今日行补充。同 gcid 已被 ① 收录时不覆盖：历史同名要拿库里的名字去比，
+  //    Sheet 上的名字可能已被 Google 后台改过（D-225 回写前后不一致）。
   for (const r of rows) {
     if (r.creationDate !== todayStr) continue;
     if (!byUser.has(r.userId)) byUser.set(r.userId, new Map());
@@ -278,8 +310,12 @@ export async function GET(req: NextRequest) {
 
     const syncedAt = new Date().toISOString();
 
-    // 今日投放广告数（今日创建 + 历史无同名，按 gcid 去重）
+    // 今日投放广告数（库内今日新建 ∪ Sheet 今日行，历史无同名，按 gcid 去重）
     const adsByUser = await countTodayNewAds(result.recentRows, result.date);
+    // 落库前先记一行：脚本停更的 MCC 曾让这个数静默偏小，日志里留下逐人条数才能事后对账
+    const adsBrief = [...adsByUser.entries()].filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
+    log(`今日投放广告：${adsBrief.reduce((s, [, n]) => s + n, 0)} 条 / ${adsBrief.length} 人` +
+        (adsBrief.length > 0 ? `（${adsBrief.map(([u, n]) => `user ${u}:${n}`).join(", ")}）` : ""));
 
     // 将结果写入 system_configs，每个 user_id 一条记录
     const writeOps: Promise<unknown>[] = [];

@@ -180,7 +180,9 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   // 适用于 CRM 建系列和直接在 Google Ads 建系列的成员
   const todayStr = todayCST();
   const todayMerchantsMap = new Map<string, number>();
-  // 今日投放广告数（今日创建且历史无同名，cron 同步时一并写入缓存 ads_count）
+  // 今日投放广告数（今日投出且历史无同名，cron 同步时一并写入缓存 ads_count）
+  // 与上面的「今日投放商家」不同口径：ads_count 取 CRM 库内今日新建(已提交 Google) ∪ Sheet 今日行，
+  // 脚本停更的 MCC 不再静默漏计（见 today-merchants-sync 的 countTodayNewAds）
   const todayAdsMap = new Map<string, number>();
   try {
     const cacheRows = await prisma.system_configs.findMany({

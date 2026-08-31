@@ -216,7 +216,7 @@ export default function TeamOverviewPage() {
     },
     {
       title: (
-        <Tooltip title="每 30 分钟从 Google Sheet 同步，统计今日新建（CST）且历史没出现过同名系列的广告数量">
+        <Tooltip title="每 30 分钟同步一次，统计今日（CST）投出且历史没出现过同名系列的广告数量：CRM 建的广告以系统记录为准，直接在 Google 后台建的按统一脚本表格补充">
           今日投放广告
         </Tooltip>
       ),
@@ -227,9 +227,10 @@ export default function TeamOverviewPage() {
       sorter: (a: MemberRanking, b: MemberRanking) =>
         (a.today_ads ?? -1) - (b.today_ads ?? -1),
       render: (v: number | null, record: MemberRanking) => {
-        if (record.script_configured === false) {
+        // 与数据中心同口径：算得出条数就直接显示，脚本提示只在一条也算不出来时顶替
+        if (record.script_configured === false && !v) {
           return (
-            <Tooltip title="该成员没有已配置 Google Sheet 的 MCC 统一脚本，无法统计今日投放">
+            <Tooltip title="该成员没有已配置 Google Sheet 的 MCC 统一脚本；其在 CRM 建的广告仍会计入，直接在 Google 后台建的系列则统计不到">
               <Text style={{ fontSize: 11, color: "#fa8c16" }}>脚本未同步，需同步配置脚本</Text>
             </Tooltip>
           );
