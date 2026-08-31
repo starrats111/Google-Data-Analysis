@@ -1027,8 +1027,11 @@ export default function DataCenterPage() {
         </Col>
         <Col xs={12} sm={8} md={4}>
           <Card size="small" styles={{ body: { padding: "8px 12px" } }}>
-            {summary.scriptConfigured === false ? (
-              <Tooltip title="未检测到已配置 Google Sheet 的 MCC 统一脚本，无法统计今日投放数">
+            {/* 脚本未配置的提示只在「确实一条也算不出来」时才顶替数字：今日投放数已改为
+                以 CRM 库内今日新建（已提交 Google）为主、Sheet 今日行为辅的并集，
+                没有统一脚本照样能算出 CRM 自己建的广告条数。 */}
+            {summary.scriptConfigured === false && !summary.todayAdsCount ? (
+              <Tooltip title="未检测到已配置 Google Sheet 的 MCC 统一脚本；CRM 自己建的广告仍会计入，直接在 Google 后台建的系列则统计不到">
                 <Statistic
                   title="今日投放数"
                   valueRender={() => (
@@ -1039,7 +1042,7 @@ export default function DataCenterPage() {
                 />
               </Tooltip>
             ) : (
-              <Tooltip title="今日（东八区）新建且历史没出现过同名系列的广告数量，每 30 分钟从 Google Sheet 同步">
+              <Tooltip title="今日（东八区）投出且历史没出现过同名系列的广告数量，每 30 分钟同步一次：CRM 建的广告以系统记录为准，直接在 Google 后台建的按统一脚本表格补充">
                 <Statistic
                   title="今日投放数"
                   value={summary.todayAdsCount ?? 0}
