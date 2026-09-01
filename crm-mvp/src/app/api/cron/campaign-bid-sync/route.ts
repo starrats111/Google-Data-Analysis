@@ -439,7 +439,14 @@ export async function GET(req: NextRequest) {
         }
         for (const [usd, dates] of datesByValue) {
           const updated = await prisma.ads_daily_stats.updateMany({
-            where: { campaign_id: ref.id, is_deleted: 0, date: { in: dates }, NOT: { max_cpc: usd } },
+            where: {
+              campaign_id: ref.id, is_deleted: 0, date: { in: dates },
+              // D-304.3：这里**不能**只写 NOT:{max_cpc:usd}。那会翻成 `max_cpc <> 0.75`，
+              // 而 SQL 里 NULL <> 0.75 的结果是 UNKNOWN 不是 TRUE——空行于是永远匹配不上，
+              // 永远填不进去（正是「有值的能改对、空的一个都补不上」那个现象的病根）。
+              // 空值必须单独用 IS NULL 兜住。
+              OR: [{ max_cpc: null }, { NOT: { max_cpc: usd } }],
+            },
             data: { max_cpc: usd },
           });
           stats.statRowsUpdated += updated.count;
