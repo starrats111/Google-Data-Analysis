@@ -6,7 +6,7 @@ import { nowCST, parseTxnDateStart, parseTxnDateEndExclusive } from "@/lib/date-
 import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
 import { applyAffiliateCommissionToDailyStats } from "@/lib/daily-stats-commission";
 import { aggregateRawTransactions } from "@/lib/affiliate-txn-aggregate";
-import { markConnectionSuccess, markConnectionAttempted, markConnectionFailure } from "@/lib/connection-health";
+import { markConnectionSuccess, markConnectionReachable, markConnectionFailure } from "@/lib/connection-health";
 
 /**
  * POST /api/user/data-center/sync-transactions
@@ -89,7 +89,7 @@ export async function POST(req: NextRequest) {
       if (error) {
         await markConnectionFailure(conn.id, error);
       } else if (transactions.length === 0) {
-        await markConnectionAttempted(conn.id);
+        await markConnectionReachable(conn.id);
       } else {
         await markConnectionSuccess(conn.id);
       }

@@ -7,7 +7,7 @@ import { todayCST, yesterdayCST, nowCST, parseTxnDateStart } from "@/lib/date-ut
 import { getExchangeRate, preloadRates } from "@/lib/exchange-rate";
 import { sqlAffiliateTxnValidPlatformConnection } from "@/lib/affiliate-transaction-sql";
 import { aggregateRawTransactions } from "@/lib/affiliate-txn-aggregate";
-import { markConnectionSuccess, markConnectionAttempted, markConnectionFailure } from "@/lib/connection-health";
+import { markConnectionSuccess, markConnectionReachable, markConnectionFailure } from "@/lib/connection-health";
 
 /**
  * POST /api/user/team/sync
@@ -292,7 +292,7 @@ async function syncRecentTransactionsForUser(
         await markConnectionFailure(conn.id, r.error);
         if (r.transactions.length === 0) continue;
       } else if (r.transactions.length === 0) {
-        await markConnectionAttempted(conn.id);
+        await markConnectionReachable(conn.id);
         continue;
       } else {
         await markConnectionSuccess(conn.id);

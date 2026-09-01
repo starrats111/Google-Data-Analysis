@@ -4,7 +4,7 @@
  * 规约：所有调用平台 API 的代码路径（5 处 sync 入口 + test-connection API）
  * 在调用 fetchAllTransactions / fetchAllMerchants 后必须调用本 helper 写状态：
  *   - 成功（拿到数据）→ markConnectionSuccess
- *   - 成功但 0 数据 → markConnectionAttempted（仅刷新 last_sync_attempt_at）
+ *   - 成功但 0 数据 → markConnectionReachable（接口是通的，清掉过期故障但不谎报 last_synced_at）
  *   - 失败（error / token invalid）→ markConnectionFailure
  *   - 用户手动测试通过 → markConnectionUserVerified（强制覆盖自检失败历史）
  *
@@ -57,9 +57,38 @@ export async function markConnectionSuccess(connId: bigint): Promise<void> {
 }
 
 /**
- * 同步成功但 0 数据：仅刷新 last_sync_attempt_at，不动 status / last_error
+ * D-305：同步成功但 0 数据 —— 接口是通的，凭据也是好的，只是这段窗口没出单。
  *
- * 注意：低活跃账号 + 短窗口可能合法地返回 0 单，不应判失败。
+ * 起因（2026-09-01，D-303 收尾时发现）：旧实现只刷 last_sync_attempt_at，
+ * 不清 last_error、不清零 consecutive_failures、不把 status 从 error 转回来。
+ * 于是**任何进过 error 的连接，只要之后没再出过单，就永久钉死在红色异常态**，
+ * 界面一直念那条早就过期的错误。D-303 修完 RW 后 45 条连接自愈 38 条，
+ * 剩下 6 条（wj111 ×3 / jy01 / jy07 / yz08）全卡在这——拿它们的 Key 直接打 RW
+ * 接口，6 条全回 `code=0 Success` 但 0 行，密钥完全正常，卡片上却还挂着
+ * 「该连接 API Key 已失效」。这跟 D-303 是同一类冤枉：D-303 修的是判据和文案，
+ * 这条是状态机——文案再准，状态不翻篇也白搭。
+ *
+ * 拿到 HTTP 成功响应，就等于平台认了这把凭据（与 markConnectionUserVerified
+ * 判「测试通过」是同一个标准），所以该清的都清掉。
+ *
+ * 唯独**不动 last_synced_at**：那个字段的语义是「上次真拿到数据」，
+ * 0 单不该冒充；界面上的「上次同步」也据此显示，谎报会让人以为数据是新的。
+ */
+export async function markConnectionReachable(connId: bigint): Promise<void> {
+  await prisma.platform_connections.update({
+    where: { id: connId },
+    data: {
+      last_sync_attempt_at: new Date(),
+      last_error: null,
+      consecutive_failures: 0,
+      status: "connected",
+    },
+  });
+}
+
+/**
+ * @deprecated D-305 起 src 内不再使用——「只刷时间不翻篇」正是让连接永久红着的原因，
+ * 详见 markConnectionReachable。仅为 scripts/ 下的一次性脚本保留，新代码别用。
  */
 export async function markConnectionAttempted(connId: bigint): Promise<void> {
   await prisma.platform_connections.update({

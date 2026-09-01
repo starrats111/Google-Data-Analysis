@@ -3,7 +3,7 @@ import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError, normalizePlatformCode } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { nowCST } from "@/lib/date-utils";
-import { markConnectionSuccess, markConnectionAttempted, markConnectionFailure } from "@/lib/connection-health";
+import { markConnectionSuccess, markConnectionReachable, markConnectionFailure } from "@/lib/connection-health";
 
 /**
  * POST /api/user/data-center/sync-payments
@@ -98,7 +98,7 @@ export async function POST(req: NextRequest) {
         continue;
       }
       if (payments.length === 0) {
-        await markConnectionAttempted(conn.id);
+        await markConnectionReachable(conn.id);
         accountResults.push({ account_name: label, platform, synced: 0, total_fetched: 0, paid_amount: 0, error });
         continue;
       }

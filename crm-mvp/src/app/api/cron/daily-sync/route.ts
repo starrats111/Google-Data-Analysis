@@ -8,7 +8,7 @@ import { applyAffiliateCommissionToDailyStats } from "@/lib/daily-stats-commissi
 import { autoRepairPublishedArticles } from "@/lib/article-auto-repair";
 import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
 import { aggregateRawTransactions } from "@/lib/affiliate-txn-aggregate";
-import { markConnectionSuccess, markConnectionAttempted, markConnectionFailure } from "@/lib/connection-health";
+import { markConnectionSuccess, markConnectionReachable, markConnectionFailure } from "@/lib/connection-health";
 import { resolveMainConnectionMap } from "@/lib/payment-main-connection";
 
 function verifyCron(req: NextRequest): boolean {
@@ -1021,7 +1021,7 @@ async function syncAllUsersTransactions(): Promise<unknown> {
             await markConnectionFailure(conn.id, r.error);
             if (r.transactions.length === 0) continue;
           } else if (r.transactions.length === 0) {
-            await markConnectionAttempted(conn.id);
+            await markConnectionReachable(conn.id);
             continue;
           } else {
             await markConnectionSuccess(conn.id);

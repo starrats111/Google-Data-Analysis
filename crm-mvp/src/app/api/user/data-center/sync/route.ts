@@ -10,7 +10,7 @@ import { syncMerchantStatusForUser, parseCampaignNameFull } from "@/lib/campaign
 import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
 import { applyAffiliateCommissionToDailyStats } from "@/lib/daily-stats-commission";
 import { aggregateRawTransactions } from "@/lib/affiliate-txn-aggregate";
-import { markConnectionSuccess, markConnectionAttempted, markConnectionFailure } from "@/lib/connection-health";
+import { markConnectionSuccess, markConnectionReachable, markConnectionFailure } from "@/lib/connection-health";
 import { createCampaignDedup, loadSoftDeletedGcids } from "@/lib/google-ads/campaign-dedup";
 
 /**
@@ -818,7 +818,7 @@ async function syncTransactionsInline(
           await markConnectionFailure(conn.id, r.error);
           if (r.transactions.length === 0) continue;
         } else if (r.transactions.length === 0) {
-          await markConnectionAttempted(conn.id);
+          await markConnectionReachable(conn.id);
           continue;
         } else {
           await markConnectionSuccess(conn.id);

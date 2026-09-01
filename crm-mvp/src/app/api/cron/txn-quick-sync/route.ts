@@ -5,7 +5,7 @@ import { nowCST, dateColumnStart, dateColumnEndExclusive } from "@/lib/date-util
 import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
 import { applyAffiliateCommissionToDailyStats } from "@/lib/daily-stats-commission";
 import { aggregateRawTransactions } from "@/lib/affiliate-txn-aggregate";
-import { markConnectionSuccess, markConnectionAttempted, markConnectionFailure } from "@/lib/connection-health";
+import { markConnectionSuccess, markConnectionReachable, markConnectionFailure } from "@/lib/connection-health";
 
 /** 快速同步的时间窗口（天）：覆盖所有状态活跃中的订单 */
 const QUICK_SYNC_DAYS = 14;
@@ -224,8 +224,8 @@ async function runQuickSync(startTime: number): Promise<NextResponse> {
             if (r.transactions.length === 0) continue;
             // 有 partial 数据时不阻塞继续处理，但状态已记为失败
           } else if (r.transactions.length === 0) {
-            // 成功但 0 单：仅刷新 attempt 时间，不动 status
-            await markConnectionAttempted(conn.id);
+            // D-305 成功但 0 单：接口通=凭据好，清掉过期故障态；但不动 last_synced_at（没真拿到数据）
+            await markConnectionReachable(conn.id);
             continue;
           } else {
             // 成功有数据：完整健康状态写库（last_synced_at + 清 error + 恢复 connected）
