@@ -24,9 +24,16 @@ export const maxDuration = 300;
  * 无关，不该共用一个跳过条件。本 cron 覆盖**所有**有凭据的 MCC。
  *
  * 写两处：
- *   · campaigns.max_cpc_limit ← 账户币种原值（该列口径即账户币种，D-266 批一）
- *   · ads_daily_stats.max_cpc ← 折美元（该列口径是 USD）；当前快照语义：昨日行必写，
- *     窗口内空值行回填，已有历史快照不覆盖
+ *   · campaigns.max_cpc_limit ← **此刻**的上限，账户币种原值（该列口径即账户币种，D-266 批一）
+ *   · ads_daily_stats.max_cpc ← **那一天**的上限，折美元（该列口径是 USD）
+ *
+ * D-304.1：逐日快照必须是「那天实际是多少」，不能拿今天的值去糊历史。
+ * 实例：wj11 的 674-LB1 在后台被逐日调价——8/25→$4.00、8/26→$4.20、8/27→$4.60、
+ * 今早→$5.20。第一版把 $5.20 刷满了 8/26~8/31 六天，等于把调价过程抹平成一条直线，
+ * 之后拿这些数做 ROI 复盘会得出完全错的结论。
+ * 现在走 change_event 还原：以「此刻的值」为锚点往回倒推——晚于某日的第一次变更，
+ * 它的 old 值就是那天收盘时的上限；该日之后没变过就还是此刻的值。这样今天天然正确，
+ * 历史也不会被今天污染。拿不到变更历史时整段不写，宁可留空。
  *
  * ⚠️ 不碰 last_google_sync_at：那一列的语义是「状态最后一次跟 Google 核对过」，
  * campaign-status-drift 靠它判断「已暂停却还在花钱」。本 cron 不读状态，碰它等于伪造证词。
@@ -85,13 +92,35 @@ function readCeiling(campaign: Record<string, unknown> | undefined): number | nu
   return null;
 }
 
+interface CampaignBid {
+  /** 此刻的出价上限（账户币种）；null = Google 上没设上限 */
+  current: number | null;
+  strategy: string;
+  /**
+   * 窗口内的上限变更，按时间升序。date 取账户时区的日期（与 segments.date 同基准），
+   * before 是这次变更**之前**的值（null = 那之前没有上限）。
+   * 有了它才能还原「那一天实际是多少」，而不是拿今天的值去糊历史。
+   */
+  changes: Array<{ date: string; before: number | null }>;
+  /** change_event 没取到（查询失败/策略不支持还原）——此时不许写逐日快照 */
+  historyMissing: boolean;
+}
+
+/** 从 old_resource / new_resource 的 campaign 对象里取出价上限 */
+function readCeilingFromResource(resource: unknown): number | null {
+  const campaign = (resource as Record<string, unknown> | undefined)?.campaign;
+  return readCeiling(campaign as Record<string, unknown> | undefined);
+}
+
 /**
- * 一个 CID 下这批系列的出价上限（账户币种）。
+ * 一个 CID 下这批系列的出价上限 + 窗口内的变更历史。
+ *
  * MANUAL_CPC 系列的出价在 ad_group，需要第二次查询——线上目前没有这种系列，
- * 所以只在确实出现时才发这个请求，不为一个空集合烧配额。
+ * 所以只在确实出现时才发这个请求，不为一个空集合烧配额；这类系列不还原历史
+ * （historyMissing=true），只更新 campaigns.max_cpc_limit，逐日快照宁可留空不写错。
  */
-async function collectCidBids(task: CidTask): Promise<Map<string, number>> {
-  const bids = new Map<string, number>(); // gcid -> 账户币种金额
+async function collectCidBids(task: CidTask, range: { startStr: string; afterEndStr: string }): Promise<Map<string, CampaignBid>> {
+  const out = new Map<string, CampaignBid>();
   const gcidList = task.refs.map((r) => r.google_campaign_id).join(",");
 
   const rows = await queryGoogleAds(task.credentials, task.cid, `
@@ -105,10 +134,15 @@ async function collectCidBids(task: CidTask): Promise<Map<string, number>> {
     const campaign = row.campaign as Record<string, unknown> | undefined;
     const gcid = String(campaign?.id ?? "");
     if (!gcid) continue;
-    if (String(campaign?.biddingStrategyType ?? "") === "MANUAL_CPC") { manualGcids.push(gcid); continue; }
-    const ceiling = readCeiling(campaign);
-    // 上限未设置（Google 不返回该字段）就是「没有上限」，写 0 会把它伪装成 $0 出价
-    if (ceiling != null) bids.set(gcid, ceiling);
+    const strategy = String(campaign?.biddingStrategyType ?? "");
+    if (strategy === "MANUAL_CPC") manualGcids.push(gcid);
+    out.set(gcid, {
+      // 上限未设置（Google 不返回该字段）就是「没有上限」，写 0 会把它伪装成 $0 出价
+      current: strategy === "MANUAL_CPC" ? null : readCeiling(campaign),
+      strategy,
+      changes: [],
+      historyMissing: strategy === "MANUAL_CPC",
+    });
   }
 
   if (manualGcids.length > 0) {
@@ -123,12 +157,64 @@ async function collectCidBids(task: CidTask): Promise<Map<string, number>> {
       const adGroup = row.adGroup as Record<string, unknown> | undefined;
       const gcid = String(campaign?.id ?? "");
       const bid = microsToDollars(Number(adGroup?.cpcBidMicros ?? 0));
-      if (!gcid || bid <= 0) continue;
-      if (bid > (bids.get(gcid) || 0)) bids.set(gcid, bid);
+      const entry = out.get(gcid);
+      if (!entry || bid <= 0) continue;
+      if (bid > (entry.current ?? 0)) entry.current = bid;
     }
   }
 
-  return bids;
+  // 只要有一条要还原历史的系列，就拉一次该 CID 的变更流水（整 CID 一次，不按系列分开发请求）
+  const needHistory = [...out.values()].some((b) => !b.historyMissing);
+  if (!needHistory) return out;
+
+  try {
+    // ⚠️ 必须滤掉 GOOGLE_ADS_SCRIPTS：换链脚本每隔几分钟改一次 finalUrlSuffix，
+    //    单条系列一个月就能刷出上万条，把出价变更整个淹掉（LIMIT 上限 10000）。
+    //    代价：万一哪天有 Ads Script 去改出价，这里看不见——目前脚本只管换链，不碰出价。
+    const evRows = await queryGoogleAds(task.credentials, task.cid, `
+      SELECT change_event.change_date_time, change_event.campaign,
+        change_event.old_resource, change_event.new_resource
+      FROM change_event
+      WHERE change_event.change_date_time >= '${range.startStr}'
+        AND change_event.change_date_time <= '${range.afterEndStr}'
+        AND change_event.change_resource_type = 'CAMPAIGN'
+        AND change_event.client_type != 'GOOGLE_ADS_SCRIPTS'
+      ORDER BY change_event.change_date_time ASC
+      LIMIT 10000
+    `);
+    for (const row of evRows) {
+      const ev = row.changeEvent as Record<string, unknown> | undefined;
+      const gcid = String(ev?.campaign ?? "").split("/").pop() || "";
+      const entry = out.get(gcid);
+      if (!entry || entry.historyMissing) continue;
+      const before = readCeilingFromResource(ev?.oldResource);
+      const after = readCeilingFromResource(ev?.newResource);
+      // 两边都没有上限字段 = 这条变更跟出价无关（改的是状态/文案/预算等），跳过
+      if (before == null && after == null) continue;
+      const dt = String(ev?.changeDateTime ?? "");
+      if (dt.length < 10) continue;
+      entry.changes.push({ date: dt.slice(0, 10), before });
+    }
+  } catch (err) {
+    // 拿不到变更历史就不写逐日快照——宁可留空，也不再拿今天的值去糊历史
+    for (const b of out.values()) b.historyMissing = true;
+    throw err;
+  }
+
+  return out;
+}
+
+/**
+ * 还原某一天**当天结束时**的出价上限。
+ *
+ * 从「此刻的值」往回倒推：晚于该日的第一次变更，它的 before 就是那天收盘时的值；
+ * 该日之后没变过，那就还是此刻的值。这样今天的值天然正确，历史也不会被今天污染。
+ */
+function ceilingOnDate(bid: CampaignBid, dateStr: string): number | null {
+  for (const ch of bid.changes) {          // changes 已按时间升序
+    if (ch.date > dateStr) return ch.before;
+  }
+  return bid.current;
 }
 
 /** 小并发执行器：按序取任务，最多 limit 个同时在跑 */
@@ -154,13 +240,23 @@ export async function GET(req: NextRequest) {
   const range = getAnalysisRange(7);
   const { getExchangeRate } = await import("@/lib/exchange-rate");
   const { todayCST, dateColumnStart } = await import("@/lib/date-utils");
-  const yesterdayDate = dateColumnStart(range.endStr);
   const todayForRate = todayCST();
+
+  // 窗口内的每一天（YYYY-MM-DD，账户时区口径与 segments.date 一致）
+  const windowDates: string[] = [];
+  for (let d = dateColumnStart(range.startStr); d < range.dateEndExclusive; d.setUTCDate(d.getUTCDate() + 1)) {
+    windowDates.push(d.toISOString().slice(0, 10));
+  }
+  // change_event 的上界要含「今天」——昨天收盘时的值，取决于今天有没有再改过
+  const tomorrow = dateColumnStart(todayForRate);
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  const tomorrowStr = tomorrow.toISOString().slice(0, 10);
 
   const stats = {
     scope: scopeAll ? "all" : "active",
     offset,
     mccs: 0, cids: 0, cidsDone: 0, campaignsUpdated: 0, statRowsUpdated: 0,
+    campaignsNoHistory: 0,
     skippedMccs: 0, timedOut: false, nextOffset: null as number | null,
     errors: [] as string[],
   };
@@ -247,35 +343,47 @@ export async function GET(req: NextRequest) {
     if (Date.now() - startedAt > DEADLINE_MS) { stats.timedOut = true; return; }
     stats.cidsDone++;
     try {
-      const bids = await collectCidBids(task);
+      const bids = await collectCidBids(task, { startStr: range.startStr, afterEndStr: tomorrowStr });
       if (bids.size === 0) return;
 
       for (const ref of task.refs) {
-        const bidAccount = bids.get(ref.google_campaign_id);
-        if (bidAccount == null) continue;
+        const bid = bids.get(ref.google_campaign_id);
+        if (!bid) continue;
 
-        // 1) 系列上的出价上限：账户币种原值，变了才写
-        const accountValue = Number(bidAccount.toFixed(4));
-        if (Number(ref.max_cpc_limit ?? -1) !== accountValue) {
-          await prisma.campaigns.update({
-            where: { id: ref.id },
-            data: { max_cpc_limit: accountValue },
-          });
-          stats.campaignsUpdated++;
+        // 1) 系列上的「现在的上限」：账户币种原值，变了才写
+        if (bid.current != null) {
+          const accountValue = Number(bid.current.toFixed(4));
+          if (Number(ref.max_cpc_limit ?? -1) !== accountValue) {
+            await prisma.campaigns.update({
+              where: { id: ref.id },
+              data: { max_cpc_limit: accountValue },
+            });
+            stats.campaignsUpdated++;
+          }
         }
 
-        // 2) 逐日快照：昨日必写，窗口内空值回填；历史已有快照不覆盖
+        // 2) 逐日快照：每天写**那天**的真值。拿不到变更历史就整段不写——
+        //    宁可留空，也不能再拿今天的值去糊历史（D-304.1 病根）。
         if (task.usdRate <= 0) continue;
-        const updated = await prisma.ads_daily_stats.updateMany({
-          where: {
-            campaign_id: ref.id,
-            is_deleted: 0,
-            date: { gte: range.dateStart, lt: range.dateEndExclusive },
-            OR: [{ date: yesterdayDate }, { max_cpc: null }],
-          },
-          data: { max_cpc: Number((bidAccount * task.usdRate).toFixed(4)) },
-        });
-        stats.statRowsUpdated += updated.count;
+        if (bid.historyMissing) { stats.campaignsNoHistory++; continue; }
+
+        // 同值的日期合并成一条 updateMany，7 天最多也就几条
+        const datesByValue = new Map<number, Date[]>();
+        for (const dateStr of windowDates) {
+          const account = ceilingOnDate(bid, dateStr);
+          if (account == null) continue; // 那天 Google 上没设上限，留空才是实话
+          const usd = Number((account * task.usdRate).toFixed(4));
+          const arr = datesByValue.get(usd) || [];
+          arr.push(dateColumnStart(dateStr));
+          datesByValue.set(usd, arr);
+        }
+        for (const [usd, dates] of datesByValue) {
+          const updated = await prisma.ads_daily_stats.updateMany({
+            where: { campaign_id: ref.id, is_deleted: 0, date: { in: dates }, NOT: { max_cpc: usd } },
+            data: { max_cpc: usd },
+          });
+          stats.statRowsUpdated += updated.count;
+        }
       }
     } catch (err) {
       const msg = `MCC ${task.mccId} CID ${task.cid}: ${err instanceof Error ? err.message : String(err)}`;
@@ -291,6 +399,7 @@ export async function GET(req: NextRequest) {
   log(
     `完成(${stats.scope})：MCC ${stats.mccs}、CID ${stats.cidsDone}/${stats.cids}（offset ${offset}）、` +
     `系列出价更新 ${stats.campaignsUpdated}、逐日快照 ${stats.statRowsUpdated} 行、` +
+    `无变更历史不写快照 ${stats.campaignsNoHistory} 条、` +
     `跳过无凭据 MCC ${stats.skippedMccs}、错误 ${stats.errors.length}` +
     `${stats.nextOffset != null ? `、软时限收工，续跑 offset=${stats.nextOffset}` : ""}，` +
     `耗时 ${((Date.now() - startedAt) / 1000).toFixed(1)}s`,
