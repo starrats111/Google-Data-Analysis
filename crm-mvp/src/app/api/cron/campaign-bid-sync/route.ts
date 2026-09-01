@@ -369,6 +369,30 @@ export async function GET(req: NextRequest) {
   // 队列顺序稳定（MCC id 升序 → CID 升序），offset 才有续跑的意义
   tasks.sort((a, b) => (a.mccId === b.mccId ? a.cid.localeCompare(b.cid) : a.mccId.localeCompare(b.mccId)));
   stats.cids = tasks.length;
+
+  // ?probe=<campaigns.id>：只读诊断——这条系列有没有进队列、Google 返回了什么、
+  // 逐日还原成多少。排查「明明在范围内却没写进去」时用，不写任何库。
+  const probeId = req.nextUrl.searchParams.get("probe");
+  if (probeId) {
+    const task = tasks.find((t) => t.refs.some((r) => String(r.id) === probeId));
+    if (!task) {
+      return NextResponse.json({ ok: true, probe: probeId, inTasks: false, totalCids: tasks.length });
+    }
+    const ref = task.refs.find((r) => String(r.id) === probeId)!;
+    const bids = await collectCidBids(task, { startStr: range.startStr, afterEndStr: tomorrowStr });
+    const bid = bids.get(ref.google_campaign_id);
+    return NextResponse.json({
+      ok: true, probe: probeId, inTasks: true,
+      mccId: task.mccId, cid: task.cid, usdRate: task.usdRate,
+      refsInTask: task.refs.map((r) => ({ id: String(r.id), gcid: r.google_campaign_id })),
+      googleReturnedGcids: [...bids.keys()],
+      matched: !!bid,
+      strategy: bid?.strategy ?? null,
+      series: bid ? [...bid.series.entries()].map(([k, s]) => ({ key: k, current: s.current, changes: s.changes })) : null,
+      perDay: windowDates.map((d) => ({ date: d, account: bid ? bidOnDate(bid, d) : null })),
+    });
+  }
+
   const slice = tasks.slice(offset);
 
   // ─── 2. 逐 CID 核对并回写 ───
