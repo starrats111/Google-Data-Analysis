@@ -28,8 +28,18 @@
  *         阈值放宽到 10 次，且一旦判定为**系统性故障**（5 分钟内 ≥3 个不同连接同时
  *         transient 失败 = 必然是本机问题，不可能多家联盟同时改密钥）连计数都不加，
  *         只记 last_error，让 UI 显示真实原因而不是甩锅给密钥。
+ *
+ * D-300 判据搬到 conn-failure-kind.ts（2026-08-29 RW「它又坏了」）：
+ *   前端为了改文案手抄过一份正则，注释写着「与后端同源」，实际两边早就长歪了——
+ *   Cloudflare 的 524、以及「网关返回 HTML 错误页 → resp.json() 抛 Unexpected token」
+ *   两边都不认，于是又显示成「该连接 API Key 已失效」。判据只留一份纯函数模块
+ *   （connection-health 顶部 import prisma，前端 import 不动），本文件 re-export 兼容旧调用点。
  */
 import prisma from "@/lib/prisma";
+import { classifyConnFailure } from "@/lib/conn-failure-kind";
+
+export { classifyConnFailure, isNonKeyFailure } from "@/lib/conn-failure-kind";
+export type { ConnFailureKind } from "@/lib/conn-failure-kind";
 
 /** 同步成功且有数据：写 last_synced_at + 清空 error + 恢复 connected */
 export async function markConnectionSuccess(connId: bigint): Promise<void> {
@@ -58,25 +68,7 @@ export async function markConnectionAttempted(connId: bigint): Promise<void> {
   });
 }
 
-// ── D-220 失败分类 ──
-
-/** 平台明确拒绝凭据——这类才是真的「API Key 失效」 */
-const AUTH_ERROR_RE =
-  /invalid[ _-]?token|token[ _-]?(invalid|expired|error)|unauthor|forbidden|\b40[13]\b|api[ _-]?key.*(invalid|error|失效|无效)|签名错误|sign[ _-]?error|鉴权|认证失败/i;
-
-/** 本机或对端的瞬时问题——不能据此判定密钥失效 */
-const TRANSIENT_ERROR_RE =
-  /fetch failed|UND_ERR|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|EPROTO|socket hang up|network|timeout|超时|aborted|The operation was aborted|\b50[234]\b|bad gateway|gateway time/i;
-
-export type ConnFailureKind = "auth" | "transient" | "unknown";
-
-export function classifyConnFailure(errorMsg: string): ConnFailureKind {
-  const m = errorMsg || "";
-  // 先判 auth：平台常把 401 包在一段普通文案里，先匹配更具体的凭据信号
-  if (AUTH_ERROR_RE.test(m)) return "auth";
-  if (TRANSIENT_ERROR_RE.test(m)) return "transient";
-  return "unknown";
-}
+// ── D-220 失败分类（判据见 conn-failure-kind.ts） ──
 
 /** 5 分钟内 ≥3 个不同连接同时 transient 失败 = 本机问题，不是各家联盟同时改了密钥 */
 const SYSTEMIC_WINDOW_MS = 5 * 60_000;

@@ -148,10 +148,56 @@ export interface PlatformMerchant {
   cookie_duration?: number | null;
 }
 
+import { platformBizError } from "@/lib/conn-failure-kind";
+
 // ── API 请求 ──
 
-const RETRYABLE_STATUS = new Set([502, 503, 504]);
+// 502/503/504 是标准网关错误；520~527 是 Cloudflare 自有码，其中 524 = 源站在 CF 的
+// 100s 内没回话。RW/LH 这些联盟自己也挂在 CF 后面，524 恰恰是最该重试、也最不该
+// 算到我方密钥头上的一类——D-300 之前它压根不在这张表里，一次都不重试就直接判失败。
+const RETRYABLE_STATUS = new Set([502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 527]);
 const MAX_RETRIES = 2;
+
+/**
+ * D-300：网关/维护页会以「HTTP 200 但正文不是 JSON」的形态回来（CF 的 HTML 错误页、
+ * 上游 PHP 把 warning 打在 JSON 前面）。旧代码直接 `resp.json()`，抛出来的是
+ * "Unexpected token '<', ... is not valid JSON"——不含状态码、不含平台、不含 URL，
+ * connection-health 认不出性质，最终写成「该连接 API Key 已失效」，
+ * 让人去重配一把本来就有效的密钥（2026-08-29 RW kaizenflowshop 现场）。
+ * 换成自描述的错误，并按「瞬时故障」重试。
+ */
+class NonJsonResponseError extends Error {
+  constructor(status: number, body: string) {
+    const snippet = body.replace(/\s+/g, " ").trim().slice(0, 120);
+    super(`平台返回非 JSON 响应（HTTP ${status}，疑似网关错误页/维护页，与密钥无关）：${snippet || "(空正文)"}`);
+    this.name = "NonJsonResponseError";
+  }
+}
+
+/** 5xx 的错误串要自带「这是服务端的事」，否则下游只能靠数字猜 */
+function httpErrorMessage(status: number): string {
+  return status >= 500
+    ? `HTTP ${status}（平台网关/上游错误，与密钥无关）`
+    : `HTTP ${status}`;
+}
+
+async function readJsonBody(resp: Response, url: string): Promise<Record<string, unknown>> {
+  const text = await resp.text();
+  try {
+    return JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    console.warn(`[PlatformAPI] ${url} 返回非 JSON（HTTP ${resp.status}，${text.length} 字节）：${text.slice(0, 200)}`);
+    throw new NonJsonResponseError(resp.status, text);
+  }
+}
+
+/** 值得再试一次的错误：自身超时、被 abort、以及网关塞回来的非 JSON 错误页 */
+function isRetryableError(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    (err.name === "AbortError" || err.name === "TimeoutError" || err.name === "NonJsonResponseError")
+  );
+}
 
 // 商家列表 API 超时：60s，最多重试 2 次（单页最长 60+2+60+4+60=186s）
 // PM 实测大账号（16k+商家）单页响应偶尔超 30s；RW page1~page2 响应 17~25s。
@@ -218,14 +264,14 @@ async function callPlatformApi(
           await sleep(delay);
           continue;
         }
-        throw new Error(`HTTP ${resp.status}`);
+        throw new Error(httpErrorMessage(resp.status));
       }
-      return await resp.json();
+      return await readJsonBody(resp, url);
     } catch (err) {
       clearTimeout(timer);
-      if (attempt < maxRetries && err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) {
+      if (attempt < maxRetries && isRetryableError(err)) {
         const delay = (attempt + 1) * 2000;
-        console.warn(`[Platform] ${url} 超时，${delay / 1000}s 后重试 (${attempt + 1}/${maxRetries})`);
+        console.warn(`[Platform] ${url} 请求失败（${err instanceof Error ? err.name : "Error"}），${delay / 1000}s 后重试 (${attempt + 1}/${maxRetries})`);
         await sleep(delay);
         continue;
       }
@@ -443,7 +489,8 @@ export async function fetchAllMerchants(
         (firstPage as any).status?.msg ||
         "API 返回错误"
       );
-      return { merchants: [], error: `${platform}: ${msg}` };
+      // D-303：贴上业务码标记，下游 classifyConnFailure 才认得出「这是平台拒绝，不是密钥失效」
+      return { merchants: [], error: platformBizError(platform, effectiveCode, msg) };
     }
 
     // 首页诊断：打印首条原始记录的链接相关字段
@@ -575,6 +622,16 @@ interface PlatformTxnConfig {
   rateLimitMs?: number;
   /** C-029：AD 不要 status:"all" 等伪过滤参数 */
   omitStatusAll?: boolean;
+  /**
+   * D-303：表单/查询串平台的 status「全部」取什么字面值，缺省 "all"。
+   * RW 2026-09-01 00:00 CST 起把这个值改成了**大小写敏感**：只认 "All"，
+   * 收到 "all" 一律回 `{status:{code:1003,msg:"Missing required parameters or incorrect format"}}`，
+   * 全线 RW 连接同一刻集体断流（当天 295 次，8-31 零次）。JSON 系平台一直发的
+   * 就是 ["All"]，所以只有走表单的 RW 中招。生产实测：status=All 与完全不传 status
+   * 返回的 23 行 ID 集合完全一致；这里选择显式传 All 而不是省略——万一 RW 以后
+   * 改了「不传时的默认口径」，省略会静默丢掉 Pending 单，显式传不会。
+   */
+  statusAllValue?: string;
   /** C-029 AD：日期跨度上限（天），splitDateRange 按此切片 */
   maxDateSpanDays?: number;
 }
@@ -612,6 +669,8 @@ const PLATFORM_TXN_CONFIG: Record<string, PlatformTxnConfig> = {
     // 2026-07-20 生产实测（14 天窗口）：limit=20→34.8s / 30→38.4s / 40→38.7s / 50→60.7s(504) / ≥100→必 504。
     // 取 30：单页 ~38s，留一次 5s 退避重试仍在 CF 100s 内。同 2026-07-15 商家接口 1000→200 的先例。
     dateFormat: "snake", pageKey: "page", sizeKey: "limit", maxSize: 30,
+    // D-303：RW 的 status 从 2026-09-01 00:00 CST 起大小写敏感，"all" 被拒（1003）
+    statusAllValue: "All",
     // maxSize 降到 30 后单段 50 页封顶只覆盖 1500 条，加 14 天切片防大窗口（daily-sync 365 天）截断。
     maxDateSpanDays: 14,
   },
@@ -684,14 +743,30 @@ export interface PlatformTransaction {
   merchant_url?: string; // 平台返回的商家/着陆/点击 URL（用于 url_direct 商家 domain 兜底，C-020）
 }
 
+/**
+ * D-300 探活口径：连接测试只需要回答「这把密钥还能用吗」，不需要把数据拉全。
+ * 默认口径（每页 120s × 3 次尝试 × 最多 50 页）远超我方 Cloudflare 的 100s 硬超时，
+ * 平台一慢，浏览器先收到 HTML 524 错误页，用户既看不到成功也看不到可读的失败。
+ */
+export interface TxnFetchOptions {
+  /** 单次请求超时（ms），默认 120000 */
+  timeoutMs?: number;
+  /** 单页最大重试次数，默认 MAX_RETRIES(2) */
+  maxRetries?: number;
+  /** 每个日期切片最多翻多少页，默认 50 */
+  maxPages?: number;
+}
+
 async function callTxnApi(
   config: PlatformTxnConfig,
   token: string,
   startDate: string,
   endDate: string,
   page: number,
+  opts?: TxnFetchOptions,
 ): Promise<Record<string, unknown>> {
   const { mode, url, source, dateFormat, pageKey, sizeKey, maxSize, omitStatusAll } = config;
+  const statusAll = config.statusAllValue ?? "all"; // D-303：RW 只认 "All"，见 statusAllValue
 
   // C-029：AD 用 transactionStart/transactionEnd；其他沿用 camel/snake
   const beginKey =
@@ -701,9 +776,12 @@ async function callTxnApi(
     dateFormat === "ad" ? "transactionEnd" :
     dateFormat === "camel" ? "endDate" : "end_date";
 
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+  const maxRetries = opts?.maxRetries ?? MAX_RETRIES;
+  const timeoutMs = opts?.timeoutMs ?? 120000;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 120000);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       let resp: Response;
@@ -732,7 +810,7 @@ async function callTxnApi(
         form.set(endKey, endDate);
         form.set(pageKey, String(page));
         form.set(sizeKey, String(maxSize));
-        if (!omitStatusAll) form.set("status", "all");
+        if (!omitStatusAll) form.set("status", statusAll);
         resp = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -747,28 +825,28 @@ async function callTxnApi(
           [pageKey]: String(page),
           [sizeKey]: String(maxSize),
         });
-        if (!omitStatusAll) params.set("status", "all");
+        if (!omitStatusAll) params.set("status", statusAll);
         // LH/LB 的 URL 已经带 ?mod=...&op=...；AD 是裸路径，需要 ? 开头
         const sep = url.includes("?") ? "&" : "?";
         resp = await fetch(`${url}${sep}${params}`, { signal: controller.signal });
       }
 
       if (!resp.ok) {
-        if (RETRYABLE_STATUS.has(resp.status) && attempt < MAX_RETRIES) {
+        if (RETRYABLE_STATUS.has(resp.status) && attempt < maxRetries) {
           const delay = (attempt + 1) * 5000;
-          console.warn(`[TxnAPI] ${url} HTTP ${resp.status}，${delay / 1000}s 后重试 (${attempt + 1}/${MAX_RETRIES})`);
+          console.warn(`[TxnAPI] ${url} HTTP ${resp.status}，${delay / 1000}s 后重试 (${attempt + 1}/${maxRetries})`);
           clearTimeout(timer);
           await sleep(delay);
           continue;
         }
-        throw new Error(`HTTP ${resp.status}`);
+        throw new Error(httpErrorMessage(resp.status));
       }
-      return await resp.json();
+      return await readJsonBody(resp, url);
     } catch (err) {
       clearTimeout(timer);
-      if (attempt < MAX_RETRIES && err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) {
+      if (attempt < maxRetries && isRetryableError(err)) {
         const delay = (attempt + 1) * 5000;
-        console.warn(`[TxnAPI] ${url} 超时，${delay / 1000}s 后重试 (${attempt + 1}/${MAX_RETRIES})`);
+        console.warn(`[TxnAPI] ${url} 请求失败（${err instanceof Error ? err.name : "Error"}），${delay / 1000}s 后重试 (${attempt + 1}/${maxRetries})`);
         await sleep(delay);
         continue;
       }
@@ -1040,6 +1118,7 @@ export async function fetchAllTransactions(
   token: string,
   startDate: string, // YYYY-MM-DD
   endDate: string,   // YYYY-MM-DD
+  opts?: TxnFetchOptions, // D-300：连接探活等场景可收窄超时/重试/页数，见 TxnFetchOptions
 ): Promise<{ transactions: PlatformTransaction[]; error?: string }> {
   const config = PLATFORM_TXN_CONFIG[platform];
   if (!config) return { transactions: [], error: `不支持的平台交易 API: ${platform}` };
@@ -1051,6 +1130,7 @@ export async function fetchAllTransactions(
   // C-029 AD 上限未知（错误码 50003 暗示有限制），QA4 封板用 30 天保守切片
   const maxDays = config.maxDateSpanDays ?? 60;
   const dateChunks = splitDateRange(startDate, endDate, maxDays);
+  const pageCap = opts?.maxPages ?? 50;
 
   const mergeTxn = (t: PlatformTransaction) => {
     const idx = txnIndex.get(t.transaction_id);
@@ -1069,19 +1149,20 @@ export async function fetchAllTransactions(
 
   try {
     for (const chunk of dateChunks) {
-      const firstPage = await callTxnApi(config, token, chunk.start, chunk.end, 1);
+      const firstPage = await callTxnApi(config, token, chunk.start, chunk.end, 1, opts);
       const code = String((firstPage as Record<string, unknown>).code ?? (firstPage as Record<string, unknown>).status ? ((firstPage as any).status?.code ?? "0") : "0");
 
       const statusCode = (firstPage as any).status?.code;
       if (statusCode !== undefined && statusCode !== 0 && String(statusCode) !== "0") {
         const msg = String((firstPage as any).status?.msg || "API 错误");
         if (msg.toLowerCase().includes("no data") || msg.toLowerCase().includes("no record")) continue;
-        return { transactions: allTxns, error: `${platform}: ${msg}` };
+        // D-303：贴上业务码标记（本次事故就是 RW 的 1003），别再让下游靠英文散文猜性质
+        return { transactions: allTxns, error: platformBizError(platform, String(statusCode), msg) };
       }
       if (code !== "0" && code !== "200" && code !== "undefined") {
         const msg = String((firstPage as Record<string, unknown>).message || "API 返回错误");
         if (msg.toLowerCase().includes("no data")) continue;
-        return { transactions: allTxns, error: `${platform}: ${msg}` };
+        return { transactions: allTxns, error: platformBizError(platform, code, msg) };
       }
 
       const firstBatch = parseTransactions(platform, firstPage);
@@ -1093,7 +1174,7 @@ export async function fetchAllTransactions(
       // （行数 >= 每页上限），就视为"未知总页数"，放开到翻页上限，靠"不满页/空页即停"收尾。
       let unknownPagination = false;
       if (totalPages <= 1 && firstBatch.length >= config.maxSize) {
-        totalPages = 50;
+        totalPages = pageCap;
         unknownPagination = true;
       }
 
@@ -1101,7 +1182,7 @@ export async function fetchAllTransactions(
       const MAX_EMPTY_TXN_RETRIES = 2;
       const MAX_CONSECUTIVE_EMPTY_TXN = 3;
 
-      for (let page = 2; page <= Math.min(totalPages, 50); page++) {
+      for (let page = 2; page <= Math.min(totalPages, pageCap); page++) {
         if (config.rateLimitMs) await sleep(config.rateLimitMs);
         else await sleep(100);
 
@@ -1114,7 +1195,7 @@ export async function fetchAllTransactions(
             await sleep((retry + 1) * 2000);
           }
           try {
-            pageData = await callTxnApi(config, token, chunk.start, chunk.end, page);
+            pageData = await callTxnApi(config, token, chunk.start, chunk.end, page, opts);
           } catch (pageErr) {
             console.warn(`[TxnSync] ${platform} page ${page} 请求失败 (${retry}/${MAX_EMPTY_TXN_RETRIES}): ${pageErr instanceof Error ? pageErr.message : String(pageErr)}`);
             continue;
@@ -1374,12 +1455,12 @@ async function callClickApi(
           await sleep((attempt + 1) * 5000);
           continue;
         }
-        throw new Error(`HTTP ${resp.status}`);
+        throw new Error(httpErrorMessage(resp.status));
       }
-      return await resp.json();
+      return await readJsonBody(resp, url);
     } catch (err) {
       clearTimeout(timer);
-      if (attempt < MAX_RETRIES && err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) {
+      if (attempt < MAX_RETRIES && isRetryableError(err)) {
         await sleep((attempt + 1) * 5000);
         continue;
       }

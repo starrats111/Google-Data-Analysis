@@ -15,6 +15,7 @@ import {
 import {
   PLATFORMS,
 } from "@/lib/constants";
+import { describeConnFailure, decideSaveGate } from "@/lib/conn-failure-kind";
 import PublishSiteSelect, { type PublishSite } from "@/components/PublishSiteSelect";
 import AppPageHeader from "@/components/AppPageHeader";
 import { generateUnifiedAdsScript } from "@/lib/link-exchange-script-template";
@@ -23,23 +24,32 @@ const { Text } = Typography;
 
 // ==================== 平台连接 Tab ====================
 // D-026: 增加测试连接 + 健康状态展示 + 保存前强制测试
-type TestResult = { ok: boolean; msg?: string; error?: string; suggest?: string; sample_count?: number; elapsed_ms?: number };
+type TestResult = { ok: boolean; msg?: string; error?: string; suggest?: string; sample_count?: number; elapsed_ms?: number;
+  /**
+   * D-300/D-303 失败性质：auth=平台拒绝凭据（该换 Key）｜platform=平台拒绝我们的请求
+   * （改口径/限流，换 Key 没用，得改代码）｜transient=网络/网关｜unknown=没判出来
+   */
+  kind?: "auth" | "platform" | "transient" | "unknown" };
 
 type PaymentMethod = { id: string; payee_name: string; pay_channel: string; card_no: string };
 
 // D-161: 测试连接超时后 Cloudflare/网关会返回 HTML 错误页（524/504），
 // 直接 r.json() 会抛 "Unexpected token '<'"，先按文本解析给出可读提示。
+// D-300: 旧文案「平台 API 响应过慢」把我方网关掐断说成平台的锅，且没有一句
+// 「这跟密钥无关」，用户只会一遍遍重配 Key。改成说清楚是谁超时、该做什么。
 async function parseTestResponse(r: Response): Promise<{ code?: number; message?: string; data?: TestResult }> {
   const text = await r.text();
   try {
     return JSON.parse(text);
   } catch {
-    throw new Error(`服务响应超时（HTTP ${r.status}）：平台 API 响应过慢，请稍后重试`);
+    throw new Error(
+      `我方网关在平台响应前掐断了本次测试（HTTP ${r.status}）：平台 API 这会儿很慢，与 API Key 无关，请稍后重试`,
+    );
   }
 }
 
 function PlatformConnectionsTab() {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const [connections, setConnections] = useState<Record<string, unknown>[]>([]);
   const [sites, setSites] = useState<PublishSite[]>([]);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
@@ -80,8 +90,10 @@ function PlatformConnectionsTab() {
         message.success(data.msg || "API 连接正常");
       } else {
         message.error({
-          content: data.error || res.message || "测试失败",
-          duration: 6,
+          content: data.suggest
+            ? `${data.error || res.message || "测试失败"}——${data.suggest}`
+            : (data.error || res.message || "测试失败"),
+          duration: 8,
         });
       }
       fetchData(); // 刷新状态字段
@@ -119,25 +131,69 @@ function PlatformConnectionsTab() {
       if (data.ok) message.success(data.msg || "测试通过");
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : String(e);
-      setModalTestResult({ ok: false, error: errMsg });
+      setModalTestResult({
+        ok: false,
+        error: errMsg,
+        kind: "transient",
+        suggest: "这是我方网关/网络层的超时，不是 API Key 的问题——请稍后重试，不要反复重新生成密钥。",
+      });
       setModalTestPassed(false);
     } finally {
       setModalTesting(false);
     }
   };
 
+  // D-300 保存按钮的可用性：
+  //   新增模式原本「没测通过就禁用」，于是平台一抽风，人手里那把刚生成的有效 Key 连存都存不进去。
+  //   现在网关/网络类失败也放开按钮，点下去走 handleSave 里的二次确认；auth 类（平台明确
+  //   拒绝凭据）依旧禁用——那是唯一一种「已知这把 Key 是坏的」。最终判定以 decideSaveGate 为准。
+  const canConfirmSave = !!modalTestResult && !modalTestResult.ok && (modalTestResult.kind ?? "unknown") !== "auth";
+  const saveNeedsTest = !modalTestPassed && !editConn && !canConfirmSave;
+
   const handleSave = async () => {
     let values;
     try { values = await form.validateFields(); } catch { return; }
     const isEditingWithUnchangedKey = !!editConn && (!values.api_key || values.api_key === "");
+
     // D-026: 强制测试通过才能保存（编辑模式且未改 key 时跳过此校验，因为不是新 key）
-    if (!isEditingWithUnchangedKey && !modalTestPassed) {
-      message.warning("请先点击「测试连接」验证 API Key 通过后再保存");
+    // D-300: 改为按失败性质分档（decideSaveGate）——网关/网络类失败证明不了这把 Key
+    //        好不好，拿它当拦阻条件只会让人拿着有效凭据干等；auth 类仍然硬拦。
+    const gate = decideSaveGate({
+      keyUnchanged: isEditingWithUnchangedKey,
+      testPassed: modalTestPassed,
+      lastFailureKind: modalTestResult && !modalTestResult.ok ? (modalTestResult.kind ?? "unknown") : undefined,
+    });
+    if (gate.allow === "no") {
+      message.warning(gate.reason);
       return;
     }
+    if (gate.allow === "confirm") {
+      const confirmed = await new Promise<boolean>((resolve) => {
+        modal.confirm({
+          title: "测试没通过，仍要保存这把 API Key 吗？",
+          okText: "确认保存",
+          okButtonProps: { danger: true },
+          cancelText: "再测一次",
+          onOk: () => resolve(true),
+          onCancel: () => resolve(false),
+          content: (
+            <div style={{ fontSize: 13 }}>
+              <div style={{ marginBottom: 6 }}>{gate.reason}</div>
+              {modalTestResult?.error && (
+                <div><Text type="secondary" style={{ fontSize: 12 }}>本次错误：{modalTestResult.error}</Text></div>
+              )}
+            </div>
+          ),
+        });
+      });
+      if (!confirmed) return;
+    }
+
     if (isEditingWithUnchangedKey) {
       delete values.api_key;
     }
+    // D-300：确认强存的 Key 没被验证过，明确告诉后端别按 connected 入库
+    if (gate.allow === "confirm") values.verified = false;
     // R-01：Select 清空后 antd 置 undefined，显式转 null 才能解绑
     values.payment_method_id = values.payment_method_id ?? null;
     // D-163⑪：后端改为「未带 publish_site_id 则不动」，前端表单里有该字段，清空时须显式传 null 解绑
@@ -148,7 +204,15 @@ function PlatformConnectionsTab() {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(values),
       }).then((r) => r.json());
       if (res.code === 0) {
-        message.success("保存成功");
+        // D-300：强存的连接以「待验证」入库，别让人以为已经验过了
+        if (gate.allow === "confirm") {
+          message.warning({
+            content: "已保存，但这把 Key 还没验证通过——连接显示为「待验证」，稍后请点「测试连接」确认",
+            duration: 8,
+          });
+        } else {
+          message.success("保存成功");
+        }
         setModalOpen(false);
         setEditConn(null);
         setModalTestResult(null);
@@ -275,9 +339,14 @@ function PlatformConnectionsTab() {
                             : `${accName} (待验证)`;
                       const lastError = (conn.last_error as string) || "";
                       // D-220：网络类失败不等于密钥失效，文案要说真话——否则组员会像 wj11 那样
-                      // 反复重配一个本来就没问题的 Key。判据与后端 classifyConnFailure 同源。
-                      const isNetworkIssue = /系统性故障|fetch failed|UND_ERR|timeout|超时|ECONNRESET|ETIMEDOUT|socket hang up|网络/i.test(lastError)
-                        && !/invalid[ _-]?token|unauthor|forbidden|40[13]/i.test(lastError);
+                      // 反复重配一个本来就没问题的 Key。
+                      // D-300：判据不再手抄，直接用后端同一份模块（conn-failure-kind 是纯函数，
+                      // 不带 prisma，客户端可 import）。
+                      // D-303：连**文案和「给不给重配按钮」**都由 describeConnFailure 统一给，
+                      // 前端不再自己写分支——上一版剩下的那个 else 分支会把所有没判出性质的错误
+                      // 一律说成「API Key 已失效」，2026-09-01 RW 那次（平台改了参数口径）就是
+                      // 这么冤枉到 wj11 头上的。
+                      const failure = describeConnFailure(lastError);
                       const lastSync = conn.last_synced_at ? new Date(String(conn.last_synced_at)).toLocaleString("zh-CN") : "从未";
                       const lastAttempt = conn.last_sync_attempt_at ? new Date(String(conn.last_sync_attempt_at)).toLocaleString("zh-CN") : "—";
                       const isTesting = testingConnId === String(conn.id);
@@ -320,25 +389,20 @@ function PlatformConnectionsTab() {
                           {/* D-026: 连接异常 Alert + 引导重新配置 */}
                           {health === "error" && lastError && (
                             <Alert
-                              type={isNetworkIssue ? "warning" : "error"}
+                              type={failure.alertType}
                               showIcon
                               style={{ marginTop: 6, padding: "4px 8px" }}
                               message={
-                                <Text style={{ fontSize: 11 }}>
-                                  {isNetworkIssue ? "暂时拉不通（网络/服务器问题，非密钥失效）" : "该连接 API Key 已失效"}
-                                </Text>
+                                <Text style={{ fontSize: 11 }}>{failure.title}</Text>
                               }
                               description={
                                 <div style={{ fontSize: 11 }}>
                                   <div><Text type="danger" style={{ fontSize: 11 }}>错误：{lastError}</Text></div>
                                   <div>上次成功同步：{lastSync}</div>
-                                  {isNetworkIssue ? (
-                                    <div style={{ marginTop: 4 }}>
-                                      <Text type="secondary" style={{ fontSize: 11 }}>
-                                        重配密钥无用，请先点上方「测试连接」确认；持续异常请联系管理员查服务器。
-                                      </Text>
-                                    </div>
-                                  ) : (
+                                  <div style={{ marginTop: 4 }}>
+                                    <Text type="secondary" style={{ fontSize: 11 }}>{failure.hint}</Text>
+                                  </div>
+                                  {failure.showReconfigure && (
                                     <Button danger size="small" style={{ marginTop: 4 }} onClick={() => openEditModal(conn)}>
                                       重新配置 API Key
                                     </Button>
@@ -383,11 +447,11 @@ function PlatformConnectionsTab() {
           <Button key="test" type="default" icon={<CheckOutlined />} loading={modalTesting} onClick={handleModalTest}>
             测试连接
           </Button>,
-          <Tooltip key="save" title={!modalTestPassed && !editConn ? "请先测试连接通过" : ""}>
+          <Tooltip key="save" title={saveNeedsTest ? "请先测试连接通过" : canConfirmSave ? "测试没通过，点击后需二次确认" : ""}>
             <Button
               type="primary"
               onClick={handleSave}
-              disabled={!modalTestPassed && !editConn}
+              disabled={saveNeedsTest}
             >
               保存
             </Button>

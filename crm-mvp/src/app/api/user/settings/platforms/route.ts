@@ -19,7 +19,11 @@ export async function POST(req: NextRequest) {
   const user = getUserFromRequest(req);
   if (!user) return apiError("未授权", 401);
 
-  const { id, platform, account_name, api_key, publish_site_id, payee, payment_method_id } = await req.json();
+  const { id, platform, account_name, api_key, publish_site_id, payee, payment_method_id, verified } = await req.json();
+  // D-300：verified=false 表示「测试没通过，用户确认后强存」（见 decideSaveGate）。
+  // 这种 Key 没被验证过，绝不能按 connected 入库——必须落成 unverified，
+  // UI 显示「待验证」黄灯，等自检或手动重测给结论。缺省（老调用点/脚本）沿用原行为。
+  const unverifiedSave = verified === false;
   if (!platform) return apiError("平台代码不能为空");
 
   const userId = BigInt(user.userId);
@@ -64,7 +68,14 @@ export async function POST(req: NextRequest) {
       data.publish_site_id = publish_site_id ? BigInt(publish_site_id) : null;
     }
     if (account_name !== undefined) data.account_name = account_name;
-    if (api_key && api_key.trim()) data.api_key = api_key;
+    if (api_key && api_key.trim() && api_key !== existing.api_key) {
+      data.api_key = api_key;
+      // D-300：换了 Key 就得把上一把 Key 的健康状态一起翻篇，否则重配完仍然挂着
+      // 旧的 last_error（现场就是「重新配置 API Key」之后卡片照旧红着骂密钥失效）。
+      data.last_error = null;
+      data.consecutive_failures = 0;
+      data.status = unverifiedSave ? "unverified" : "connected";
+    }
     if (payee !== undefined) data.payee = normalizedPayee || null;
     if (methodId !== undefined) data.payment_method_id = methodId;
 
@@ -137,7 +148,7 @@ export async function POST(req: NextRequest) {
       payee: normalizedPayee || null,
       payment_method_id: methodId ?? null,
       publish_site_id: publish_site_id ? BigInt(publish_site_id) : null,
-      status: "connected",
+      status: unverifiedSave ? "unverified" : "connected",
     },
   });
 
