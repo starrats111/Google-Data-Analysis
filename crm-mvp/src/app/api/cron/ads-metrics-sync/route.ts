@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import { queryGoogleAds, microsToDollars, type MccCredentials } from "@/lib/google-ads/client";
+import { queryGoogleAds, type MccCredentials } from "@/lib/google-ads/client";
 import { getAnalysisRange } from "@/lib/campaign-analysis";
 import { extractSheetId } from "@/lib/sheet-sync";
 
@@ -20,8 +20,11 @@ export const maxDuration = 300;
  *      （search_budget_lost_impression_share / search_rank_lost_impression_share，0-1 分数）
  *   2. quality_score：keyword_view 当前 QS 按当日点击加权（QS 无历史维度，等价于
  *      kyads Ads Script 每天写当天快照的口径）
- *   3. max_cpc：ad_group.cpc_bid_micros 最大值快照（CRM 调价即改 ad_group 出价），
- *      写入窗口内所有空值日 + 昨日
+ *
+ * D-304：max_cpc 已从本 cron 移出，改由 /api/cron/campaign-bid-sync 负责。原因是本 cron
+ * 的 Sheet 跳过闸门（sheetProvidesIs）把出价采集一起带走了——统一脚本的 Sheet 有 IS/QS 列
+ * 却没有出价列，于是 8-25 起 21 个 MCC 的 max_cpc 全线断供，弹窗只能退回建广告时那个
+ * 兜底值。出价与 IS/QS 的供数来源本就不同，不该共用一个跳过条件。
  *
  * 范围：所有配置了活跃 MCC 的用户；窗口 = 最近 7 天（截止昨天）。逐 MCC 串行，
  * 单 MCC 失败只记日志不阻塞其他（jy 组缺 SA 凭据的 MCC 会在此跳过，补配后自动覆盖）。
@@ -68,7 +71,7 @@ async function sheetProvidesIs(sheetUrl: string | null): Promise<boolean> {
   }
 }
 
-/** 单个 CID 下的一批系列：拉 IS 逐日 + QS 加权 + MaxCpc 快照 */
+/** 单个 CID 下的一批系列：拉 IS 逐日 + QS 加权 */
 async function collectCidMetrics(
   credentials: MccCredentials,
   customerId: string,
@@ -77,14 +80,12 @@ async function collectCidMetrics(
 ): Promise<{
   isDaily: Map<string, { isBudget: number; isRank: number }>; // key: gcid_date
   qsDaily: Map<string, number>; // key: gcid_date（点击加权）
-  maxCpc: Map<string, number>; // key: gcid
 }> {
   const gcids = campaigns.map((c) => c.google_campaign_id);
   const gcidList = gcids.join(",");
 
   const isDaily = new Map<string, { isBudget: number; isRank: number }>();
   const qsDaily = new Map<string, number>();
-  const maxCpc = new Map<string, number>();
 
   // 1) campaign 级 IS 逐日
   const isRows = await queryGoogleAds(credentials, customerId, `
@@ -144,23 +145,7 @@ async function collectCidMetrics(
     qsDaily.set(key, Math.round(value * 10) / 10);
   }
 
-  // 3) ad_group 出价最大值快照（CRM 的「最高出价」语义即 ad_group cpc_bid）
-  const agRows = await queryGoogleAds(credentials, customerId, `
-    SELECT campaign.id, ad_group.cpc_bid_micros
-    FROM ad_group
-    WHERE campaign.id IN (${gcidList})
-      AND ad_group.status != 'REMOVED'
-  `);
-  for (const row of agRows) {
-    const campaign = row.campaign as Record<string, unknown> | undefined;
-    const adGroup = row.adGroup as Record<string, unknown> | undefined;
-    const gcid = String(campaign?.id ?? "");
-    const bid = microsToDollars(Number(adGroup?.cpcBidMicros ?? 0));
-    if (!gcid || bid <= 0) continue;
-    if (bid > (maxCpc.get(gcid) || 0)) maxCpc.set(gcid, bid);
-  }
-
-  return { isDaily, qsDaily, maxCpc };
+  return { isDaily, qsDaily };
 }
 
 export async function GET(req: NextRequest) {
@@ -177,13 +162,9 @@ export async function GET(req: NextRequest) {
     where: { is_deleted: 0 },
     select: {
       id: true, user_id: true, mcc_id: true, mcc_name: true,
-      developer_token: true, service_account_json: true, sheet_url: true, currency: true,
+      developer_token: true, service_account_json: true, sheet_url: true,
     },
   });
-
-  const { getExchangeRate } = await import("@/lib/exchange-rate");
-  const { todayCST } = await import("@/lib/date-utils");
-  const todayForRate = todayCST();
 
   for (const mcc of mccs) {
     // D-264：新版脚本的 Sheet 已自带 IS/QS 列，读操作走 Sheet，此处不再烧 API 配额
@@ -191,11 +172,6 @@ export async function GET(req: NextRequest) {
       stats.sheetCoveredMccs++;
       continue;
     }
-
-    // D-266 批一：API 返回的出价 micros 是账户币种，ads_daily_stats 金额口径是 USD，
-    // 写库前折美元；汇率不可用时跳过 max_cpc（IS/QS 是比率不受影响），不写错币种数值。
-    const mccCurrency = (mcc.currency || "USD").toUpperCase();
-    const usdRate = mccCurrency === "USD" ? 1 : await getExchangeRate(mccCurrency, todayForRate);
 
     const credentials: MccCredentials = {
       mcc_id: mcc.mcc_id,
@@ -257,10 +233,9 @@ export async function GET(req: NextRequest) {
             is_deleted: 0,
             date: { gte: range.dateStart, lt: range.dateEndExclusive },
           },
-          select: { id: true, campaign_id: true, date: true, max_cpc: true },
+          select: { id: true, campaign_id: true, date: true },
         });
         const gcidOf = new Map(refs.map((r) => [String(r.id), r.google_campaign_id]));
-        const yesterdayStr = range.endStr;
 
         for (const row of statRows) {
           const gcid = gcidOf.get(String(row.campaign_id));
@@ -269,16 +244,10 @@ export async function GET(req: NextRequest) {
           const key = `${gcid}_${dateStr}`;
           const is = metrics.isDaily.get(key);
           const qs = metrics.qsDaily.get(key);
-          const bid = metrics.maxCpc.get(gcid);
 
           const data: Record<string, unknown> = {};
           if (is) { data.is_budget = is.isBudget; data.is_rank = is.isRank; }
           if (qs != null) data.quality_score = qs;
-          // MaxCpc 是当前快照：昨日行必写，历史空值行回填（不覆盖历史已写快照）
-          // D-266 批一：账户币种 → USD 折算后入库；汇率不可用（usdRate<=0）时不写
-          if (bid != null && usdRate > 0 && (dateStr === yesterdayStr || row.max_cpc == null)) {
-            data.max_cpc = Number((bid * usdRate).toFixed(4));
-          }
           if (Object.keys(data).length === 0) continue;
 
           await prisma.ads_daily_stats.update({ where: { id: row.id }, data });
