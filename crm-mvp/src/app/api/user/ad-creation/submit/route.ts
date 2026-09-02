@@ -17,6 +17,7 @@ import type { GoogleAdsViolation } from "@/lib/google-ads";
 import { parsePolicyError, logPolicyViolations, rewriteAdCopyForPolicy, type ParsedPolicyError } from "@/lib/policy-hub";
 import { checkReachability, isHardUnreachable } from "@/lib/intellicenter/ad-creation";
 import { assignFormalCampaignNameBeforeSubmit, resolvePlatformLabel } from "@/lib/campaign-naming";
+import { validateCampaignNameCountry } from "@/lib/campaign-name-country";
 import { createOrReuseSubmitJob, enqueueSubmitJob } from "@/lib/submit-runner";
 import { readFile } from "fs/promises";
 import { existsSync } from "fs";
@@ -104,10 +105,26 @@ export async function POST(req: NextRequest) {
   if (!campaignId) return apiError("缺少 campaign_id");
   const campaign = await prisma.campaigns.findFirst({
     where: { id: BigInt(campaignId), user_id: userId, is_deleted: 0 },
-    select: { id: true, google_campaign_id: true },
+    select: { id: true, google_campaign_id: true, target_country: true },
   });
   if (!campaign) return apiError("广告系列不存在", 404);
   if (campaign.google_campaign_id) return apiError("该广告系列已提交到 Google Ads");
+
+  // D-308：系列名国家段 vs 草稿国家。放在建 job 之前，员工点提交那一刻就能看到原因，
+  // 不用等后台任务跑 1-3 分钟才在轮询结果里读到一句失败。runSubmitCore 里还有同一道闸兜底
+  // （同步回滚开关 SUBMIT_ASYNC_OFF、以及任何绕过本入口的调用方）。
+  {
+    const nameCountry = validateCampaignNameCountry({
+      campaignName: body?.campaign_name_custom,
+      draftCountryCode: campaign.target_country,
+    });
+    if (!nameCountry.ok) {
+      console.warn(
+        `[AdSubmit] D-308 系列名国家不一致，已阻断建 job：name=${nameCountry.nameCountry} draft=${nameCountry.draftCountry} via=${nameCountry.via} (campaign_id=${campaign.id})`,
+      );
+      return apiError(nameCountry.message, 422);
+    }
+  }
 
   const job = await createOrReuseSubmitJob({ campaignId: campaign.id, userId, payload: body });
   enqueueSubmitJob(job.id);
@@ -1020,6 +1037,21 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
   if (customNameTrimmed) {
     if (customNameTrimmed.length > 120) return apiError("广告系列名过长（最多 120 字符）");
     if (customNameTrimmed.startsWith("DRAFT-")) return apiError("广告系列名不能以 DRAFT- 开头");
+    // D-308：名字里的国家段与草稿国家冲突 → 不许发。
+    //   C-088 当初「不做格式校验、留给 Google Ads 处理」在国家这一段上不成立：Google 不看
+    //   系列名，定位照 target_country 走；但全站（数据中心 / Sheet / Hermes 报表）都按名字认
+    //   国家，名字与草稿对不上就是一条会长期骗人的脏数据，改名的成本远低于删重建。
+    //   注意这里必须在 campaigns.campaign_name 落库**之前**拦——否则名字已经写脏了。
+    const nameCountryGate = validateCampaignNameCountry({
+      campaignName: customNameTrimmed,
+      draftCountryCode: campaign.target_country,
+    });
+    if (!nameCountryGate.ok) {
+      console.warn(
+        `[AdSubmit] D-308 系列名国家不一致，已阻断提交：name=${nameCountryGate.nameCountry} draft=${nameCountryGate.draftCountry} via=${nameCountryGate.via} "${customNameTrimmed}" (campaign_id=${campaign.id})`,
+      );
+      return apiError(nameCountryGate.message, 422);
+    }
     await prisma.campaigns.update({
       where: { id: campaign.id },
       data: { campaign_name: customNameTrimmed },

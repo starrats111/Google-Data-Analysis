@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   Card, Row, Col, Input, Button, Space, Tag, Typography, Spin, Alert,
@@ -18,6 +18,7 @@ import { useApiWithParams, mutateApi } from "@/lib/swr";
 import { describeClientError } from "@/lib/client-error";
 import { BIDDING_STRATEGIES } from "@/lib/constants";
 import { COUNTRY_OPTIONS, countryFilterOption, countryFilterSort } from "@/lib/countries";
+import { validateCampaignNameCountry } from "@/lib/campaign-name-country";
 import { getAdMarketConfig, getCurrencyCodeByCountry, getLanguageCodeByCountry, getSnippetHeaderByCountry } from "@/lib/ad-market";
 import { rankCidsForAutoPick, isCidSelectable } from "@/lib/google-ads/cid-availability";
 
@@ -534,6 +535,18 @@ export default function AdPreviewPage() {
   const isReady = preview?.isReady ?? false;
   const targetCountry = String(preview?.campaign?.target_country || "US").toUpperCase();
   const market = getAdMarketConfig(targetCountry);
+
+  // D-308：手填的系列名里认得出国家段时，必须与本条草稿的目标国家一致。
+  //   判定逻辑与后端 submit 共用 lib/campaign-name-country（同一套口径，不会出现「前端放行、
+  //   后端拒收」的两套标准）。这里用 preview 里的原始值而非 targetCountry——后者在 preview
+  //   还没加载出来时会兜底成 "US"，拿它比对会把「还没加载完」误报成国家不一致。
+  const campaignNameCountryCheck = useMemo(
+    () => validateCampaignNameCountry({
+      campaignName: campaignNameDraft,
+      draftCountryCode: preview?.campaign?.target_country,
+    }),
+    [campaignNameDraft, preview?.campaign?.target_country],
+  );
 
   // 动态读取激活人设名称，用于标签显示
   const activePersonaName = (() => {
@@ -2240,6 +2253,9 @@ export default function AdPreviewPage() {
   // confirmReachable：用户在「落地页无法访问」硬卡弹窗点「我已确认可访问，仍要提交」后再次提交时为 true，
   //   后端据此跳过 D-050 连接级硬卡（我们机房/代理到不了 ≠ Google 到不了）。
   const handleSubmit = useCallback(async (confirmReachable: boolean = false) => {
+    // D-308：系列名国家段与草稿国家不一致 → 当场拦下。后端建 job 前也有同一道闸，
+    // 这里前置是为了省掉「等 1-3 分钟后台任务跑完才知道被拒」的空等。
+    if (!campaignNameCountryCheck.ok) { message.error(campaignNameCountryCheck.message); return; }
     const validH = headlines.filter((h) => h.trim().length > 0);
     const validD = descriptions.filter((d) => d.trim().length > 0);
     if (validH.length < 3) { message.error("至少需要 3 条标题"); return; }
@@ -2458,7 +2474,7 @@ export default function AdPreviewPage() {
       message.destroy("ad-submit");
       setSubmitting(false);
     }
-  }, [headlines, descriptions, kwList, budget, maxCpc, biddingStrategy, networkSearch, networkPartners, networkDisplay, campaignId, message, modal, router, sitelinks, imageUrls, enableCallouts, callouts, selectedCid, selectedMccId, adLanguage, euPoliticalAd, fetchAndValidateSitelink, enablePromotion, promotion, enablePrice, priceItems, priceType, enableCall, callPhoneNumber, callCountryCode, enableSnippet, snippetHeader, snippetValues, campaignNameDraft, negativeKeywords]);
+  }, [headlines, descriptions, kwList, budget, maxCpc, biddingStrategy, networkSearch, networkPartners, networkDisplay, campaignId, message, modal, router, sitelinks, imageUrls, enableCallouts, callouts, selectedCid, selectedMccId, adLanguage, euPoliticalAd, fetchAndValidateSitelink, enablePromotion, promotion, enablePrice, priceItems, priceType, enableCall, callPhoneNumber, callCountryCode, enableSnippet, snippetHeader, snippetValues, campaignNameDraft, campaignNameCountryCheck, negativeKeywords]);
 
   if (isLoading && !preview) {
     return <div style={{ textAlign: "center", padding: 80 }}><Spin size="large" tip="加载中..." /></div>;
@@ -3607,9 +3623,17 @@ export default function AdPreviewPage() {
                 showCount
                 disabled={campaignNameLoading}
                 size="small"
+                status={campaignNameCountryCheck.ok ? undefined : "error"}
               />
+              {/* D-308：国家段与草稿国家冲突时当场标红，不等点提交才知道 */}
+              {!campaignNameCountryCheck.ok && (
+                <Text type="danger" style={{ fontSize: 11, display: "block", marginTop: 2 }}>
+                  {campaignNameCountryCheck.message}
+                </Text>
+              )}
               <Text type="secondary" style={{ fontSize: 11, display: "block", marginTop: 2 }}>
                 格式：序号-平台-商家-国家-日期(MMDD/CZS)-MID；可改任意一段，留空则自动分配序号
+                （国家段须与本条草稿国家 <Text strong style={{ fontSize: 11 }}>{targetCountry}</Text> 一致）
               </Text>
             </div>
           </Card>
