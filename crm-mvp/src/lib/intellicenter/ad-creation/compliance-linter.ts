@@ -257,7 +257,8 @@ export async function lintRewriteAndBackfill(
     cleanedDescriptions = backfill(
       cleanedDescriptions,
       ctx.targetDescriptions,
-      staticFallbackDescriptions(),
+      // D-307：允许品牌时兜底模板也带品牌名，否则补量填进去的描述品牌覆盖率注定是 0
+      staticFallbackDescriptions(ctx.merchantName, ctx.allowBrand),
       "description",
       ctx,
     );

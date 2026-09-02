@@ -66,11 +66,32 @@ export interface AdGenerationPromptOpts {
 }
 
 /**
+ * D-307：本次生成允许不允许用品牌名。
+ *
+ * `block_brand` 之外的两种策略（`free` / `allow_with_authz`）都是允许的 —— 而 Wellfit 修复
+ * （policy-preflight 的 isBrandOwnDomain 推定）之后，常规联盟单基本都落在 `free`。
+ */
+export function brandAllowed(preflight: PreflightResult): boolean {
+  return preflight.trademarkPolicy !== "block_brand";
+}
+
+/**
+ * D-307：描述里至少要有几条带品牌名。
+ *
+ * 07 拍板取一半（4 条描述 → 2 条）：Ad Strength 认「描述含品牌」这个信号，但 4 条全带会被
+ * 判「文案多样性不足」反而扣分，且 90 字符里被品牌名吃掉一截卖点空间。
+ */
+export function descriptionBrandQuota(count: number): number {
+  return Math.max(1, Math.floor(count / 2));
+}
+
+/**
  * 主入口：构造带证据约束的 AI prompt。
  *
  * 输出 prompt 风格：英文（AI 处理英文更稳） + JSON 输出格式 + 硬规则 + 证据库 + 关键词 + 政策约束。
  */
 export function buildEvidencePrompt(opts: AdGenerationPromptOpts): string {
+  const allowBrand = brandAllowed(opts.preflight);
   const taskInstructions = TASK_INSTRUCTIONS[opts.task](opts);
   const evidenceBlock = buildEvidenceBlock(opts.merchantName, opts.evidence, opts.preflight.trademarkPolicy === "block_brand");
   const keywordsBlock = buildKeywordsBlock(opts.keywords);
@@ -79,11 +100,18 @@ export function buildEvidencePrompt(opts: AdGenerationPromptOpts): string {
   const rejectionBlock = buildRejectionBlock(opts.evidence.rejectionFeedback);
   const toneInstruction = TONE_INSTRUCTIONS[opts.preflight.recommendedTone];
 
+  // D-307：允许用品牌名时，把品牌名正面交给 AI。此前品牌名只在「禁用」语境里出现过
+  // （block_brand 的 BANNED 句、SemRush 标题脱敏、爬空兜底句），常规商家的 prompt 里
+  // 根本没有这个字符串，AI 只能自己从页面正文里捞 —— 捞不到就不写，描述几乎全无品牌词。
+  const brandBlock = allowBrand
+    ? `\n# Brand name (use this EXACT spelling, do not translate or abbreviate it)\n${opts.merchantName}\n`
+    : "";
+
   return `You are a senior Google Ads copywriter generating ${opts.task} content for a real merchant.
 
 # Output language
 ${opts.languageName}
-
+${brandBlock}
 # Output JSON schema (return ONLY this JSON, no markdown fences, no preamble)
 ${TASK_OUTPUT_SCHEMA[opts.task](opts.count)}
 
@@ -108,7 +136,11 @@ ${rejectionBlock ? `\n# Past rejection lessons (CRITICAL — these ads were ALRE
 # Hard rules
 1. NEVER invent: prices, discount %, awards, certifications, founding year, or testimonials not present in evidence.
 2. NEVER use: all-caps words, double exclamation "!!", emojis, "guaranteed", "100%", "#1", "best ever", "miracle".
-3. NEVER use the merchant brand name if policy block_brand applies (see Policy constraints above).
+3. ${
+    allowBrand
+      ? `The merchant brand name "${opts.merchantName}" is ALLOWED and WANTED here — Google's Ad Strength scores copy that names the advertiser. Use it where the Task section asks for it, spelled exactly as given above.`
+      : "NEVER use the merchant brand name — policy block_brand applies (see Policy constraints above)."
+  }
 4. SUPERLATIVE / AWARD policy (Google Ads "unfair advantage" — read carefully):
    - Bare superlatives are BANNED: do NOT write "Best", "Best Brand", "Top-Rated", "#1", "Award-Winning", "Voted #1", "Awarded", "Awards Won" on their own — Google disapproves unverifiable superiority claims. ("Bestseller"/"Best Sellers" as a retail category word — e.g. "25% Off Bestsellers" — is fine; it states the merchant's own sales fact, not superiority over competitors.)
    - ONLY if the evidence explicitly contains a real, named award/ranking/certification, you MAY cite it in a SPECIFIC, verifiable form that names the issuer and/or year. Example: if evidence shows "2025 Beauty Shortlist Award", write "2025 Beauty Shortlist Winner" (NOT "Best Natural Brand"); if evidence shows "Certified Organic by Demeter", write "Demeter Certified Organic" (NOT "Certified" alone).
@@ -140,8 +172,15 @@ const TASK_INSTRUCTIONS: Record<
 > = {
   headline: (opts) =>
     `Write exactly ${opts.count} unique Google Ads RSA headlines, each ≤ ${opts.maxLen} characters. Each headline should target a different angle (benefit / feature / promo / brand / category). No two headlines can share the same opening word.`,
-  description: (opts) =>
-    `Write exactly ${opts.count} unique Google Ads RSA descriptions, each between ${opts.minLen ?? 40} and ${opts.maxLen} characters. Each must include at least one concrete benefit and one CTA. No two descriptions can share the same opening word.`,
+  description: (opts) => {
+    // D-307：品牌覆盖要求。askCount 会比最终要的条数多几条（orchestrator 的 buffer），
+    // 所以这里按比例说「至少一半」，而不是写死条数 —— 最终选取时 orchestrator 会按
+    // descriptionBrandQuota() 保证留下的 4 条里有 2 条带品牌。
+    const brandRule = brandAllowed(opts.preflight)
+      ? ` At least half of the descriptions (${descriptionBrandQuota(opts.count)} of ${opts.count} or more) MUST contain the brand name "${opts.merchantName}" written out in full — put it in the FIRST half of the sentence, phrased naturally (e.g. "Shop ${opts.merchantName} for ...", "${opts.merchantName} offers ..."), never bolted on at the end. The remaining descriptions must NOT contain the brand name, so the set stays varied.`
+      : "";
+    return `Write exactly ${opts.count} unique Google Ads RSA descriptions, each between ${opts.minLen ?? 40} and ${opts.maxLen} characters. Each must include at least one concrete benefit and one CTA. No two descriptions can share the same opening word.${brandRule}`;
+  },
   sitelink: (opts) =>
     `Generate exactly ${opts.count} sitelinks. Each title ≤25 chars, each desc ≤35 chars. Titles should reflect REAL on-site sections (e.g. "Shop New Arrivals", "Sale", "Customer Reviews"). url_path should be a relative path like "/sale" or null.`,
   callout: (opts) =>

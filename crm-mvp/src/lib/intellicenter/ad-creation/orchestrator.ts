@@ -37,7 +37,14 @@ import {
   type KeywordCandidate,
   type KeywordWithMatchType,
 } from "./keyword-intelligence";
-import { buildEvidencePrompt, type EvidenceContext, type RejectionLesson } from "./evidence-prompt";
+import {
+  brandAllowed,
+  buildEvidencePrompt,
+  descriptionBrandQuota,
+  type EvidenceContext,
+  type RejectionLesson,
+} from "./evidence-prompt";
+import { containsBrand } from "@/lib/ad-compliance-checker";
 import {
   buildRetryHintForLowSimilarity,
   scoreBatch,
@@ -463,7 +470,8 @@ export async function runIntelligentAdCreation(
     );
   // D-161：商标策略与 Step 4 preflight 同源 —— 画像判 authorized/own_brand（非 block_brand）时
   // 品牌名是合法产出，Step 8 不再按 trademark_leak 删除/重写（否则 prompt 允许、linter 又删，自相矛盾）
-  const allowBrand = preflight.trademarkPolicy !== "block_brand";
+  // D-307：与 Step 6 的品牌配额同一个判据函数，避免两步对「能不能用品牌名」各判各的
+  const allowBrand = brandAllowed(preflight);
   const linter = await lintRewriteAndBackfill(
     { headlines, descriptions, callouts },
     {
@@ -568,6 +576,14 @@ async function generateAndScoreBatch(
       }
     }
   };
+  // D-307：描述的品牌词配额（07 拍板 4 条里 2 条）。标题与 block_brand 商家 quota=0，行为不变。
+  const brandName = opts.ctx.merchantName;
+  const brandQuota =
+    opts.task === "description" && brandAllowed(opts.preflight)
+      ? descriptionBrandQuota(opts.count)
+      : 0;
+  const countBrandHits = () =>
+    accumulated.filter((s) => containsBrand(s, brandName)).length;
   // 多要 buffer：让 AI 一次多产几条，截断/去重后仍够数（描述更难达标，buffer 更大）
   const askCount = opts.count + (opts.task === "description" ? 4 : 5);
 
@@ -587,8 +603,11 @@ async function generateAndScoreBatch(
       maxLen: opts.maxLen,
       minLen: opts.minLen,
     });
-    // 已累积的项告诉 AI 不要重复 + 还差几条
-    const needMore = opts.count - accumulated.length;
+    // 已累积的项告诉 AI 不要重复 + 还差几条（品牌配额没满时，即使条数够了也还得再要）
+    const needMore = Math.max(
+      opts.count - accumulated.length,
+      brandQuota - countBrandHits(),
+    );
     const dedupHint = accumulated.length > 0
       ? `\n\n# Already have these (do NOT repeat, generate ${needMore}+ NEW different ones):\n${accumulated.map((s) => `- ${s}`).join("\n")}`
       : "";
@@ -634,26 +653,70 @@ async function generateAndScoreBatch(
       }
       addItems(parsed);
 
-      // 数量已够 → 立即返回（取前 count 条）
-      if (accumulated.length >= opts.count) {
-        return { items: accumulated.slice(0, opts.count), lastSimilarity: bestSimilarity, aiCalls };
+      // 数量够 且 品牌配额也满 → 立即返回
+      const brandHits = countBrandHits();
+      if (accumulated.length >= opts.count && brandHits >= brandQuota) {
+        return {
+          items: pickWithBrandQuota(accumulated, opts.count, brandName, brandQuota),
+          lastSimilarity: bestSimilarity,
+          aiCalls,
+        };
       }
 
-      // 触发返工（带相似度反馈 + 补量提示）
-      retryHint = buildRetryHintForLowSimilarity(sim, opts.keywords);
-      opts.emit("similarity_retry", {
-        task: opts.task,
-        attempt: attempt + 1,
-        avgSimilarity: sim.avgSimilarity,
-        lowScoringCount: sim.lowScoringItems.length,
-      });
+      // 触发返工。品牌配额没满是首要缺口（数量够了也要再要一轮），否则走相似度反馈。
+      if (brandHits < brandQuota) {
+        retryHint = `Only ${brandHits} of the descriptions so far contain the brand name "${brandName}". Write ${brandQuota - brandHits} more description(s) that each contain "${brandName}" spelled exactly like that, placed in the first half of the sentence and phrased naturally — not appended at the end. Keep every other rule (length, language, evidence grounding) unchanged.`;
+        opts.emit("brand_quota_retry", {
+          task: opts.task,
+          attempt: attempt + 1,
+          brandHits,
+          brandQuota,
+        });
+      } else {
+        retryHint = buildRetryHintForLowSimilarity(sim, opts.keywords);
+        opts.emit("similarity_retry", {
+          task: opts.task,
+          attempt: attempt + 1,
+          avgSimilarity: sim.avgSimilarity,
+          lowScoringCount: sim.lowScoringItems.length,
+        });
+      }
     }
   }
 
   console.warn(
-    `[Orchestrator] ${opts.task} 3 轮累积仅 ${accumulated.length}/${opts.count} 条（AI 产出不足，已尽力）`,
+    `[Orchestrator] ${opts.task} 3 轮累积仅 ${accumulated.length}/${opts.count} 条（AI 产出不足，已尽力）` +
+      (brandQuota > 0 ? `，含品牌词 ${countBrandHits()}/${brandQuota} 条` : ""),
   );
-  return { items: accumulated.slice(0, opts.count), lastSimilarity: bestSimilarity, aiCalls };
+  return {
+    items: pickWithBrandQuota(accumulated, opts.count, brandName, brandQuota),
+    lastSimilarity: bestSimilarity,
+    aiCalls,
+  };
+}
+
+/**
+ * D-307：按品牌词配额选取最终 count 条。
+ *
+ * 此前是无脑 `slice(0, count)` —— AI 多产的 buffer 里就算有带品牌的条目，也可能全被切在
+ * count 之外。现在先放满配额的带品牌项，再用不带品牌的补齐（保留各自原相对顺序，AI 通常
+ * 把最好的排在前面）；不带品牌的不够时用剩余带品牌项兜底，绝不因为配额而少给条数。
+ *
+ * quota=0（标题 / block_brand 商家）时行为与原来完全一致。
+ */
+export function pickWithBrandQuota(
+  items: string[],
+  count: number,
+  merchantName: string,
+  quota: number,
+): string[] {
+  if (quota <= 0) return items.slice(0, count);
+  const withBrand = items.filter((s) => containsBrand(s, merchantName));
+  const withoutBrand = items.filter((s) => !containsBrand(s, merchantName));
+  const take = Math.min(quota, withBrand.length, count);
+  const out = [...withBrand.slice(0, take), ...withoutBrand.slice(0, count - take)];
+  if (out.length < count) out.push(...withBrand.slice(take, take + (count - out.length)));
+  return out.slice(0, count);
 }
 
 /**

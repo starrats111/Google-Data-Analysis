@@ -154,16 +154,54 @@ function detectAllCapsOveruse(text: string): boolean {
   return allCaps.length / words.length > 0.3;
 }
 
-function brandRootToken(merchantName: string): string | null {
-  if (!merchantName) return null;
-  const lower = merchantName.toLowerCase();
-  const cleaned = lower
+/**
+ * D-307：品牌词命中判定的统一口径 —— 生成端（evidence-prompt / orchestrator 的品牌配额）
+ * 与检查端（trademark_leak）共用，避免两边对「这条算不算含品牌词」各说各话。
+ *
+ *   - full：整个商家名清洗后的形态（如 "the game collection"），最准的一把
+ *   - root：跳过停用词 / 法人后缀 / 国家后缀后的首个有效 token（如 "game"），
+ *           用于 AI 只写了品牌主词的情形（"Ferryhopper US" → "Ferryhopper"）
+ *
+ * 2026-09-01 一并修正：此前只剥法人后缀不剥停用词，"The Game Collection" 的品牌 token
+ * 被算成 `the` —— 任何含 "the" 的文案都会误报 trademark_leak。好在 TRADEMARK-02 之后
+ * 它只是 minor 警告，没到删条目的地步，所以一直没暴露。
+ */
+const BRAND_TOKEN_STOPWORDS = new Set([
+  // 冠词 / 连词 / 介词
+  "the", "and", "for", "with", "from", "your", "our",
+  // 法人 / 商业后缀
+  "inc", "llc", "ltd", "gmbh", "sa", "co", "corp", "corporation", "group",
+  "store", "shop", "online", "com", "net", "org", "official",
+  // 商家名里常见的国家 / 地区后缀（"Ferryhopper US" 这类）
+  "us", "usa", "uk", "eu", "de", "fr", "jp", "ca", "au", "nz", "it", "es", "nl",
+]);
+
+export function brandMatchTokens(merchantName: string): {
+  full: string | null;
+  root: string | null;
+} {
+  if (!merchantName) return { full: null, root: null };
+  const cleaned = merchantName
+    .toLowerCase()
     .replace(/[-—–.,!?'"&/\\]+/g, " ")
-    .replace(/\b(inc|llc|ltd|gmbh|s\.a\.|co|co\.|corp|corporation|group|store|shop|online|com|net|org)\b/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-  const tokens = cleaned.split(" ").filter((t) => t.length >= 3);
-  return tokens[0] ?? null;
+  if (!cleaned) return { full: null, root: null };
+  const root =
+    cleaned.split(" ").find((t) => t.length >= 3 && !BRAND_TOKEN_STOPWORDS.has(t)) ?? null;
+  return { full: cleaned.length >= 3 ? cleaned : null, root };
+}
+
+/** 一条文案里是否出现了商家品牌名（整名或品牌主词，命中其一即算） */
+export function containsBrand(text: string, merchantName: string): boolean {
+  const { full, root } = brandMatchTokens(merchantName);
+  if (!full && !root) return false;
+  const lower = (text ?? "").toLowerCase();
+  return (!!full && lower.includes(full)) || (!!root && lower.includes(root));
+}
+
+function brandRootToken(merchantName: string): string | null {
+  return brandMatchTokens(merchantName).root;
 }
 
 function checkOne(
@@ -422,11 +460,33 @@ export function staticFallbackHeadlines(merchantName: string, _category?: string
   ].slice(0, 15);
 }
 
-export function staticFallbackDescriptions(): string[] {
-  return [
+/**
+ * D-307：补量兜底的描述模板。
+ *
+ * 原先这里 4 条全是不含品牌名的通用模板，且函数根本不接商家名 —— 凡是被 Step 8 补量
+ * 填进去的描述，品牌词覆盖率注定是 0。现在允许用品牌名时（非 block_brand）先出带品牌名
+ * 的两条，凑不满或禁用品牌时再退回通用模板。
+ *
+ * 品牌名按原样拼进句子（不做大小写规整）：调用方传的是 `campaigns.merchant_name`，
+ * 本身就是商家对外的正式写法。
+ */
+export function staticFallbackDescriptions(
+  merchantName?: string,
+  allowBrand?: boolean,
+): string[] {
+  const generic = [
     "Browse hand-picked items featured in our curated category lists. Updated weekly with new arrivals.",
     "Shop bestselling categories with confidence. Easy returns and customer support throughout the journey.",
     "Discover top-selling collections aligned with current trends. Quality picks from established sellers.",
     "Explore our featured product highlights. Multiple categories, all curated for everyday shoppers.",
   ];
+  const brand = (merchantName ?? "").trim();
+  if (!allowBrand || brand.length < 2) return generic;
+  // 品牌名放句首：描述上限 90 字符，下游 fitAdTextBatch 超长时从尾部截，
+  // 品牌名在前才不会被截掉。整条仍超 90 的（品牌名过长）直接弃用该模板。
+  const branded = [
+    `Shop ${brand} online. Browse the full range and shop with easy returns.`,
+    `${brand} has curated picks in every category. See the latest arrivals today.`,
+  ].filter((d) => d.length <= 90);
+  return [...branded, ...generic];
 }
