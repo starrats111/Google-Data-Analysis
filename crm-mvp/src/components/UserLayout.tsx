@@ -126,11 +126,32 @@ interface Notification {
   has_detail?: boolean;
 }
 
+/** D-309：亏损提醒明细（后端按 metadata 里的系列 ID 回查，口径同 cron/loss-digest） */
+interface LossDigestRow {
+  campaignId: string;
+  name: string;
+  status: string;
+  group: "loss" | "zero";
+  cost: number;
+  commission: number;
+  orders: number;
+  net: number;
+  roi: number | null;
+  lastOrder: string | null;
+  recentCost: number;
+}
+
+/** 通知正文里用 ** 做强调（发飞书时的写法），站内直接显示会露出星号，去掉 */
+function plainContent(s: string): string {
+  return s.replace(/\*\*/g, "");
+}
+
 interface NotificationDetail {
   removed?: { name: string; platform: string }[];
   added?: { name: string; platform: string }[];
   invalidLinks?: { name: string; platform: string; reason: string }[];
   statusChanged?: { name: string; platform: string }[];
+  lossDigest?: { rows: LossDigestRow[]; missing: number; activeDays: number };
 }
 
 export default function UserLayout({ children }: { children: React.ReactNode }) {
@@ -215,8 +236,10 @@ export default function UserLayout({ children }: { children: React.ReactNode }) 
     mutateUnread();
   }, [mutateUnread]);
 
-  const [detailModal, setDetailModal] = useState<{ open: boolean; title: string; loading: boolean; data: NotificationDetail | null }>({
-    open: false, title: "", loading: false, data: null,
+  // D-309：content 一并存下来——弹窗认不出 metadata 结构时，至少把通知正文原样显示出来，
+  // 不再像以前那样渲染出一个空白弹窗
+  const [detailModal, setDetailModal] = useState<{ open: boolean; title: string; content: string; loading: boolean; data: NotificationDetail | null }>({
+    open: false, title: "", content: "", loading: false, data: null,
   });
 
   const openNotifDetail = useCallback(async (n: Notification) => {
@@ -224,12 +247,17 @@ export default function UserLayout({ children }: { children: React.ReactNode }) 
       setNotifications((prev) => prev.map((x) => x.id === n.id ? { ...x, is_read: 1 } : x));
       mutateUnread();
     }
-    setDetailModal({ open: true, title: n.title, loading: true, data: null });
+    setDetailModal({ open: true, title: n.title, content: n.content || "", loading: true, data: null });
     setNotifOpen(false);
     try {
       const res = await fetch(`/api/user/notifications/${n.id}`).then((r) => r.json());
-      if (res.code === 0 && res.data?.metadata) {
-        setDetailModal((prev) => ({ ...prev, loading: false, data: res.data.metadata }));
+      if (res.code === 0) {
+        setDetailModal((prev) => ({
+          ...prev,
+          loading: false,
+          content: res.data?.content || prev.content,
+          data: res.data?.metadata || null,
+        }));
       } else {
         setDetailModal((prev) => ({ ...prev, loading: false, data: null }));
       }
@@ -237,6 +265,23 @@ export default function UserLayout({ children }: { children: React.ReactNode }) 
       setDetailModal((prev) => ({ ...prev, loading: false }));
     }
   }, [mutateUnread]);
+
+  /** 从明细行跳到数据中心并按系列名预筛，落地即可暂停 */
+  const gotoCampaign = useCallback((name: string) => {
+    setDetailModal((prev) => ({ ...prev, open: false }));
+    router.push(`/user/data-center?search=${encodeURIComponent(name)}`);
+  }, [router]);
+
+  // 弹窗认得出的结构化明细有没有内容——一个都没有就退回显示通知正文原文
+  const hasStructuredDetail = useMemo(() => {
+    const d = detailModal.data;
+    if (!d) return false;
+    return Boolean(
+      d.removed?.length || d.added?.length ||
+      d.statusChanged?.length || d.invalidLinks?.length ||
+      d.lossDigest?.rows?.length,
+    );
+  }, [detailModal.data]);
 
   const handleLogout = useCallback(async () => {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -396,11 +441,11 @@ export default function UserLayout({ children }: { children: React.ReactNode }) 
         open={detailModal.open}
         onCancel={() => setDetailModal((prev) => ({ ...prev, open: false }))}
         footer={null}
-        width={640}
+        width={detailModal.data?.lossDigest ? 900 : 640}
       >
         {detailModal.loading ? (
           <div style={{ textAlign: "center", padding: 40 }}><Spin /></div>
-        ) : detailModal.data ? (
+        ) : hasStructuredDetail && detailModal.data ? (
           <div>
             {detailModal.data.removed && detailModal.data.removed.length > 0 && (
               <div style={{ marginBottom: 20 }}>
@@ -471,6 +516,69 @@ export default function UserLayout({ children }: { children: React.ReactNode }) 
                 />
               </div>
             )}
+            {/* D-309：每日亏损提醒 — 列到具体是哪几个系列，点系列名跳数据中心决定关不关 */}
+            {detailModal.data.lossDigest && detailModal.data.lossDigest.rows.length > 0 && (
+              <div>
+                <Text strong style={{ fontSize: 14, display: "block", marginBottom: 8 }}>
+                  <Tag color="red">亏损</Tag>这条提醒点到的 {detailModal.data.lossDigest.rows.length} 个系列，点系列名去数据中心决定关还是继续养
+                </Text>
+                <Table
+                  dataSource={detailModal.data.lossDigest.rows}
+                  columns={[
+                    {
+                      title: "广告系列", dataIndex: "name", key: "name", ellipsis: true,
+                      render: (v: string, r: LossDigestRow) => (
+                        <Space size={4}>
+                          <Tag color={r.group === "zero" ? "orange" : "red"}>
+                            {r.group === "zero" ? "零出单" : "有单亏"}
+                          </Tag>
+                          <a onClick={() => gotoCampaign(v)}>{v}</a>
+                          {r.status !== "ENABLED" && <Tag>{r.status === "PAUSED" ? "已暂停" : r.status}</Tag>}
+                        </Space>
+                      ),
+                    },
+                    { title: "花费", dataIndex: "cost", key: "cost", width: 90, align: "right", render: (v: number) => `$${v.toFixed(2)}` },
+                    { title: "佣金", dataIndex: "commission", key: "commission", width: 90, align: "right", render: (v: number) => `$${v.toFixed(2)}` },
+                    {
+                      title: "净利", dataIndex: "net", key: "net", width: 90, align: "right",
+                      render: (v: number) => <Text style={{ color: v < 0 ? "#CF1322" : "#3F8600" }}>${v.toFixed(2)}</Text>,
+                    },
+                    { title: "ROI", dataIndex: "roi", key: "roi", width: 70, align: "right", render: (v: number | null) => v != null ? v.toFixed(2) : "—" },
+                    {
+                      title: "出单", key: "orders", width: 130,
+                      render: (_: unknown, r: LossDigestRow) => r.orders > 0 ? `${r.orders} 单 / 末单 ${r.lastOrder || "—"}` : "零出单",
+                    },
+                    {
+                      title: `近 ${detailModal.data.lossDigest.activeDays} 天花费`, dataIndex: "recentCost", key: "recentCost", width: 110, align: "right",
+                      render: (v: number) => `$${v.toFixed(2)}`,
+                    },
+                  ]}
+                  rowKey="campaignId"
+                  size="small"
+                  scroll={{ x: 820 }}
+                  pagination={detailModal.data.lossDigest.rows.length > 10 ? { pageSize: 10 } : false}
+                />
+                <div style={{ marginTop: 8, fontSize: 12, color: COLORS.textSecondary }}>
+                  表内为当前累计数据，可能与发通知时的数字有出入；发出时的原文见下方。
+                  {detailModal.data.lossDigest.missing > 0 && (
+                    <span>另有 {detailModal.data.lossDigest.missing} 个系列已删除或不在你名下，未列出。</span>
+                  )}
+                </div>
+                {detailModal.content && (
+                  <details style={{ marginTop: 12 }}>
+                    <summary style={{ cursor: "pointer", fontSize: 12, color: COLORS.textSecondary }}>通知原文（发出时的数据）</summary>
+                    <div style={{ whiteSpace: "pre-wrap", fontSize: 12, color: COLORS.textSecondary, marginTop: 8, lineHeight: 1.7 }}>
+                      {plainContent(detailModal.content)}
+                    </div>
+                  </details>
+                )}
+              </div>
+            )}
+          </div>
+        ) : detailModal.content ? (
+          // 认不出结构就把正文原样显示——以前这里会渲染出一个空白弹窗（metadata 非空但四个分支全不命中）
+          <div style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.8, color: COLORS.textPrimary }}>
+            {plainContent(detailModal.content)}
           </div>
         ) : (
           <Empty description="暂无详细数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />

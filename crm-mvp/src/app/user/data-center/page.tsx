@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import { useSearchParams } from "next/navigation";
 import { globalMutate } from "@/lib/swr";
 import {
   Card, Table, Row, Col, Statistic, Select, Space, Typography, Tag, Button,
@@ -145,7 +146,12 @@ export default function DataCenterPage() {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [platformFilter, setPlatformFilter] = useState<string>("");
   const [midFilter, setMidFilter] = useState<string>("");
-  const [searchFilter, setSearchFilter] = useState<string>("");
+  // D-309：支持 ?search=xxx 自动填入搜索框（来自亏损提醒详情弹窗「点系列名」跳转）
+  const searchParams = useSearchParams();
+  const urlSearch = searchParams?.get("search") ?? "";
+  const [searchFilter, setSearchFilter] = useState<string>(urlSearch);
+  // 已经停在本页时点跳转不会重新挂载，靠这个 effect 让参数变化也能生效
+  useEffect(() => { setSearchFilter(urlSearch); }, [urlSearch]);
   const [dateRange, setDateRange] = useState<[Dayjs, Dayjs]>([defaultStartDate, defaultEndDate]);
   const [syncingTransactions, setSyncingTransactions] = useState(false);
   const [syncingMcc, setSyncingMcc] = useState(false);
