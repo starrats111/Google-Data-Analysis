@@ -4,8 +4,7 @@ import { serializeData } from "@/lib/auth";
 import prisma from "@/lib/prisma";
 import { verifyHermesToken } from "@/lib/hermes-auth";
 import { publishArticleToSite } from "@/lib/remote-publisher";
-import { runHumanizerGate, describeGateViolations } from "@/lib/humanizer-gate";
-import { humanize } from "@/lib/humanizer";
+import { enforceHumanizerGate, describeGateViolations } from "@/lib/humanizer-gate";
 
 // HM-D23：Hermes 委托发文 —— 接收 Hermes 生成好的完整文章，走 CRM 既有发布链路推到宝塔
 // 链路与站内发布完全一致：Humanizer 门禁（不过检自动清洗一次，仍不过拒发 422）
@@ -52,22 +51,12 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    // Humanizer 门禁（与站内 publish-to-site 同规则）
-    let contentForPublish = content;
-    let gate = runHumanizerGate(contentForPublish);
-    if (!gate.passed) {
-      const cleaned = humanize(contentForPublish);
-      const gateAfterClean = runHumanizerGate(cleaned);
-      if (gateAfterClean.passed && cleaned.trim().length >= 200) {
-        console.warn(`[HermesPublish] Humanizer 首检未通过（${describeGateViolations(gate)}），自动清洗后通过`);
-        contentForPublish = cleaned;
-        gate = gateAfterClean;
-      } else {
-        return apiError(
-          `Humanizer 检测未通过，禁止发布：${describeGateViolations(gateAfterClean.passed ? gate : gateAfterClean)}`,
-          422,
-        );
-      }
+    // Humanizer 门禁（与站内 publish-to-site 同一份 enforceHumanizerGate，D-310 起两条链路不会再规则漂移）
+    const verdict = enforceHumanizerGate(content);
+    if (!verdict.ok) return apiError(verdict.reason!, 422);
+    const contentForPublish = verdict.content;
+    if (verdict.cleaned) {
+      console.warn(`[HermesPublish] Humanizer 首检未通过（${describeGateViolations(verdict.before)}），自动清洗后通过`);
     }
 
     const site = await prisma.publish_sites.findFirst({

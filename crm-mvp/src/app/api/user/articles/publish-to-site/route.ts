@@ -3,8 +3,7 @@ import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { publishArticleToSite, unpublishArticleFromSite, updateArticleDateOnSite } from "@/lib/remote-publisher";
-import { runHumanizerGate, describeGateViolations } from "@/lib/humanizer-gate";
-import { humanize } from "@/lib/humanizer";
+import { enforceHumanizerGate, describeGateViolations } from "@/lib/humanizer-gate";
 
 // POST — 发布文章到站点（SSH 推送文件到宝塔）
 export async function POST(req: NextRequest) {
@@ -34,26 +33,19 @@ export async function POST(req: NextRequest) {
     if (!article.title || !article.content) return apiError("文章标题或内容为空，无法发布");
 
     // C-186：Humanizer 发布门禁 —— 所有文章必须通过 AI 痕迹检测才能发布。
-    // 未通过时先自动清洗（humanize）一次，清洗后仍未通过则拒绝发布。
-    let contentForPublish = article.content;
-    let gate = runHumanizerGate(contentForPublish);
-    if (!gate.passed) {
-      const cleaned = humanize(contentForPublish);
-      const gateAfterClean = runHumanizerGate(cleaned);
-      if (gateAfterClean.passed && cleaned.trim().length >= 200) {
-        console.warn(`[PublishToSite] 文章 ${article_id} Humanizer 首检未通过（${describeGateViolations(gate)}），自动清洗后通过`);
-        contentForPublish = cleaned;
-        await prisma.articles.update({
-          where: { id: BigInt(article_id) },
-          data: { content: cleaned },
-        });
-        gate = gateAfterClean;
-      } else {
-        return apiError(
-          `Humanizer 检测未通过，禁止发布：${describeGateViolations(gateAfterClean.passed ? gate : gateAfterClean)}。请修改正文中的 AI 痕迹后重试`,
-          422,
-        );
-      }
+    // 未通过时先自动清洗一次，清洗后仍未通过则拒绝发布。
+    // D-310：检测与清洗合并进 enforceHumanizerGate，两者共用同一张规则表
+    // （原来门禁认 /gi + 词形变体、清洗只认小写字面量，大写/变体一律修不掉又发不出去）。
+    const verdict = enforceHumanizerGate(article.content);
+    if (!verdict.ok) return apiError(verdict.reason!, 422);
+
+    const contentForPublish = verdict.content;
+    if (verdict.cleaned) {
+      console.warn(`[PublishToSite] 文章 ${article_id} Humanizer 首检未通过（${describeGateViolations(verdict.before)}），自动清洗后通过`);
+      await prisma.articles.update({
+        where: { id: BigInt(article_id) },
+        data: { content: contentForPublish },
+      });
     }
 
     // 查询站点（全局站点，不再按 user_id 过滤）

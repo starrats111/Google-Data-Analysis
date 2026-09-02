@@ -1,7 +1,12 @@
 /**
  * 去 AI 味处理服务（移植自 humanizer_service.py）
  * 去除 AI 生成文章中的常见痕迹
+ *
+ * D-310：发布门禁能拦的词，一律交给 humanizer-gate 的 autoFixGateHits 按同一套规则换掉，
+ * 这里只负责门禁管不到的中文套话、感叹号、段首序词等。两边共用 AI_WORD_REPLACEMENTS，
+ * 保证「生成时洗过的文章」到发布时不会再被门禁拦下来。
  */
+import { autoFixGateHits, normalizeDashes, AI_WORD_REPLACEMENTS } from "@/lib/humanizer-gate";
 
 const AI_WORDS = [
   // 中文 AI 高频词
@@ -59,33 +64,29 @@ const FILLER_PATTERNS: [RegExp, string][] = [
   [/(?:^|\n)\s*(?:总之|综上)[，,：:]?\s*/g, "\n"],
 ];
 
-/**
- * 破折号归一化：破折号（em dash）是 AI 写作最明显的指纹之一，确定性清除。
- * - 中文双破折号 "——" → 中文逗号
- * - 单 em dash（U+2014）夹在文字之间：CJK 上下文用中文逗号，英文用英文逗号
- * - 其余残留的 em dash → 英文逗号
- * 仅处理 em dash（U+2014），不动 en dash（U+2013，常用于数字区间如 4–6）。
- */
-function normalizeDashes(text: string): string {
-  let r = text;
-  r = r.replace(/\s*\u2014\u2014\s*/g, "，");
-  r = r.replace(/(\S)\s*\u2014\s*(\S)/g, (_m, a: string, b: string) =>
-    /[\u3400-\u9fff]/.test(a) || /[\u3400-\u9fff]/.test(b) ? `${a}，${b}` : `${a}, ${b}`,
-  );
-  r = r.replace(/\u2014/g, ",");
-  return r;
+const CJK_RE = /[㐀-鿿]/;
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function removeAiWords(text: string): string {
   let result = text;
   for (const word of AI_WORDS) {
-    if (result.includes(word)) {
-      // C-186：替换全部出现（原来只替换第一处，多次出现的 AI 词会漏网，
-      // 导致发布门禁 runHumanizerGate 的自动清洗兜底失效）
-      result = result.split(word).join("");
+    if (CJK_RE.test(word)) {
+      // C-186：中文词按子串删掉全部出现（原来只替换第一处，多次出现的会漏网）
+      if (result.includes(word)) result = result.split(word).join("");
+      continue;
     }
+    // D-310：英文词必须整词匹配。原来按子串删，把 revolutionized 啃成 "d"、
+    // delved 啃成 "d"，残句就这么发到站点上了。
+    // 有大白话替换词的换词（AI_WORD_REPLACEMENTS 与发布门禁共用同一张表），
+    // 没有的才删——名词/动词删掉会把句子挖穿，所以它们都在表里。
+    const replacement = AI_WORD_REPLACEMENTS[word.toLowerCase()] ?? "";
+    result = result.replace(new RegExp(`\\b${escapeRegExp(word)}\\b`, "g"), replacement);
   }
-  return result;
+  // 删词留下的空档收口
+  return result.replace(/[ \t]{2,}/g, " ").replace(/ +([,.;!?])/g, "$1");
 }
 
 function removeFillerPatterns(text: string): string {
@@ -137,6 +138,9 @@ export function humanize(text: string): string {
   if (!text) return text;
   let result = text;
   result = normalizeDashes(result);
+  // D-310：发布门禁拦得住的词，先按门禁自己那套规则换掉（忽略大小写、认词形变体），
+  // 生成时就洗干净，别等发布那一刻才拦下来让人无从下手
+  result = autoFixGateHits(result);
   result = removeAiWords(result);
   result = removeFillerPatterns(result);
   result = reduceExclamation(result);
