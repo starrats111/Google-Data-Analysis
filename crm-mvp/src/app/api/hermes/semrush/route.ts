@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { apiSuccess, apiError } from "@/lib/constants";
 import { verifyHermesToken } from "@/lib/hermes-auth";
 import { fetchSemrushKeywords } from "@/lib/semrush-keywords";
+import { refreshApiKey } from "@/lib/semrush-auto-fix";
 
 // HM-D80 / D-307：Hermes 的广告文案样本与选商家深筛改用 SemRush，停用 SerpApi。
 //
@@ -23,6 +24,28 @@ import { fetchSemrushKeywords } from "@/lib/semrush-keywords";
 //   paid_keyword_count / total_copies     → 该商家自己在不在投广告
 //
 // 只读、不写业务库（fetchSemrushKeywords 内部会写它自己的域名缓存表）。
+
+// D-308：撞到 account_blocked 时主动刷一次 3UE 的 API Key，把自愈从「等每小时的
+// semrush-health cron」压到秒级。
+//
+// ⚠️ 必须防抖，而且是硬性要求：这个 3UE 账号只有**一个在线设备名额**（见 semrush-client.ts
+// 里「把账号唯一在线设备名额还给员工」那段）。若每个失败请求都去登录一次，并发的登录会
+// 互相把对方踢下线，制造出比原问题更严重的雪崩。所以全局同一时刻只允许一次刷新，
+// 且两次刷新至少间隔 REFRESH_MIN_INTERVAL_MS。
+const REFRESH_MIN_INTERVAL_MS = 5 * 60 * 1000;
+let lastRefreshAt = 0;
+let refreshInflight: Promise<unknown> | null = null;
+
+function kickRefreshApiKey(): void {
+  if (refreshInflight) return;
+  if (Date.now() - lastRefreshAt < REFRESH_MIN_INTERVAL_MS) return;
+  lastRefreshAt = Date.now();
+  // 不 await：本次请求已经失败了，等它没意义；刷新是给后续请求铺路。
+  refreshInflight = refreshApiKey()
+    .then((r) => console.log(`[hermes/semrush] 主动刷新 API Key: ${r.action} ${r.detail || ""}`))
+    .catch((e) => console.warn(`[hermes/semrush] 主动刷新失败: ${e instanceof Error ? e.message : e}`))
+    .finally(() => { refreshInflight = null; });
+}
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300; // 3UE 有全局互斥 + 退避重试，单次可达数分钟
@@ -62,6 +85,8 @@ export async function POST(req: NextRequest) {
     maxCpcUsd,
     // 不传 userId：Hermes 是独立投放体，走全局账号池
   });
+
+  if (!r.ok && r.errorCategory === "account_blocked") kickRefreshApiKey();
 
   const p = (r.payload || {}) as Record<string, unknown>;
   const num = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);

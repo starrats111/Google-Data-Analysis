@@ -209,8 +209,12 @@ export async function fetchSemrushKeywords(params: SemrushKeywordsParams): Promi
     firstErr = err;
     const cls = classifyError(err);
     console.warn(`[SemRush] 首次失败 (category=${cls.category}): ${err instanceof Error ? err.message : err}`);
-    // account_blocked / config_missing 不重试（无意义）
-    if (cls.category !== "account_blocked" && cls.category !== "config_missing") {
+    // D-308：account_blocked 改为**要**重试。原假设是「账户过期/被封 = 持久故障，重试无意义」，
+    // 2026-09-02 实测推翻：同一秒内 contiki.com 成功、newbalance.com.br 报 account_blocked，
+    // 逐请求随机抖动约 50%（CRM 侧日志显示 8-23 起每天撞 9~149 次，是慢性病不是账户真出事）。
+    // 不重试的代价：员工侧一抖就掉到「爬取/兜底词」，Hermes 侧一抖就废掉一个候选。
+    // 重试一次能把成功率从约 50% 抬到约 75%。config_missing 仍然不重试——没配凭据重试确实无意义。
+    if (cls.category !== "config_missing") {
       await new Promise((r) => setTimeout(r, OUTER_RETRY_DELAY_MS));
       try {
         console.log(`[SemRush] I7 路由层重试 1/1（已等待 ${OUTER_RETRY_DELAY_MS}ms）`);
