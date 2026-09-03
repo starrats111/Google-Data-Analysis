@@ -90,6 +90,9 @@ export async function POST(req: NextRequest) {
     );
 
     if (!result.success) {
+      // 这条路径原先也是一行日志都不留：2026-09-03 那次「文章发不出去」的真因是
+      // CRM 连不上宝塔机（SSH 全端口被挡），但服务端一条记录都没有，只能回头要截图。
+      console.error(`[PublishToSite] 文章 ${article_id} 发布到 ${site.domain} 失败：${result.error}`);
       return apiError(`发布失败: ${result.error}`, 500);
     }
 

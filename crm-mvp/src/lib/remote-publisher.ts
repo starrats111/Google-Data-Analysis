@@ -2637,6 +2637,9 @@ export async function publishArticleToSite(
     return { success: true, url: articleUrl, updatedContent };
   } catch (err) {
     client?.end();
+    // 所有调用方（站内发布 / Hermes 委托 / 补发回填）都只把 error 原样回给前端，
+    // 没有一个落日志。2026-09-03「文章发不出去」查不到任何服务端痕迹就是这么来的。
+    console.error(`[Publisher] 文章 ${article.id} 发布到 ${site.domain} 失败：${err instanceof Error ? err.message : String(err)}`);
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
