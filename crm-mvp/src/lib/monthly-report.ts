@@ -30,6 +30,9 @@ import { countActiveRunningCampaigns } from "@/lib/active-running";
  *  平台名义 5号/15号 分两期请求打款，实际有 4-6号 / 14-16号 漂移，按就近原则判批。 */
 export const HALF_SPLIT_DAY = 10;
 
+/** D-311 广告费缺数标记的佣金门槛（USD）：单成员当月账面佣金低于此值不算缺口，避免零星佣金误报 */
+export const AD_GAP_MIN_BOOK_USD = 100;
+
 // ─────────────────────────────────────────────────────────────
 // 类型
 // ─────────────────────────────────────────────────────────────
@@ -802,6 +805,48 @@ async function buildMccSections(
       effectiveUsd,
     });
   }
+
+  // D-311：补出「有花费但不在本人活跃 MCC 列表里」的段——已删 MCC 的历史花费，
+  // 以及挂在别人名下、承载了本人投放的 MCC。原先这些钱既不出段也不进合计，静默消失。
+  const listedIds = new Set(sections.map((s) => s.mccDbId));
+  const orphanIds = [...costByMcc.keys()].filter((id) => !listedIds.has(id));
+  if (orphanIds.length > 0) {
+    const orphanRows = await prisma.google_mcc_accounts.findMany({
+      where: { id: { in: orphanIds.map((id) => BigInt(id)) } },
+      select: { id: true, mcc_id: true, mcc_name: true, currency: true, is_deleted: true, user_id: true },
+    });
+    const orphanMeta = new Map(orphanRows.map((m) => [String(m.id), m]));
+    for (const dbId of orphanIds) {
+      const cost = costByMcc.get(dbId)!;
+      if (r2(cost.usd) === 0) continue;
+      const meta = orphanMeta.get(dbId);
+      if (!meta) {
+        warnings.push(`有 $${r2(cost.usd)} 广告费所挂的 MCC 行(id=${dbId})已不存在，未计入`);
+        continue;
+      }
+      const isCny = meta.currency === "CNY";
+      const adj = adjustMap.get(dbId) || 0;
+      const costUsd = r2(cost.usd + adj);
+      const costOriginal = isCny
+        ? r2(cost.cny + (rate.cnyToUsd > 0 ? adj / rate.cnyToUsd : 0))
+        : costUsd;
+      const ov = overrides.get(`mcc:${dbId}`);
+      const override = ov !== undefined ? r2(ov) : null;
+      const tag = meta.is_deleted === 1 ? "已删" : meta.user_id !== userId ? "借用" : "历史";
+      sections.push({
+        mccDbId: dbId,
+        mccId: meta.mcc_id,
+        mccName: `${meta.mcc_name || meta.mcc_id}（${tag}）`,
+        currency: meta.currency,
+        adjustment: r2(adj),
+        costUsd,
+        costOriginal,
+        override,
+        effectiveOriginal: override ?? costOriginal,
+        effectiveUsd: override != null ? (isCny ? r2(override * rate.cnyToUsd) : override) : costUsd,
+      });
+    }
+  }
   return sections;
 }
 
@@ -1154,6 +1199,10 @@ export interface AnnualMonthAgg {
   estPaidCny: number;
   actualPaidCny: number | null;
   profitCny: number;
+  /** D-311 广告费可信度：当月「有佣金却零广告费」的成员用户名（非空 = 该月广告费必然缺数，比例不可用） */
+  adGapMembers: string[];
+  /** D-311 广告费可信度：当月广告费里手填覆盖（report_overrides mcc:*）的处数 */
+  adOverrideCount: number;
 }
 
 export interface TeamAnnualReport {
@@ -1180,9 +1229,13 @@ export async function buildTeamAnnualReport(
   const warnings: string[] = [];
   const members = await prisma.users.findMany({
     where: { team_id: teamId, is_deleted: 0, role: "user" },
-    select: { id: true },
+    select: { id: true, username: true },
   });
   const memberIds = members.map((m) => m.id);
+  const nameByUid = new Map(members.map((m) => [String(m.id), m.username]));
+  /** D-311：month -> 该月「有佣金却零广告费」的成员名 / 手填处数 */
+  const adGapByMonth = new Map<string, Set<string>>();
+  const adOvCountByMonth = new Map<string, number>();
   const yearStart = `${year}-01-01`;
   const yearEndExcl = `${year + 1}-01-01`;
   const monthsList = Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, "0")}`);
@@ -1434,9 +1487,22 @@ export async function buildTeamAnnualReport(
       GROUP BY c.mcc_id, m
     `, ...memberIds, dateColumnStart(yearStart), dateColumnStart(yearEndExcl));
 
+    // D-311：花费按 campaigns.mcc_id（**行 id**）归集，而同一个 MCC 号换人重登记会留下 is_deleted=1
+    // 的旧行；原先 mccMeta 只装「本组成员的活跃 MCC」，旧行与挂在非本组成员名下的 MCC（实测 wj06 的
+    // MCC 承载了本组成员的投放）名下花费整段丢弃且不报警——2026 全年新城组因此少算 $6,277.29。
+    // 改为：凡是本组成员花费所挂的 MCC 行一律纳入，各按**自身** currency 折算（已删行的 currency 仍在）。
+    // 仍保留成员全部 MCC（含零花费）以免月度手填覆盖失效（如 1 月 wj07 mcc:1 手填值）。
+    const costMccIds = [...new Set(
+      costRows.map((r) => r.mcc_id).filter((v): v is bigint => v != null),
+    )];
     const mccMeta = new Map(
       (await prisma.google_mcc_accounts.findMany({
-        where: { user_id: { in: memberIds }, is_deleted: 0 },
+        where: {
+          OR: [
+            { user_id: { in: memberIds } },
+            ...(costMccIds.length > 0 ? [{ id: { in: costMccIds } }] : []),
+          ],
+        },
         select: { id: true, currency: true },
       })).map((m) => [String(m.id), m.currency]),
     );
@@ -1475,8 +1541,12 @@ export async function buildTeamAnnualReport(
       const [mccId, m] = key.split("|");
       const a = acc.get(m);
       if (!a) continue;
-      // 口径对齐月度表：只计成员活跃 MCC（已删 MCC 的历史花费与月度 buildMccSections 一致地不计入）
-      if (!mccMeta.has(mccId)) continue;
+      // D-311：MCC 行已被物理删除才跳过，且必须留痕——不再静默丢弃已删/借用 MCC 的花费
+      if (!mccMeta.has(mccId)) {
+        if (c.usd > 0) warnings.push(`${m} 有 $${r2(c.usd)} 广告费所挂的 MCC 行(id=${mccId})已不存在，未计入`);
+        continue;
+      }
+      if (c.ov != null) adOvCountByMonth.set(m, (adOvCountByMonth.get(m) || 0) + 1);
       const rate = rates.get(m)!;
       const isCny = mccMeta.get(mccId) === "CNY";
       const costUsd = c.usd + c.adj;
@@ -1485,6 +1555,40 @@ export async function buildTeamAnnualReport(
       const effUsd = c.ov != null ? (isCny ? c.ov * rate.cnyToUsd : c.ov) : costUsd;
       if (isCny) a.adCny += effOriginal;
       else a.adUsd += effUsd;
+    }
+
+    // D-311 广告费缺数标记：某成员当月有佣金却零广告费 = 该月广告费必然不全，
+    // 拿它跟佣金比比例会得出荒谬结论（1 月 26 倍即由此而来）。按 人×月 逐格判定。
+    const adByUidMonth = await prisma.$queryRawUnsafe<{ uid: bigint; m: string; usd: number }[]>(`
+      SELECT s.user_id AS uid, DATE_FORMAT(s.date, '%Y-%m') AS m,
+        SUM(CAST(s.cost AS DECIMAL(16,6))) AS usd
+      FROM ads_daily_stats s
+      WHERE s.user_id IN (${uidIn}) AND s.is_deleted = 0 AND s.date >= ? AND s.date < ?
+      GROUP BY uid, m
+    `, ...memberIds, dateColumnStart(yearStart), dateColumnStart(yearEndExcl));
+    const adUidMonth = new Map<string, number>();
+    for (const r of adByUidMonth) adUidMonth.set(`${r.uid}|${r.m}`, Number(r.usd || 0));
+
+    const bookUidMonth = new Map<string, number>();
+    for (const [key, c] of bookCells) {
+      const [uid, m] = key.split("|");
+      bookUidMonth.set(`${uid}|${m}`, (bookUidMonth.get(`${uid}|${m}`) || 0) + c.book);
+    }
+    // 该成员当月自己手填过广告费就不算缺口（按 人×月 判，不能按整月判——
+    // 否则 1 月 wj07 一人填了值，会把另外 6 人的缺口一起掩盖掉）
+    const ovByUidMonth = new Set<string>();
+    for (const o of mccOvRows) {
+      if (Number(o.value) > 0) ovByUidMonth.add(`${o.user_id}|${o.month}`);
+    }
+    for (const [key, book] of bookUidMonth) {
+      // 佣金太小的格不报警：几块钱的零星佣金对比例毫无影响，报了只是狼来了
+      // （实测 4 月 wj11 $10、9 月 wj111 $3 各会拉一次红灯）
+      if (book < AD_GAP_MIN_BOOK_USD) continue;
+      const [uid, m] = key.split("|");
+      if ((adUidMonth.get(`${uid}|${m}`) || 0) >= 1 || ovByUidMonth.has(`${uid}|${m}`)) continue;
+      let set = adGapByMonth.get(m);
+      if (!set) { set = new Set(); adGapByMonth.set(m, set); }
+      set.add(nameByUid.get(uid) || uid);
     }
   }
 
@@ -1549,6 +1653,8 @@ export async function buildTeamAnnualReport(
       book: r2(a.book), rejected: r2(a.rejected),
       recvTotal: r2(a.recvTotal), paidTotal,
       estPaidCny, actualPaidCny, profitCny,
+      adGapMembers: [...(adGapByMonth.get(m) || [])].sort(),
+      adOverrideCount: adOvCountByMonth.get(m) || 0,
     };
   });
 

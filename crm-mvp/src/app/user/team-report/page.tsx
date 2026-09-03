@@ -14,6 +14,7 @@ import {
 } from "antd";
 import {
   FileExcelOutlined, ReloadOutlined, BarChartOutlined,
+  WarningOutlined, EditOutlined,
 } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
@@ -92,12 +93,39 @@ function AnnualReportTab() {
         </Tooltip>
       ),
     },
-    { title: "广告费($)", dataIndex: "adUsd", key: "adUsd", align: "right", render: (v: number) => `$${fmt(v)}` },
+    {
+      title: "广告费($)", dataIndex: "adUsd", key: "adUsd", align: "right",
+      render: (v: number, row) => (
+        <Space size={4}>
+          {/* D-311：广告费是否可信，一眼看得出——缺数月不要拿去跟佣金比比例 */}
+          {row.adGapMembers.length > 0 && (
+            <Tooltip
+              title={`${row.adGapMembers.join("、")} 当月有佣金却零广告费——本月广告费缺数，不能用来算投产比`}
+            >
+              <WarningOutlined style={{ color: "#cf1322" }} />
+            </Tooltip>
+          )}
+          {row.adOverrideCount > 0 && (
+            <Tooltip title={`本月广告费含 ${row.adOverrideCount} 处组员手填值（非 Google 同步数据）`}>
+              <EditOutlined style={{ color: "#d46b08" }} />
+            </Tooltip>
+          )}
+          <span>${fmt(v)}</span>
+        </Space>
+      ),
+    },
     { title: "广告费(¥)", dataIndex: "adCny", key: "adCny", align: "right", render: (v: number) => `¥${fmt(v)}` },
     {
       title: <Tooltip title="美金广告费按当月报表汇率折人民币 + 人民币广告费累计">核算广告费(¥)</Tooltip>,
       dataIndex: "profitAdCostCny", key: "profitAdCostCny", align: "right",
-      render: (v: number) => `¥${fmt(v)}`,
+      render: (v: number, row) =>
+        row.adGapMembers.length > 0 ? (
+          <Tooltip title="本月广告费缺数（见左侧红色警示），此值偏小，不能用来算投产比">
+            <Text type="secondary" style={{ borderBottom: "1px dashed #cf1322" }}>¥{fmt(v)}</Text>
+          </Tooltip>
+        ) : (
+          <span>¥{fmt(v)}</span>
+        ),
     },
     { title: "账面佣金($)", dataIndex: "book", key: "book", align: "right", render: (v: number) => <Text style={{ color: "#1677ff" }}>${fmt(v)}</Text> },
     { title: "失效佣金($)", dataIndex: "rejected", key: "rejected", align: "right", render: (v: number) => <Text type={v > 0 ? "danger" : undefined}>${fmt(v)}</Text> },
