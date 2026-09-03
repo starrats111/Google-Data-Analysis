@@ -30,7 +30,7 @@ import { countActiveRunningCampaigns } from "@/lib/active-running";
  *  平台名义 5号/15号 分两期请求打款，实际有 4-6号 / 14-16号 漂移，按就近原则判批。 */
 export const HALF_SPLIT_DAY = 10;
 
-/** D-311 广告费缺数标记的佣金门槛（USD）：单成员当月账面佣金低于此值不算缺口，避免零星佣金误报 */
+/** D-312 广告费缺数标记的佣金门槛（USD）：单成员当月账面佣金低于此值不算缺口，避免零星佣金误报 */
 export const AD_GAP_MIN_BOOK_USD = 100;
 
 // ─────────────────────────────────────────────────────────────
@@ -806,7 +806,7 @@ async function buildMccSections(
     });
   }
 
-  // D-311：补出「有花费但不在本人活跃 MCC 列表里」的段——已删 MCC 的历史花费，
+  // D-312：补出「有花费但不在本人活跃 MCC 列表里」的段——已删 MCC 的历史花费，
   // 以及挂在别人名下、承载了本人投放的 MCC。原先这些钱既不出段也不进合计，静默消失。
   const listedIds = new Set(sections.map((s) => s.mccDbId));
   const orphanIds = [...costByMcc.keys()].filter((id) => !listedIds.has(id));
@@ -1199,9 +1199,9 @@ export interface AnnualMonthAgg {
   estPaidCny: number;
   actualPaidCny: number | null;
   profitCny: number;
-  /** D-311 广告费可信度：当月「有佣金却零广告费」的成员用户名（非空 = 该月广告费必然缺数，比例不可用） */
+  /** D-312 广告费可信度：当月「有佣金却零广告费」的成员用户名（非空 = 该月广告费必然缺数，比例不可用） */
   adGapMembers: string[];
-  /** D-311 广告费可信度：当月广告费里手填覆盖（report_overrides mcc:*）的处数 */
+  /** D-312 广告费可信度：当月广告费里手填覆盖（report_overrides mcc:*）的处数 */
   adOverrideCount: number;
 }
 
@@ -1233,7 +1233,7 @@ export async function buildTeamAnnualReport(
   });
   const memberIds = members.map((m) => m.id);
   const nameByUid = new Map(members.map((m) => [String(m.id), m.username]));
-  /** D-311：month -> 该月「有佣金却零广告费」的成员名 / 手填处数 */
+  /** D-312：month -> 该月「有佣金却零广告费」的成员名 / 手填处数 */
   const adGapByMonth = new Map<string, Set<string>>();
   const adOvCountByMonth = new Map<string, number>();
   const yearStart = `${year}-01-01`;
@@ -1487,7 +1487,7 @@ export async function buildTeamAnnualReport(
       GROUP BY c.mcc_id, m
     `, ...memberIds, dateColumnStart(yearStart), dateColumnStart(yearEndExcl));
 
-    // D-311：花费按 campaigns.mcc_id（**行 id**）归集，而同一个 MCC 号换人重登记会留下 is_deleted=1
+    // D-312：花费按 campaigns.mcc_id（**行 id**）归集，而同一个 MCC 号换人重登记会留下 is_deleted=1
     // 的旧行；原先 mccMeta 只装「本组成员的活跃 MCC」，旧行与挂在非本组成员名下的 MCC（实测 wj06 的
     // MCC 承载了本组成员的投放）名下花费整段丢弃且不报警——2026 全年新城组因此少算 $6,277.29。
     // 改为：凡是本组成员花费所挂的 MCC 行一律纳入，各按**自身** currency 折算（已删行的 currency 仍在）。
@@ -1541,7 +1541,7 @@ export async function buildTeamAnnualReport(
       const [mccId, m] = key.split("|");
       const a = acc.get(m);
       if (!a) continue;
-      // D-311：MCC 行已被物理删除才跳过，且必须留痕——不再静默丢弃已删/借用 MCC 的花费
+      // D-312：MCC 行已被物理删除才跳过，且必须留痕——不再静默丢弃已删/借用 MCC 的花费
       if (!mccMeta.has(mccId)) {
         if (c.usd > 0) warnings.push(`${m} 有 $${r2(c.usd)} 广告费所挂的 MCC 行(id=${mccId})已不存在，未计入`);
         continue;
@@ -1557,7 +1557,7 @@ export async function buildTeamAnnualReport(
       else a.adUsd += effUsd;
     }
 
-    // D-311 广告费缺数标记：某成员当月有佣金却零广告费 = 该月广告费必然不全，
+    // D-312 广告费缺数标记：某成员当月有佣金却零广告费 = 该月广告费必然不全，
     // 拿它跟佣金比比例会得出荒谬结论（1 月 26 倍即由此而来）。按 人×月 逐格判定。
     const adByUidMonth = await prisma.$queryRawUnsafe<{ uid: bigint; m: string; usd: number }[]>(`
       SELECT s.user_id AS uid, DATE_FORMAT(s.date, '%Y-%m') AS m,

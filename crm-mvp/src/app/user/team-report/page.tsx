@@ -97,7 +97,7 @@ function AnnualReportTab() {
       title: "广告费($)", dataIndex: "adUsd", key: "adUsd", align: "right",
       render: (v: number, row) => (
         <Space size={4}>
-          {/* D-311：广告费是否可信，一眼看得出——缺数月不要拿去跟佣金比比例 */}
+          {/* D-312：广告费是否可信，一眼看得出——缺数月不要拿去跟佣金比比例 */}
           {row.adGapMembers.length > 0 && (
             <Tooltip
               title={`${row.adGapMembers.join("、")} 当月有佣金却零广告费——本月广告费缺数，不能用来算投产比`}
