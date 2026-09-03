@@ -53,7 +53,10 @@ export async function POST(req: NextRequest) {
   try {
     // Humanizer 门禁（与站内 publish-to-site 同一份 enforceHumanizerGate，D-310 起两条链路不会再规则漂移）
     const verdict = enforceHumanizerGate(content);
-    if (!verdict.ok) return apiError(verdict.reason!, 422);
+    if (!verdict.ok) {
+      console.warn(`[HermesPublish] 被 Humanizer 拒发：${describeGateViolations(verdict.before)} → ${verdict.reason}`);
+      return apiError(verdict.reason!, 422);
+    }
     const contentForPublish = verdict.content;
     if (verdict.cleaned) {
       console.warn(`[HermesPublish] Humanizer 首检未通过（${describeGateViolations(verdict.before)}），自动清洗后通过`);

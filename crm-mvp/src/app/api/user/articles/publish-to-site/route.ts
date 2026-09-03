@@ -37,7 +37,12 @@ export async function POST(req: NextRequest) {
     // D-310：检测与清洗合并进 enforceHumanizerGate，两者共用同一张规则表
     // （原来门禁认 /gi + 词形变体、清洗只认小写字面量，大写/变体一律修不掉又发不出去）。
     const verdict = enforceHumanizerGate(article.content);
-    if (!verdict.ok) return apiError(verdict.reason!, 422);
+    if (!verdict.ok) {
+      // 拒发这条路径原先一行日志都不留：用户报「发不出去」时，服务端查不到任何痕迹，
+      // 只能回头找用户要截图。挡下就记一条，别再靠截图还原现场。
+      console.warn(`[PublishToSite] 文章 ${article_id} 被 Humanizer 拒发：${describeGateViolations(verdict.before)} → ${verdict.reason}`);
+      return apiError(verdict.reason!, 422);
+    }
 
     const contentForPublish = verdict.content;
     if (verdict.cleaned) {

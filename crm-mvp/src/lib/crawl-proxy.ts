@@ -11,6 +11,7 @@
 
 import * as https from "https";
 import * as http from "http";
+import { isTlsChainIncompleteError, leafCertDefect } from "@/lib/lenient-fetch";
 
 /**
  * 取国家级 SOCKS5 代理 URL。
@@ -396,6 +397,11 @@ export async function fetchViaProxy(
   const MAX_BODY_BYTES = 3 * 1024 * 1024;
   const chainDeadline = Date.now() + CHAIN_DEADLINE_MS;
 
+  // D-311：目标站漏发中间证书时（ncsf.org 等），整条代理重试也会死在
+  // `unable to verify the first certificate`——而那些站浏览器打得开。
+  // 首次遇到就整条重放一次，关链校验、叶子证书自验（与 lenient-fetch 直连路径同一套判据）。
+  let acceptIncompleteChain = false;
+
   const doRequest = (targetUrl: string, redirectCount: number, method: string): Promise<ProxyFetchResponse> => {
     return new Promise((resolve, reject) => {
       if (options.signal?.aborted) return reject(new Error("Aborted"));
@@ -429,12 +435,22 @@ export async function fetchViaProxy(
         // 部分站点（如 promodirect.com）响应头用裸 LF 折行，Node 严格解析器会整条拒收，
         // 表现为「浏览器能打开、我们说打不开」。这里放宽分帧解析，TLS 校验不受影响。
         insecureHTTPParser: true,
+        ...(acceptIncompleteChain && isHttps ? { rejectUnauthorized: false } : {}),
         // 单跳 socket 超时不得超过链级剩余预算
         timeout: Math.min(18000, remainingMs),
       };
 
       const mod = isHttps ? https : http;
       const req = (mod as typeof https).request(reqOptions as unknown as Parameters<typeof https.request>[0], (res) => {
+        // 链校验关掉了就得自己验叶子证书：过期/域名不符仍判失败（浏览器也拦）
+        if (acceptIncompleteChain && isHttps) {
+          const defect = leafCertDefect(res.socket, parsed.hostname);
+          if (defect) {
+            res.destroy();
+            req.destroy();
+            return reject(new Error(defect));
+          }
+        }
         const status = res.statusCode || 0;
         const location = res.headers["location"];
 
@@ -511,5 +527,15 @@ export async function fetchViaProxy(
     });
   };
 
-  return withProxySlot(() => doRequest(url, 0, options.method || "GET"));
+  const method = options.method || "GET";
+  return withProxySlot(async () => {
+    try {
+      return await doRequest(url, 0, method);
+    } catch (err) {
+      if (!isTlsChainIncompleteError(err) || acceptIncompleteChain) throw err;
+      acceptIncompleteChain = true;
+      console.warn(`[CrawlProxy] 目标站漏发中间证书，改为自验叶子证书后重试: ${url.slice(0, 100)}`);
+      return await doRequest(url, 0, method);
+    }
+  });
 }

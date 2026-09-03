@@ -1,4 +1,4 @@
-import { fetchCompat, isHttpParseError } from "@/lib/lenient-fetch";
+import { fetchCompat, isHttpParseError, describeFetchFailure } from "@/lib/lenient-fetch";
 
 const UA_POOL = [
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
@@ -237,6 +237,9 @@ export async function tryValidateUrl(url: string): Promise<UrlCheckResult> {
   // 直连最终失败原因（传递给代理重试失败后的兜底返回）
   let lastDirectFailReason = "所有验证方式均失败";
   let lastDirectFailStatus = 0;
+  // 取不到代理时也照旧在结论里写「含代理重试」，看结论的人会以为代理试过了，
+  // 于是排查方向被带偏（D-311 实例：真因是证书链，却先去查代理池）。如实记录。
+  let proxyAttempted = false;
 
   for (let i = 0; i < UA_POOL.length; i++) {
     const ua = UA_POOL[i];
@@ -324,9 +327,11 @@ export async function tryValidateUrl(url: string): Promise<UrlCheckResult> {
       }
       // 站点响应头不合规，连宽容解析都没救回来——这是对方站点的问题，
       // 不是链接失效。如实说明，别让用户去删一条其实能打开的链接。
+      // D-311：原来这里直接印 err.message，undici 给的永远是一句没信息量的
+      // `fetch failed`（真话在 cause 里），排查时照着提示什么也查不到。
       lastDirectFailReason = isHttpParseError(err)
         ? "目标站点返回的 HTTP 响应头不合规，无法自动校验（浏览器可正常打开）"
-        : `请求异常: ${msg.slice(0, 60)}`;
+        : `请求异常: ${describeFetchFailure(err).slice(0, 60)}`;
       if (i < UA_POOL.length - 1) continue;
     }
   }
@@ -347,6 +352,7 @@ export async function tryValidateUrl(url: string): Promise<UrlCheckResult> {
     const proxyType = httpProxyUrl ? "HTTP" : "SOCKS5";
     console.log(`[UrlValidator] 代理重试触发: url=${url.slice(0, 80)} country=${country} type=${proxyType} geo=${geoDomainRedirectCount} cf=${cloudflareCount}`);
     if (proxyUrl) {
+      proxyAttempted = true;
       const ua = UA_POOL[0];
       const proxyResp = await fetchViaProxy(
         url,
@@ -388,10 +394,11 @@ export async function tryValidateUrl(url: string): Promise<UrlCheckResult> {
       return { ok: true, status: proxyResp.status, finalUrl: proxyResp.url, reason: `代理访问返回 ${proxyResp.status}，保守放行` };
     }
   } catch (proxyErr) {
-    console.warn(`[UrlValidator] 代理重试异常: ${proxyErr instanceof Error ? proxyErr.message : proxyErr}`);
+    console.warn(`[UrlValidator] 代理重试异常: ${describeFetchFailure(proxyErr)}`);
   }
 
-  return { ok: false, status: lastDirectFailStatus, finalUrl: url, reason: `${lastDirectFailReason}（含代理重试）` };
+  const proxyNote = proxyAttempted ? "含代理重试" : "无可用代理，未做代理重试";
+  return { ok: false, status: lastDirectFailStatus, finalUrl: url, reason: `${lastDirectFailReason}（${proxyNote}）` };
 }
 
 /**
@@ -439,7 +446,7 @@ export async function quickCheckUrl(url: string): Promise<UrlCheckResult> {
     if (isHttpParseError(err)) {
       return { ok: false, status: 0, finalUrl: url, reason: "目标站点返回的 HTTP 响应头不合规，无法自动校验（浏览器可正常打开）" };
     }
-    return { ok: false, status: 0, finalUrl: url, reason: `请求异常: ${msg.slice(0, 80)}` };
+    return { ok: false, status: 0, finalUrl: url, reason: `请求异常: ${describeFetchFailure(err).slice(0, 80)}` };
   }
 }
 
