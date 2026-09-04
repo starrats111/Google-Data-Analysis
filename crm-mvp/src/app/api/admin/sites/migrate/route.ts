@@ -91,13 +91,30 @@ function buildGitHubRepoCandidates(domain: string, sourceRef?: string | null) {
 
   const full = domain.trim().toLowerCase();
   const stripped = stripTld(full);
-  const candidates = [full, stripped].filter(Boolean);
+  // D-313：站群仓库名不带连字符（viva-luxe-life.top → VivaLuxelife、wander-well.top → WanderWell），
+  // 只试域名原样会全部猜空，害得人以为仓库不存在。GitHub 仓库名不区分大小写，所以只需补去连字符这一档。
+  const dehyphenated = stripped.replace(/-/g, "");
+  const candidates = [full, stripped, dehyphenated].filter(Boolean);
   return Array.from(new Set(candidates));
 }
 
+// 凭据可能出现在 git 的报错里，而报错会被原样写进 site_migrations.error_message —— 落库前先抹掉
+function maskSecrets(text: string) {
+  return text
+    .replace(/x-access-token:[^@\s]+@/gi, "x-access-token:***@")
+    .replace(/gh[pousr]_[A-Za-z0-9]{20,}/g, "ghp_***")
+    .replace(/github_pat_[A-Za-z0-9_]{20,}/g, "github_pat_***")
+    .replace(/cfat_[A-Za-z0-9_.-]{20,}/g, "cfat_***");
+}
+
 function buildGitHubCloneUrl(ghEntry: GitHubTokenEntry, repoRef: string) {
+  // D-313：令牌必须以「用户名:令牌」的形式给 git。原先拼成 `https://<token>@github.com/...`，
+  // git 把 token 当用户名、转头再要密码，非交互环境下必然报
+  // `could not read Password for ...: No such device or address`——2026-09-04 站群重建时
+  // 23 个仓库一个都拉不下来，查了半天才发现不是仓库没了，是这行拼错了。
+  const auth = `x-access-token:${ghEntry.token}`;
   if (repoRef.startsWith("http://") || repoRef.startsWith("https://")) {
-    return repoRef.replace(/^https?:\/\//, `https://${ghEntry.token}@`);
+    return repoRef.replace(/^https?:\/\//, `https://${auth}@`);
   }
 
   const normalized = repoRef.replace(/^\/+|\/+$/g, "");
@@ -105,7 +122,7 @@ function buildGitHubCloneUrl(ghEntry: GitHubTokenEntry, repoRef: string) {
     ? normalized
     : `${ghEntry.org}/${normalized}`;
 
-  return `https://${ghEntry.token}@github.com/${repoPath}.git`;
+  return `https://${auth}@github.com/${repoPath}.git`;
 }
 
 // ─── 异步迁移执行器 ───
@@ -197,18 +214,18 @@ async function runMigrationAsync(taskId: bigint) {
         await update({ progress: 30, step_detail: `正在尝试 GitHub 仓库：${repoRef}` });
         await exec(`sudo rm -rf ${shellSingleQuote(`${sitePath}/_tmp_clone`)}`);
         try {
-          cloneOut = await exec(`cd ${shellSingleQuote(sitePath)} && sudo git clone --depth 1 ${shellSingleQuote(cloneUrl)} _tmp_clone 2>&1`, true);
+          cloneOut = await exec(`cd ${shellSingleQuote(sitePath)} && sudo GIT_TERMINAL_PROMPT=0 git clone --depth 1 ${shellSingleQuote(cloneUrl)} _tmp_clone 2>&1`, true);
           cloneSucceeded = true;
           await update({ progress: 40, step_detail: `GitHub 仓库匹配成功：${repoRef}` });
           break;
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          errors.push(`${repoRef}: ${msg.slice(0, 180)}`);
+          errors.push(maskSecrets(`${repoRef}: ${msg.slice(0, 180)}`));
         }
       }
 
       if (!cloneSucceeded) {
-        throw new Error(`GitHub 仓库不存在或无权限访问。已尝试：${repoCandidates.join(", ")}。${errors[0] || ""}`);
+        throw new Error(maskSecrets(`GitHub 仓库不存在或无权限访问。已尝试：${repoCandidates.join(", ")}。${errors[0] || ""}`));
       }
 
       await exec(`cd ${shellSingleQuote(sitePath)} && sudo cp -r _tmp_clone/. . && sudo rm -rf _tmp_clone`);
@@ -417,7 +434,7 @@ async function runMigrationAsync(taskId: bigint) {
     });
   } catch (err) {
     try { sshClient?.end(); } catch { /* ignore */ }
-    const errorMessage = err instanceof Error ? err.message : String(err);
+    const errorMessage = maskSecrets(err instanceof Error ? err.message : String(err));
     try {
       const failedTask = await prisma.site_migrations.findUnique({ where: { id: taskId } });
       if (failedTask?.site_id) {
