@@ -23,6 +23,9 @@ export const dynamic = "force-dynamic";
  * 数据通道：零新增 API 读取——候选打款单读库内 affiliate_payments（正式同步流程入库），
  * 汇率读 exchange_rate_snapshots，归属口径与 prefill/candidates 完全一致
  * （月快照文本匹配 + C-179 逐笔修正最优先 + payment_no 去重 + gross 优先折 CNY）。
+ *
+ * D-314：美金行同样出可入账提案（拿打款单美金原值比对，不经汇率），前端保存时带 currency=USD。
+ * 汇率快照仍要读——人民币行照旧要折 CNY 比对，美金行不用。
  */
 
 const normCard = (s: string | null | undefined) => (s || "").replace(/[\s-]/g, "");
@@ -65,7 +68,7 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
     return apiError(
       detailSheets.length > 0
         ? `只解析到按投手分摊的明细表（${detailSheets.map((s) => s.name).join("、")}），里面不是银行到账金额，本次不做任何改动`
-        : "没有解析到任何到账行（需要含「时间 / 收款人户名 / 人民币」列的表头），本次不做任何改动",
+        : "没有解析到任何到账行（需要含「时间 / 收款人户名 / 人民币或美金」列的表头），本次不做任何改动",
     );
   }
 
@@ -238,7 +241,7 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
     where: { ...entryWhere, team_id: teamId, is_deleted: 0 },
     select: {
       id: true, payment_method_id: true, platform: true, txn_group: true, source_date: true, txn_at: true,
-      amount: true, expected_amount: true, fee: true, breakdown: true,
+      amount: true, currency: true, expected_amount: true, fee: true, breakdown: true,
     },
   });
   const channelOf = new Map(methodRows.map((m) => [String(m.id), m.pay_channel || ""]));
@@ -269,6 +272,8 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
       methodId: mid,
       payChannel: channelOf.get(mid) ?? "",
       amount: Number(e.amount),
+      // D-314：条目币种（老数据默认 CNY），美金行只跟美金条目比「已录过」
+      currency: e.currency === "USD" ? "USD" : "CNY",
       txnDate: e.txn_at.toISOString().slice(0, 10),
       expected: Number(e.expected_amount),
       fee: Number(e.fee),
@@ -302,7 +307,7 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
   };
   const resultSheets = sheets.map((s) => {
     const proposals = matchBankRows({ rows: s.rows, methods, payments, usedBatchKeys, existingEntries });
-    const stats = { auto: 0, review: 0, exists: 0, unmatched: 0, usd: 0, no_method: 0, date_fix: 0, split_existing: 0 };
+    const stats = { auto: 0, review: 0, exists: 0, unmatched: 0, no_method: 0, date_fix: 0, split_existing: 0, internal_transfer: 0 };
     for (const p of proposals) stats[p.status]++;
     return {
       name: s.name,

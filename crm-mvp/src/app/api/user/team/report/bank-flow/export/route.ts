@@ -5,8 +5,8 @@ import { resolveBankFlowScope, scopeEntryWhere } from "@/lib/bank-flow-scope";
 import ExcelJS from "exceljs";
 import {
   buildBankStatementSheet, buildPayeeStatementSheet,
-  buildYearOverviewSheet, buildYearMonthDetailSheet,
-  type BankFlowExportMethod, type BankFlowExportEntry, type BankFlowYearEntry,
+  buildYearOverviewSheet, buildYearMonthDetailSheet, entryCurrency,
+  type BankFlowExportMethod, type BankFlowExportEntry, type BankFlowYearEntry, type FlowCurrency,
 } from "@/lib/bank-flow-xlsx";
 
 export const dynamic = "force-dynamic";
@@ -123,6 +123,16 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
 
   const payeeOfMethod = (m: BankFlowExportMethod) => m.payeeName.replace(/[（(].*$/, "").trim() || m.payeeName;
 
+  // D-314：一张表只放一种币（美金不折人民币，混在一起余额没法滚）。
+  // 人民币表照旧先出，有美金到账时再各出一张 (USD) 表；没有美金就跟改动前一模一样。
+  const currenciesOf = (es: BankFlowExportEntry[]): FlowCurrency[] => {
+    const list: FlowCurrency[] = [];
+    if (es.length === 0 || es.some((e) => entryCurrency(e) === "CNY")) list.push("CNY"); // 无到账也出人民币空表（原行为）
+    if (es.some((e) => entryCurrency(e) === "USD")) list.push("USD");
+    return list;
+  };
+  const ofCur = <T extends BankFlowExportEntry>(es: T[], cur: FlowCurrency) => es.filter((e) => entryCurrency(e) === cur);
+
   if (yearParam) {
     // D-287 年度导出：年度总览 + 有到账的月份各一张明细
     const methodById = new Map(methods.map((m) => [m.id, m]));
@@ -132,22 +142,32 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
     });
     // 收款人列顺序按收款方式创建先后；仅全年有到账的出列（无到账收款人不出空列）
     const payeeOrder = [...new Set(methods.map(payeeOfMethod))];
-    const withData = new Set(yearEntries.map((e) => e.payee));
-    let payees = payeeOrder.filter((p) => withData.has(p));
-    if (payees.length === 0) payees = payeeOrder; // 全年无到账：仍出全员空总览
-    buildYearOverviewSheet(wb, yearParam, payees, yearEntries);
-    const monthsWithData = [...new Set(yearEntries.map((e) => e.month))].sort();
-    for (const ym of monthsWithData) {
-      buildYearMonthDetailSheet(
-        wb, yearParam, Number(ym.slice(5)), payees, methods,
-        yearEntries.filter((e) => e.month === ym),
-      );
+    // D-314：币种各出一套（总览 + 该币种有到账的月份明细），人民币在前
+    for (const cur of currenciesOf(yearEntries)) {
+      const curEntries = ofCur(yearEntries, cur);
+      const withData = new Set(curEntries.map((e) => e.payee));
+      let payees = payeeOrder.filter((p) => withData.has(p));
+      if (payees.length === 0) payees = payeeOrder; // 全年无到账：仍出全员空总览
+      buildYearOverviewSheet(wb, yearParam, payees, curEntries, cur);
+      const monthsWithData = [...new Set(curEntries.map((e) => e.month))].sort();
+      for (const ym of monthsWithData) {
+        buildYearMonthDetailSheet(
+          wb, yearParam, Number(ym.slice(5)), payees, methods,
+          curEntries.filter((e) => e.month === ym), cur,
+        );
+      }
     }
   } else if (methodIdParam) {
-    // 单卡导出：该卡单独一张流水单
+    // 单卡导出：该卡单独一张流水单（D-314：该卡收过美金则美金另出一张）
     const m = methods[0];
-    const name = `${m.payeeName}${m.payChannel ? "-" + m.payChannel : ""}${m.cardNo ? "-" + m.cardNo.slice(-4) : ""}`.slice(0, 28);
-    buildBankStatementSheet(wb, month, m, entries.filter((e) => e.paymentMethodId === m.id), name);
+    const cardEntries = entries.filter((e) => e.paymentMethodId === m.id);
+    const base = `${m.payeeName}${m.payChannel ? "-" + m.payChannel : ""}${m.cardNo ? "-" + m.cardNo.slice(-4) : ""}`;
+    for (const cur of currenciesOf(cardEntries)) {
+      buildBankStatementSheet(
+        wb, month, m, ofCur(cardEntries, cur),
+        `${base.slice(0, cur === "CNY" ? 28 : 22)}${cur === "USD" ? "(USD)" : ""}`, cur,
+      );
+    }
   } else {
     // C-179：每收款人一张合并流水单（该人所有卡/渠道入账合并）
     // C-178 后 payee_name 已是纯名字；去括号逻辑兼容未迁移的旧文本
@@ -159,11 +179,15 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
       const methodIds = new Set(payeeMethods.map((m) => m.id));
       const payeeEntries = entries.filter((e) => methodIds.has(e.paymentMethodId));
       if (payeeEntries.length === 0 && payees.length > 1) continue; // 该收款人本月无到账则不出空表
-      let name = payee.slice(0, 28);
-      let i = 2;
-      while (used.has(name)) name = `${payee.slice(0, 24)}(${i++})`;
-      used.add(name);
-      buildPayeeStatementSheet(wb, month, payee, payeeMethods, payeeEntries, name);
+      // D-314：同一个收款人的人民币卡与香港美金卡各出一张表，两种钱不滚进同一个余额
+      for (const cur of currenciesOf(payeeEntries)) {
+        const suffix = cur === "USD" ? "(USD)" : "";
+        let name = `${payee.slice(0, 28 - suffix.length)}${suffix}`;
+        let i = 2;
+        while (used.has(name)) name = `${payee.slice(0, 24 - suffix.length)}${suffix}(${i++})`;
+        used.add(name);
+        buildPayeeStatementSheet(wb, month, payee, payeeMethods, ofCur(payeeEntries, cur), name, cur);
+      }
     }
     if (wb.worksheets.length === 0) {
       // 全部收款人本月都无到账：仍给每人一张空表，避免空 workbook

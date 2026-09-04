@@ -282,6 +282,61 @@ async function buildDailyUsdToCnyLookup(endExcl: string, take = 70): Promise<(d:
   };
 }
 
+/**
+ * D-314.1（07 2026-09-04 二次拍板「美金要换算成人民币显示在月度和年度报表里」）：
+ * 银行流水里 `currency='USD'` 的条目（香港卡收的美金，D-314 起直接以美金入账）在报表侧
+ * 按**到账日汇率**折成人民币，再喂给原有的人民币聚合——下游一行不用改，也就不存在
+ * 「$1 当 ¥1」的口径漏洞。
+ *
+ * - 折 `amount`（实际到账）、`fee`（手续费）与 `breakdown` 里每个人的明细金额，三者同一个汇率，
+ *   「明细合计 − 手续费 = 到账」这条恒等式折算后仍成立（各自四舍五入最多差 1 分，
+ *   下游 apportionFee 本来就按余数收尾）；
+ * - 汇率取到账日当日或其前最近的 CNY 快照（与逐笔打款日汇率同一口径，见 buildDailyUsdToCnyLookup）；
+ * - **查不到汇率就返回 null**（早于最早快照等），调用方必须把它记进 warnings 而不是当人民币混进去。
+ */
+type BankCurrencyRow = { txn_at: Date; currency: string; amount: unknown; fee?: unknown; breakdown?: string | null };
+
+export function bankRowToCny<T extends BankCurrencyRow>(e: T, usdToCny: (d: Date) => number): T | null {
+  if (e.currency !== "USD") return e;
+  const rate = usdToCny(e.txn_at);
+  if (!(rate > 0)) return null;
+  let breakdown = e.breakdown ?? null;
+  if (breakdown) {
+    try {
+      const items: unknown = JSON.parse(breakdown);
+      if (Array.isArray(items)) {
+        breakdown = JSON.stringify(
+          items.map((it) =>
+            it && typeof it === "object"
+              ? { ...it, amount: r2(Number((it as { amount?: unknown }).amount || 0) * rate) }
+              : it),
+        );
+      }
+    } catch { /* 脏数据：明细保持原样，下游解析失败时本来就跳过 */ }
+  }
+  return {
+    ...e,
+    amount: r2(Number(e.amount || 0) * rate),
+    ...(e.fee === undefined ? {} : { fee: r2(Number(e.fee || 0) * rate) }),
+    breakdown,
+  };
+}
+
+/** 折算一批银行流水条目；折不动的（美金但查不到当日汇率）单独返回，由调用方报警不静默丢 */
+function bankRowsToCny<T extends BankCurrencyRow>(
+  rows: T[],
+  usdToCny: (d: Date) => number,
+): { rows: T[]; unconverted: T[] } {
+  const out: T[] = [];
+  const unconverted: T[] = [];
+  for (const e of rows) {
+    const c = bankRowToCny(e, usdToCny);
+    if (c) out.push(c);
+    else unconverted.push(e);
+  }
+  return { rows: out, unconverted };
+}
+
 /** "YYYY-MM" → 下月 1 日 "YYYY-MM-DD" */
 function nextMonthStart(month: string): string {
   const [y, m] = month.split("-").map(Number);
@@ -490,10 +545,16 @@ export async function buildMemberMonthlyReport(
   //        替代打款日汇率毛额估算；组员手填 recvcny:* 仍最优先 ──────────
   const bankNetForCol = new Map<ColKey, { H1?: number; H2?: number }>();
   if (user.team_id) {
-    const bankEntries = await prisma.bank_flow_entries.findMany({
+    const bankRaw = await prisma.bank_flow_entries.findMany({
       where: { team_id: user.team_id, month, is_deleted: 0 },
-      select: { platform: true, txn_at: true, amount: true, fee: true, source_date: true, breakdown: true },
+      select: { platform: true, txn_at: true, amount: true, currency: true, fee: true, source_date: true, breakdown: true },
     });
+    // D-314.1：美金条目（香港卡）按到账日汇率折成人民币再参与本口径，折不动的报警不静默丢
+    const converted = bankRowsToCny(bankRaw, await buildDailyUsdToCnyLookup(nextMonthStart(month)));
+    const bankEntries = converted.rows;
+    for (const e of converted.unconverted) {
+      warnings.push(`${e.txn_at.toISOString().slice(0, 10)} ${e.platform} 美金到账 $${r2(Number(e.amount || 0))} 查不到当日汇率快照，未计入实收(CNY)`);
+    }
     if (bankEntries.length > 0) {
       const teamMembers = await prisma.users.findMany({
         where: { team_id: user.team_id, is_deleted: 0, role: "user" },
@@ -1017,10 +1078,16 @@ export async function buildTeamMonthlySummary(
   // 归半月用「请求时间」口径与报表其余列一致：通过 source_date（平台显示打款日）反查
   // 该批打款单的 request_date 判批（≤10号 = 5号批 H1，>10号 = 15号批 H2）；
   // 反查不到时才退回到账日就近判断。银行流水核对本身仍按 paid_date 走（prefill 不变）。
-  const bankEntries = await prisma.bank_flow_entries.findMany({
+  const bankRaw = await prisma.bank_flow_entries.findMany({
     where: { team_id: teamId, month, is_deleted: 0 },
-    select: { platform: true, txn_at: true, amount: true, source_date: true, breakdown: true },
+    select: { platform: true, txn_at: true, amount: true, currency: true, source_date: true, breakdown: true },
   });
+  // D-314.1：美金条目按到账日汇率折成人民币再聚合（同 3b，理由见 bankRowToCny）
+  const bankConverted = bankRowsToCny(bankRaw, await buildDailyUsdToCnyLookup(nextMonthStart(month)));
+  const bankEntries = bankConverted.rows;
+  for (const e of bankConverted.unconverted) {
+    warnings.push(`${e.txn_at.toISOString().slice(0, 10)} ${e.platform} 美金到账 $${r2(Number(e.amount || 0))} 查不到当日汇率快照，未计入实际入账(CNY)`);
+  }
   const resolveTeamBankHalf = await buildBankHalfResolver(bankEntries, members.map((m) => m.id));
   const bankCnyByPlat = new Map<string, { H1: number; H2: number; hasH1: boolean; hasH2: boolean }>();
   for (const e of bankEntries) {
@@ -1257,10 +1324,16 @@ export async function buildTeamAnnualReport(
   // request_date 判批，兜底按日期就近。用于：
   // a) 月×平台×半月 实际入账(CNY)聚合（实际佣金取值，优先级低于组长手填、高于成员估算）；
   // b) 默认实收(CNY)的净额替换（与月度 3b 一致，杜绝年度/月度口径漂移，见下方替换段）
-  const bankRows = await prisma.bank_flow_entries.findMany({
+  const bankRawRows = await prisma.bank_flow_entries.findMany({
     where: { team_id: teamId, is_deleted: 0, month: { startsWith: `${year}-` } },
-    select: { month: true, platform: true, txn_at: true, amount: true, fee: true, source_date: true, breakdown: true },
+    select: { month: true, platform: true, txn_at: true, amount: true, currency: true, fee: true, source_date: true, breakdown: true },
   });
+  // D-314.1：美金条目按到账日汇率折成人民币再聚合（同月度 3b）；take 覆盖整年 + 前月回溯
+  const bankYearConverted = bankRowsToCny(bankRawRows, await buildDailyUsdToCnyLookup(`${Number(year) + 1}-01-01`, 400));
+  const bankRows = bankYearConverted.rows;
+  for (const e of bankYearConverted.unconverted) {
+    warnings.push(`${e.month} ${e.platform} 美金到账 $${r2(Number(e.amount || 0))} 查不到当日汇率快照，未计入实际入账(CNY)`);
+  }
   const resolveAnnualBankHalf = await buildBankHalfResolver(bankRows, memberIds);
   const bankCnyMonthPlat = new Map<string, Map<string, { H1?: number; H2?: number }>>();
   for (const e of bankRows) {

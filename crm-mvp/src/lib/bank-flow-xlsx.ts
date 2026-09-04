@@ -41,6 +41,16 @@ export interface BankFlowExportEntry {
   remark: string;
 }
 
+/**
+ * D-314：一张表只放一种币。香港卡收的美金不折人民币，抬头的币种、金额列名与合计
+ * 全部跟着这张表的币种走；美金与人民币绝不出现在同一张表（余额没法滚）。
+ */
+export type FlowCurrency = "CNY" | "USD";
+export const entryCurrency = (e: { currency?: string | null }): FlowCurrency => (e.currency === "USD" ? "USD" : "CNY");
+const CUR_SYM: Record<FlowCurrency, string> = { CNY: "¥", USD: "$" };
+const CUR_LABEL: Record<FlowCurrency, string> = { CNY: "人民币(CNY)", USD: "美元(USD)" };
+const CUR_UNIT: Record<FlowCurrency, string> = { CNY: "人民币元", USD: "美元" };
+
 const THIN: Partial<ExcelJS.Border> = { style: "thin", color: { argb: "FF000000" } };
 const BORDER: Partial<ExcelJS.Borders> = { top: THIN, left: THIN, bottom: THIN, right: THIN };
 const GRAY = "FFD9D9D9";
@@ -95,6 +105,8 @@ export function buildBankStatementSheet(
   method: BankFlowExportMethod,
   entries: BankFlowExportEntry[],
   sheetName: string,
+  /** D-314：本表币种（调用方已按币种分好表），默认人民币 */
+  cur: FlowCurrency = "CNY",
 ) {
   const ws = wb.addWorksheet(sheetName);
   const COLS = 10;
@@ -102,7 +114,8 @@ export function buildBankStatementSheet(
   widths.forEach((w, i) => (ws.getColumn(i + 1).width = w));
 
   const { start, end } = monthRange(month);
-  const opening = method.openingBalance ?? 0;
+  // 期初余额是这张卡的人民币期初；美金表没有对应的期初口径，从 0 起滚
+  const opening = cur === "CNY" ? (method.openingBalance ?? 0) : 0;
 
   // 抬头
   ws.mergeCells(1, 1, 1, COLS);
@@ -114,19 +127,19 @@ export function buildBankStatementSheet(
   ws.mergeCells(2, 4, 2, 6);
   cell(ws, 2, 4, `账　号：${method.cardNo || "—"}`, { h: "left", noBorder: true });
   ws.mergeCells(2, 7, 2, COLS);
-  cell(ws, 2, 7, `币　种：人民币(CNY)`, { h: "left", noBorder: true });
+  cell(ws, 2, 7, `币　种：${CUR_LABEL[cur]}`, { h: "left", noBorder: true });
 
   const now = new Date();
   ws.mergeCells(3, 1, 3, 3);
   cell(ws, 3, 1, `查询期间：${start} 至 ${end}`, { h: "left", noBorder: true });
   ws.mergeCells(3, 4, 3, 6);
-  cell(ws, 3, 4, `期初余额：${opening.toLocaleString("zh-CN", { minimumFractionDigits: 2 })}`, { h: "left", noBorder: true });
+  cell(ws, 3, 4, `期初余额：${opening.toLocaleString("zh-CN", { minimumFractionDigits: 2 })}${cur === "USD" ? "（美金账户不设期初，本表从 0 起滚）" : ""}`, { h: "left", noBorder: true });
   ws.mergeCells(3, 7, 3, COLS);
   cell(ws, 3, 7, `打印时间：${fmtDate(now)} ${fmtTime(now)}`, { h: "left", noBorder: true });
   for (let r = 2; r <= 3; r++) ws.getRow(r).height = 22;
 
   // 表头
-  const HEAD = ["序号", "交易日期", "交易时间", "交易摘要", "对方户名", "收入金额(贷)", "支出金额(借)", "账户余额", "手续费(¥)", "备注"];
+  const HEAD = ["序号", "交易日期", "交易时间", "交易摘要", "对方户名", "收入金额(贷)", "支出金额(借)", "账户余额", `手续费(${CUR_SYM[cur]})`, "备注"];
   HEAD.forEach((h, i) => cell(ws, 5, 1 + i, h, { bold: true, fill: GRAY }));
   ws.getRow(5).height = 24;
 
@@ -159,7 +172,7 @@ export function buildBankStatementSheet(
   const totalIn = Math.round(sorted.reduce((s, e) => s + e.amount, 0) * 100) / 100;
   const totalFee = Math.round(sorted.reduce((s, e) => s + e.fee, 0) * 100) / 100;
   ws.mergeCells(r, 1, r, 5);
-  cell(ws, r, 1, `本期合计：收入 ${sorted.length} 笔，手续费支出 ¥${money(totalFee)}`, { bold: true, fill: GRAY, h: "left" });
+  cell(ws, r, 1, `本期合计：收入 ${sorted.length} 笔，手续费支出 ${CUR_SYM[cur]}${money(totalFee)}`, { bold: true, fill: GRAY, h: "left" });
   cell(ws, r, 6, totalIn, { bold: true, fill: GRAY, numFmt: MONEY, h: "right" });
   cell(ws, r, 7, 0, { bold: true, fill: GRAY, numFmt: MONEY, h: "right" });
   cell(ws, r, 8, Math.round(balance * 100) / 100, { bold: true, fill: GRAY, numFmt: MONEY, h: "right" });
@@ -191,6 +204,8 @@ export function buildPayeeStatementSheet(
   methods: BankFlowExportMethod[],
   entries: BankFlowExportEntry[],
   sheetName: string,
+  /** D-314：本表币种（调用方已按币种分好表），默认人民币 */
+  cur: FlowCurrency = "CNY",
 ) {
   const ws = wb.addWorksheet(sheetName);
   const COLS = 11;
@@ -199,7 +214,8 @@ export function buildPayeeStatementSheet(
 
   const { start, end } = monthRange(month);
   const methodById = new Map(methods.map((m) => [m.id, m]));
-  const opening = methods.reduce((s, m) => s + (m.openingBalance ?? 0), 0);
+  // 期初余额只对人民币表成立；美金表从 0 起滚（见 buildBankStatementSheet 同处注释）
+  const opening = cur === "CNY" ? methods.reduce((s, m) => s + (m.openingBalance ?? 0), 0) : 0;
   const cardNos = [...new Set(methods.map((m) => m.cardNo).filter(Boolean))];
   const acctLabel = cardNos.length === 0 ? "—" : cardNos.length === 1 ? cardNos[0] : `共 ${cardNos.length} 张卡（见「打款方式」列）`;
 
@@ -213,19 +229,19 @@ export function buildPayeeStatementSheet(
   ws.mergeCells(2, 4, 2, 6);
   cell(ws, 2, 4, `账　号：${acctLabel}`, { h: "left", noBorder: true });
   ws.mergeCells(2, 7, 2, COLS);
-  cell(ws, 2, 7, `币　种：人民币(CNY)`, { h: "left", noBorder: true });
+  cell(ws, 2, 7, `币　种：${CUR_LABEL[cur]}`, { h: "left", noBorder: true });
 
   const now = new Date();
   ws.mergeCells(3, 1, 3, 3);
   cell(ws, 3, 1, `查询期间：${start} 至 ${end}`, { h: "left", noBorder: true });
   ws.mergeCells(3, 4, 3, 6);
-  cell(ws, 3, 4, `期初余额：${opening.toLocaleString("zh-CN", { minimumFractionDigits: 2 })}（各卡合计）`, { h: "left", noBorder: true });
+  cell(ws, 3, 4, `期初余额：${opening.toLocaleString("zh-CN", { minimumFractionDigits: 2 })}${cur === "USD" ? "（美金账户不设期初，本表从 0 起滚）" : "（各卡合计）"}`, { h: "left", noBorder: true });
   ws.mergeCells(3, 7, 3, COLS);
   cell(ws, 3, 7, `打印时间：${fmtDate(now)} ${fmtTime(now)}`, { h: "left", noBorder: true });
   for (let r = 2; r <= 3; r++) ws.getRow(r).height = 22;
 
   // 表头
-  const HEAD = ["序号", "交易日期", "交易时间", "交易摘要", "对方户名", "打款方式(卡号)", "收入金额(贷)", "支出金额(借)", "账户余额", "手续费(¥)", "备注"];
+  const HEAD = ["序号", "交易日期", "交易时间", "交易摘要", "对方户名", "打款方式(卡号)", "收入金额(贷)", "支出金额(借)", "账户余额", `手续费(${CUR_SYM[cur]})`, "备注"];
   HEAD.forEach((h, i) => cell(ws, 5, 1 + i, h, { bold: true, fill: GRAY }));
   ws.getRow(5).height = 24;
 
@@ -260,7 +276,7 @@ export function buildPayeeStatementSheet(
   const totalIn = Math.round(sorted.reduce((s, e) => s + e.amount, 0) * 100) / 100;
   const totalFee = Math.round(sorted.reduce((s, e) => s + e.fee, 0) * 100) / 100;
   ws.mergeCells(r, 1, r, 6);
-  cell(ws, r, 1, `本期合计：收入 ${sorted.length} 笔，手续费支出 ¥${money(totalFee)}`, { bold: true, fill: GRAY, h: "left" });
+  cell(ws, r, 1, `本期合计：收入 ${sorted.length} 笔，手续费支出 ${CUR_SYM[cur]}${money(totalFee)}`, { bold: true, fill: GRAY, h: "left" });
   cell(ws, r, 7, totalIn, { bold: true, fill: GRAY, numFmt: MONEY, h: "right" });
   cell(ws, r, 8, 0, { bold: true, fill: GRAY, numFmt: MONEY, h: "right" });
   cell(ws, r, 9, Math.round(balance * 100) / 100, { bold: true, fill: GRAY, numFmt: MONEY, h: "right" });
@@ -297,21 +313,24 @@ export function buildYearOverviewSheet(
   year: string,
   payees: string[],
   entries: BankFlowYearEntry[],
+  /** D-314：本表币种（美金另出一张「年度总览(USD)」），默认人民币 */
+  cur: FlowCurrency = "CNY",
 ) {
-  const ws = wb.addWorksheet("年度总览");
+  const ws = wb.addWorksheet(cur === "CNY" ? "年度总览" : "年度总览(USD)");
   const widths = [10, ...payees.map(() => 16), 16, 13, 8];
   widths.forEach((w, i) => (ws.getColumn(i + 1).width = w));
   const NC = widths.length;
 
   ws.mergeCells(1, 1, 1, NC);
-  cell(ws, 1, 1, `${year} 年度银行流水总览表`, { sz: 16, bold: true, noBorder: true });
+  cell(ws, 1, 1, `${year} 年度银行流水总览表${cur === "USD" ? "（美金）" : ""}`, { sz: 16, bold: true, noBorder: true });
   ws.getRow(1).height = 34;
   const now = new Date();
   ws.mergeCells(2, 1, 2, NC);
-  cell(ws, 2, 1, `单位：人民币元　　统计期间：${year}-01-01 至 ${year}-12-31　　制表时间：${fmtDate(now)} ${fmtTime(now)}`, { h: "left", noBorder: true, sz: 10 });
+  cell(ws, 2, 1, `单位：${CUR_UNIT[cur]}　　统计期间：${year}-01-01 至 ${year}-12-31　　制表时间：${fmtDate(now)} ${fmtTime(now)}`, { h: "left", noBorder: true, sz: 10 });
   ws.getRow(2).height = 20;
 
-  const HEAD = ["月份", ...payees.map((p) => `${p} 到账(¥)`), "当月合计(¥)", "手续费(¥)", "笔数"];
+  const S = CUR_SYM[cur];
+  const HEAD = ["月份", ...payees.map((p) => `${p} 到账(${S})`), `当月合计(${S})`, `手续费(${S})`, "笔数"];
   HEAD.forEach((h, i) => cell(ws, 4, 1 + i, h, { bold: true, fill: GRAY }));
   ws.getRow(4).height = 24;
 
@@ -371,8 +390,10 @@ export function buildYearMonthDetailSheet(
   payees: string[],
   methods: BankFlowExportMethod[],
   entries: BankFlowYearEntry[],
+  /** D-314：本表币种（美金另出「N月(USD)」），默认人民币 */
+  cur: FlowCurrency = "CNY",
 ) {
-  const ws = wb.addWorksheet(`${monthNum}月`);
+  const ws = wb.addWorksheet(cur === "CNY" ? `${monthNum}月` : `${monthNum}月(USD)`);
   const widths = [6, 12, 8, 10, 24, 12, 14, 16, 15, 13, 20];
   widths.forEach((w, i) => (ws.getColumn(i + 1).width = w));
   const NC = widths.length;
@@ -381,13 +402,14 @@ export function buildYearMonthDetailSheet(
   const ym = `${year}-${String(monthNum).padStart(2, "0")}`;
 
   ws.mergeCells(1, 1, 1, NC);
-  cell(ws, 1, 1, `${year} 年 ${monthNum} 月银行流水明细`, { sz: 15, bold: true, noBorder: true });
+  cell(ws, 1, 1, `${year} 年 ${monthNum} 月银行流水明细${cur === "USD" ? "（美金）" : ""}`, { sz: 15, bold: true, noBorder: true });
   ws.getRow(1).height = 30;
   ws.mergeCells(2, 1, 2, NC);
   const { start, end } = monthRange(ym);
-  cell(ws, 2, 1, `单位：人民币元　　期间：${start} 至 ${end}`, { h: "left", noBorder: true, sz: 10 });
+  cell(ws, 2, 1, `单位：${CUR_UNIT[cur]}　　期间：${start} 至 ${end}`, { h: "left", noBorder: true, sz: 10 });
 
-  const HEAD = ["序号", "交易日期", "时间", "收款人", "打款方式(卡号)", "平台", "交易摘要", "对方户名", "到账金额(¥)", "手续费(¥)", "备注"];
+  const S = CUR_SYM[cur];
+  const HEAD = ["序号", "交易日期", "时间", "收款人", "打款方式(卡号)", "平台", "交易摘要", "对方户名", `到账金额(${S})`, `手续费(${S})`, "备注"];
   HEAD.forEach((h, i) => cell(ws, 4, 1 + i, h, { bold: true, fill: GRAY }));
   ws.getRow(4).height = 24;
 

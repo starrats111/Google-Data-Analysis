@@ -27,6 +27,7 @@ function pmEntry(over: Partial<ExistingEntry> = {}): ExistingEntry {
     methodId: METHOD_BANK.id,
     payChannel: METHOD_BANK.payChannel,
     amount: 46593.08,
+    currency: "CNY",
     txnDate: "2026-06-16",
     expected: 46724.97,
     fee: 131.89,

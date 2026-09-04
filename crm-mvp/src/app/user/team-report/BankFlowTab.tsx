@@ -89,6 +89,19 @@ interface FlowEntry {
 const fmt = (n: number | null | undefined) =>
   n == null ? "—" : n.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+// ── D-314 币种 ──────────────────────────────────────────────────────────────
+// 香港卡收的美金不再折人民币，直接以美金入账核对；页面上凡是出现金额的地方都跟着条目的币种走，
+// 合计一律按币种分开算（两种钱相加是假数字）。
+type FlowCurrency = "CNY" | "USD";
+const CURRENCIES: FlowCurrency[] = ["CNY", "USD"];
+/** 条目币种（老数据 currency 为空时按人民币） */
+const entryCur = (e: { currency?: string | null }): FlowCurrency => (e.currency === "USD" ? "USD" : "CNY");
+const sym = (cur: FlowCurrency) => (cur === "USD" ? "$" : "¥");
+const curName = (cur: FlowCurrency) => (cur === "USD" ? "美金" : "人民币");
+/** 带符号的金额；负数写成 -¥12.34 而不是 ¥-12.34 */
+const money = (n: number | null | undefined, cur: FlowCurrency = "CNY") =>
+  n == null ? "—" : n < 0 ? `-${sym(cur)}${fmt(-n)}` : `${sym(cur)}${fmt(n)}`;
+
 // ── D-279 导入财务月表 ──────────────────────────────────────────────────────
 
 interface ImportRowView {
@@ -113,7 +126,7 @@ interface ImportSplitPartView {
 }
 
 interface ImportProposalView {
-  status: "auto" | "review" | "exists" | "unmatched" | "usd" | "no_method" | "date_fix" | "split_existing";
+  status: "auto" | "review" | "exists" | "unmatched" | "no_method" | "date_fix" | "split_existing" | "internal_transfer";
   rows: ImportRowView[];
   methodId: string | null;
   methodLabel: string | null;
@@ -156,7 +169,8 @@ const IMPORT_STATUS_META: Record<ImportProposalView["status"], { label: string; 
   date_fix: { label: "校正到账日", color: "gold", importable: true },
   split_existing: { label: "按银行拆分", color: "purple", importable: true },
   exists: { label: "已录过", color: "default", importable: false },
-  usd: { label: "美金行·暂不导入", color: "blue", importable: false },
+  // D-314.1：香港卡美金换汇划回大陆卡的那笔人民币到账 —— 同一笔钱搬家，不是新收入，不入账
+  internal_transfer: { label: "内部划转·不入账", color: "cyan", importable: false },
   unmatched: { label: "对不上", color: "red", importable: false },
   no_method: { label: "无收款方式", color: "magenta", importable: false },
 };
@@ -278,7 +292,10 @@ export default function BankFlowTab() {
         message.error(res.message || "预填失败");
         return;
       }
-      const { items, note, matchedDate } = res.data as { items: BreakdownItem[]; note: string; matchedDate: string | null };
+      // D-314：美金条目的明细取打款单的美金原值，人民币条目照旧取折 CNY 值
+      const { items, note, matchedDate } = res.data as {
+        items: (BreakdownItem & { usd: number })[]; note: string; matchedDate: string | null;
+      };
       // C-180：只替换当前平台的行，保留手动添加的其他平台明细
       setBreakdown((prev) => [
         ...prev.filter((b) => (b.platform || platform) !== platform),
@@ -288,7 +305,7 @@ export default function BankFlowTab() {
           displayName: it.displayName,
           platform: it.platform,
           account: it.account,
-          amount: it.amount,
+          amount: modalCur === "USD" ? it.usd : it.amount,
           sourceDate: matchedDate,
         })),
       ]);
@@ -364,7 +381,8 @@ export default function BankFlowTab() {
         map.set(key, row);
         merged.push(row);
       }
-      row.amount = Math.round((row.amount + c.amount) * 100) / 100;
+      // D-314：美金条目按美金原值累加（候选列表里两个值都带回来了）
+      row.amount = Math.round((row.amount + (modalCur === "USD" ? c.usd : c.amount)) * 100) / 100;
     }
     setBreakdown((prev) => [...prev, ...merged]);
     setCandOpen(false);
@@ -397,6 +415,8 @@ export default function BankFlowTab() {
     () => apportionFee(effBreakdown.map((b) => b.amount || 0), modalFee),
     [effBreakdown, modalFee],
   );
+  // D-314：编辑既有条目时金额按其币种显示（美金条目改金额不会被当成人民币）；手工新增仍是人民币
+  const modalCur: FlowCurrency = editing ? entryCur(editing) : "CNY";
 
   // C-180：明细混含多平台时的拆分预览（与后端保存口径同一函数）
   const watchedPlatform = Form.useWatch("platform", form) as string | undefined;
@@ -524,7 +544,7 @@ export default function BankFlowTab() {
     const failed: string[] = [];
     try {
       for (const p of chosen) {
-        const label = `${p.txnDate} ¥${fmt(p.amount)}`;
+        const label = `${p.txnDate} ${money(p.amount, p.currency)}`;
         try {
           let res: { code: number; message?: string };
           if (p.status === "date_fix") {
@@ -566,6 +586,8 @@ export default function BankFlowTab() {
                 platform: p.platform,
                 txnAt: dayjs(`${p.txnDate} 10:00`).toISOString(),
                 amount: p.amount,
+                // D-314：美金行按美金原值入账（不折人民币），币种必须跟着走
+                currency: p.currency,
                 counterparty: "",
                 summary: "佣金结算",
                 remark: p.counterparty || "",
@@ -640,11 +662,20 @@ export default function BankFlowTab() {
   };
 
   // ── 汇总数字 ──
+  // D-314：合计按币种分开算——美金没换成人民币，两种钱不许相加
   const totals = useMemo(() => {
-    const amount = entries.reduce((s, e) => s + e.amount, 0);
-    const expected = entries.reduce((s, e) => s + e.expectedAmount, 0);
-    const fee = entries.reduce((s, e) => s + e.fee, 0);
-    return { count: entries.length, amount, expected, fee };
+    const byCur = CURRENCIES.map((cur) => {
+      const es = entries.filter((e) => entryCur(e) === cur);
+      return {
+        currency: cur,
+        count: es.length,
+        amount: es.reduce((s, e) => s + e.amount, 0),
+        expected: es.reduce((s, e) => s + e.expectedAmount, 0),
+        fee: es.reduce((s, e) => s + e.fee, 0),
+      };
+    });
+    // 只有一种币时不出多余的卡片；两种都有则各出一组
+    return byCur.filter((t) => t.count > 0 || t.currency === "CNY");
   }, [entries]);
 
   const columns: ColumnsType<FlowEntry> = [
@@ -683,26 +714,27 @@ export default function BankFlowTab() {
       defaultSortOrder: "ascend",
     },
     {
-      title: "实际到账(¥)", dataIndex: "amount", width: 130, align: "right",
-      render: (v: number) => <Text strong>¥{fmt(v)}</Text>,
+      // D-314：金额列跟条目币种走（香港卡是美金），不再一律写 ¥
+      title: "实际到账", dataIndex: "amount", width: 130, align: "right",
+      render: (v: number, e) => <Text strong>{money(v, entryCur(e))}</Text>,
     },
     {
-      title: <Tooltip title="该笔打款覆盖的员工收款明细合计，点击查看逐人明细">员工明细合计(¥)</Tooltip>,
+      title: <Tooltip title="该笔打款覆盖的员工收款明细合计，点击查看逐人明细">员工明细合计</Tooltip>,
       dataIndex: "expectedAmount", width: 140, align: "right",
       render: (v: number, e) => (
         <Tooltip title="点击查看逐人明细">
           <Button type="link" size="small" style={{ padding: 0 }} onClick={(ev) => { ev.stopPropagation(); setViewing(e); }}>
-            ¥{fmt(v)}{e.breakdown.length > 0 && <Text type="secondary" style={{ fontSize: 12 }}>（{e.breakdown.length}人）</Text>}
+            {money(v, entryCur(e))}{e.breakdown.length > 0 && <Text type="secondary" style={{ fontSize: 12 }}>（{e.breakdown.length}人）</Text>}
           </Button>
         </Tooltip>
       ),
     },
     {
-      title: <Tooltip title="手续费 = 员工明细合计 − 实际到账（自动计算）">手续费(¥)</Tooltip>,
+      title: <Tooltip title="手续费 = 员工明细合计 − 实际到账（自动计算）">手续费</Tooltip>,
       dataIndex: "fee", width: 110, align: "right",
-      render: (v: number) => (
+      render: (v: number, e) => (
         <Text style={{ color: v > 0 ? "#cf1322" : v < 0 ? "#fa8c16" : undefined }} strong={v !== 0}>
-          {v > 0 ? `¥${fmt(v)}` : v < 0 ? `-¥${fmt(-v)}` : "¥0.00"}
+          {money(v, entryCur(e))}
         </Text>
       ),
     },
@@ -734,7 +766,7 @@ export default function BankFlowTab() {
     },
     { title: "平台账号", dataIndex: "account", ellipsis: true },
     {
-      title: "金额(¥)", dataIndex: "amount", width: 135, align: "right",
+      title: `金额(${sym(modalCur)})`, dataIndex: "amount", width: 135, align: "right",
       render: (_, b, idx) => (
         <InputNumber
           size="small"
@@ -749,18 +781,18 @@ export default function BankFlowTab() {
       ),
     },
     {
-      title: <Tooltip title="按费率（总手续费÷明细合计）比例分摊，尾差调整到金额最大者">个人手续费(¥)</Tooltip>,
+      title: <Tooltip title="按费率（总手续费÷明细合计）比例分摊，尾差调整到金额最大者">个人手续费({sym(modalCur)})</Tooltip>,
       key: "fee", width: 110, align: "right",
       render: (_, __, idx) => {
         const f = modalFees[idx] ?? 0;
-        return <Text type={f > 0 ? "danger" : "secondary"}>¥{fmt(f)}</Text>;
+        return <Text type={f > 0 ? "danger" : "secondary"}>{money(f, modalCur)}</Text>;
       },
     },
     {
-      title: "净到手(¥)", key: "net", width: 110, align: "right",
+      title: `净到手(${sym(modalCur)})`, key: "net", width: 110, align: "right",
       // D-274.1：净到手按摊入多到账差额后的金额算（保存入库的就是这个数）
       render: (_, __, idx) =>
-        <Text strong>¥{fmt(Math.round(((effBreakdown[idx]?.amount || 0) - (modalFees[idx] ?? 0)) * 100) / 100)}</Text>,
+        <Text strong>{money(Math.round(((effBreakdown[idx]?.amount || 0) - (modalFees[idx] ?? 0)) * 100) / 100, modalCur)}</Text>,
     },
     {
       title: "", key: "del", width: 40,
@@ -834,12 +866,12 @@ export default function BankFlowTab() {
         <Space direction="vertical" style={{ width: "100%" }} size={16}>
           {/* 汇总 */}
           <Row gutter={[12, 12]}>
-            {[
-              { label: "本月到账笔数", value: String(totals.count), color: "#595959" },
-              { label: "实际到账合计(¥)", value: `¥${fmt(totals.amount)}`, color: "#389e0d" },
-              { label: "员工明细合计(¥)", value: `¥${fmt(totals.expected)}`, color: "#1677ff" },
-              { label: "手续费合计(¥)", value: `¥${fmt(totals.fee)}`, color: totals.fee > 0 ? "#cf1322" : "#595959" },
-            ].map(({ label, value, color }) => (
+            {totals.flatMap((t) => [
+              { label: `本月到账笔数${totals.length > 1 ? `（${curName(t.currency)}）` : ""}`, value: String(t.count), color: "#595959" },
+              { label: `实际到账合计(${sym(t.currency)})`, value: money(t.amount, t.currency), color: "#389e0d" },
+              { label: `员工明细合计(${sym(t.currency)})`, value: money(t.expected, t.currency), color: "#1677ff" },
+              { label: `手续费合计(${sym(t.currency)})`, value: money(t.fee, t.currency), color: t.fee > 0 ? "#cf1322" : "#595959" },
+            ]).map(({ label, value, color }) => (
               <Col key={label} xs={12} sm={6}>
                 <Card size="small" styles={{ body: { padding: "10px 14px" } }}>
                   <Statistic title={<Text style={{ fontSize: 12 }}>{label}</Text>} value={value} valueStyle={{ fontSize: 16, color }} />
@@ -852,8 +884,13 @@ export default function BankFlowTab() {
           <Row gutter={[12, 12]}>
             {methods.map((m) => {
               const cardEntries = entries.filter((e) => e.paymentMethodId === m.id);
-              const inSum = cardEntries.reduce((s, e) => s + e.amount, 0);
-              const feeSum = cardEntries.reduce((s, e) => s + e.fee, 0);
+              // D-314：同一张卡理论上只收一种币，仍按币种分行显示，混币时不会加成一个假合计
+              const cardSums = CURRENCIES
+                .map((cur) => {
+                  const es = cardEntries.filter((e) => entryCur(e) === cur);
+                  return { cur, count: es.length, inSum: es.reduce((s, e) => s + e.amount, 0), feeSum: es.reduce((s, e) => s + e.fee, 0) };
+                })
+                .filter((x) => x.count > 0);
               return (
                 <Col key={m.id} xs={24} sm={12} md={8} lg={6}>
                   <Card
@@ -887,12 +924,19 @@ export default function BankFlowTab() {
                           }}
                         />
                       </Space>
-                      <Text style={{ fontSize: 13 }}>
-                        本月入账 <Text strong>{cardEntries.length}</Text> 笔，合计 <Text strong style={{ color: "#389e0d" }}>¥{fmt(inSum)}</Text>
-                      </Text>
-                      <Text style={{ fontSize: 13 }}>
-                        手续费支出 <Text strong style={{ color: feeSum > 0 ? "#cf1322" : "#595959" }}>¥{fmt(feeSum)}</Text>
-                      </Text>
+                      {cardSums.length === 0 ? (
+                        <Text style={{ fontSize: 13 }} type="secondary">本月无入账</Text>
+                      ) : cardSums.map(({ cur, count, inSum, feeSum }) => (
+                        <div key={cur}>
+                          <Text style={{ fontSize: 13 }}>
+                            本月入账 <Text strong>{count}</Text> 笔，合计 <Text strong style={{ color: "#389e0d" }}>{money(inSum, cur)}</Text>
+                          </Text>
+                          <br />
+                          <Text style={{ fontSize: 13 }}>
+                            手续费支出 <Text strong style={{ color: feeSum > 0 ? "#cf1322" : "#595959" }}>{money(feeSum, cur)}</Text>
+                          </Text>
+                        </div>
+                      ))}
                     </Space>
                   </Card>
                 </Col>
@@ -922,7 +966,8 @@ export default function BankFlowTab() {
                 多平台一起提现（如 BSH+CG 一笔总额到账）时用「手动添加」勾选其他平台的打款记录，保存后按平台拆成多条流水（带「合」标记），
                 每条到账 = 该平台明细合计 − 按比例分摊手续费，各自独立编辑/删除。
                 导出的「账户交易明细清单」按期初余额逐笔滚动余额（拆分条目自动合并回一笔，与真实银行一致），
-                并带「手续费(¥)」列与本期手续费支出合计（手续费打款时已预扣、银行只到账净额，故不计入收支与余额），可直接作为对账材料。
+                人民币与美金各出一张表（香港卡收的美金不折人民币，两种钱不滚进同一个余额），
+                并带手续费列与本期手续费支出合计（手续费打款时已预扣、银行只到账净额，故不计入收支与余额），可直接作为对账材料。
               </Text>
             </div>
           </Card>
@@ -946,6 +991,7 @@ export default function BankFlowTab() {
           const m = methodById.get(viewing.paymentMethodId);
           const rate = viewing.expectedAmount > 0 ? `${((viewing.fee / viewing.expectedAmount) * 100).toFixed(2)}%` : "—";
           const viewFees = apportionFee(viewing.breakdown.map((b) => b.amount || 0), viewing.fee);
+          const vc = entryCur(viewing); // D-314：本条目币种
           return (
             <Space direction="vertical" size={12} style={{ width: "100%" }}>
               <Descriptions size="small" bordered column={2} styles={{ label: { width: 110 } }}>
@@ -963,11 +1009,14 @@ export default function BankFlowTab() {
                   )}
                 </Descriptions.Item>
                 <Descriptions.Item label="到账时间">{dayjs(viewing.txnAt).format("YYYY-MM-DD HH:mm")}</Descriptions.Item>
-                <Descriptions.Item label="实际到账"><Text strong>¥{fmt(viewing.amount)}</Text></Descriptions.Item>
-                <Descriptions.Item label="员工明细合计">¥{fmt(viewing.expectedAmount)}</Descriptions.Item>
+                <Descriptions.Item label="实际到账">
+                  <Text strong>{money(viewing.amount, vc)}</Text>
+                  {vc === "USD" && <Tag color="blue" style={{ marginLeft: 8 }}>美金</Tag>}
+                </Descriptions.Item>
+                <Descriptions.Item label="员工明细合计">{money(viewing.expectedAmount, vc)}</Descriptions.Item>
                 <Descriptions.Item label="手续费">
                   <Text strong style={{ color: viewing.fee > 0 ? "#cf1322" : viewing.fee < 0 ? "#fa8c16" : undefined }}>
-                    {viewing.fee >= 0 ? `¥${fmt(viewing.fee)}` : `-¥${fmt(-viewing.fee)}`}
+                    {money(viewing.fee, vc)}
                   </Text>
                   <Text type="secondary" style={{ marginLeft: 8 }}>费率 {rate}</Text>
                 </Descriptions.Item>
@@ -978,9 +1027,9 @@ export default function BankFlowTab() {
                 columns={[
                   { title: "组员", key: "member", width: 100, render: (_, b) => b.displayName || b.username },
                   { title: "平台账号", dataIndex: "account", ellipsis: true },
-                  { title: "金额(¥)", dataIndex: "amount", width: 110, align: "right", render: (v: number) => `¥${fmt(v)}` },
+                  { title: `金额(${sym(vc)})`, dataIndex: "amount", width: 110, align: "right", render: (v: number) => money(v, vc) },
                   {
-                    title: <Tooltip title="按费率（总手续费÷明细合计）比例分摊，尾差调整到金额最大者">个人手续费(¥)</Tooltip>,
+                    title: <Tooltip title="按费率（总手续费÷明细合计）比例分摊，尾差调整到金额最大者">个人手续费({sym(vc)})</Tooltip>,
                     key: "fee", width: 110, align: "right",
                     render: (_, __, idx) => {
                       const f = viewFees[idx] ?? 0;
@@ -988,8 +1037,8 @@ export default function BankFlowTab() {
                     },
                   },
                   {
-                    title: "净到手(¥)", key: "net", width: 110, align: "right",
-                    render: (_, b, idx) => <Text strong>¥{fmt(Math.round(((b.amount || 0) - (viewFees[idx] ?? 0)) * 100) / 100)}</Text>,
+                    title: `净到手(${sym(vc)})`, key: "net", width: 110, align: "right",
+                    render: (_, b, idx) => <Text strong>{money(Math.round(((b.amount || 0) - (viewFees[idx] ?? 0)) * 100) / 100, vc)}</Text>,
                   },
                 ]}
                 dataSource={viewing.breakdown}
@@ -1001,9 +1050,9 @@ export default function BankFlowTab() {
                 summary={() => (
                   <Table.Summary.Row style={{ background: "#fafafa", fontWeight: 600 }}>
                     <Table.Summary.Cell index={0} colSpan={2}>合计（{viewing.breakdown.length} 人）</Table.Summary.Cell>
-                    <Table.Summary.Cell index={1} align="right">¥{fmt(viewing.expectedAmount)}</Table.Summary.Cell>
-                    <Table.Summary.Cell index={2} align="right">¥{fmt(viewing.fee)}</Table.Summary.Cell>
-                    <Table.Summary.Cell index={3} align="right">¥{fmt(Math.round((viewing.expectedAmount - viewing.fee) * 100) / 100)}</Table.Summary.Cell>
+                    <Table.Summary.Cell index={1} align="right">{money(viewing.expectedAmount, vc)}</Table.Summary.Cell>
+                    <Table.Summary.Cell index={2} align="right">{money(viewing.fee, vc)}</Table.Summary.Cell>
+                    <Table.Summary.Cell index={3} align="right">{money(Math.round((viewing.expectedAmount - viewing.fee) * 100) / 100, vc)}</Table.Summary.Cell>
                   </Table.Summary.Row>
                 )}
               />
@@ -1023,6 +1072,23 @@ export default function BankFlowTab() {
         destroyOnHidden
       >
         <Form form={form} layout="vertical" style={{ marginTop: 8 }}>
+          {/* D-314.1（07 2026-09-04）：手工登记只录人民币；美金一律走导入，划回款不许再登记一次 */}
+          {!editing && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 12 }}
+              message={
+                <Text style={{ fontSize: 12 }}>
+                  这里登记的是<Text strong>人民币</Text>到账。香港卡收的<Text strong>美金请走「导入财务月表」</Text>，
+                  手工登记不支持美金。
+                  <br />
+                  美金换成人民币划回大陆卡的那笔到账<Text strong>不要在这里登记</Text>——
+                  那笔钱已在香港卡以美金入账，再记一次账面就翻倍。
+                </Text>
+              }
+            />
+          )}
           <Row gutter={12}>
             <Col span={5}>
               <Form.Item name="payee" label="收款人" rules={[{ required: true, message: "请选择收款人" }]}>
@@ -1060,7 +1126,7 @@ export default function BankFlowTab() {
           </Row>
           <Row gutter={12}>
             <Col span={9}>
-              <Form.Item name="amount" label="实际总打款金额(¥)" rules={[{ required: true, message: "请输入实际到账总金额" }]}>
+              <Form.Item name="amount" label={`实际总打款金额(${sym(modalCur)})`} rules={[{ required: true, message: "请输入实际到账总金额" }]}>
                 <InputNumber min={0} precision={2} style={{ width: "100%" }} placeholder="银行实际入账金额" />
               </Form.Item>
             </Col>
@@ -1103,18 +1169,18 @@ export default function BankFlowTab() {
             />
             <div style={{ marginTop: 8, textAlign: "right" }}>
               <Space size={16}>
-                <Text>明细合计：<Text strong>¥{fmt(breakdownTotal)}</Text></Text>
+                <Text>明细合计：<Text strong>{money(breakdownTotal, modalCur)}</Text></Text>
                 <Text>
                   手续费：
                   <Text strong style={{ color: modalFee > 0 ? "#cf1322" : modalFee < 0 ? "#fa8c16" : undefined }}>
-                    {modalFee >= 0 ? `¥${fmt(modalFee)}` : `-¥${fmt(-modalFee)}`}
+                    {money(modalFee, modalCur)}
                   </Text>
                 </Text>
                 <Text type="secondary">
                   费率 {breakdownTotal > 0 ? `${((modalFee / breakdownTotal) * 100).toFixed(2)}%` : "—"}
                 </Text>
                 {absorbed >= 0.005 && (
-                  <Text type="secondary">（到账比明细多 ¥{fmt(absorbed)}，已按占比摊入员工金额）</Text>
+                  <Text type="secondary">（到账比明细多 {money(absorbed, modalCur)}，已按占比摊入员工金额）</Text>
                 )}
               </Space>
             </div>
@@ -1125,7 +1191,7 @@ export default function BankFlowTab() {
                 showIcon
                 message={
                   <Text style={{ fontSize: 12 }}>
-                    明细含 {splitGroups.length} 个平台，保存后将拆分为 {splitGroups.map((g) => `${g.platform} ¥${fmt(g.amount)}`).join(" + ")}
+                    明细含 {splitGroups.length} 个平台，保存后将拆分为 {splitGroups.map((g) => `${g.platform} ${money(g.amount, modalCur)}`).join(" + ")}
                     （手续费全部明细统一按比例分摊；拆出的条目各自独立编辑，导出流水单时自动合并回一笔）
                   </Text>
                 }
@@ -1178,7 +1244,11 @@ export default function BankFlowTab() {
                 <Text style={{ fontSize: 12 }}>
                   按金额比对打款记录自动认账（不依赖表格平台标注）：整批到账、多人合并打款、一批拆多笔、跨平台合并提现都会自动识别。
                   「可自动入账」默认勾选；「需复核」的行请点开明细核对后再勾；对不上的行请用「登记平台打款」手工处理；
-                  美金账户行本期不自动入账。手续费入库时按既有规则自动计算，多平台明细自动拆分（带「合」标记）。
+                  美金行（香港卡）按美金原值直接比对入账，条目与手续费都记美金；月度/年度报表里再按到账日汇率折成人民币计入。
+                  手续费入库时按既有规则自动计算，多平台明细自动拆分（带「合」标记）。
+                  <br />
+                  「内部划转·不入账」= 对方户名/标注指向香港卡的人民币到账，判定为美金换汇划回大陆卡——
+                  那笔钱已在香港卡以美金入账，再登记一次账面就翻倍，故不入账（判断有误时可用「登记平台打款」手工处理）。
                   <br />
                   「校正到账日」= 金额已对上、登记日与银行差 ≤5 天，勾选后把登记日改成银行流水的日期（差更多的按实际到账时间保留现值）；
                   「按银行拆分」= 银行分多笔到账、系统录成一条，勾选后按明细净额把人落到各笔上重建（WISE 那种一笔打款分批回款保持一条不拆）。
@@ -1218,7 +1288,7 @@ export default function BankFlowTab() {
                         key={pi}
                         title={() => (
                           <Text strong style={{ fontSize: 12 }}>
-                            第 {pi + 1} 笔：{part.txnDate} 到账 ¥{fmt(part.amount)}
+                            第 {pi + 1} 笔：{part.txnDate} 到账 {money(part.amount, p.currency)}
                             <Tag color="green" style={{ marginInlineStart: 8 }}>{part.platform}</Tag>
                           </Text>
                         )}
@@ -1227,7 +1297,7 @@ export default function BankFlowTab() {
                           { title: "平台", dataIndex: "platform", width: 64, render: (v: string) => <Tag color="green">{v}</Tag> },
                           { title: "平台账号", dataIndex: "account", ellipsis: true },
                           { title: "批次日", dataIndex: "sourceDate", width: 100, render: (v: string | null) => v || "—" },
-                          { title: "明细金额(¥)", dataIndex: "amount", width: 120, align: "right", render: (v: number) => `¥${fmt(v)}` },
+                          { title: `明细金额(${sym(p.currency)})`, dataIndex: "amount", width: 120, align: "right", render: (v: number) => money(v, p.currency) },
                         ]}
                         dataSource={part.breakdown}
                         rowKey={(b, i) => `${pi}-${b.userId}-${b.account}-${i}`}
@@ -1243,7 +1313,7 @@ export default function BankFlowTab() {
                           { title: "平台", dataIndex: "platform", width: 64, render: (v: string) => <Tag color="green">{v}</Tag> },
                           { title: "平台账号", dataIndex: "account", ellipsis: true },
                           { title: "批次日", dataIndex: "sourceDate", width: 100 },
-                          { title: "金额(¥)", dataIndex: "amount", width: 110, align: "right", render: (v: number) => `¥${fmt(v)}` },
+                          { title: `金额(${sym(p.currency)})`, dataIndex: "amount", width: 110, align: "right", render: (v: number) => money(v, p.currency) },
                         ]}
                         dataSource={p.breakdown}
                         rowKey={(b, i) => `${b.userId}-${b.account}-${i}`}
@@ -1266,7 +1336,7 @@ export default function BankFlowTab() {
                     <Space direction="vertical" size={0}>
                       {p.rows.map((r, i) => (
                         <Text key={i} style={{ fontSize: 12 }}>
-                          {r.date} {r.payee} {r.cny != null ? `¥${fmt(r.cny)}` : `$${fmt(r.usd)}`}
+                          {r.date} {r.payee} {r.cny != null ? money(r.cny, "CNY") : money(r.usd, "USD")}
                           <Text type="secondary" style={{ fontSize: 11 }}>（第{r.rowNo}行）</Text>
                         </Text>
                       ))}
@@ -1275,7 +1345,12 @@ export default function BankFlowTab() {
                 },
                 {
                   title: "合计", key: "amount", width: 120, align: "right",
-                  render: (_, p) => <Text strong>{p.currency === "CNY" ? `¥${fmt(p.amount)}` : `$${fmt(p.amount)}`}</Text>,
+                  render: (_, p) => (
+                    <Space size={4}>
+                      <Text strong>{money(p.amount, p.currency)}</Text>
+                      {p.currency === "USD" && <Tag color="blue" style={{ marginInlineEnd: 0 }}>美金</Tag>}
+                    </Space>
+                  ),
                 },
                 {
                   title: "收款方式", key: "method", width: 170, ellipsis: true,
@@ -1298,7 +1373,7 @@ export default function BankFlowTab() {
                     p.breakdown.length === 0 ? <Text type="secondary">—</Text> : (
                       <Space direction="vertical" size={0} style={{ lineHeight: 1.2 }}>
                         <Text style={{ color: p.fee > 0 ? "#cf1322" : undefined, fontSize: 12 }}>
-                          {p.fee >= 0 ? `¥${fmt(p.fee)}` : `-¥${fmt(-p.fee)}`}
+                          {money(p.fee, p.currency)}
                         </Text>
                         <Text type="secondary" style={{ fontSize: 11 }}>
                           {p.feeRate != null ? `${(p.feeRate * 100).toFixed(2)}%` : "—"}
@@ -1334,10 +1409,13 @@ export default function BankFlowTab() {
             { title: "平台账号", dataIndex: "account", ellipsis: true },
             {
               title: "金额", dataIndex: "amount", width: 130, align: "right",
+              // D-314：美金条目以美金原值为准，人民币值退到第二行（人民币条目反之）
               render: (v: number, c) => (
                 <Space direction="vertical" size={0} style={{ lineHeight: 1.2 }}>
-                  <Text strong>¥{fmt(v)}</Text>
-                  <Text type="secondary" style={{ fontSize: 11 }}>${fmt(c.usd)}</Text>
+                  <Text strong>{modalCur === "USD" ? money(c.usd, "USD") : money(v, "CNY")}</Text>
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    {modalCur === "USD" ? money(v, "CNY") : money(c.usd, "USD")}
+                  </Text>
                 </Space>
               ),
             },

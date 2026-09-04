@@ -23,6 +23,18 @@
  * - 银行分多笔到账、合计等于某个既有条目时：WISE 卡是「平台一笔打款、我们分批回款」保持一条不拆；
  *   其余（平台自己分开汇款，如 PM）按明细净额把人精确落到各笔上，出「按银行拆分」提案，
  *   落不到人就如实跳过请人工处理，绝不按比例硬摊。
+ *
+ * D-314（07 2026-09-04 拍板「不转人民币了，打款到香港卡里的美金直接导入月表后录入核对」）：
+ * - 美金行不再挂起，与人民币行同一套引擎跑，只是拿打款单的**美金原值**比对（不经汇率），
+ *   条目落库 currency=USD，手续费/费率照旧（美金对美金，没有汇差这一项）；
+ * - 引擎全线认币种：「已录过」判定、一批拆多笔（L4）、按银行拆分都只在同币种内组合，
+ *   美金行与人民币行永远不会凑成同一笔（原先这些环节写死 r.cny != null，美金行直接被漏掉，
+ *   后果是同一张表导两次会重复入账）；
+ * - 报表口径见 lib/monthly-report.ts：美金条目按**到账日汇率**折成人民币后计入月度/年度报表的
+ *   人民币口径（07 2026-09-04 二次拍板「美金要换算成人民币显示在月度和年度报表里」）；
+ *   银行流水页与导出的流水单仍按币种分开，不折算——那是对银行账的，要跟真实对账单一致；
+ * - 防重复记账（07「不要重复记账，你自己解决」）：美金换成人民币划回大陆卡的那笔到账
+ *   不是新收入，标 internal_transfer 不入账，见 isHkRemittanceRow。
  */
 
 export const IMPORT_WINDOW_DAYS = 14;
@@ -73,6 +85,15 @@ export interface ParsedBankRow {
   counterparty: string;
 }
 
+/** D-314：到账行/条目的币种。美金不折人民币，两种币各算各的，绝不相加 */
+export type FlowCurrency = "CNY" | "USD";
+/** 到账行的币种（人民币列有值即人民币，解析时已保证两列互斥） */
+export const rowCurrency = (r: ParsedBankRow): FlowCurrency => (r.cny != null ? "CNY" : "USD");
+/** 到账行的金额（按其币种取值） */
+export const rowAmount = (r: ParsedBankRow): number => r.cny ?? r.usd ?? 0;
+/** 币种符号（提案说明文案用） */
+const sym = (cur: FlowCurrency) => (cur === "USD" ? "$" : "¥");
+
 export interface ParsedSheet {
   name: string;
   rows: ParsedBankRow[];
@@ -97,6 +118,7 @@ const parseNum = (s: unknown): number | null => {
 
 /**
  * 解析财务月表的一个 sheet。表头行按列名定位（序号/时间/收款人户名/收款人账号/美金/人民币），
+ * 两个金额列有一个就够（D-314：香港卡表可能只有美金列），同一行两列都有值时以人民币为准。
  * 财务手工表列数月月不同，只认列名不认列号。日期 M/D/YY；年份异常（如 5/22/22 笔误）归并到
  * sheet 内出现最多的年份。
  */
@@ -122,7 +144,8 @@ export function parseBankSheet(name: string, data: unknown[][]): ParsedSheet | n
     };
     break;
   }
-  if (headIdx < 0 || !cols || cols.cny < 0) return null;
+  // D-314：只有美金列的 sheet（香港卡月表）也要解析——原先必须有人民币列才认，美金表整张被丢掉
+  if (headIdx < 0 || !cols || (cols.cny < 0 && cols.usd < 0)) return null;
 
   interface RawRow { rowNo: number; m: number; d: number; y: number; payee: string; acct: string; cny: number | null; usd: number | null; note: string; counterparty: string }
   const raw: RawRow[] = [];
@@ -134,7 +157,7 @@ export function parseBankSheet(name: string, data: unknown[][]): ParsedSheet | n
     const row = data[i] || [];
     const dateMatch = String(row[cols.date] ?? "").trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
     const payee = String(row[cols.payee] ?? "").trim();
-    const cny = parseNum(row[cols.cny]);
+    const cny = cols.cny >= 0 ? parseNum(row[cols.cny]) : null;
     const usd = cols.usd >= 0 ? parseNum(row[cols.usd]) : null;
     if (!dateMatch || !payee || (cny == null && usd == null)) {
       if (row.some((c) => c != null && String(c).trim() !== "")) skipped++;
@@ -215,6 +238,9 @@ const PAYEE_ALIASES: { payee: string; acct: string; toPayee: string; toChannel: 
   { payee: "龚建成", acct: "恒生", toPayee: "张文俊", toChannel: "香港" },
 ];
 
+/** 香港账户的银行名：月表账号列写银行（恒生 / 汇丰），系统里的渠道名却是「香港」，见下方回退 */
+const HK_BANK_RE = /恒生|汇丰|HSBC|HANG\s*SENG/i;
+
 /**
  * 表格行 → 候选收款方式列表：账号列是卡号数字则按卡号匹配（同一卡号可能挂多个渠道，
  * 如 张文俊 的 工商 与 WISE 在库内共用同一卡号——表格只写卡号分不出渠道，
@@ -234,6 +260,15 @@ export function resolveMethodCandidates(row: { payee: string; acct: string }, me
     const byPayee = methods.filter((m) => normDigits(m.cardNo) === digits && m.payeeName === row.payee);
     if (byPayee.length > 0) return byPayee;
     return methods.filter((m) => normDigits(m.cardNo) === digits);
+  }
+  // D-314（生产库实证 2026-09-04）：香港卡在系统里的渠道名一律是「香港」（张文俊 971520622888、
+  // 龚建成 011769338833），而月表账号列写的是**银行名**（恒生 / 汇丰）。下面的通用文字匹配
+  // 拿「汇丰」去比「香港」永远比不上——龚建成的汇丰行会整行判成「无收款方式」导不进来。
+  // 故：账号列是香港的银行名时，回退到该收款人名下渠道含「香港」的卡。
+  // （上面的 PAYEE_ALIASES 先跑，07 2026-08-26 拍板的「龚建成-恒生 = 张文俊-香港」优先级不变。）
+  if (HK_BANK_RE.test(row.acct)) {
+    const hk = methods.filter((m) => m.payeeName === row.payee && normText(m.payChannel).includes("香港"));
+    if (hk.length > 0) return hk;
   }
   const acctText = normText(row.acct);
   if (!acctText) return [];
@@ -295,13 +330,13 @@ export interface ImportSplitPart {
 }
 
 export interface ImportProposal {
-  status: "auto" | "review" | "exists" | "unmatched" | "usd" | "no_method" | "date_fix" | "split_existing";
+  status: "auto" | "review" | "exists" | "unmatched" | "no_method" | "date_fix" | "split_existing" | "internal_transfer";
   /** 组成本条目的到账行（L4 拆分时多行） */
   rows: ParsedBankRow[];
   methodId: string | null;
-  /** 实际到账合计（CNY 行）或美金合计（usd 状态） */
+  /** 实际到账合计（按 currency 计价，D-314 起美金行同样可入账） */
   amount: number;
-  currency: "CNY" | "USD";
+  currency: FlowCurrency;
   /** 主平台（明细合计最大的平台；保存时 C-180 仍按明细逐行拆） */
   platform: string | null;
   txnDate: string | null;
@@ -393,6 +428,25 @@ export function counterpartyOf(rows: { note: string; counterparty?: string }[]):
     }
   }
   return out.join("、");
+}
+
+/**
+ * D-314.1（07 2026-09-04「不要重复记账，你自己解决」）：香港卡收的美金 D-314 起已经在香港卡
+ * 那头以美金入账；财务把它换成人民币划回大陆卡时，银行流水上会**再出现一笔人民币到账**——
+ * 那是同一笔钱搬家，不是新收入，再记一次账面就翻倍。
+ *
+ * 这类行标「内部划转·不入账」，不出可入账提案。判据保守，两条都要满足：
+ * ① 该行没有匹配到任何打款组合（对得上打款单的是真实的平台打款，绝不拦）——由调用位置保证，
+ *    这段只在第 6 步「剩余行」里跑；
+ * ② 是人民币行，且对方户名/标注里点名了香港卡（财务的习惯写法，见月表备注：恒生 / 汇丰）。
+ *
+ * 判不出来的（财务没写备注）只能靠第 6 步那句提醒兜——所以提醒必须显眼，不能只写「对不上」。
+ */
+const HK_CARD_RE = /恒生|汇丰|香港|HSBC|HANG\s*SENG|(^|[^A-Za-z])HK([^A-Za-z]|$)/i;
+
+export function isHkRemittanceRow(r: ParsedBankRow): boolean {
+  if (rowCurrency(r) !== "CNY") return false;
+  return HK_CARD_RE.test(`${r.counterparty || ""} ${r.note || ""}`);
 }
 
 /** 两行的标注是否可能属于同一笔批次（见 counterpartyTokens） */
@@ -527,6 +581,8 @@ export interface ExistingEntry {
   /** 收款方式渠道：WISE = 平台一笔打款、我们分批回款（07 2026-08-27：不拆） */
   payChannel: string;
   amount: number;
+  /** D-314：条目币种，只跟同币种的到账行比金额 */
+  currency: FlowCurrency;
   txnDate: string;
   expected: number;
   fee: number;
@@ -549,11 +605,11 @@ function assignPartsByMember(e: ExistingEntry, rs: ParsedBankRow[]): ImportSplit
   const remaining = new Set(e.breakdown.map((_, i) => i));
   const picks = new Map<string, number[]>();
   // 金额大的先认领：小额行更容易被子集凑出来，先认大额可减少歧义
-  for (const r of [...rs].sort((a, b) => (b.cny ?? 0) - (a.cny ?? 0))) {
-    if (r.cny == null) return null;
+  // D-314：按行自身币种取额（调用方已保证同组行与条目同币种）
+  for (const r of [...rs].sort((a, b) => rowAmount(b) - rowAmount(a))) {
     const pool = [...remaining].map((i) => ({ key: String(i), amt: nets[i] }));
     // 每行净额各带 ≤0.005 的四舍五入误差，容差随参与行数放宽
-    const hit = exactSubset(pool, r.cny, Math.max(0.05, 0.011 * pool.length));
+    const hit = exactSubset(pool, rowAmount(r), Math.max(0.05, 0.011 * pool.length));
     if (!hit) return null;
     for (const k of hit) remaining.delete(Number(k));
     picks.set(r.key, hit.map(Number));
@@ -566,7 +622,7 @@ function assignPartsByMember(e: ExistingEntry, rs: ParsedBankRow[]): ImportSplit
     const dates = [...new Set(items.map((it) => it.sourceDate || "").filter(Boolean))].sort();
     return {
       txnDate: r.date,
-      amount: r2(r.cny!),
+      amount: r2(rowAmount(r)),
       platform: [...platSum.entries()].sort((a, b) => b[1] - a[1])[0][0],
       sourceDate: dates[0] ?? null,
       breakdown: items,
@@ -617,11 +673,12 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
   const resolveExisting = (rs: ParsedBankRow[], entryIdx: number, e: ExistingEntry) => {
     usedEntries.add(entryIdx);
     for (const r of rs) assigned.add(r.key);
+    const cur = rowCurrency(rs[0]);
     const base = {
       rows: rs,
       methodId: e.methodId,
-      amount: r2(rs.reduce((s, r) => s + (r.cny ?? r.usd ?? 0), 0)),
-      currency: (rs[0].cny != null ? "CNY" : "USD") as "CNY" | "USD",
+      amount: r2(rs.reduce((s, r) => s + rowAmount(r), 0)),
+      currency: cur,
       platform: null as string | null,
       sourceDate: null,
       breakdown: [], expected: 0, fee: 0, feeRate: null,
@@ -654,7 +711,7 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
     }
 
     // 多行合计 = 一个既有条目
-    const rowsText = rs.map((r) => `${r.date} ¥${(r.cny ?? 0).toFixed(2)}`).join("、");
+    const rowsText = rs.map((r) => `${r.date} ${sym(cur)}${rowAmount(r).toFixed(2)}`).join("、");
     if (isTrancheChannel(e.payChannel)) {
       proposals.push({
         ...base, status: "exists", txnDate: e.txnDate,
@@ -681,7 +738,7 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
     proposals.push({
       ...base, status: "split_existing", entryIds: e.ids, parts,
       txnDate: parts[0].txnDate, platform: parts[0].platform,
-      matchNote: `银行分 ${rs.length} 笔到账，按明细净额拆开：${parts.map((p) => `${p.txnDate} ¥${p.amount.toFixed(2)}（${p.members.join("+")}）`).join("；")}`,
+      matchNote: `银行分 ${rs.length} 笔到账，按明细净额拆开：${parts.map((p) => `${p.txnDate} ${sym(cur)}${p.amount.toFixed(2)}（${p.members.join("+")}）`).join("；")}`,
     });
   };
   // 已录过判定按「同收款人」放宽：历史条目可能登记在同人的另一渠道（如到账进银行卡、
@@ -696,9 +753,10 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
     existingEntries.forEach((e, idx) => {
       if (usedEntries.has(idx)) return;
       for (const r of rows) {
-        if (assigned.has(r.key) || r.cny == null) continue;
+        // D-314：只跟同币种的条目比（美金行不许对上人民币条目，反之亦然）
+        if (assigned.has(r.key) || rowCurrency(r) !== e.currency) continue;
         if (!entryMatchesRow(r, e.methodId)) continue;
-        if (Math.abs(r.cny - e.amount) <= 0.05 && daysBetween(r.date, e.txnDate) <= existsWindow) {
+        if (Math.abs(rowAmount(r) - e.amount) <= 0.05 && daysBetween(r.date, e.txnDate) <= existsWindow) {
           resolveExisting([r], idx, e);
           return;
         }
@@ -709,15 +767,15 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
   existingEntries.forEach((e, idx) => {
     if (usedEntries.has(idx)) return;
     const byMethod = rows.filter((r) =>
-      !assigned.has(r.key) && r.cny != null &&
+      !assigned.has(r.key) && rowCurrency(r) === e.currency &&
       entryMatchesRow(r, e.methodId) &&
       daysBetween(r.date, e.txnDate) <= SPLIT_WINDOW_DAYS,
     );
     if (byMethod.length < 2) return;
     // 精确合计（±0.05）才认已录过，避免误吞
-    const sorted = [...byMethod].sort((a, b) => (b.cny ?? 0) - (a.cny ?? 0));
+    const sorted = [...byMethod].sort((a, b) => rowAmount(b) - rowAmount(a));
     const suffix = new Array<number>(sorted.length + 1).fill(0);
-    for (let i = sorted.length - 1; i >= 0; i--) suffix[i] = suffix[i + 1] + (sorted[i].cny ?? 0);
+    for (let i = sorted.length - 1; i >= 0; i--) suffix[i] = suffix[i + 1] + rowAmount(sorted[i]);
     let hit: ParsedBankRow[] | null = null;
     const picked: number[] = [];
     let budget = 100000;
@@ -728,7 +786,7 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
       // D-291：标注互斥的行不许凑成同一条既有条目
       if (picked.every((pi) => notesCompatible(sorted[pi], sorted[i]))) {
         picked.push(i);
-        dfs(i + 1, sum + (sorted[i].cny ?? 0));
+        dfs(i + 1, sum + rowAmount(sorted[i]));
         picked.pop();
       }
       dfs(i + 1, sum);
@@ -789,8 +847,9 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
             (p) => daysBetween(p.date, r.date) <= windowDays && !consumedPayments.has(`${m.id}\u0000${p.paymentKey}`),
           );
           if (mp.length === 0) continue;
-          const isUsd = r.cny == null;
-          const target = isUsd ? r.usd! : r.cny!;
+          // D-314：美金行拿打款单的美金原值比，人民币行拿折 CNY 值比，两条路同一套搜索
+          const isUsd = rowCurrency(r) === "USD";
+          const target = rowAmount(r);
           const items = mp
             .filter((p) => (isUsd ? p.usd : p.cny) > 0.005)
             .map((p) => ({ key: `${m.id}\u0000${p.paymentKey}`, amt: isUsd ? p.usd : p.cny, batch: `${p.platform}|${p.date}`, platform: p.platform }));
@@ -821,43 +880,49 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
   };
   runSingles(IMPORT_WINDOW_DAYS, false, 8);
 
-  // ── 阶段二：一批拆多笔（L4，按 CNY；目标额 = 批次未消费余额；同样循环补捞） ──
+  // ── 阶段二：一批拆多笔（L4；目标额 = 批次未消费余额，D-314 起按到账行币种取该批次的
+  //    人民币额或美金额——同一批钱只会以一种币到账，两个候选共用打款单、天然互斥；同样循环补捞） ──
   for (let round = 0; round < 4; round++) {
-    const batchTotals = new Map<string, { methodId: string; platform: string; date: string; keys: string[]; cny: number }>();
+    // D-314：批次余额两种币各记一份，人民币行对 cny、美金行对 usd，绝不混算
+    const batchTotals = new Map<string, { methodId: string; platform: string; date: string; keys: string[]; cny: number; usd: number }>();
     for (const p of pool) {
       const pk = `${p.methodId}\u0000${p.paymentKey}`;
       if (consumedPayments.has(pk)) continue;
       const bk = `${p.methodId}\u0000${p.platform}\u0000${p.date}`;
-      const b = batchTotals.get(bk) ?? { methodId: p.methodId, platform: p.platform, date: p.date, keys: [], cny: 0 };
+      const b = batchTotals.get(bk) ?? { methodId: p.methodId, platform: p.platform, date: p.date, keys: [], cny: 0, usd: 0 };
       b.keys.push(pk);
       b.cny = r2(b.cny + p.cny);
+      b.usd = r2(b.usd + p.usd);
       batchTotals.set(bk, b);
     }
     const splits: Candidate[] = [];
     for (const b of batchTotals.values()) {
-      if (b.cny < 0.01) continue;
-      for (const tier of [0, 1] as const) {
-        const groupRows = rows
-          .filter((r) => {
-            if (assigned.has(r.key) || r.cny == null || daysBetween(r.date, b.date) > SPLIT_WINDOW_DAYS) return false;
-            const cands = candidateMethodsOf(r).filter((c) => c.tier === tier);
-            return cands.some((c) => c.m.id === b.methodId);
-          })
-          .map((r) => ({ key: r.key, amt: r.cny!, date: r.date, row: r }));
-        if (groupRows.length < 2) continue;
-        const best = bestRowGroup(groupRows, b.cny);
-        if (best && best.keys.length >= 2) {
-          const dateDist = Math.min(...best.keys.map((k) => daysBetween(rowByKey.get(k)!.date, b.date)));
-          splits.push({
-            rowKeys: best.keys,
-            paymentKeys: b.keys,
-            fee: best.fee,
-            sortFee: sortFeeOf(best.fee),
-            dateDist,
-            batchCount: 1,
-            kind: "split",
-            tier,
-          });
+      for (const cur of ["CNY", "USD"] as const) {
+        const batchAmt = cur === "USD" ? b.usd : b.cny;
+        if (batchAmt < 0.01) continue;
+        for (const tier of [0, 1] as const) {
+          const groupRows = rows
+            .filter((r) => {
+              if (assigned.has(r.key) || rowCurrency(r) !== cur || daysBetween(r.date, b.date) > SPLIT_WINDOW_DAYS) return false;
+              const cands = candidateMethodsOf(r).filter((c) => c.tier === tier);
+              return cands.some((c) => c.m.id === b.methodId);
+            })
+            .map((r) => ({ key: r.key, amt: rowAmount(r), date: r.date, row: r }));
+          if (groupRows.length < 2) continue;
+          const best = bestRowGroup(groupRows, batchAmt);
+          if (best && best.keys.length >= 2) {
+            const dateDist = Math.min(...best.keys.map((k) => daysBetween(rowByKey.get(k)!.date, b.date)));
+            splits.push({
+              rowKeys: best.keys,
+              paymentKeys: b.keys,
+              fee: best.fee,
+              sortFee: sortFeeOf(best.fee),
+              dateDist,
+              batchCount: 1,
+              kind: "split",
+              tier,
+            });
+          }
         }
       }
     }
@@ -874,8 +939,9 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
     const rs = c.rowKeys.map((k) => rowByKey.get(k)!).sort((a, b) => a.date.localeCompare(b.date));
     const ps = c.paymentKeys.map((k) => paymentByKey.get(k)!);
     const m = methodById.get(ps[0].methodId)!;
-    const isUsd = rs[0].cny == null;
-    const amount = r2(rs.reduce((s, r) => s + (isUsd ? r.usd! : r.cny!), 0));
+    const rowCur = rowCurrency(rs[0]);
+    const isUsd = rowCur === "USD";
+    const amount = r2(rs.reduce((s, r) => s + rowAmount(r), 0));
 
     // 明细行：组员×平台×账号×批次日 合并（与手动添加口径一致）
     const bdMap = new Map<string, MatchedBreakdownItem>();
@@ -909,7 +975,8 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
     // 表格日期早于库内打款日：小幅早于是常态（平台记的 paid_date 会晚于实际到账，实测 LH 6-22 批 6-18 就到账），
     // 07 2026-08-27 拍板「相差 ≤5 天以银行流水为准」，故只有超过这个阈值才判表格有误、
     // 改按库内打款日入账（07 2026-08-26「表格确实有误，按照库内收款日导」，实证 2/12 vs 3/4 差 20 天）。
-    const sheetDateTooEarly = !isUsd && signedDays(sourceDate, rs[0].date) > DATE_FIX_MAX_DAYS;
+    // D-314：表格日期这条判定与币种无关，美金行同样适用（原先美金行不入账才跳过这段）
+    const sheetDateTooEarly = signedDays(sourceDate, rs[0].date) > DATE_FIX_MAX_DAYS;
     const useDbDate = c.rescued || sheetDateTooEarly;
     if (c.rescued) {
       warnings.push(`表格日期 ${rs[0].date} 与库内打款日 ${sourceDate} 相差 ${Math.round(c.dateDist)} 天，判定表格日期有误，已按库内打款日入账，请复核`);
@@ -933,11 +1000,11 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
     }
 
     proposals.push({
-      status: isUsd ? "usd" : warnings.length > 0 ? "review" : "auto",
+      status: warnings.length > 0 ? "review" : "auto",
       rows: rs,
       methodId: m.id,
       amount,
-      currency: isUsd ? "USD" : "CNY",
+      currency: rowCur,
       platform,
       // 表格日期判定有误（补捞命中/早于打款日）：入账日按库内打款日（07 2026-08-26 拍板）
       txnDate: useDbDate ? sourceDate : rs[0].date,
@@ -953,24 +1020,43 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
     });
   }
 
-  // ── 6. 剩余：未命中 / 无卡 ──
+  // ── 6. 剩余：未命中 / 无卡 / 香港卡换汇划回（D-314.1 防重复记账） ──
+  // 本次导入或库里存在美金活动时，未命中的人民币行要多提醒一句（见 HK_CARD_RE 上方注释）
+  const hasUsdActivity =
+    rows.some((r) => rowCurrency(r) === "USD") || existingEntries.some((e) => e.currency === "USD");
   for (const r of rows) {
     if (assigned.has(r.key)) continue;
     const m = (methodsOf.get(r.key) ?? [])[0] ?? null;
-    proposals.push({
-      status: m ? "unmatched" : "no_method",
+    const base = {
       rows: [r],
       methodId: m?.id ?? null,
-      amount: r2(r.cny ?? r.usd ?? 0),
-      currency: r.cny != null ? "CNY" : "USD",
+      amount: r2(rowAmount(r)),
+      currency: rowCurrency(r),
       platform: null,
       txnDate: r.date,
       sourceDate: null,
       breakdown: [], expected: 0, fee: 0, feeRate: null,
+      warnings: [] as string[],
+    };
+    // 香港卡换汇划回：钱已在香港卡以美金入账，这笔人民币到账是同一笔钱搬家，不是新收入
+    if (isHkRemittanceRow(r)) {
+      proposals.push({
+        ...base,
+        status: "internal_transfer",
+        matchNote: `对方户名/标注指向香港卡（${(r.counterparty || r.note).trim()}），判定为香港卡美金换汇划回大陆卡——`
+          + `这笔钱已在香港卡以美金入账，再登记一次就是重复记账，故不入账。若判断有误（确实是平台新打的款），请用「登记平台打款」手工处理`,
+      });
+      continue;
+    }
+    proposals.push({
+      ...base,
+      status: m ? "unmatched" : "no_method",
       matchNote: m
         ? `±${IMPORT_WINDOW_DAYS} 天内没有费率 ≤${(FEE_MAX * 100).toFixed(1)}% 的打款组合，请用「登记平台打款」手工处理`
+          + (hasUsdActivity && rowCurrency(r) === "CNY"
+            ? "；若这笔是香港卡美金换汇划回的钱，**不要**再登记，那笔已在香港卡以美金入账"
+            : "")
         : `收款人「${r.payee}」账号「${r.acct || "—"}」对不上任何收款方式，请先在小组设置维护`,
-      warnings: [],
     });
   }
 
