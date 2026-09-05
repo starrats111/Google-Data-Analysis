@@ -70,8 +70,21 @@ export function brandTokenOf(targetDomain: string | null | undefined): string {
     .split('.')[0]
     .toLowerCase()
     .replace(/[^a-z0-9]/g, '')
-  return brand.length >= 3 ? brand : ''
+  if (brand.length < 3) return ''
+  // 商家 URL 本身就填成建站平台子域时（库里确有 `e6026e.myshopify.com` 这类），
+  // 根域第一段取出来的是平台名而不是品牌名。拿「myshopify」去商家正文里搜必然搜不到，
+  // 会把归属校验变成误杀机。这种情况直接判为「取不出品牌段」，不参与判定。
+  if (PLATFORM_ROOTS.has(brand)) return ''
+  return brand
 }
+
+/** 建站/托管平台的根域第一段——它们出现在这里代表「没填真品牌域」，不是品牌名 */
+const PLATFORM_ROOTS = new Set([
+  'myshopify', 'shopify', 'squarespace', 'wixsite', 'wix', 'weebly',
+  'bigcartel', 'webflow', 'webnode', 'shoplazza', 'shopline', 'shoplineapp',
+  'ecwid', 'storenvy', 'bigcommerce', 'mybigcommerce', 'godaddysites',
+  'netlify', 'vercel', 'github', 'pages', 'herokuapp', 'blogspot', 'wordpress',
+])
 
 export function landingMatchesTarget(landingHost: string, targetDomain: string): boolean {
   if (sameRootDomain(landingHost, targetDomain)) return true

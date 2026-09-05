@@ -84,6 +84,17 @@ describe("D-317 checkEvidenceOwnership：拦「不是这个商家的页」", () 
     assert.equal(r.brand, "");
   });
 
+  it("商家 URL 填成建站平台子域时不判——品牌段会被取成 myshopify，那是误杀机", () => {
+    // 库里确有 `https://e6026e.myshopify.com` 这类 merchant_url
+    const r = checkEvidenceOwnership({
+      evidenceUrl: "https://www.realstore.com/",
+      merchantUrl: "https://e6026e.myshopify.com",
+      pageText: "完全没有 myshopify 字样的正常店铺页",
+    });
+    assert.equal(r.verdict, "ok");
+    assert.equal(r.brand, "");
+  });
+
   it("素材来源 URL 或商家 URL 缺失时不判，不拿缺数据当证据", () => {
     assert.equal(
       checkEvidenceOwnership({ evidenceUrl: "", merchantUrl: "https://www.tchibo.ch" }).verdict,
