@@ -41,6 +41,26 @@ describe("D-316 landingMatchesTarget：拦中转，不误伤商家自己的域",
     assert.equal(landingMatchesTarget("ethika.myshopify.com", "https://www.ethika.com"), true);
   });
 
+  it("D-318：商家自己的姊妹域靠共同前缀放行（上线当天误杀的那单）", () => {
+    // 2026-09-05 20:31 生产日志：easycanvasdesigns 被判「停在第三方中转域名」，
+    // 而那个站的标题就是 Easy Canvas Prints™，是同一家的另一个域。
+    assert.equal(
+      landingMatchesTarget("www.easycanvasdesigns.com", "https://www.easycanvasprints.com/"),
+      true,
+    );
+  });
+
+  it("D-318：共同前缀这条判据不能把真中转放进来", () => {
+    // 真中转域与商家名毫无字面关系，共同前缀 0-1 个字符
+    assert.equal(landingMatchesTarget("tatrck.com", "https://www.tchibo.ch"), false);
+    assert.equal(landingMatchesTarget("lg-twn.provenpixel.com", "https://knix.com"), false);
+    assert.equal(
+      landingMatchesTarget("pepperjamnetwork.com", "https://www.mohawkgeneralstore.com"),
+      false,
+    );
+    assert.equal(landingMatchesTarget("fr-go.kelkoogroup.net", "https://www.miliboo.com"), false);
+  });
+
   it("品牌段短于 3 字符一律放行，不拿两三个字母去猜", () => {
     assert.equal(landingMatchesTarget("go.adt212.net", "https://ab.com"), true);
   });

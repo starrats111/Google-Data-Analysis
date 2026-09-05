@@ -109,5 +109,29 @@ export function landingMatchesTarget(landingHost: string, targetDomain: string):
     .filter((l) => l.length >= 3)
   // 落地 host 压根解析不出可比对的段（空串、裸 TLD、畸形输入）→ 放行，不拿解析失败当证据
   if (labels.length === 0) return true
-  return labels.some((l) => l.includes(brand) || brand.includes(l))
+  return labels.some(
+    (l) => l.includes(brand) || brand.includes(l) || sharedPrefixLen(l, brand) >= SAME_ENTITY_PREFIX,
+  )
+}
+
+/**
+ * D-318：同主体的第二判据——两个品牌段共享足够长的前缀。
+ *
+ * 单靠「互相包含」漏掉了商家自己的姊妹域：`easycanvasdesigns.com` 与 `easycanvasprints.com`
+ * 谁也不包含谁，D-316 上线当天就把它判成了「停在第三方中转域名」，tracking_status 从 ok
+ * 掉成 resolve_failed，连追踪后缀一起丢了（2026-09-05 20:31 生产日志实证，商家实为
+ * Easy Canvas Prints™ 的另一个域）。
+ *
+ * 阈值取 10 个字符里的 6：真中转域与商家名毫无字面关系（adt212/tchibo=0、tatrck/tchibo=1、
+ * kelkoogroup/miliboo=0、provenpixel/knix=0、pepperjamnetwork/mohawkgeneralstore=0），
+ * 留出的余量足够；而误判方向是「放行一个其实无关的域」，与本模块一贯的
+ * 「宁可漏判，不可错杀」一致。
+ */
+const SAME_ENTITY_PREFIX = 6
+
+function sharedPrefixLen(a: string, b: string): number {
+  const n = Math.min(a.length, b.length)
+  let i = 0
+  while (i < n && a[i] === b[i]) i++
+  return i
 }
