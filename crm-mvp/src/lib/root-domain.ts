@@ -57,6 +57,22 @@ export function sameRootDomain(a: string | null | undefined, b: string | null | 
  *
  * 这道闸的取向是「宁可漏判，不可错杀」：品牌段短于 3 字符时一律放行。
  */
+/**
+ * D-317：取商家域的「品牌段」，供证据页归属校验做正文比对用。
+ *
+ * 与 `landingMatchesTarget` 内部用的是同一个口径（根域第一段、去掉非字母数字、小写），
+ * 单独导出是因为归属校验除了比 host 还要在正文里找这个词。
+ * 短于 3 字符返回空串 —— 拿两三个字母去正文里搜必然满地误报。
+ */
+export function brandTokenOf(targetDomain: string | null | undefined): string {
+  if (!targetDomain) return ''
+  const brand = (extractRootDomain(targetDomain) || '')
+    .split('.')[0]
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '')
+  return brand.length >= 3 ? brand : ''
+}
+
 export function landingMatchesTarget(landingHost: string, targetDomain: string): boolean {
   if (sameRootDomain(landingHost, targetDomain)) return true
   const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '')

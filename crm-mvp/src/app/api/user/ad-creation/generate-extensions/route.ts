@@ -26,6 +26,7 @@ import { fitAdTextBatch, fitAdTextSync } from "@/lib/ad-text-fit";
 import { fetchSemrushKeywords, type SemrushKeywordsResult } from "@/lib/semrush-keywords";
 import { matchParkedTextSignal } from "@/lib/country-url-resolver";
 import { landingMatchesTarget } from "@/lib/root-domain";
+import { checkEvidenceOwnership } from "@/lib/evidence-ownership";
 import { humanizeAdCopyBatch, AD_COPY_ANTI_AI_BLOCK } from "@/lib/humanizer";
 import { autoExpandSitelinks } from "@/lib/sitelink-auto-expand";
 import { generateSitelinkTexts } from "@/lib/sitelink-ai-writer";
@@ -1286,6 +1287,57 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
             try { controller.enqueue(encoder.encode("data: [DONE]\n\n")); } catch { isClosed = true; }
           }
           return;
+        }
+
+        // ─── L1.6 D-317：证据页归属校验（爬到的这页，到底是不是这个商家的？）───
+        // D-316 只守住「联盟链解析」这一个入口。错 URL 还能从别的路径进来：员工手填 final_url、
+        // ccTLD 兜底换域、D-096 落地域校正。而 L2 守门只数**数量**（字数/semrush 数/产品数），
+        // 一张内容丰满的错页（Adtraction 招商页 7577 字）照样满分放行，Step 7 相似度又只比
+        // 文案↔关键词、关键词还与错页同源 —— 三道闸没有一道负责问「这页是谁的」。
+        //
+        // 判法要两个信号同时失守才拦，单独一个都不算数：
+        //   ① host 对不上商家域（用 D-316 那套品牌级比对，放过 ccTLD / 子域 / 建站平台）；
+        //   ② 商家品牌词在标题、meta、正文里**一次都没出现**。
+        // 只有 ①②都成立才硬拦 —— 商家换了域名、merchant_url 填的是旧域这类情况，品牌词一定在
+        // 正文里，② 不成立，照常放行（只记一条 warn）。取向与 D-316 一致：宁可漏判，不可错杀。
+        const EVIDENCE_OWNER_GUARD = process.env.AD_EVIDENCE_OWNER_GUARD !== "0";
+        const evidenceSourceUrl = cache!.crawledFromUrl || merchantUrl || "";
+        const evidenceOwn = checkEvidenceOwnership({
+          evidenceUrl: evidenceSourceUrl,
+          merchantUrl: merchant.merchant_url,
+          pageText: cache!.pageText,
+          // 只喂爬到的那一页自己的字：navItems / features。
+          // semrushTitles 是按商家域查回来的，必然带品牌词，掺进来这道闸就废了。
+          extraText: [...(cache!.navItems ?? []), ...(cache!.features ?? [])],
+        });
+
+        if (EVIDENCE_OWNER_GUARD && evidenceOwn.verdict === "off_merchant" && types.includes("core")) {
+          console.warn(
+            `[Extensions] L1.6 D-317 触发：素材页 ${evidenceSourceUrl} 既不在商家域 ${merchant.merchant_url} 下，` +
+              `正文里也找不到品牌词「${evidenceOwn.brand}」（pageText=${ctxPageTextLen}），停掉 core 文案生成 ` +
+              `(campaign_id=${campaign_id})`,
+          );
+          send("evidence_off_merchant", {
+            evidence_url: evidenceSourceUrl,
+            merchant_url: merchant.merchant_url,
+            page_text_len: ctxPageTextLen,
+            reason:
+              `本次爬到的素材页是 ${evidenceSourceUrl}，它既不在商家域名下、正文里也没出现过商家品牌词——` +
+              `多半是联盟追踪/返利中转页。按这页生成会得到一份文案通顺、却跟商家卖什么毫无关系的广告`,
+            suggestion:
+              "请检查该广告的『落地页网址』是不是被写成了联盟追踪链接；改回商家自己的页面后重新生成",
+          });
+          if (!isClosed) {
+            try { controller.enqueue(encoder.encode("data: [DONE]\n\n")); } catch { isClosed = true; }
+          }
+          return;
+        }
+        if (EVIDENCE_OWNER_GUARD && evidenceOwn.verdict === "brand_hit_allow") {
+          // 只记一笔不拦：品牌词在正文里出现过，多半是商家自己的另一个域（换域/子品牌站/merchant_url 过期）
+          console.warn(
+            `[Extensions] L1.6 D-317：素材页 ${evidenceSourceUrl} 不在商家域 ${merchant.merchant_url} 下，` +
+              `但正文含品牌词「${evidenceOwn.brand}」，判为商家自有站点放行 (campaign_id=${campaign_id})`,
+          );
         }
 
         if (ctxInsufficient && types.includes("core")) {
