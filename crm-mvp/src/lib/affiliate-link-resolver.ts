@@ -27,7 +27,7 @@ import { acquireExchangeSlot } from "@/lib/puppeteer-semaphore";
 import { probeExitIp } from "@/lib/suffix-engine/exit-ip";
 import { pickMobileUserAgent } from "@/lib/mobile-user-agents";
 import { registerBrowser, closeBrowserSafely, getStealthLauncher } from "@/lib/puppeteer-browser-registry";
-import { sameRootDomain } from "@/lib/root-domain";
+import { sameRootDomain, landingMatchesTarget } from "@/lib/root-domain";
 import { fetchChainViaKy } from "@/lib/link-resolver";
 
 // tracker_forbidden：联盟跳板在「自己的重定向端点」返回 4xx（401/403/404/410/451 等）拒绝了这次点击——
@@ -53,6 +53,37 @@ const RESOLVER_V2 = process.env.AFFILIATE_RESOLVER_V2 === "1";
  * 关掉即恢复「拿到代理直接跟」，用于漏国率极低时省掉校验开销或应急排障。
  */
 const EGRESS_VERIFY = process.env.RESOLVER_EGRESS_VERIFY !== "0";
+
+/**
+ * D-316：巡航终点落地域校验（默认开，置 0 一键退回旧行为）。
+ *
+ * 报案现象：PartnerMatic 的追踪链要先经 `fatcoupon.com/redirect.html`（FatCoupon 是上级发布商）
+ * 才到广告主。那个页面是 8.5KB 的纯 JS 壳（`<title>Just a moment...</title>` + noindex），
+ * HTTP 跟链跟不动 JS 跳转，就停在它上面——而它既不是已知跳板域、也不是深链域，三张名单一个都不命中，
+ * 于是被当成广告主落地页判 `ok`（`parent_check_reason='巡航通过'`）写进 `resolved_final_url`。
+ * 7 天缓存把它一路复用成 `ad_creatives.final_url` + 爬取起点 → `pageText=0` → L2 守门拦死文案，
+ * 员工重爬多少次都一样（2026-09-03 实测：15 行商家 / 7 个员工 / PM 12·LB 2·RW 1，最早 2026-06-27）。
+ *
+ * 2026-09-05 追加（07 报障，Tchibo CH）：同一个病还有**更坏的第二形态**。中转页不是空壳、而是
+ * 内容丰满时，L2 守门（只数字数）根本不会响。PM 的链接经 Adtraction 追踪域 `go.adt212.net/t/t`
+ * （链接自带 `&url=https%3A%2F%2Fwww.tchibo.ch`），HTTP 停在那儿判 `ok`，爬到 7577 字
+ * **Adtraction 卖给广告主的招商页**，于是 15 条标题全成了「Partnerprogramm ab 149 CHF/mo」
+ * 「Managed Services ab 249 CHF」——流利、合规、零报错，跟 Tchibo 卖的咖啡服饰毫无关系。
+ * Step 7 相似度也拦不住：它比的是文案↔关键词，而关键词有一路同样来自那张错页，同源自洽分数反而高。
+ * 且 Adtraction 用轮换编号域（tatrck.com / adt212.net / adt256.com / adt284.net…），
+ * **往 `TRACKER_HOST_PATTERNS` 加名单永远追不上**——只能靠下面这种域名无关的「终点 vs 商家域」判法。
+ *
+ * 治法：追踪链自己带着正确答案——`?url=https%3A%2F%2F<商家域>`。`effectiveTargetDomain` 早就能解出它，
+ * 却只喂给 `v1EarlyStopEnabled` 那个 10% 灰度的**性能**早停，从不用作结果校验。这里把它升级成断言：
+ *   ① 软层（`effectiveTargetDomain`，含从链接解包推出的域名）：终点对不上就置 `requiresBrowserEnrich`，
+ *      逼一次浏览器兜底——真实浏览器能执行 JS 跟过中转壳，多半当场就跟到广告主了，且完全非破坏性
+ *      （现有逻辑只在浏览器结果为 ok/forbidden_network 时才采用，否则保留首次结果）；
+ *   ② 硬层（仅 `opts.targetDomain`，即 `user_merchants.merchant_url` 这一权威来源）：浏览器也救不回来时，
+ *      把 ok 降级成 resolve_failed 并清空 landingUrl/finalUrl，绝不让中转 URL 落库当落地页。
+ * 只有权威来源参与硬判，是为了不拿「从链接解包猜出来的域名」去否决真实结果。
+ */
+const LANDING_GUARD = process.env.RESOLVER_LANDING_GUARD !== "0";
+
 
 /**
  * D-222B：跟链拿到 403（tracker_forbidden）时，是否换一个出口复核一次再下结论（默认开，置 0 关闭）。
@@ -1480,6 +1511,22 @@ export async function resolveAffiliateLink(
     // 静态解包只拿到广告主域名、缺网络追踪参数 → 标记交外层用浏览器补全完整落地页。
     if (needBrowserEnrich) r.requiresBrowserEnrich = true;
 
+    // D-316 软层：终点既不是跳板/深链/点击中转（上面三张名单都没命中），也不是商家自己的域名
+    //   → 十有八九是没跟动 JS 跳转、停在了未知中转壳上（fatcoupon.com/redirect.html 即此）。
+    //   逼一次浏览器兜底：真实浏览器执行 JS 通常当场就跟到广告主了。非破坏性——本次结果原样保留，
+    //   外层只在浏览器拿到 ok/forbidden_network 时才替换。
+    if (
+      LANDING_GUARD &&
+      !usedBrowser &&
+      effectiveTargetDomain &&
+      !landingMatchesTarget(finalParsed.hostname, effectiveTargetDomain)
+    ) {
+      r.requiresBrowserEnrich = true;
+      console.warn(
+        `[AffiliateResolver] D-316：HTTP 跟链停在 ${finalParsed.hostname}，与商家域 ${effectiveTargetDomain} 不符（疑似未跟动 JS 的中转壳），升级浏览器兜底`,
+      );
+    }
+
     if (!r.trackingLink) {
       // D-182「落地洗参」兜底：最终落地页无 query，但跳转链里广告主同根域名那一跳带联盟追踪参数
       // （Partnerize/prf.hn 等：gilt.com/?clickref=... → gilt.com/boutique/ 洗掉参数）。点击已在带参
@@ -1715,6 +1762,33 @@ export async function resolveAffiliateLink(
       console.warn(
         `[AffiliateResolver] 浏览器兜底未产出最终 URL（err=${br.error ?? "-"}），保留首次 HTTP 结果（status=${result.status} err=${result.error ?? "-"}） url=${affiliateUrl.slice(0, 120)}`,
       );
+    }
+  }
+
+  // ── D-316 硬层：落地域校验 ──
+  // 走到这里 result 若还是 ok，说明 HTTP 和浏览器都认这个终点。但只要它不在商家自己的域名下，
+  // 这个 URL 就绝不能落库当落地页——它会经 resolved_final_url 的 7 天缓存扩散成 ad_creatives.final_url
+  // 和爬取起点，把整条文案生成钉死在一个没有商家正文的页面上（fatcoupon 事故的传播路径）。
+  // 只用 opts.targetDomain（user_merchants.merchant_url，权威来源）判，不拿链接解包猜出来的域名否决真实结果。
+  if (LANDING_GUARD && result.status === "ok" && opts.targetDomain && result.finalUrl) {
+    let landedHost = "";
+    try {
+      landedHost = new URL(result.finalUrl).hostname;
+    } catch {
+      /* 解析不了就不判，交给既有逻辑 */
+    }
+    if (landedHost && !landingMatchesTarget(landedHost, opts.targetDomain)) {
+      console.warn(
+        `[AffiliateResolver] D-316：巡航终点 ${landedHost} 不在商家域 ${opts.targetDomain} 下，` +
+          `判定未跟到广告主落地页（usedBrowser=${result.usedBrowser}） url=${affiliateUrl.slice(0, 120)}`,
+      );
+      result.status = "resolve_failed";
+      result.error =
+        `停在第三方中转域名 ${landedHost}（商家域 ${opts.targetDomain}），未跟到广告主落地页` +
+        `——该链接需真实浏览器跟随其 JS 跳转，或上级发布商中转页本身不可跟`;
+      result.landingUrl = null;
+      result.trackingLink = null;
+      result.finalUrl = null;
     }
   }
 

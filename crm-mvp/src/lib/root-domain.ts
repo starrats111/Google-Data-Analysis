@@ -41,3 +41,44 @@ export function sameRootDomain(a: string | null | undefined, b: string | null | 
   const rb = extractRootDomain(b)
   return !!ra && !!rb && ra === rb
 }
+
+/**
+ * D-316：落地 host 与商家域是否属于「同一个主体」——比同根域宽一档的品牌级比对。
+ *
+ * 用途是把「第三方中转站」和「商家自己的另一个域名」区分开。刻意放过三类正常情况，只揪中转：
+ *   · 同根域：      `shop.brand.com`         vs `brand.com` → 过
+ *   · 换 ccTLD：    `brand.co.uk`            vs `brand.com` → 过（品牌段相同）
+ *   · 建站平台子域：`brand.myshopify.com`    vs `brand.com` → 过（品牌段出现在 host 里）
+ *   · 第三方中转：  `fatcoupon.com`          vs `bellamiacollections.com` → 拦
+ *
+ * 比对方式：取商家域的品牌段，与落地 host「去掉公共后缀之后」的每一段做互相包含判断。
+ * 只比根域第一段是不够的——`brand.myshopify.com` 的根域是 `myshopify.com`，第一段会变成
+ * `myshopify`，商家自己的品牌段反而被丢掉，导致 Shopify 托管的商家被误拦。
+ *
+ * 这道闸的取向是「宁可漏判，不可错杀」：品牌段短于 3 字符时一律放行。
+ */
+export function landingMatchesTarget(landingHost: string, targetDomain: string): boolean {
+  if (sameRootDomain(landingHost, targetDomain)) return true
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '')
+  const brand = norm((extractRootDomain(targetDomain) || '').split('.')[0])
+  if (brand.length < 3) return true
+  // 两种入参都要认：裸 host（resolver 侧）与完整 URL（生成侧的 final_url）
+  let host = (landingHost || '').trim().toLowerCase()
+  try {
+    if (host.includes('://')) host = new URL(host).hostname
+    else if (host.includes('/')) host = host.split('/')[0]
+  } catch {
+    return true
+  }
+  if (host.includes(':')) host = host.split(':')[0]
+  const rootParts = (extractRootDomain(host) || '').split('.').filter(Boolean)
+  const suffixLen = Math.max(rootParts.length - 1, 1)
+  const hostParts = host.split('.').filter(Boolean)
+  const labels = hostParts
+    .slice(0, Math.max(hostParts.length - suffixLen, 0))
+    .map(norm)
+    .filter((l) => l.length >= 3)
+  // 落地 host 压根解析不出可比对的段（空串、裸 TLD、畸形输入）→ 放行，不拿解析失败当证据
+  if (labels.length === 0) return true
+  return labels.some((l) => l.includes(brand) || brand.includes(l))
+}

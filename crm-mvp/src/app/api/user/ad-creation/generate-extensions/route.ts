@@ -25,6 +25,7 @@ import { buildCrawlKey, withCrawlInflightLock } from "@/lib/crawl-inflight-lock"
 import { fitAdTextBatch, fitAdTextSync } from "@/lib/ad-text-fit";
 import { fetchSemrushKeywords, type SemrushKeywordsResult } from "@/lib/semrush-keywords";
 import { matchParkedTextSignal } from "@/lib/country-url-resolver";
+import { landingMatchesTarget } from "@/lib/root-domain";
 import { humanizeAdCopyBatch, AD_COPY_ANTI_AI_BLOCK } from "@/lib/humanizer";
 import { autoExpandSitelinks } from "@/lib/sitelink-auto-expand";
 import { generateSitelinkTexts } from "@/lib/sitelink-ai-writer";
@@ -539,7 +540,26 @@ export async function loadGenContext(
 
   // 优先使用用户明确设定的落地页 URL（用户可能已改成本地化路径如 /en-us/）
   // merchant_url 是商家层面的默认 URL，可能带旧地区前缀（如 /en-sg/）
-  const originalMerchantUrl = adCreative?.final_url || merchant.merchant_url || "";
+  //
+  // D-316：但只在 final_url 确实落在商家自己域名下时才认它。
+  //   落地页会被 D-101 巡航结果覆盖，而巡航可能停在联盟/返利中转壳上（fatcoupon.com/redirect.html
+  //   即此：纯 JS 空壳、无商家正文）。那种 URL 一旦当上爬取起点，pageText 恒为 0、抓到的还是中转站
+  //   自己的合作商 logo，L2 守门把文案拦死，员工重爬多少次都一样。
+  //   落在同一品牌主体下才沿用（保住 /en-us/ 路径与 brand.co.uk 这类本地化落地页的原意），
+  //   落到无关的第三方域名就退回商家官网当素材源；
+  //   这里只改「读文案素材从哪来」，不动 final_url 本身（投放落地页仍由下游各分支按原逻辑决定）。
+  const rawFinalUrl = adCreative?.final_url || "";
+  const merchantSiteUrl = merchant.merchant_url || "";
+  const finalUrlOnMerchantSite =
+    !!rawFinalUrl && (!merchantSiteUrl || landingMatchesTarget(rawFinalUrl, merchantSiteUrl));
+  if (rawFinalUrl && !finalUrlOnMerchantSite) {
+    console.warn(
+      `[Extensions] D-316：落地页 ${rawFinalUrl} 不在商家域 ${merchantSiteUrl} 下（疑似联盟/返利中转），` +
+        `改用商家官网作爬取起点 (campaign_id=${campaign.id})`,
+    );
+  }
+  const originalMerchantUrl =
+    (finalUrlOnMerchantSite ? rawFinalUrl : merchantSiteUrl) || rawFinalUrl || "";
   // LAND-01：用户在落地页处手动「修改+保存」过 → final_url_locked=1，本次生成全程不再自动改写落地页
   //   （跳过 ccTLD 兜底 / C-016 路径本地化 / D-096 落地域校正 对 final_url 的覆盖）。
   const finalUrlLocked = adCreative?.final_url_locked === 1 && !!adCreative?.final_url;
@@ -682,7 +702,18 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
                 try {
                   const u = new URL(merchant.resolved_final_url);
                   // 缓存若落在联盟跳板/点击中转/App 深链域名上即为脏数据（曾把追踪链接当落地页）→ 丢弃缓存，走现场重巡
-                  if (!isNonLandingHost(u.hostname)) {
+                  // D-316：再加一条——缓存落在「非商家域」的第三方站上同样是脏数据。存量 resolved_final_url
+                  //   里已有 15 行被写成 fatcoupon.com/redirect.html 且 tracking_status='ok'，光修 resolver
+                  //   救不了它们：7 天缓存会绕过巡航直接复用旧值。这里一并判掉，存量行下次生成即自愈重巡。
+                  const cacheOffMerchantSite =
+                    !!merchant.merchant_url && !landingMatchesTarget(u.hostname, merchant.merchant_url);
+                  if (cacheOffMerchantSite) {
+                    console.warn(
+                      `[Extensions] D-316：resolved_final_url 缓存落在 ${u.hostname}，不在商家域 ` +
+                        `${merchant.merchant_url} 下，判为脏缓存丢弃并现场重巡 (merchant_id=${merchant.id})`,
+                    );
+                  }
+                  if (!isNonLandingHost(u.hostname) && !cacheOffMerchantSite) {
                     landing = u.origin + u.pathname;
                     // D-234：缓存的 resolved_final_url 是历史脏数据的重灾区（存量含 referer= 的 17 行），
                     // 从它拆后缀必须同样过清洗，否则脏参数会绕过 resolver 直接写进 final_url_suffix
@@ -696,7 +727,13 @@ export function buildGenerationStream(ctx: GenContext): ReadableStream {
                 // browserFallback：EV/MUI 等靠 JS 跳转的联盟，HTTP 只拿到中转域名/裸落地页时，用真实浏览器
                 // 跟随到「广告主域名 + 完整追踪 query」。浏览器跟随较慢，给到 60s 预算（受 puppeteer 信号量限并发）。
                 const cruise = await Promise.race([
-                  resolveAffiliateLink(affiliateUrl, country, merchant.platform || null, { browserFallback: true }),
+                  // D-316：补 targetDomain —— 另外两个调用点（cruise/route.ts、parent-network-backfill）
+                  //   一直都传，只有生成这条路径漏了，于是 resolver 既拿不到目标域早停，也没法校验
+                  //   「巡航终点是不是商家自己的域名」，把 fatcoupon.com/redirect.html 当落地页判了 ok。
+                  resolveAffiliateLink(affiliateUrl, country, merchant.platform || null, {
+                    browserFallback: true,
+                    targetDomain: merchant.merchant_url,
+                  }),
                   new Promise<null>((r) => setTimeout(() => r(null), 60000)),
                 ]);
                 if (cruise && cruise.landingUrl) {
