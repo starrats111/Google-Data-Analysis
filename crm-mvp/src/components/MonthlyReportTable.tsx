@@ -567,7 +567,17 @@ export default function MonthlyReportTable({
             {/* 收款方式 */}
             <tr className="mrt-sec">
               <td className={FX0} style={labelCell} colSpan={2}>收款人</td>
-              {accounts.map((a, i) => <td key={a.label} style={{ ...cellBase, background: zebra(i) ?? "#fff", textAlign: "center" }} colSpan={2}>{a.payeeName}</td>)}
+              {accounts.map((a, i) => (
+                <td key={a.label} style={{ ...cellBase, background: zebra(i) ?? "#fff", textAlign: "center" }} colSpan={2}>
+                  {a.payeeName}
+                  {/* D-315：这列的钱实际到账的卡与账号绑定不一致，印的是实际到账卡 */}
+                  {a.payeeFromOverride && (
+                    <Tooltip title="该账号本月打款被逐笔修正到这张卡，此处按实际到账卡显示（与账号绑定的卡不一致）">
+                      <span style={{ marginLeft: 4, fontSize: 10, color: "#d46b08", border: "1px solid #ffd591", borderRadius: 2, padding: "0 3px" }}>实收卡</span>
+                    </Tooltip>
+                  )}
+                </td>
+              ))}
               <td className={FXR} style={totalCell}></td>
             </tr>
             <tr>

@@ -99,11 +99,47 @@ export interface AccountColumn {
   /** 实收(CNY) 生效值（手填 ?? 默认） */
   paidCnyH1Effective: number;
   paidCnyH2Effective: number;
-  /** 收款方式（当月=实时绑定，历史月=快照） */
+  /** 收款方式（当月=实时绑定，历史月=快照；被打款单逐笔修正覆盖时=实际到账卡） */
   payeeName: string;
   cardNo: string;
+  /** true = 上面印的是打款单逐笔修正的「实际到账卡」，与账号绑定/快照不一致 */
+  payeeFromOverride: boolean;
+
   /** 该账号当月是否有打款记录（无则实收/应收留空展示） */
   hasPayments: boolean;
+}
+
+/**
+ * D-315：某列当月打款「钱实际到账的卡」——`overrides` 是被逐笔修正过的收款方式 id，
+ * `bound` 是没被修正、按账号绑定走的那些。`overrides` 为空即该列无修正，列头不动。
+ */
+type ActualCards = { overrides: Set<string>; bound: Set<string> };
+
+/** 收款方式的展示文本（组合名「名字(打款方式)」+ 卡号），见 C-178 */
+type CardText = { payee_name: string; card_no: string };
+
+/**
+ * D-315：算出某列「钱实际到账的卡」该怎么印。
+ *
+ * - 该列没有任何逐笔修正（`overrides` 为空）→ 返回 null，调用方保持绑定/快照原样，
+ *   历史月快照的冻结语义因此一分不动；
+ * - 有修正 → 修正到的卡就是实际到账卡；同列还有没被修正的笔时，绑定卡也算一张，
+ *   两张都印（用 " / " 连），绝不让任何一张凭空消失；
+ * - 收款方式 id 在清单里查不到（已被硬删等）→ 当它不存在，全查不到就返回 null 不乱改。
+ */
+export function pickActualCard(
+  ac: ActualCards | undefined,
+  byId: Map<string, CardText>,
+): { payee: string; card: string } | null {
+  if (!ac || ac.overrides.size === 0) return null;
+  const hit = [...new Set([...ac.overrides, ...ac.bound])]
+    .map((id) => byId.get(id))
+    .filter((v) => v != null);
+  if (hit.length === 0) return null;
+  return {
+    payee: [...new Set(hit.map((h) => h.payee_name))].join(" / "),
+    card: [...new Set(hit.map((h) => h.card_no).filter(Boolean))].join(" / "),
+  };
 }
 
 export interface MemberMonthlyReport {
@@ -407,7 +443,7 @@ export async function buildMemberMonthlyReport(
         paidCnyH1: 0, paidCnyH2: 0,
         paidCnyH1Override: null, paidCnyH2Override: null,
         paidCnyH1Effective: 0, paidCnyH2Effective: 0,
-        payeeName: "", cardNo: "",
+        payeeName: "", cardNo: "", payeeFromOverride: false,
         hasPayments: false,
       });
       methodIdByColKey.set(key, c.payment_method_id);
@@ -490,7 +526,7 @@ export async function buildMemberMonthlyReport(
       paidCnyH1: 0, paidCnyH2: 0,
       paidCnyH1Override: null, paidCnyH2Override: null,
       paidCnyH1Effective: 0, paidCnyH2Effective: 0,
-      payeeName: "", cardNo: "", hasPayments: false,
+      payeeName: "", cardNo: "", payeeFromOverride: false, hasPayments: false,
     });
   }
 
@@ -505,10 +541,15 @@ export async function buildMemberMonthlyReport(
     select: {
       platform: true, platform_connection_id: true, status: true,
       request_date: true, amount: true, gross_amount: true,
+      payment_method_id_override: true,
     },
   });
 
   const dailyUsdToCny = await buildDailyUsdToCnyLookup(monthEnd);
+
+  // D-315：记录每列「钱实际到账的卡」——打款单的逐笔修正（C-179）优先于账号绑定。
+  // 只在该列确有修正时才生效，没修正的列一律不碰，历史月快照的冻结口径原样保留。
+  const actualCardByCol = new Map<AccountColumn, ActualCards>();
 
   for (const p of payments) {
     const key = resolveColKey(
@@ -521,6 +562,10 @@ export async function buildMemberMonthlyReport(
     }
     const col = colByKey.get(key)!;
     col.hasPayments = true;
+    let ac = actualCardByCol.get(col);
+    if (!ac) { ac = { overrides: new Set(), bound: new Set() }; actualCardByCol.set(col, ac); }
+    if (p.payment_method_id_override != null) ac.overrides.add(String(p.payment_method_id_override));
+    else { const b = methodIdByColKey.get(key); if (b != null) ac.bound.add(String(b)); }
     const day = p.request_date!.getUTCDate();
     const recv = Number(p.amount || 0);
     const isPaid = p.status === "paid";
@@ -645,7 +690,7 @@ export async function buildMemberMonthlyReport(
   }
 
   // ── 5. 收款方式（当月实时绑定 / 历史月快照懒固化） ─────────────────
-  await attachPaymentBindings(userId, month, isCurrentMonth, accounts, methodIdByColKey);
+  await attachPaymentBindings(userId, month, isCurrentMonth, accounts, methodIdByColKey, actualCardByCol, warnings);
 
   // ── 6. 广告费（MCC×月，覆盖优先，CNY 反算原币） ────────────────────
   const mccs = await buildMccSections(userId, month, monthStart, monthEnd, rate, overrides, warnings);
@@ -711,23 +756,28 @@ async function attachPaymentBindings(
   isCurrentMonth: boolean,
   accounts: AccountColumn[],
   methodIdByColKey: Map<string, bigint | null>,
+  actualCardByCol: Map<AccountColumn, ActualCards>,
+  warnings: string[],
 ): Promise<void> {
-  const readCurrentBindings = async () => {
-    const methodIds = [...new Set([...methodIdByColKey.values()].filter((v): v is bigint => v != null))];
-    if (methodIds.length === 0) return new Map<string, { payee_name: string; card_no: string }>();
-    const methods = await prisma.payment_methods.findMany({
-      where: { id: { in: methodIds } }, // 不过滤 is_deleted：已删清单项仍按原文本显示
-      select: { id: true, payee_name: true, pay_channel: true, card_no: true },
-    });
-    // C-178：清单已拆成 纯名字 + 打款方式 两字段；报表展示与月度快照仍用组合文本
-    // 「名字(打款方式)」，与历史快照口径一致（prefill 按该文本匹配账号归属）。
-    const byId = new Map(methods.map((m) => [
-      String(m.id),
-      {
-        payee_name: m.pay_channel ? `${m.payee_name}(${m.pay_channel})` : m.payee_name,
-        card_no: m.card_no,
-      },
-    ]));
+  // 一次把「账号绑定卡」和「打款单逐笔修正到的卡」用到的收款方式都查出来
+  const methodIds = [...new Set([
+    ...[...methodIdByColKey.values()].filter((v): v is bigint => v != null).map(String),
+    ...[...actualCardByCol.values()].flatMap((a) => [...a.overrides, ...a.bound]),
+  ])];
+  const methods = methodIds.length === 0 ? [] : await prisma.payment_methods.findMany({
+    where: { id: { in: methodIds.map((s) => BigInt(s)) } }, // 不过滤 is_deleted：已删清单项仍按原文本显示
+    select: { id: true, payee_name: true, pay_channel: true, card_no: true },
+  });
+  // C-178：清单已拆成 纯名字 + 打款方式 两字段；报表展示与月度快照仍用组合文本
+  // 「名字(打款方式)」，与历史快照口径一致（prefill 按该文本匹配账号归属）。
+  const byId = new Map(methods.map((m) => [
+    String(m.id),
+    {
+      payee_name: m.pay_channel ? `${m.payee_name}(${m.pay_channel})` : m.payee_name,
+      card_no: m.card_no,
+    },
+  ]));
+  const readCurrentBindings = () => {
     const byColKey = new Map<string, { payee_name: string; card_no: string }>();
     for (const [colKey, mid] of methodIdByColKey) {
       if (mid != null && byId.has(String(mid))) byColKey.set(colKey, byId.get(String(mid))!);
@@ -735,12 +785,39 @@ async function attachPaymentBindings(
     return byColKey;
   };
 
+  /**
+   * D-315（07 2026-09-05 报障：8 月 CG/wenjun2 的 $7,885.88 到的是张文俊香港卡，
+   * 列头却印「张文俊(工商) 6222…3768」，看着像工商卡收了 ¥53,184.18，
+   * 而工商卡当月真实流水只有 ¥3,562.91）：列头必须印**钱实际到账的那张卡**。
+   * 打款单的逐笔修正 payment_method_id_override 优先于账号绑定/历史快照——
+   * 数据中心打款列表、银行流水 prefill/candidates/import 早就是这个口径（C-179），
+   * 只有这里漏读，属实现遗漏不是口径分歧。
+   * 只覆盖确有逐笔修正的列；没修正的列一个字都不动，历史月快照的冻结语义原样保留。
+   */
+  const applyActualCards = () => {
+    for (const col of accounts) {
+      const actual = pickActualCard(actualCardByCol.get(col), byId);
+      if (!actual) continue;
+      const { payee, card } = actual;
+      if (payee === col.payeeName && card === col.cardNo) continue; // 与绑定/快照一致，无需覆盖
+      warnings.push(
+        `${col.label || col.platform}(${col.accountName}) 本月打款实际到账卡是 ${payee}` +
+        (col.payeeName ? `，账号绑定的却是 ${col.payeeName}` : "，该账号未绑定收款方式") +
+        "——列头已按实际到账卡显示，请核对账号绑定",
+      );
+      col.payeeName = payee;
+      col.cardNo = card;
+      col.payeeFromOverride = true;
+    }
+  };
+
   if (isCurrentMonth) {
-    const bindings = await readCurrentBindings();
+    const bindings = readCurrentBindings();
     for (const col of accounts) {
       const b = bindings.get(`${col.platform}\u0000${col.accountName}`);
       if (b) { col.payeeName = b.payee_name; col.cardNo = b.card_no; }
     }
+    applyActualCards();
     return;
   }
 
@@ -749,7 +826,7 @@ async function attachPaymentBindings(
     where: { user_id: userId, month },
   });
   if (snapshots.length === 0) {
-    const bindings = await readCurrentBindings();
+    const bindings = readCurrentBindings();
     const toCreate = accounts
       .filter((c) => c.accountName !== "(历史账号)")
       .map((c) => {
@@ -773,6 +850,7 @@ async function attachPaymentBindings(
     const s = snapMap.get(`${col.platform}\u0000${col.accountName}`);
     if (s) { col.payeeName = s.payee_name; col.cardNo = s.card_no; }
   }
+  applyActualCards();
 }
 
 // ─────────────────────────────────────────────────────────────
