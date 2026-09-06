@@ -24,10 +24,15 @@ export const CID_AVAILABILITY = {
 } as const;
 
 /**
- * 批量回写 Y/N 时的 where 附加条件：D 是终态（除非 admin 显式恢复），
+ * 批量回写 Y/N 时的 where 附加条件：D 是终态（解除只走 D-324 的「Google 返回即恢复」跃迁），
  * 同步任务不得把停用的 CID 冲回可用。
+ *
+ * D-324：同时锁死 status——原来只挡 is_available=D，于是被停/注销的行（status
+ * cancelled 但 is_available 还停在 Y/N）照样被日巡冲成 "N"，库里躺了 139 条
+ * 「已注销却标占用中」的脏行。展示层 deriveDisplayAvailability 先看 status 才没出事，
+ * 但任何绕过它直接读 is_available 的地方都会踩雷。
  */
-export const CID_WRITE_GUARD = { is_available: { not: "D" } } as const;
+export const CID_WRITE_GUARD = { is_available: { not: "D" }, status: "active" } as const;
 
 /**
  * D-248「被中止 CID」判定（07 拍板 2026-08-18）：只看 Google 侧真值。

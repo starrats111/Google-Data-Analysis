@@ -9,9 +9,11 @@
  * 与 API 登记按钮（listMccChildAccounts）的语义差异——刻意保守：
  * - API 的 customer_client 查询只返回 ENABLED 子账号，「出现在列表」即 Google 真值 ENABLED；
  *   Ads Script 的 accounts() 迭代器**不过滤账号状态**（suspended 也可能在列），
- *   所以「出现在 Sheet」不能当 ENABLED 证据 → 本同步【绝不】把 suspended/cancelled 行
- *   自动复活成 active（否则 D-248 被中止锁操作会被洗白），恢复仍走 API 按钮/管理员。
- * - 消失判定与 API 口径一致：active 行不在 Sheet → status=cancelled + is_available=D（终态）。
+ *   所以「出现在 Sheet」不能当 ENABLED 证据 → 本同步的**名单比对路径**（diffCidList）
+ *   【绝不】把 suspended/cancelled 行自动复活成 active（否则 D-248 被中止锁操作会被洗白）。
+ *   D-324：复活改由**状态列路径**（diffCidStatuses）负责，判据是 Status 列的
+ *   customer_client.status 真值 = ENABLED，与「在不在表里」无关，见下方 D-324 段。
+ * - 消失判定与 API 口径一致：active 行不在 Sheet → status=cancelled + is_available=D。
  *
  * 失败与不确定路径（质量闸第 3 条，显式设计）：
  * - Sheet 拉取失败 / 无 CID_List tab / 表头不符 / 0 数据行 → 整个 MCC 跳过不动库
@@ -78,8 +80,16 @@ export function parseCidListRows(rows: string[][]): CidListRow[] | null {
 
 // ─────────────────────────────────────────────────────────────
 // D-277：账户状态同步（07 2026-08-25 拍板）
-// Sheet Status 列 = Google 账户状态真值 → 库内 status 跟随；
-// 只自动停不自动恢复：Google 报 ENABLED 而库内被停 → 仅提醒人工确认（q5=b）。
+// Sheet Status 列 = Google 账户状态真值 → 库内 status 跟随。
+//
+// D-324（2026-09-06 改判）：原来「只自动停不自动恢复」（q5=b），恢复只发提醒等人点
+// 「同步 CID」按钮。那条规矩的依据是 D-277 之前的口径——Ads Script 的 accounts()
+// 迭代器不过滤账号状态，「出现在 Sheet」不能当 ENABLED 证据。但 D-277 已经加了
+// Status 列（GAQL customer_client.status 原值），停用方向正是拿它直接写库标停的；
+// 同一列报 ENABLED 却不敢写回，是不对称。后果：账户申诉回来后库内一直锁着，
+// 只能等商家找上门（670-967-7594 停于 09-02、Google 侧早已恢复，到 09-06 仍显示已停用）。
+// 现改为：Status 列明确为 ENABLED 且库内被停 → 自动恢复 active + 解除 D，照发通知。
+// 判据仍只认 Status 列真值（mapSheetStatus 返回 null 的一律不动库），不靠「在不在表里」。
 // ─────────────────────────────────────────────────────────────
 
 /** Google customer_client.status → 库内 status 三态；不确定值（UNKNOWN/空）返回 null 不动库 */
@@ -91,7 +101,7 @@ export function mapSheetStatus(raw: string | null | undefined): "active" | "susp
   return null;
 }
 
-export type CidStatusChangeKind = "suspend" | "cancel" | "recover_notice";
+export type CidStatusChangeKind = "suspend" | "cancel" | "recover";
 
 export interface CidStatusChange {
   kind: CidStatusChangeKind;
@@ -99,15 +109,15 @@ export interface CidStatusChange {
   customer_id: string;
   customer_name: string | null;
   fromStatus: string;
-  /** suspend→suspended / cancel→cancelled；recover_notice 不写库 */
-  toStatus: "suspended" | "cancelled" | null;
+  /** suspend→suspended / cancel→cancelled / recover→active（D-324 起恢复也写库） */
+  toStatus: "suspended" | "cancelled" | "active";
 }
 
 /**
  * 纯 diff（可单测）：Sheet 状态列 vs 库内 status。
  * - 库内 active，Sheet SUSPENDED/CANCELED → 自动标停（suspend/cancel）
  * - 库内 suspended ↔ cancelled 之间变化 → 跟随 Google 真值更新
- * - 库内被停，Sheet ENABLED → recover_notice（只提醒，不动库，恢复走人工 API 按钮）
+ * - 库内被停，Sheet ENABLED → recover（D-324：跟随真值恢复 active + 解除 D，并发通知）
  * - Sheet 无状态列/状态不确定/新 CID（无库内行）→ 不产生动作
  */
 export function diffCidStatuses(sheetRows: CidListRow[], existing: ExistingCidRow[]): CidStatusChange[] {
@@ -125,7 +135,7 @@ export function diffCidStatuses(sheetRows: CidListRow[], existing: ExistingCidRo
       fromStatus: ex.status,
     };
     if (mapped === "active") {
-      out.push({ ...base, kind: "recover_notice", toStatus: null });
+      out.push({ ...base, kind: "recover", toStatus: "active" });
     } else if (mapped === "suspended") {
       out.push({ ...base, kind: "suspend", toStatus: "suspended" });
     } else {
@@ -160,7 +170,8 @@ async function isDuplicateNotice(key: string, hours: number): Promise<boolean> {
 
 export interface CidStatusSyncStats {
   updated: number;
-  recoverNotices: number;
+  /** D-324：真正写库恢复的条数（原 recoverNotices 只是「提醒了几条」） */
+  recovered: number;
   alerted: number;
 }
 
@@ -173,7 +184,7 @@ export async function applyCidStatusChanges(
   changes: CidStatusChange[],
   log: (msg: string) => void,
 ): Promise<CidStatusSyncStats> {
-  const stats: CidStatusSyncStats = { updated: 0, recoverNotices: 0, alerted: 0 };
+  const stats: CidStatusSyncStats = { updated: 0, recovered: 0, alerted: 0 };
   if (changes.length === 0) return stats;
   const label = mcc.mcc_name ? `${mcc.mcc_name}（${mcc.mcc_id}）` : mcc.mcc_id;
 
@@ -184,16 +195,29 @@ export async function applyCidStatusChanges(
 
   for (const c of changes) {
     const name = c.customer_name ? `${c.customer_name}(${c.customer_id})` : c.customer_id;
-    if (c.kind === "recover_notice") {
+    if (c.kind === "recover") {
+      // D-324：Status 列真值 ENABLED → 写库恢复。必须连 is_available 一起解除 D，
+      // 只改 status 的话展示层照样按 D 显示「已停用」并禁选（这就是原来点了
+      // 「同步 CID」也解不开锁的那个洞）。恢复后可用性未核实 → U，等计数转 Y/N。
       const key = `cid_status_${c.customer_id}_recovered`;
       try {
+        await prisma.mcc_cid_accounts.update({
+          where: { id: c.id },
+          data: {
+            status: "active",
+            is_available: "U",
+            status_changed_at: new Date(),
+            last_synced_at: new Date(),
+          },
+        });
+        stats.recovered++;
+        log(`  [CID状态] ${label} ${name}: ${c.fromStatus} → active（Sheet 状态列真值，已解除 D）`);
         if (!(await isDuplicateNotice(key, 7 * 24))) {
-          recoverLines.push(`• ${name}：Google 侧已恢复为 ENABLED（库内仍为${STATUS_LABEL[c.fromStatus] || c.fromStatus}）`);
+          recoverLines.push(`• ${name}：${STATUS_LABEL[c.fromStatus] || c.fromStatus} → 正常（Google 侧已恢复 ENABLED）`);
           recoverKeys.push(key);
         }
-        stats.recoverNotices++;
       } catch (e) {
-        log(`  [CID状态] 恢复提醒去重查询失败（跳过 ${name}）: ${e instanceof Error ? e.message.slice(0, 80) : e}`);
+        log(`  [CID状态] 恢复写库失败（跳过 ${name}）: ${e instanceof Error ? e.message.slice(0, 80) : e}`);
       }
       continue;
     }
@@ -202,7 +226,7 @@ export async function applyCidStatusChanges(
       await prisma.mcc_cid_accounts.update({
         where: { id: c.id },
         data: {
-          status: c.toStatus!,
+          status: c.toStatus,
           is_available: "D",
           status_changed_at: new Date(),
           last_synced_at: new Date(),
@@ -248,11 +272,11 @@ export async function applyCidStatusChanges(
     }
 
     if (recoverLines.length > 0 && recipients.length > 0) {
-      const title = `你的 MCC ${label} 有 ${recoverLines.length} 个被停账户在 Google 侧已恢复`;
+      const title = `你的 MCC ${label} 有 ${recoverLines.length} 个被停账户已恢复可用`;
       const content =
-        `统一脚本回传的账户状态显示以下账户 Google 侧已是 ENABLED，但 CRM 内仍标记为被停（${beijingNow()} 北京时间发现）：\n` +
+        `统一脚本回传的账户状态显示以下账户 Google 侧已是 ENABLED（${beijingNow()} 北京时间发现）：\n` +
         recoverLines.join("\n") +
-        `\n\n按规则系统不自动解锁（防误报洗白）。请人工核实后到 MCC 管理点「同步 CID」恢复。`;
+        `\n\nCRM 已按真值自动解锁，这些 CID 现在可以正常选号建广告，无需再手动点「同步 CID」。`;
       const metadata = JSON.stringify({ keys: recoverKeys, kind: "cid_status_recover" });
       await prisma.notifications.createMany({
         data: recipients.map((uid) => ({ user_id: uid, type: "alert", title, content, metadata })),
@@ -292,7 +316,8 @@ export function diffCidList(
       continue;
     }
     if (ex.status !== "active") {
-      // 出现在 Sheet ≠ ENABLED（迭代器不过滤状态），不自动复活，恢复走 API 按钮
+      // 出现在 Sheet ≠ ENABLED（迭代器不过滤状态），这条路径永不复活；
+      // 复活只认 Status 列真值，走 diffCidStatuses 的 recover（D-324）
       presentButDisabled++;
       continue;
     }
@@ -330,14 +355,14 @@ export interface CidListSyncStats {
   guardTriggered: number;
   /** D-277：按 Sheet 状态列真值更新的行数（被停/注销跟随） */
   statusUpdated: number;
-  /** D-277：Google 已恢复但库内被停的提醒数（不动库） */
-  recoverNotices: number;
+  /** D-324：Google 侧已恢复 ENABLED、自动写库解锁的行数（原为「只提醒」计数） */
+  recovered: number;
   warnings: string[];
 }
 
 /** 每日执行入口（daily-sync Step 2.4 挂载）：逐 MCC 读 Sheet CID_List 并比对入库 */
 export async function syncCidListFromSheets(log: (msg: string) => void): Promise<CidListSyncStats> {
-  const stats: CidListSyncStats = { mccs: 0, skipped: 0, created: 0, renamed: 0, cancelled: 0, guardTriggered: 0, statusUpdated: 0, recoverNotices: 0, warnings: [] };
+  const stats: CidListSyncStats = { mccs: 0, skipped: 0, created: 0, renamed: 0, cancelled: 0, guardTriggered: 0, statusUpdated: 0, recovered: 0, warnings: [] };
 
   const mccs = await prisma.google_mcc_accounts.findMany({
     where: { is_deleted: 0, sheet_url: { not: null } },
@@ -434,7 +459,7 @@ export async function syncCidListFromSheets(log: (msg: string) => void): Promise
         log,
       );
       stats.statusUpdated += s.updated;
-      stats.recoverNotices += s.recoverNotices;
+      stats.recovered += s.recovered;
     }
 
     if (diff.create.length || diff.cancel.length || diff.rename.length || statusChanges.length) {
@@ -442,7 +467,7 @@ export async function syncCidListFromSheets(log: (msg: string) => void): Promise
     }
   }
 
-  log(`  [CID_List] 完成：比对 ${stats.mccs} 个 MCC（跳过 ${stats.skipped}），新增 ${stats.created}、改名 ${stats.renamed}、取消 ${stats.cancelled}${stats.statusUpdated ? `、状态跟随 ${stats.statusUpdated}` : ""}${stats.recoverNotices ? `、待人工恢复提醒 ${stats.recoverNotices}` : ""}${stats.guardTriggered ? `、缩水保护触发 ${stats.guardTriggered}` : ""}`);
+  log(`  [CID_List] 完成：比对 ${stats.mccs} 个 MCC（跳过 ${stats.skipped}），新增 ${stats.created}、改名 ${stats.renamed}、取消 ${stats.cancelled}${stats.statusUpdated ? `、状态跟随 ${stats.statusUpdated}` : ""}${stats.recovered ? `、自动恢复 ${stats.recovered}` : ""}${stats.guardTriggered ? `、缩水保护触发 ${stats.guardTriggered}` : ""}`);
   return stats;
 }
 
@@ -455,9 +480,9 @@ export async function syncCidStatusesFromSheets(log: (msg: string) => void): Pro
   mccs: number;
   withStatusCol: number;
   updated: number;
-  recoverNotices: number;
+  recovered: number;
 }> {
-  const out = { mccs: 0, withStatusCol: 0, updated: 0, recoverNotices: 0 };
+  const out = { mccs: 0, withStatusCol: 0, updated: 0, recovered: 0 };
   const mccs = await prisma.google_mcc_accounts.findMany({
     where: { is_deleted: 0, sheet_url: { not: null } },
     select: { id: true, mcc_id: true, mcc_name: true, sheet_url: true, user_id: true },
@@ -486,7 +511,7 @@ export async function syncCidStatusesFromSheets(log: (msg: string) => void): Pro
         log,
       );
       out.updated += s.updated;
-      out.recoverNotices += s.recoverNotices;
+      out.recovered += s.recovered;
     } catch (e) {
       // 拉取失败（含被封）不在这里报警——被封告警由 broadcastSheetFailure 通道负责，避免双报
       log(`  [CID状态] ${mcc.mcc_name || mcc.mcc_id}: 本轮跳过（${e instanceof Error ? e.message.slice(0, 100) : e}）`);

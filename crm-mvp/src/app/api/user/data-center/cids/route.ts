@@ -110,17 +110,27 @@ export async function POST(req: NextRequest) {
     });
     const existingMap = new Map(existingCids.map((c) => [c.customer_id, c]));
 
-    let created = 0, updated = 0, cancelled = 0;
+    let created = 0, updated = 0, cancelled = 0, restored = 0;
     const googleCidSet = new Set(childAccounts.map((c) => c.customer_id));
 
     for (const child of childAccounts) {
       const existing = existingMap.get(child.customer_id);
       if (existing) {
+        // D-324：Google 返回 = 真值 ENABLED。库内被停的行（停时连带写了 D）说明已申诉恢复，
+        // status 回 active 必须同时解除 D，否则下拉框继续显示「已停用」并禁选。
+        // 只认「非 active → active」跃迁，管理员强停（status 始终 active + D）不动。
+        const resurrected = existing.status !== "active";
         await prisma.mcc_cid_accounts.update({
           where: { id: existing.id },
-          data: { customer_name: child.customer_name, status: "active", last_synced_at: new Date() },
+          data: {
+            customer_name: child.customer_name,
+            status: "active",
+            ...(resurrected ? { is_available: "U", status_changed_at: new Date() } : {}),
+            last_synced_at: new Date(),
+          },
         });
         updated++;
+        if (resurrected) restored++;
       } else {
         await prisma.mcc_cid_accounts.create({
           data: {
@@ -195,7 +205,7 @@ export async function POST(req: NextRequest) {
 
     return apiSuccess(serializeData({
       cids: cidsWithCounts,
-      synced: { created, updated, cancelled, total: allCids.length },
+      synced: { created, updated, cancelled, restored, total: allCids.length },
     }));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

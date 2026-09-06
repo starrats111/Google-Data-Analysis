@@ -33,15 +33,28 @@ export const POST = withAdmin(async (req: NextRequest) => {
     const existingMap = new Map(existingCids.map((c) => [c.customer_id, c]));
     const googleCidSet = new Set(childAccounts.map((c) => c.customer_id));
 
-    let created = 0, updated = 0, cancelled = 0;
+    let created = 0, updated = 0, cancelled = 0, restored = 0;
     for (const child of childAccounts) {
       const existing = existingMap.get(child.customer_id);
       if (existing) {
+        // D-324：listMccChildAccounts 只返回 Google 侧 ENABLED 子账户，返回即真值恢复。
+        // 库内是被停状态（停用时连带写了 is_available=D）说明账户已申诉回来——status 改回
+        // active 时必须同时解除 D，否则 CID 永远显示「已停用」且禁选（全库没有任何一处
+        // 会把 D 改回来，CID_WRITE_GUARD 还明令禁止批量回写覆盖它）。
+        // 只认「非 active → active」这一跃迁：管理员强停（status 一直是 active + D）不洗白。
+        const resurrected = existing.status !== "active";
         await prisma.mcc_cid_accounts.update({
           where: { id: existing.id },
-          data: { customer_name: child.customer_name, status: "active", last_synced_at: new Date() },
+          data: {
+            customer_name: child.customer_name,
+            status: "active",
+            // 恢复后可用性尚未核实 → U，等状态同步按 ENABLED 计数转 Y/N
+            ...(resurrected ? { is_available: "U", status_changed_at: new Date() } : {}),
+            last_synced_at: new Date(),
+          },
         });
         updated++;
+        if (resurrected) restored++;
       } else {
         await prisma.mcc_cid_accounts.create({
           data: {
@@ -69,7 +82,7 @@ export const POST = withAdmin(async (req: NextRequest) => {
     // D-248：不再把被中止 CID 旗下 ENABLED 系列改判 PAUSED——库里保留 Google 真实状态，
     // 前端按 CID 状态派生显示「被中止」并锁操作（07 拍板 2026-08-18）
 
-    return apiSuccess({ created, updated, cancelled, total: googleCidSet.size });
+    return apiSuccess({ created, updated, cancelled, restored, total: googleCidSet.size });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[Admin CID Sync] 失败:", message);

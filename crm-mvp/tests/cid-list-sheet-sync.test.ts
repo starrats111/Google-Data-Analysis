@@ -165,14 +165,34 @@ describe("diffCidStatuses (D-277)", () => {
     assert.deepEqual(changes.map((c) => c.toStatus), ["suspended", "cancelled"]);
   });
 
-  test("库内被停 + Sheet ENABLED → 只提醒不动库（recover_notice，07 q5=b）", () => {
+  test("库内被停 + Sheet ENABLED → 跟随真值恢复（recover，D-324 改判 q5=b）", () => {
     const changes = diffCidStatuses(
       [row("1111111111", "ENABLED")],
       [ex(1, "1111111111", "a", "suspended")],
     );
     assert.equal(changes.length, 1);
-    assert.equal(changes[0].kind, "recover_notice");
-    assert.equal(changes[0].toStatus, null);
+    assert.equal(changes[0].kind, "recover");
+    assert.equal(changes[0].toStatus, "active");
+  });
+
+  test("库内 cancelled + Sheet ENABLED 同样恢复（申诉回来的注销号）", () => {
+    const changes = diffCidStatuses(
+      [row("1111111111", "ENABLED")],
+      [ex(1, "1111111111", "a", "cancelled")],
+    );
+    assert.deepEqual(changes.map((c) => c.kind), ["recover"]);
+  });
+
+  test("D-324：状态列缺失/不确定时绝不恢复（只认 Status 列真值，不看在不在表里）", () => {
+    const changes = diffCidStatuses(
+      [row("1111111111", null), row("2222222222", "UNKNOWN"), row("3333333333", "")],
+      [
+        ex(1, "1111111111", "a", "suspended"),
+        ex(2, "2222222222", "b", "cancelled"),
+        ex(3, "3333333333", "c", "suspended"),
+      ],
+    );
+    assert.equal(changes.length, 0);
   });
 
   test("suspended ↔ cancelled 之间跟随 Google 真值", () => {
