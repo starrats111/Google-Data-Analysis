@@ -16,6 +16,9 @@ export const maxDuration = 60;
  *   2. 筛出"异常"连接：status='error' OR last_synced_at < NOW() - 24h
  *   3. 为每个异常连接写一条 notifications（type='alert'）给所属用户
  *   4. 如所属用户有 leader（is_leader=0 + leader_user_id 关联），同时给 leader 发一条
+ *   5. D-323：扫「同一把 api_key 挂在多个用户名下」的串号，通知卷入的用户 + 全体管理员。
+ *      这类连接骗得过第 2 步——它 status=connected、失败计数 0、每半小时刷新 last_synced_at，
+ *      只是在更新别人的交易行；被占的一方名下 0 条。指纹只能靠 api_key 分组去查。
  *
  * 07 决策：仅站内 notifications（不发邮件/WhatsApp）
  *
@@ -194,11 +197,106 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // ── D-323：同一把 Key 挂在多个用户名下的撞车检测 ──
+  //
+  // 这是 D-322 那道闸的兜底：闸只拦新建/改 Key，拦不住已经存在的撞车，也拦不住直接改库。
+  // 撞车的后果是佣金被静默吞掉——`affiliate_transactions` 的唯一键 (platform, transaction_id)
+  // 全局唯一、不含 user_id，两条 sync 路径的 upsert `update` 分支又不改 user_id，
+  // 所以**先同步的人占走全部佣金，后绑的人名下永远 0 条**。
+  //
+  // 上面那套 D-026 巡检一条都发现不了：撞车的连接 status=connected、consecutive_failures=0、
+  // last_synced_at 每半小时刷新（它确实在同步，只是在更新别人的行）。2026-09-06 wj02 的
+  // RW 佣金被工具账号「佣金查询」占了 9 笔 $27.62，全靠人肉发现。这里按指纹直接扫。
+  type CollisionRow = { platform: string; conn_count: bigint | number; who: string; user_ids: string };
+  const collisions: CollisionRow[] = await prisma.$queryRawUnsafe(`
+    SELECT pc.platform,
+           COUNT(*) AS conn_count,
+           GROUP_CONCAT(CONCAT(u.username, ' / ', pc.account_name, ' #', pc.id) ORDER BY pc.id SEPARATOR ' | ') AS who,
+           GROUP_CONCAT(DISTINCT pc.user_id ORDER BY pc.user_id) AS user_ids
+    FROM platform_connections pc
+    JOIN users u ON u.id = pc.user_id
+    WHERE pc.is_deleted = 0 AND pc.api_key IS NOT NULL AND LENGTH(pc.api_key) > 5
+    GROUP BY pc.platform, pc.api_key
+    HAVING COUNT(DISTINCT pc.user_id) > 1
+  `);
+
+  let collisionNotifs = 0;
+  if (collisions.length > 0) {
+    log(`⚠ 发现 ${collisions.length} 组跨用户共用 API Key（佣金会被先同步的人占走）`);
+    // 通知每一个卷入的用户 + 全体管理员：谁被谁占了，用户自己看不出来，必须点名
+    const involvedUserIds = new Set<string>();
+    for (const c of collisions) {
+      for (const uid of String(c.user_ids).split(",")) {
+        if (uid.trim()) involvedUserIds.add(uid.trim());
+      }
+    }
+    const admins = await prisma.users.findMany({
+      where: { role: "admin", status: "active", is_deleted: 0 },
+      select: { id: true },
+    });
+    const targets = new Set<string>([
+      ...involvedUserIds,
+      ...admins.map((a) => a.id.toString()),
+    ]);
+    const title = `平台连接串号：${collisions.length} 组账号被多人共用`;
+    const content = [
+      `检测到同一把联盟 API Key 挂在多个用户名下。这种情况下佣金会被**先同步的那个人全部占走**，`,
+      `后绑定的人名下一条交易都不会有，而且双方界面都是绿灯、看不出任何异常。`,
+      "",
+      ...collisions.slice(0, 20).map((c) => `  • ${c.platform}：${c.who}`),
+      collisions.length > 20 ? `  ...另外 ${collisions.length - 20} 组` : "",
+      "",
+      `处理办法：确认这个联盟账号到底归谁，让其他人删除自己那条连接；`,
+      `已经落到错误账号下的交易需要人工改判（改 user_id / platform_connection_id / user_merchant_id）。`,
+    ].filter(Boolean).join("\n");
+
+    for (const uid of targets) {
+      const dup = await prisma.notifications.count({
+        where: {
+          user_id: BigInt(uid),
+          type: "alert",
+          title: { startsWith: "平台连接串号" },
+          created_at: { gte: new Date(Date.now() - 24 * 3600 * 1000) },
+          is_deleted: 0,
+        },
+      });
+      if (dup > 0) continue;
+      await prisma.notifications.create({
+        data: {
+          user_id: BigInt(uid),
+          type: "alert",
+          title,
+          content,
+          metadata: JSON.stringify({
+            source: "D-323 shared-api-key collision",
+            groups: collisions.length,
+            detail: collisions.map((c) => ({ platform: c.platform, who: c.who })),
+          }),
+        },
+      });
+      collisionNotifs++;
+    }
+    notifsCreated += collisionNotifs;
+
+    const { sendAlert } = await import("@/lib/alert");
+    void sendAlert({
+      level: "warning",
+      title: "平台连接串号：同一把 API Key 挂了多个用户",
+      content: [
+        `${collisions.length} 组共用凭据，佣金会被先同步的人占走，被占的一方名下 0 条且界面全绿。`,
+        ...collisions.slice(0, 10).map((c) => `${c.platform}：${c.who}`),
+      ].join("\n"),
+      source: "cron/connection-health",
+    });
+  }
+
   const elapsed = Date.now() - startedAt.getTime();
   const result = {
     ok: true,
     scanned: rawConns.length,
     unhealthy: rawConns.length,
+    key_collision_groups: collisions.length,
+    key_collision_notifications: collisionNotifs,
     notifications_created: notifsCreated,
     users_alerted: userIdsAlerted.size,
     leaders_alerted: leaderAggregate.size,

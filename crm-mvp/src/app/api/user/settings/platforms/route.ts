@@ -15,6 +15,38 @@ export async function GET(req: NextRequest) {
   return apiSuccess(serializeData(connections));
 }
 
+/**
+ * D-322：同一把联盟 Key 不许挂在两个用户名下。
+ *
+ * 起因（2026-09-06 wj02）：她的 RW 账号 bloomroots 的 Key 同时存在于 投手1#116、
+ * wj111#335（工具账号「佣金查询」）、wj02#342 三条连接。`affiliate_transactions` 的唯一键
+ * `uk_platform_txn` 是 (platform, transaction_id) **全局唯一、不含 user_id**，而两条 sync
+ * 路径的 upsert `update` 分支都不改 `user_id`/`platform_connection_id` ——
+ * 于是**先同步的那个人占有这笔佣金，后来者每半小时把别人的行更新一遍，自己名下永远 0 条**。
+ * wj02 的 9 笔 $27.62 就这样记在了「佣金查询」头上，而界面全程绿灯：连接 connected、
+ * 失败计数 0、cron 日志有 `raw=8 → 3`、Key 直连返回 code:0。全库同类另有 12 条哑雷 + LH 一处活体。
+ *
+ * 下面这道闸是根治口：建/改连接时就拒绝，不让第二个人拿到同一把 Key。
+ * 已存在的撞车由 D-323 的巡检兜底（连接健康 cron）。
+ */
+async function findForeignKeyHolder(platform: string, apiKey: string, userId: bigint) {
+  const holder = await prisma.platform_connections.findFirst({
+    where: { platform, api_key: apiKey, is_deleted: 0, user_id: { not: userId } },
+    select: { id: true, account_name: true, user_id: true },
+  });
+  if (!holder) return null;
+  const owner = await prisma.users.findFirst({
+    where: { id: holder.user_id },
+    select: { username: true, display_name: true },
+  });
+  const who = owner ? `${owner.username}${owner.display_name ? `（${owner.display_name}）` : ""}` : `user#${holder.user_id}`;
+  return apiError(
+    `这把 API Key 已经挂在 ${who} 的连接「${holder.account_name}」(id=${holder.id}) 下了，不能重复绑定。` +
+    `同一把 Key 挂两个人时，交易表按 (平台, 交易号) 全局去重，先同步的人会占走全部佣金，后绑的人一条都拿不到。` +
+    `若这个联盟账号确实已经转给你，请先让对方删除该连接，或联系管理员处理。`,
+  );
+}
+
 export async function POST(req: NextRequest) {
   const user = getUserFromRequest(req);
   if (!user) return apiError("未授权", 401);
@@ -69,6 +101,9 @@ export async function POST(req: NextRequest) {
     }
     if (account_name !== undefined) data.account_name = account_name;
     if (api_key && api_key.trim() && api_key !== existing.api_key) {
+      // D-322：换 Key 也要过跨用户查重，否则「编辑」这条路仍能把别人的 Key 抢过来
+      const conflict = await findForeignKeyHolder(existing.platform, api_key.trim(), userId);
+      if (conflict) return conflict;
       data.api_key = api_key;
       // D-300：换了 Key 就得把上一把 Key 的健康状态一起翻篇，否则重配完仍然挂着
       // 旧的 last_error（现场就是「重新配置 API Key」之后卡片照旧红着骂密钥失效）。
@@ -109,6 +144,11 @@ export async function POST(req: NextRequest) {
     });
     return apiSuccess(null, `该平台已存在相同凭据的连接「${sameKeyConn.account_name}」，已复用并更新，未新建重复连接`);
   }
+
+  //   ①.5 D-322：这把 Key 已经挂在**别人**名下 → 直接拒绝。上面 ① 只看本人的连接，
+  //        跨用户撞车正是佣金被静默吞掉的那条路（详见 findForeignKeyHolder 的注释）。
+  const foreignHolder = await findForeignKeyHolder(platform, trimmedKey, userId);
+  if (foreignHolder) return foreignHolder;
 
   //   ② 用户显式指定的名字与现有 active 连接同名（多为「换 API Key 却走了新建」）→ 拦截并引导去「编辑」
   //      现有连接更新 Key（保持连接 id 不变），避免同一账号的订单与刷点击分裂到两条连接。
