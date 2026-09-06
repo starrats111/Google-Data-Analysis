@@ -11,7 +11,7 @@ import {
   RiseOutlined, FallOutlined, SyncOutlined,
   CloudDownloadOutlined, EditOutlined, SearchOutlined,
   PlayCircleOutlined, PauseCircleOutlined, RedoOutlined, PlusOutlined,
-  TableOutlined, WarningOutlined, EyeOutlined, RobotOutlined,
+  TableOutlined, WarningOutlined, EyeOutlined, RobotOutlined, FlagOutlined,
 } from "@ant-design/icons";
 import AppPageHeader from "@/components/AppPageHeader";
 import type { ColumnsType } from "antd/es/table";
@@ -858,12 +858,14 @@ export default function DataCenterPage() {
                 </Tooltip>
               )
             )}
-            {/* D-321：被 Google 拒登 → 记原因 + 当场标「已移除」，不用再绕到商家页 */}
+            {/* D-321：被 Google 拒登 → 记原因 + 当场标「已移除」，不用再绕到商家页。
+                D-321.1：图标必须是「低调的动作按钮」，不能是红色警告三角——每行都有的红三角
+                被 07 一眼读成「她的广告全被拒登了」，员工同样会误读。灰色旗标 + 疑问句 tooltip。 */}
             {v !== "REMOVED" && r.google_campaign_id && (
-              <Tooltip title="这条被 Google 拒登了：记录拒登原因，并在 CRM 标记为已移除（Google 那边请自行移除）">
+              <Tooltip title="这条被 Google 拒登了？点这里记录拒登原因，并把它在 CRM 标为已移除（Google 那边请自行移除）">
                 <Button
                   type="text" size="small"
-                  icon={<WarningOutlined style={{ color: "#cf1322" }} />}
+                  icon={<FlagOutlined style={{ color: "#bfbfbf" }} />}
                   onClick={() => openReject(r)}
                   style={{ padding: 0, height: 20, width: 20 }}
                 />
