@@ -904,6 +904,31 @@ async function syncAllCampaignStatuses(): Promise<unknown> {
         });
       }
 
+      // D-325：上面这个循环只遍历「Sheet 里有广告行的 CID」，一条广告都没有的空号
+      // 根本进不了 cidHasEnabled，于是永远停在登记时的 U——而「零广告」恰恰就是「空闲」，
+      // 最该判 Y 的那批号反倒是唯一转不出 U 的那批（改前 112 个 U 里 75 个是空号，
+      // 最久的卡了七周）。空号也是核实结果，系统自己判，不该挂个用户清不掉的标签。
+      //
+      // 安全前提 statuses.length > 0：Sheet 拉到了真实数据才敢把「表里没有」当「没广告」。
+      // 空表/残表（脚本 clearContents 后中断）时一律不动，否则会把全 MCC 刷成空闲。
+      if (statuses.length > 0) {
+        const idleCids = await prisma.mcc_cid_accounts.findMany({
+          where: {
+            mcc_account_id: mcc.id, is_deleted: 0,
+            customer_id: { notIn: [...cidHasEnabled.keys()] },
+            ...CID_WRITE_GUARD,
+          },
+          select: { id: true },
+        });
+        if (idleCids.length > 0) {
+          await prisma.mcc_cid_accounts.updateMany({
+            where: { id: { in: idleCids.map((c) => c.id) } },
+            data: { is_available: "Y", last_synced_at: new Date() },
+          });
+          log(`  MCC ${mcc.mcc_name || mcc.mcc_id}: ${idleCids.length} 个零广告 CID 核实为空闲(Y)`);
+        }
+      }
+
       results[`mcc_${mcc.mcc_id}`] = { statuses: statuses.length, updated };
       log(`  MCC ${mcc.mcc_name || mcc.mcc_id}: ${statuses.length} campaigns, ${updated} updated`);
     } catch (e) {
@@ -912,10 +937,24 @@ async function syncAllCampaignStatuses(): Promise<unknown> {
       log(`  MCC ${mcc.mcc_name || mcc.mcc_id} status sync error: ${msg}`);
       // 批次5：本轮没核实到的 MCC，其"空闲"标记不再可信 → 降级为 U（未核实），
       // 防止自动选号把过期的 Y 当真。N/D 保持不动（占用/停用无需降级）。
-      await prisma.mcc_cid_accounts.updateMany({
+      const degraded = await prisma.mcc_cid_accounts.updateMany({
         where: { mcc_account_id: mcc.id, is_deleted: 0, status: "active", is_available: "Y" },
         data: { is_available: "U" },
-      }).catch(() => {});
+      }).catch(() => ({ count: 0 }));
+      // D-325：这个降级原来只写 console 日志，对外完全静默——唯一的对外痕迹是员工下拉框里
+      // 多出来的「（未核实）」，而那是员工既看不懂也清不掉的。同步失败是系统故障，
+      // 得报到人，不能让它伪装成用户任务。
+      if (degraded.count > 0) {
+        const { sendAlert } = await import("@/lib/alert");
+        void sendAlert({
+          level: "warning",
+          title: `MCC ${mcc.mcc_name || mcc.mcc_id} 广告状态同步失败`,
+          content:
+            `本轮未能核实该 MCC 的广告状态，${degraded.count} 个 CID 的「空闲」标记已降级为未核实` +
+            `（自动选号会避开它们，直到下一轮同步成功）。\n失败原因：${msg.slice(0, 300)}`,
+          source: "cron/daily-sync cid-status",
+        });
+      }
     }
   }
   return results;

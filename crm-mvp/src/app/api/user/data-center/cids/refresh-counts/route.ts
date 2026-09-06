@@ -127,6 +127,26 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // D-325：零广告的空号在 sheetMap 里一条行都没有，进不了上面的循环，
+    // 于是点多少次「刷新广告数量」都核实不了，永远停在 U。空号 = 空闲，一并判 Y。
+    // 前提 sheetMap.size > 0：Sheet 真拉到数据才敢把「表里没有」当「没广告」。
+    if (sheetMap.size > 0) {
+      const idle = await prisma.mcc_cid_accounts.findMany({
+        where: {
+          mcc_account_id: BigInt(mccAccountId), is_deleted: 0,
+          customer_id: { notIn: [...cidEnabledFlag.keys()] },
+          ...CID_WRITE_GUARD,
+        },
+        select: { id: true },
+      });
+      if (idle.length > 0) {
+        await prisma.mcc_cid_accounts.updateMany({
+          where: { id: { in: idle.map((c) => c.id) } },
+          data: { is_available: "Y", last_synced_at: new Date() },
+        });
+      }
+    }
+
     // 4. 重新 groupBy 三段计数，返回与 GET 相同结构
     const refreshedCids = await prisma.mcc_cid_accounts.findMany({
       where: { mcc_account_id: BigInt(mccAccountId), is_deleted: 0, status: "active" },

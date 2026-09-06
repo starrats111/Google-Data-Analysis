@@ -3550,7 +3550,12 @@ export default function AdPreviewPage() {
                   .sort((a, b) => (Number(a.customer_name) || 0) - (Number(b.customer_name) || 0))
                   .map((c) => ({
                     value: c.customer_id,
-                    label: `${formatCid(c.customer_id)}${c.customer_name ? ` - ${c.customer_name}` : ""}${c.is_available === "U" ? "（未核实）" : ""}${c.is_available === "D" ? "（已停用）" : ""}`,
+                    // D-325：不再显示「（未核实）」。U 是系统自己的核实进度，员工既无法
+                    // 判断也无法清除（点「刷新广告数量」也转不出去），挂在这里只是让人
+                    // 以为自己该做点什么。U 仍参与自动选号排序（靠后），运维要看分布
+                    // 去「账户状态看板」，那里保留 Y/N/U/D 四态标签。
+                    // 用户能采取行动的状态才配有标签——「已停用」是（去申诉），U 不是。
+                    label: `${formatCid(c.customer_id)}${c.customer_name ? ` - ${c.customer_name}` : ""}${c.is_available === "D" ? "（已停用）" : ""}`,
                     disabled: !isCidSelectable(c.is_available),
                   }))}
                 optionRender={(option) => {
