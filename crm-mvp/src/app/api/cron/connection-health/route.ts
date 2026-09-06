@@ -7,7 +7,9 @@ export const maxDuration = 60;
 /**
  * D-026 每日 API 连接健康巡检
  *
- * 触发：每日 09:00 CST（cron `0 1 * * *` 服务器时间为 UTC，09:00 CST = 01:00 UTC）
+ * 触发：每日 09:00 CST（crontab `0 9 * * *`）
+ * ⚠️ D-320 校准：本机时区是 CST 不是 UTC，原先写成 `0 1` 的表达式实际每天凌晨 1 点跑，
+ *    通知发出去时没人看；2026-09-06 改回 `0 9`。同批 cron 的其余整点任务核对过，时间都是对的。
  *
  * 任务：
  *   1. 扫所有 `platform_connections WHERE is_deleted=0`
