@@ -671,7 +671,26 @@ async function syncAllCampaignStatuses(): Promise<unknown> {
       const { loadSuspendedCidSet, normalizeCid } = await import("@/lib/google-ads/cid-suspension");
       const suspendedCids = await loadSuspendedCidSet([mcc.id]);
 
+      // D-321：本地人工移除（拒登）的系列——状态是终态。成员收到拒登通知后自己去 Google 移除，
+      // 在他动手之前 Google 仍返回 ENABLED，这里若跟随就会把它冲回「已启用」，
+      // 员工点的「拒登」白点、CID 名额继续被占。这类行本轮只刷同步时间。
+      const locallyRemovedRows = await prisma.campaigns.findMany({
+        where: { user_id: mcc.user_id, mcc_id: mcc.id, is_deleted: 0, remove_source: { not: null } },
+        select: { google_campaign_id: true },
+      });
+      const locallyRemovedGcids = new Set(
+        locallyRemovedRows.map((c) => c.google_campaign_id).filter((g): g is string => !!g),
+      );
+
       for (const s of statuses) {
+        // D-321：本地已人工移除 → 不跟随 Google 状态，也不进下面的复活闸门
+        if (locallyRemovedGcids.has(s.campaign_id)) {
+          await prisma.campaigns.updateMany({
+            where: { user_id: mcc.user_id, google_campaign_id: s.campaign_id, is_deleted: 0 },
+            data: { last_google_sync_at: new Date() },
+          });
+          continue;
+        }
         // D-034：检测 PAUSED→ENABLED 漂移
         if (s.status === "ENABLED" && pausedByGcid.has(s.campaign_id)) {
           const existing = pausedByGcid.get(s.campaign_id)!;

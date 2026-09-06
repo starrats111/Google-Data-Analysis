@@ -4,6 +4,7 @@ import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
 import { removeCampaign } from "@/lib/google-ads";
 import { generateCampaignName, hasAssignedFormalCampaignName, resolvePlatformLabel } from "@/lib/campaign-naming";
+import { CLEAR_LOCAL_REMOVE } from "@/lib/campaign-local-remove";
 
 /**
  * POST /api/user/ad-creation/republish
@@ -87,6 +88,8 @@ export async function POST(req: NextRequest) {
       // D-245：重发即重新开始投放，清掉历史暂停记录
       paused_at: null,
       pause_source: null,
+      // D-321：重发即这条广告重新做人，清掉「拒登本地移除」标记，状态交还给同步
+      ...CLEAR_LOCAL_REMOVE,
     },
   });
 

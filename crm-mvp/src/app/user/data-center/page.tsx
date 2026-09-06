@@ -17,6 +17,7 @@ import AppPageHeader from "@/components/AppPageHeader";
 import type { ColumnsType } from "antd/es/table";
 import { PLATFORMS } from "@/lib/constants";
 import { TXN_TZ_NOTE } from "@/lib/report-metrics";
+import { POLICY_CATEGORY_MAP, POLICY_CATEGORY_LABELS } from "@/lib/policy-hub/policy-categories";
 import dayjs, { Dayjs } from "dayjs";
 import utc from "dayjs/plugin/utc";
 import timezone from "dayjs/plugin/timezone";
@@ -38,6 +39,12 @@ const TZ = "Asia/Shanghai";
 // 否则隐藏列后固定列（广告系列）会与表体错位。
 
 const { Text } = Typography;
+
+/** D-321 拒登政策类别下拉（与商家页同一张表，value=policyName code） */
+const POLICY_OPTIONS = Object.entries(POLICY_CATEGORY_MAP).map(([code, e]) => ({
+  value: code,
+  label: `${POLICY_CATEGORY_LABELS[e.category]} / ${e.labelZh}`,
+}));
 
 // ========== D-239 自定义列展示：列注册表 ==========
 /** 后端 user_table_preferences 的 table_key */
@@ -581,6 +588,43 @@ export default function DataCenterPage() {
     } finally { setTogglingId(null); }
   }, [message]);
 
+  // ========== D-321 拒登 → 记原因 + 当场在 CRM 标记「已移除」 ==========
+  // 员工是在本页发现广告被拒登的，之前只能绕到「商家」页展开子表才有这个按钮。
+  // Google 侧由成员自己移除；CRM 这边标完就不再占「选 CID」的在投名额。
+  const [rejectModal, setRejectModal] = useState<{ open: boolean; row: CampaignRow | null }>({ open: false, row: null });
+  const [rejectForm] = Form.useForm<{ policy_category: string; reason_text: string }>();
+  const [rejectSubmitting, setRejectSubmitting] = useState(false);
+
+  const openReject = useCallback((row: CampaignRow) => {
+    rejectForm.resetFields();
+    setRejectModal({ open: true, row });
+  }, [rejectForm]);
+
+  const submitReject = useCallback(async () => {
+    let values: { policy_category: string; reason_text: string };
+    try { values = await rejectForm.validateFields(); } catch { return; }
+    const row = rejectModal.row;
+    if (!row) return;
+    setRejectSubmitting(true);
+    try {
+      const res = await fetch("/api/user/ad-rejection-feedback", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ campaign_id: row.id, policy_category: values.policy_category, reason_text: values.reason_text }),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        message.success(
+          res.data?.marked_removed
+            ? "已记录拒登原因，并把该广告标记为「已移除」，不再占用 CID 名额"
+            : "已记录拒登原因（该广告此前已是移除状态）",
+        );
+        setRejectModal({ open: false, row: null });
+        setStatusOverrides((prev) => ({ ...prev, [row.id]: "REMOVED" }));
+        refreshApi(/\/api\/user\/data-center/);
+      } else message.error(res.message || "保存失败");
+    } catch { message.error("保存失败，请重试"); }
+    finally { setRejectSubmitting(false); }
+  }, [rejectForm, rejectModal, message]);
+
   // ========== D-238 广告 AI 分析 ==========
   const [strategy, setStrategy] = useState("balanced");
   const [analysisMap, setAnalysisMap] = useState<Record<string, AnalysisItem>>({});
@@ -813,6 +857,17 @@ export default function DataCenterPage() {
                   />
                 </Tooltip>
               )
+            )}
+            {/* D-321：被 Google 拒登 → 记原因 + 当场标「已移除」，不用再绕到商家页 */}
+            {v !== "REMOVED" && r.google_campaign_id && (
+              <Tooltip title="这条被 Google 拒登了：记录拒登原因，并在 CRM 标记为已移除（Google 那边请自行移除）">
+                <Button
+                  type="text" size="small"
+                  icon={<WarningOutlined style={{ color: "#cf1322" }} />}
+                  onClick={() => openReject(r)}
+                  style={{ padding: 0, height: 20, width: 20 }}
+                />
+              </Tooltip>
             )}
           </Space>
         );
@@ -1430,6 +1485,42 @@ export default function DataCenterPage() {
         onApplied={refreshAnalysis}
         onReanalyzed={refreshAnalysis}
       />
+
+      {/* ========== D-321 拒登：记原因 + 当场标「已移除」 ========== */}
+      <Modal
+        title="记录广告拒登"
+        open={rejectModal.open}
+        onOk={submitReject}
+        confirmLoading={rejectSubmitting}
+        onCancel={() => setRejectModal({ open: false, row: null })}
+        okText="保存并标记已移除"
+        cancelText="取消"
+        destroyOnHidden
+      >
+        <Alert
+          type="warning" showIcon style={{ marginBottom: 12 }}
+          message="保存后该广告在 CRM 立刻变成「已移除」，不再占用「选 CID」里的在投名额"
+          description="CRM 只管我们这边的账，不会去动 Google——请自行到 Google Ads 后台移除这条广告，否则它还会继续花钱（系统每天会巡检并提醒）。系统同时会抓取该广告当前的标题/描述作为被拒文案快照，同商家下次生成广告强约束避开这些写法。"
+        />
+        {rejectModal.row && (
+          <div style={{ marginBottom: 12, fontSize: 12, color: "#888", wordBreak: "break-all" }}>
+            广告系列：{rejectModal.row.campaign_name}
+          </div>
+        )}
+        <Form form={rejectForm} layout="vertical">
+          <Form.Item name="policy_category" label="拒登政策类别" rules={[{ required: true, message: "请选择政策类别" }]}>
+            <Select showSearch placeholder="选择 Google Ads 政策类别" optionFilterProp="label" options={POLICY_OPTIONS} />
+          </Form.Item>
+          <Form.Item name="reason_text" label="具体拒登原因" rules={[{ required: true, message: "请填写具体拒登原因" }]}>
+            <Input.TextArea
+              rows={4}
+              maxLength={1000}
+              showCount
+              placeholder="填写 Google Ads 给出的具体拒登说明，越具体越能帮助后续广告避坑（例如：标题含未授权品牌名 XXX / 落地页缺少价格披露 / 文案含绝对化宣称 Best）"
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
 
     </div>
   );

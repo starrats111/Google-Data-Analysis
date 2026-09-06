@@ -482,6 +482,8 @@ export const CampaignsScalarFieldEnum = {
   last_google_sync_at: 'last_google_sync_at',
   paused_at: 'paused_at',
   pause_source: 'pause_source',
+  removed_at: 'removed_at',
+  remove_source: 'remove_source',
   status_verified_at: 'status_verified_at',
   hermes_managed_at: 'hermes_managed_at',
   previous_gcids: 'previous_gcids',
@@ -1887,6 +1889,7 @@ export const campaignsOrderByRelevanceFieldEnum = {
   status: 'status',
   google_status: 'google_status',
   pause_source: 'pause_source',
+  remove_source: 'remove_source',
   final_url_suffix: 'final_url_suffix',
   suffix_last_content: 'suffix_last_content'
 } as const

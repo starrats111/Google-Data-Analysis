@@ -439,6 +439,12 @@ model campaigns {
   // REMOVED 保留（曾暂停过的进复盘）。backfill = 上线时用 last_google_sync_at 近似回填的存量值
   paused_at                  DateTime? @db.DateTime(0)
   pause_source               String?   @db.VarChar(20) // manual / spend_guard / ai_apply / sync(近似) / change_history(精确) / backfill(近似)
+  // D-321：本地人工移除（拒登）。非空 = 员工在 CRM 判定这条广告已死（Google 侧由成员自己移除），
+  // google_status 置 REMOVED 后所有同步入口不得再冲回——sync 看到 remove_source 非空一律跳过状态写入。
+  // 「重发此条」发出新广告时清空（状态跟随新广告）。巡检 removed-still-spending 负责兜住
+  // 「CRM 已移除但成员忘了在 Google 移除、还在烧钱」这种情况。
+  removed_at                 DateTime? @db.DateTime(0)
+  remove_source              String?   @db.VarChar(20) // rejection（记拒登时自动）
   // D-246：CRM 实时操作确认时间 — toggle/apply-actions 直连 Google mutate 成功后写入。
   // Sheet 快照类状态同步在信任窗口（默认 90 分钟，SHEET_STATUS_TRUST_MIN 可调）内不得覆盖状态，
   // 防止过期快照把刚暂停/启用的系列翻回去（2026-08-18 wj02 暂停 425-Hiccapop 后被 sync 刷回 active 实证）

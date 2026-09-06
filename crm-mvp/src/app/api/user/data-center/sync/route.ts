@@ -12,6 +12,7 @@ import { applyAffiliateCommissionToDailyStats } from "@/lib/daily-stats-commissi
 import { aggregateRawTransactions } from "@/lib/affiliate-txn-aggregate";
 import { markConnectionSuccess, markConnectionReachable, markConnectionFailure } from "@/lib/connection-health";
 import { createCampaignDedup, loadSoftDeletedGcids } from "@/lib/google-ads/campaign-dedup";
+import { isLocallyRemoved } from "@/lib/campaign-local-remove";
 
 /**
  * POST /api/user/data-center/sync
@@ -323,18 +324,24 @@ async function syncAdsData(
             campaign = createdC;
             campaignMap.set(cd.campaign_id, campaign);
           } else {
+            // D-321：本地人工移除（拒登）的行不跟随 Google 状态——成员还没在 Google 那边移除时，
+            //        这里会把它冲回 ENABLED，员工点的「拒登」白点、CID 名额继续被占。只刷预算和同步时间。
+            const localRemoved = isLocallyRemoved(campaign);
             const updateData: Record<string, unknown> = {
-              daily_budget: cd.budget_dollars, google_status: cd.campaign_status, last_google_sync_at: new Date(),
+              daily_budget: cd.budget_dollars, last_google_sync_at: new Date(),
+              ...(localRemoved ? {} : { google_status: cd.campaign_status }),
             };
             // D-245 复盘分析：同步发现 →PAUSED 翻转记录暂停时间；→ENABLED 清空；REMOVED 保留原值
-            if (cd.campaign_status === "PAUSED" && campaign.google_status !== "PAUSED") {
-              updateData.paused_at = new Date();
-              updateData.pause_source = "sync";
-            } else if (cd.campaign_status === "ENABLED") {
-              updateData.paused_at = null;
-              updateData.pause_source = null;
+            if (!localRemoved) {
+              if (cd.campaign_status === "PAUSED" && campaign.google_status !== "PAUSED") {
+                updateData.paused_at = new Date();
+                updateData.pause_source = "sync";
+              } else if (cd.campaign_status === "ENABLED") {
+                updateData.paused_at = null;
+                updateData.pause_source = null;
+              }
+              campaign.google_status = cd.campaign_status;
             }
-            campaign.google_status = cd.campaign_status;
             if (!campaign.customer_id && cd.customer_id) {
               updateData.customer_id = cd.customer_id;
               campaign.customer_id = cd.customer_id;
@@ -400,7 +407,8 @@ async function syncAdsData(
             if (existing) {
               // D-040 BUG-1：反向同步内部 status 字段，避免 CRM 暂停后被 cron 覆盖
               // D-246：信任窗口内（刚被 toggle/apply-actions 实时确认）不允许过期 Sheet 快照翻状态、清 paused_at
-              const trusted = isStatusRecentlyVerified(existing.status_verified_at);
+              // D-321：本地人工移除（拒登）是终态，Sheet 快照不得翻它——名字/CID 仍可回写
+              const trusted = isStatusRecentlyVerified(existing.status_verified_at) || isLocallyRemoved(existing);
               const expectedInternalStatus = cs.status === "PAUSED" || cs.status === "REMOVED" ? "paused" : "active";
               const statusNeedsSync = !trusted
                 && (existing.google_status !== cs.status || existing.status !== expectedInternalStatus);

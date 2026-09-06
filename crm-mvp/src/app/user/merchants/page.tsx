@@ -899,7 +899,12 @@ export default function MerchantsPage() {
         body: JSON.stringify({ campaign_id: campaign.id, policy_category: values.policy_category, reason_text: values.reason_text }),
       }).then(x => x.json());
       if (r.code === 0) {
-        message.success("拒登原因已记录，将作为该商家/同行业广告生成的避坑约束");
+        // D-321：记拒登 = 同时在 CRM 标「已移除」
+        message.success(
+          r.data?.marked_removed
+            ? "已记录拒登原因，并把该广告标记为「已移除」，不再占用 CID 名额"
+            : "拒登原因已记录，将作为该商家/同行业广告生成的避坑约束",
+        );
         setRejectModal({ open: false, merchantId: null, campaign: null });
         if (merchantId) void loadMerchantCampaigns(merchantId);
       } else message.error(r.message || "保存失败");
@@ -1605,9 +1610,9 @@ export default function MerchantsPage() {
       destroyOnHidden
     >
       <Alert
-        type="info" showIcon style={{ marginBottom: 12 }}
-        message="保存后系统会自动抓取该广告当前的标题/描述作为被拒文案快照"
-        description="同商家下次生成广告会强约束避开这些写法，同行业会作为软提示参考。本操作不消耗任何 API，也不会修改真实广告系列名。"
+        type="warning" showIcon style={{ marginBottom: 12 }}
+        message="保存后该广告在 CRM 立刻变成「已移除」，不再占用「选 CID」里的在投名额"
+        description="CRM 只管我们这边的账，不会去动 Google——请自行到 Google Ads 后台移除这条广告，否则它还会继续花钱（系统每天会巡检并提醒）。系统同时会抓取该广告当前的标题/描述作为被拒文案快照：同商家下次生成广告强约束避开这些写法，同行业作为软提示参考。本操作不消耗任何 API。"
       />
       {rejectModal.campaign && (
         <div style={{ marginBottom: 12, fontSize: 12, color: "#888", wordBreak: "break-all" }}>

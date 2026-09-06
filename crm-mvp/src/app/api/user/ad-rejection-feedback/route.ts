@@ -5,12 +5,14 @@ import prisma from "@/lib/prisma";
 import { POLICY_CATEGORY_MAP } from "@/lib/policy-hub/policy-categories";
 import { policyLabelFor } from "@/lib/intellicenter/ad-creation/rejection-feedback";
 import { detectIndustryProfile } from "@/lib/industry-profile";
+import { REMOVE_SOURCE_REJECTION } from "@/lib/campaign-local-remove";
 
 /**
  * D-050 广告拒登反馈（事后学习负样本，员工手动录入，零 API）
  *
  * GET  /api/user/ad-rejection-feedback        → 当前用户的拒登记录（数据中心展示备注标记 + 列表）
  * POST /api/user/ad-rejection-feedback        → 录入一条拒登记录（自动抓被拒文案快照 + 行业识别）
+ *                                               + D-321：同时把该广告在 CRM 标记为「已移除」
  *
  * 复用范围：同商家=强约束、同行业=软提示（见 rejection-feedback.ts 的生成期加载逻辑）。
  */
@@ -97,6 +99,8 @@ export async function POST(req: NextRequest) {
         user_merchant_id: true,
         google_campaign_id: true,
         campaign_name: true,
+        google_status: true,
+        remove_source: true,
       },
     });
     if (!campaign) return apiError("广告系列不存在或无权操作", 404);
@@ -156,7 +160,32 @@ export async function POST(req: NextRequest) {
       select: { id: true },
     });
 
-    return apiSuccess(serializeData({ id: created.id, industry_category: industry?.id ?? null }));
+    // 6. D-321：拒登即在 CRM 标记「已移除」——Google 侧由成员收到拒登通知后自己移除，
+    //    CRM 这边当场同步移除，员工不用干等下一轮同步。remove_source 一并写死，
+    //    否则手动同步 / 06:00 daily-sync 会按 Google 的 ENABLED 把它冲回去，继续占 CID 名额。
+    const wasRemoved = campaign.google_status === "REMOVED" && !!campaign.remove_source;
+    if (!wasRemoved) {
+      await prisma.campaigns.update({
+        where: { id: campaign.id },
+        data: {
+          status: "paused",
+          google_status: "REMOVED",
+          removed_at: new Date(),
+          remove_source: REMOVE_SOURCE_REJECTION,
+        },
+      });
+      console.log(
+        `[ad-rejection-feedback] D-321 拒登即移除 campaign#${campaign.id}「${campaign.campaign_name}」` +
+        `${campaign.google_status} → REMOVED`,
+      );
+    }
+
+    return apiSuccess(serializeData({
+      id: created.id,
+      industry_category: industry?.id ?? null,
+      // 前端据此提示「已标记为已移除，不再占用 CID 名额」
+      marked_removed: !wasRemoved,
+    }));
   } catch (e) {
     console.error(`[ad-rejection-feedback] POST failed: ${e instanceof Error ? e.message : e}`);
     return apiError("保存拒登记录失败", 500);

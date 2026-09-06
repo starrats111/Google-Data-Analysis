@@ -91,6 +91,8 @@ export type CampaignsMinAggregateOutputType = {
   last_google_sync_at: Date | null
   paused_at: Date | null
   pause_source: string | null
+  removed_at: Date | null
+  remove_source: string | null
   status_verified_at: Date | null
   hermes_managed_at: Date | null
   final_url_suffix: string | null
@@ -133,6 +135,8 @@ export type CampaignsMaxAggregateOutputType = {
   last_google_sync_at: Date | null
   paused_at: Date | null
   pause_source: string | null
+  removed_at: Date | null
+  remove_source: string | null
   status_verified_at: Date | null
   hermes_managed_at: Date | null
   final_url_suffix: string | null
@@ -175,6 +179,8 @@ export type CampaignsCountAggregateOutputType = {
   last_google_sync_at: number
   paused_at: number
   pause_source: number
+  removed_at: number
+  remove_source: number
   status_verified_at: number
   hermes_managed_at: number
   previous_gcids: number
@@ -262,6 +268,8 @@ export type CampaignsMinAggregateInputType = {
   last_google_sync_at?: true
   paused_at?: true
   pause_source?: true
+  removed_at?: true
+  remove_source?: true
   status_verified_at?: true
   hermes_managed_at?: true
   final_url_suffix?: true
@@ -304,6 +312,8 @@ export type CampaignsMaxAggregateInputType = {
   last_google_sync_at?: true
   paused_at?: true
   pause_source?: true
+  removed_at?: true
+  remove_source?: true
   status_verified_at?: true
   hermes_managed_at?: true
   final_url_suffix?: true
@@ -346,6 +356,8 @@ export type CampaignsCountAggregateInputType = {
   last_google_sync_at?: true
   paused_at?: true
   pause_source?: true
+  removed_at?: true
+  remove_source?: true
   status_verified_at?: true
   hermes_managed_at?: true
   previous_gcids?: true
@@ -476,6 +488,8 @@ export type CampaignsGroupByOutputType = {
   last_google_sync_at: Date | null
   paused_at: Date | null
   pause_source: string | null
+  removed_at: Date | null
+  remove_source: string | null
   status_verified_at: Date | null
   hermes_managed_at: Date | null
   previous_gcids: runtime.JsonValue
@@ -542,6 +556,8 @@ export type campaignsWhereInput = {
   last_google_sync_at?: Prisma.DateTimeNullableFilter<"campaigns"> | Date | string | null
   paused_at?: Prisma.DateTimeNullableFilter<"campaigns"> | Date | string | null
   pause_source?: Prisma.StringNullableFilter<"campaigns"> | string | null
+  removed_at?: Prisma.DateTimeNullableFilter<"campaigns"> | Date | string | null
+  remove_source?: Prisma.StringNullableFilter<"campaigns"> | string | null
   status_verified_at?: Prisma.DateTimeNullableFilter<"campaigns"> | Date | string | null
   hermes_managed_at?: Prisma.DateTimeNullableFilter<"campaigns"> | Date | string | null
   previous_gcids?: Prisma.JsonFilter<"campaigns">
@@ -585,6 +601,8 @@ export type campaignsOrderByWithRelationInput = {
   last_google_sync_at?: Prisma.SortOrderInput | Prisma.SortOrder
   paused_at?: Prisma.SortOrderInput | Prisma.SortOrder
   pause_source?: Prisma.SortOrderInput | Prisma.SortOrder
+  removed_at?: Prisma.SortOrderInput | Prisma.SortOrder
+  remove_source?: Prisma.SortOrderInput | Prisma.SortOrder
   status_verified_at?: Prisma.SortOrderInput | Prisma.SortOrder
   hermes_managed_at?: Prisma.SortOrderInput | Prisma.SortOrder
   previous_gcids?: Prisma.SortOrder
@@ -632,6 +650,8 @@ export type campaignsWhereUniqueInput = Prisma.AtLeast<{
   last_google_sync_at?: Prisma.DateTimeNullableFilter<"campaigns"> | Date | string | null
   paused_at?: Prisma.DateTimeNullableFilter<"campaigns"> | Date | string | null
   pause_source?: Prisma.StringNullableFilter<"campaigns"> | string | null
+  removed_at?: Prisma.DateTimeNullableFilter<"campaigns"> | Date | string | null
+  remove_source?: Prisma.StringNullableFilter<"campaigns"> | string | null
   status_verified_at?: Prisma.DateTimeNullableFilter<"campaigns"> | Date | string | null
   hermes_managed_at?: Prisma.DateTimeNullableFilter<"campaigns"> | Date | string | null
   previous_gcids?: Prisma.JsonFilter<"campaigns">
@@ -675,6 +695,8 @@ export type campaignsOrderByWithAggregationInput = {
   last_google_sync_at?: Prisma.SortOrderInput | Prisma.SortOrder
   paused_at?: Prisma.SortOrderInput | Prisma.SortOrder
   pause_source?: Prisma.SortOrderInput | Prisma.SortOrder
+  removed_at?: Prisma.SortOrderInput | Prisma.SortOrder
+  remove_source?: Prisma.SortOrderInput | Prisma.SortOrder
   status_verified_at?: Prisma.SortOrderInput | Prisma.SortOrder
   hermes_managed_at?: Prisma.SortOrderInput | Prisma.SortOrder
   previous_gcids?: Prisma.SortOrder
@@ -726,6 +748,8 @@ export type campaignsScalarWhereWithAggregatesInput = {
   last_google_sync_at?: Prisma.DateTimeNullableWithAggregatesFilter<"campaigns"> | Date | string | null
   paused_at?: Prisma.DateTimeNullableWithAggregatesFilter<"campaigns"> | Date | string | null
   pause_source?: Prisma.StringNullableWithAggregatesFilter<"campaigns"> | string | null
+  removed_at?: Prisma.DateTimeNullableWithAggregatesFilter<"campaigns"> | Date | string | null
+  remove_source?: Prisma.StringNullableWithAggregatesFilter<"campaigns"> | string | null
   status_verified_at?: Prisma.DateTimeNullableWithAggregatesFilter<"campaigns"> | Date | string | null
   hermes_managed_at?: Prisma.DateTimeNullableWithAggregatesFilter<"campaigns"> | Date | string | null
   previous_gcids?: Prisma.JsonWithAggregatesFilter<"campaigns">
@@ -769,6 +793,8 @@ export type campaignsCreateInput = {
   last_google_sync_at?: Date | string | null
   paused_at?: Date | string | null
   pause_source?: string | null
+  removed_at?: Date | string | null
+  remove_source?: string | null
   status_verified_at?: Date | string | null
   hermes_managed_at?: Date | string | null
   previous_gcids?: Prisma.JsonNullValueInput | runtime.InputJsonValue
@@ -812,6 +838,8 @@ export type campaignsUncheckedCreateInput = {
   last_google_sync_at?: Date | string | null
   paused_at?: Date | string | null
   pause_source?: string | null
+  removed_at?: Date | string | null
+  remove_source?: string | null
   status_verified_at?: Date | string | null
   hermes_managed_at?: Date | string | null
   previous_gcids?: Prisma.JsonNullValueInput | runtime.InputJsonValue
@@ -855,6 +883,8 @@ export type campaignsUpdateInput = {
   last_google_sync_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   paused_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   pause_source?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  removed_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  remove_source?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   status_verified_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   hermes_managed_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   previous_gcids?: Prisma.JsonNullValueInput | runtime.InputJsonValue
@@ -898,6 +928,8 @@ export type campaignsUncheckedUpdateInput = {
   last_google_sync_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   paused_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   pause_source?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  removed_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  remove_source?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   status_verified_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   hermes_managed_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   previous_gcids?: Prisma.JsonNullValueInput | runtime.InputJsonValue
@@ -941,6 +973,8 @@ export type campaignsCreateManyInput = {
   last_google_sync_at?: Date | string | null
   paused_at?: Date | string | null
   pause_source?: string | null
+  removed_at?: Date | string | null
+  remove_source?: string | null
   status_verified_at?: Date | string | null
   hermes_managed_at?: Date | string | null
   previous_gcids?: Prisma.JsonNullValueInput | runtime.InputJsonValue
@@ -984,6 +1018,8 @@ export type campaignsUpdateManyMutationInput = {
   last_google_sync_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   paused_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   pause_source?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  removed_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  remove_source?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   status_verified_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   hermes_managed_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   previous_gcids?: Prisma.JsonNullValueInput | runtime.InputJsonValue
@@ -1027,6 +1063,8 @@ export type campaignsUncheckedUpdateManyInput = {
   last_google_sync_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   paused_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   pause_source?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  removed_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  remove_source?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   status_verified_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   hermes_managed_at?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
   previous_gcids?: Prisma.JsonNullValueInput | runtime.InputJsonValue
@@ -1076,6 +1114,8 @@ export type campaignsCountOrderByAggregateInput = {
   last_google_sync_at?: Prisma.SortOrder
   paused_at?: Prisma.SortOrder
   pause_source?: Prisma.SortOrder
+  removed_at?: Prisma.SortOrder
+  remove_source?: Prisma.SortOrder
   status_verified_at?: Prisma.SortOrder
   hermes_managed_at?: Prisma.SortOrder
   previous_gcids?: Prisma.SortOrder
@@ -1140,6 +1180,8 @@ export type campaignsMaxOrderByAggregateInput = {
   last_google_sync_at?: Prisma.SortOrder
   paused_at?: Prisma.SortOrder
   pause_source?: Prisma.SortOrder
+  removed_at?: Prisma.SortOrder
+  remove_source?: Prisma.SortOrder
   status_verified_at?: Prisma.SortOrder
   hermes_managed_at?: Prisma.SortOrder
   final_url_suffix?: Prisma.SortOrder
@@ -1182,6 +1224,8 @@ export type campaignsMinOrderByAggregateInput = {
   last_google_sync_at?: Prisma.SortOrder
   paused_at?: Prisma.SortOrder
   pause_source?: Prisma.SortOrder
+  removed_at?: Prisma.SortOrder
+  remove_source?: Prisma.SortOrder
   status_verified_at?: Prisma.SortOrder
   hermes_managed_at?: Prisma.SortOrder
   final_url_suffix?: Prisma.SortOrder
@@ -1247,6 +1291,8 @@ export type campaignsSelect<ExtArgs extends runtime.Types.Extensions.InternalArg
   last_google_sync_at?: boolean
   paused_at?: boolean
   pause_source?: boolean
+  removed_at?: boolean
+  remove_source?: boolean
   status_verified_at?: boolean
   hermes_managed_at?: boolean
   previous_gcids?: boolean
@@ -1292,6 +1338,8 @@ export type campaignsSelectScalar = {
   last_google_sync_at?: boolean
   paused_at?: boolean
   pause_source?: boolean
+  removed_at?: boolean
+  remove_source?: boolean
   status_verified_at?: boolean
   hermes_managed_at?: boolean
   previous_gcids?: boolean
@@ -1312,7 +1360,7 @@ export type campaignsSelectScalar = {
   updated_at?: boolean
 }
 
-export type campaignsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "user_merchant_id" | "platform_connection_id" | "google_campaign_id" | "mcc_id" | "customer_id" | "campaign_name" | "daily_budget" | "bidding_strategy" | "max_cpc_limit" | "target_country" | "geo_target" | "language_id" | "network_search" | "network_partners" | "network_display" | "status" | "google_status" | "last_google_sync_at" | "paused_at" | "pause_source" | "status_verified_at" | "hermes_managed_at" | "previous_gcids" | "final_url_suffix" | "suffix_exchange_enabled" | "suffix_needs_browser" | "suffix_is_static" | "suffix_last_content" | "suffix_last_apply_at" | "suffix_click_baseline" | "suffix_click_checkpoint_at" | "suffix_fail_count" | "suffix_no_tracking_streak" | "suffix_needs_v2" | "suffix_cooldown_until" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["campaigns"]>
+export type campaignsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "user_merchant_id" | "platform_connection_id" | "google_campaign_id" | "mcc_id" | "customer_id" | "campaign_name" | "daily_budget" | "bidding_strategy" | "max_cpc_limit" | "target_country" | "geo_target" | "language_id" | "network_search" | "network_partners" | "network_display" | "status" | "google_status" | "last_google_sync_at" | "paused_at" | "pause_source" | "removed_at" | "remove_source" | "status_verified_at" | "hermes_managed_at" | "previous_gcids" | "final_url_suffix" | "suffix_exchange_enabled" | "suffix_needs_browser" | "suffix_is_static" | "suffix_last_content" | "suffix_last_apply_at" | "suffix_click_baseline" | "suffix_click_checkpoint_at" | "suffix_fail_count" | "suffix_no_tracking_streak" | "suffix_needs_v2" | "suffix_cooldown_until" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["campaigns"]>
 
 export type $campaignsPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "campaigns"
@@ -1340,6 +1388,8 @@ export type $campaignsPayload<ExtArgs extends runtime.Types.Extensions.InternalA
     last_google_sync_at: Date | null
     paused_at: Date | null
     pause_source: string | null
+    removed_at: Date | null
+    remove_source: string | null
     status_verified_at: Date | null
     hermes_managed_at: Date | null
     previous_gcids: runtime.JsonValue
@@ -1749,6 +1799,8 @@ export interface campaignsFieldRefs {
   readonly last_google_sync_at: Prisma.FieldRef<"campaigns", 'DateTime'>
   readonly paused_at: Prisma.FieldRef<"campaigns", 'DateTime'>
   readonly pause_source: Prisma.FieldRef<"campaigns", 'String'>
+  readonly removed_at: Prisma.FieldRef<"campaigns", 'DateTime'>
+  readonly remove_source: Prisma.FieldRef<"campaigns", 'String'>
   readonly status_verified_at: Prisma.FieldRef<"campaigns", 'DateTime'>
   readonly hermes_managed_at: Prisma.FieldRef<"campaigns", 'DateTime'>
   readonly previous_gcids: Prisma.FieldRef<"campaigns", 'Json'>

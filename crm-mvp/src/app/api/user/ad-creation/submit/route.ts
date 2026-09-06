@@ -2274,6 +2274,9 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
           network_partners: network_partners ? 1 : 0,
           network_display: network_display ? 1 : 0,
           google_status: "ENABLED",
+          // D-321：重新发布成功即清掉「拒登本地移除」标记，状态交还给同步
+          removed_at: null,
+          remove_source: null,
         },
       }),
       prisma.ad_groups.update({
