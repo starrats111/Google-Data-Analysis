@@ -8,7 +8,7 @@
  */
 
 import ExcelJS from "exceljs";
-import type { MemberMonthlyReport, TeamAnnualReport, MemberAnnualReport } from "@/lib/monthly-report";
+import type { MemberMonthlyReport, TeamAnnualReport, MemberAnnualReport, TeamPlatformAgg } from "@/lib/monthly-report";
 import { REPORT_PLATFORM_ORDER } from "@/lib/report-metrics";
 
 const CLR = {
@@ -167,11 +167,28 @@ export function buildFengduMonthSheet(
   reports: MemberMonthlyReport[],
   sheetName?: string,
   avgUsdToCny?: number,
-  opts: { paidInCny?: boolean } = {},
+  opts: { paidInCny?: boolean; platforms?: TeamPlatformAgg[] } = {},
 ) {
   const paidInCny = opts.paidInCny === true;
+  // D-327：组长导出的「实收佣金（人民币）」改成页面同款「实际佣金」口径——
+  // 每平台每半月取 组长手填 ?? 银行流水登记 ?? 成员默认CNY 累计。
+  // 只有组长导出传 platforms；组员单表没有团队级流水，仍走成员块 SUMIF。
+  const actualCny = new Map<string, { H1: number; H2: number }>();
+  if (paidInCny && opts.platforms) {
+    for (const p of opts.platforms) {
+      actualCny.set(p.platform, {
+        H1: p.paidCnyH1 ?? p.bankCnyH1 ?? p.memberCnyH1,
+        H2: p.paidCnyH2 ?? p.bankCnyH2 ?? p.memberCnyH2,
+      });
+    }
+  }
+  const useActual = actualCny.size > 0;
   const avgRate = (avgUsdToCny && avgUsdToCny > 0 ? avgUsdToCny : 0) || reports[0]?.rate.usdToCny || 0;
   const cnyToUsd = (cny: number): number => (avgRate > 0 ? cny / avgRate : 0);
+  // D-327：核算广告费改用「月末锁定汇率」（= 页面 getReportRate 的那把），与人民币广告费原值，
+  // 口径与页面 profitAdCostCny 完全一致；月平均汇率仍只用于人民币→美金的展示折算。
+  const lockedRate = reports[0]?.rate.usdToCny || 0;
+  const adCostCnyTotal = +reports.reduce((s, r) => s + r.adCostTotalCny, 0).toFixed(2);
   // R-09 折美金 / R-10 组长导出保留人民币原值
   const paidVal = paidInCny ? (cny: number) => cny : cnyToUsd;
   const month = reports[0]?.month || "";
@@ -237,9 +254,23 @@ export function buildFengduMonthSheet(
 
   // ── 行1 黄条（C..last，无左右框线，与模板一致）；C1 标注换算用月平均汇率 ──
   for (let c = 3; c <= lastCol; c++) fdCell(ws, 1, c, "", { fill: FD.YELLOW, bold: true, tbOnly: true });
+  // D-327：表里现在有两把汇率，黄条逐把写明，避免财务照着一个数反推另一个数对不上
+  const lockedNote = lockedRate > 0 ? `；核算广告费按月末锁定汇率 ${lockedRate.toFixed(4)} 计（与系统页面同口径）` : "";
+  // D-327：实收佣金改实际到账口径后，合计块不再等于右侧成员块横加，必须在表面上写明，
+  // 否则财务自己加一遍对不上会以为表算错了。
+  const actualNote = useActual
+    ? "。实收佣金＝实际到账口径（组长手填 > 银行流水登记 > 成员折算），与右侧成员块的折算值存在口径差，不可横向相加核对"
+    : "";
+  // 模板只有 10 个平台列，落在列外的平台不能静默丢——宁可在表头喊一声
+  const spill = useActual
+    ? [...actualCny.entries()].filter(([p, v]) => !P.includes(p) && Math.abs(v.H1) + Math.abs(v.H2) >= 0.005)
+    : [];
+  const spillNote = spill.length > 0
+    ? `。⚠ 以下平台不在模板 10 列内，未计入合计：${spill.map(([p, v]) => `${p} ¥${(v.H1 + v.H2).toFixed(2)}`).join("、")}`
+    : "";
   const rateNote = paidInCny
-    ? `月平均汇率 USD→CNY ${avgRate.toFixed(4)}（实收佣金为人民币原值；人民币 MCC 广告费按此折美金；核算广告费与可分配利润为人民币）`
-    : `月平均汇率 USD→CNY ${avgRate.toFixed(4)}（人民币均按此换算成美金；核算广告费为人民币）`;
+    ? `月平均汇率 USD→CNY ${avgRate.toFixed(4)}（人民币 MCC 广告费按此折美金）${lockedNote}。实收佣金为人民币原值；核算广告费与可分配利润为人民币${actualNote}${spillNote}`
+    : `月平均汇率 USD→CNY ${avgRate.toFixed(4)}（人民币均按此换算成美金）${lockedNote}。核算广告费为人民币`;
   fdCell(ws, 1, 3, rateNote, { fill: FD.YELLOW, bold: true, tbOnly: true, hDefault: true });
 
   // ── C..M 合计块（公式动态定界到最后一个成员块） ──
@@ -248,7 +279,7 @@ export function buildFengduMonthSheet(
   merge(3, 3, 3, 5, "美金", { fill: FD.GREEN });
   // R-09：人民币 MCC 广告费按月平均汇率折美金展示
   merge(3, 6, 3, 8, "美金(折算)", { fill: FD.GREEN });
-  // R-08：「核算广告费」保持人民币 =(美金广告费+折算广告费)×月平均汇率，在跑广告量右移
+  // R-08：「核算广告费」保持人民币；D-327 起 =美金广告费×月末锁定汇率+人民币广告费原值，在跑广告量右移
   merge(3, 9, 3, 10, "核算广告费(人民币)", { fill: FD.GREEN });
   merge(3, 11, 3, 13, "在跑广告量", { fill: FD.GREEN });
 
@@ -256,7 +287,15 @@ export function buildFengduMonthSheet(
     ({ formula: `SUMIF($N$3:$${lastL}$3,${keyCell},$N${row}:$${lastL}${row})` });
   merge(4, 3, 4, 5, sumifRow(4, "C$3"), { numFmt: FD_NUM_AD });
   merge(4, 6, 4, 8, sumifRow(4, "F$3"), { numFmt: FD_NUM_AD });
-  merge(4, 9, 4, 10, { formula: `ROUND((C4+F4)*${avgRate.toFixed(6)},2)` }, { numFmt: FD_NUM_AD });
+  // D-327：原式 ROUND((C4+F4)*月平均汇率,2) 有两处失真——① 用了月平均汇率而页面用月末锁定汇率；
+  // ② 人民币广告费先被 F4 折成美金再折回人民币，round-trip 掉精度。改成直接用原值 + 锁定汇率。
+  merge(
+    4, 9, 4, 10,
+    lockedRate > 0
+      ? { formula: `ROUND(C4*${lockedRate.toFixed(8)}+${adCostCnyTotal.toFixed(2)},2)` }
+      : { formula: `ROUND((C4+F4)*${avgRate.toFixed(6)},2)` },
+    { numFmt: FD_NUM_AD },
+  );
   merge(4, 11, 4, 13, sumifRow(4, "K$3"), { numFmt: FD_NUM_AD });
 
   P.forEach((p, i) => fdCell(ws, 5, 3 + i, p, { fill: FD.GREEN }));
@@ -283,9 +322,17 @@ export function buildFengduMonthSheet(
     fdCell(ws, 11, 3 + i, { formula: `SUM(${cL}9:${cL}10)` }, { fill: FD.GREEN });
   }
   fdCell(ws, 11, 13, { formula: "SUM(C11:L11)" }, { fill: FD.GREEN, bold: true });
-  platSumif(12, FD.G4);
+  // D-327：实收佣金两行——组长导出写平台级「实际佣金」实数（手填>流水>成员默认），
+  // 组员导出仍用 SUMIF 从成员块横加。实数与 SUMIF 不能混用：实际到账是平台级的，
+  // 拆不回具体成员，硬摊回成员块等于编数。
+  const platActual = (row: number, half: "H1" | "H2") => {
+    for (let i = 0; i < NP; i++) {
+      fdCell(ws, row, 3 + i, fdNv(actualCny.get(P[i])?.[half] ?? 0), { fill: FD.G4, numFmt: FD_NUM_RED });
+    }
+  };
+  if (useActual) platActual(12, "H1"); else platSumif(12, FD.G4);
   fdCell(ws, 12, 13, { formula: "SUM(C12:L12)" }, { fill: FD.G4, bold: true });
-  platSumif(13, FD.G4);
+  if (useActual) platActual(13, "H2"); else platSumif(13, FD.G4);
   fdCell(ws, 13, 13, { formula: "SUM(C13:L13)" }, { fill: FD.G4, bold: true });
   for (let i = 0; i < NP; i++) {
     const cL = fdColL(3 + i);

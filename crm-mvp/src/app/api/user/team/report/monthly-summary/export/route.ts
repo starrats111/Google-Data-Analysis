@@ -28,8 +28,11 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   // R-06：单 sheet，与「丰度收支统计表」月份 sheet 完全同版式（合计公式块 + 每成员一个 12 列块）
   // R-09：人民币 MCC 广告费按月平均汇率折美金（核算广告费保持人民币）
   // R-10：组长口径实收佣金为人民币原值，可分配利润同为人民币
+  // D-327：实收佣金行改用页面同款「实际佣金」（组长手填 > 银行流水登记 > 成员默认），
+  // 核算广告费改用月末锁定汇率——导出与页面同口径，不再需要人工对账。
   buildFengduMonthSheet(wb, summary.memberReports, `${parseInt(month.slice(5), 10)}月份`, avgUsdToCny, {
     paidInCny: true,
+    platforms: summary.platforms,
   });
 
   const buffer = await wb.xlsx.writeBuffer();
