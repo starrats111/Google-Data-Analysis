@@ -211,6 +211,8 @@ export function buildFengduMonthSheet(
   ws.getColumn(3).width = 16.25;
   ws.getColumn(4).width = 14.25;
   for (let c = 5; c <= lastCol; c++) ws.getColumn(c).width = 11;
+  // M 列是合计列，六位数带两位小数在宋体12 下要 11 个字宽以上；模板的 11 会顶格显示成 ####
+  ws.getColumn(13).width = 13;
 
   // 先给合并区每个格子刷样式再合并（合并后从属格样式无法单独写，
   // 否则从属格在文件里残留默认 Calibri，边框/字体与模板逐格比对不一致）
@@ -330,10 +332,13 @@ export function buildFengduMonthSheet(
       fdCell(ws, row, 3 + i, fdNv(actualCny.get(P[i])?.[half] ?? 0), { fill: FD.G4, numFmt: FD_NUM_RED });
     }
   };
+  // 合计格显式给不带占位的 "0.00"：ExcelJS 里同行前面的格子设了 FD_NUM_RED（末尾 `_)` 占一个
+  // 括号宽），M 列会跟着继承，宋体12 下 "146895.88" 加占位就超过列宽 11，WPS/Excel 显示成 ####。
+  const TOTAL_FMT = "0.00";
   if (useActual) platActual(12, "H1"); else platSumif(12, FD.G4);
-  fdCell(ws, 12, 13, { formula: "SUM(C12:L12)" }, { fill: FD.G4, bold: true });
+  fdCell(ws, 12, 13, { formula: "SUM(C12:L12)" }, { fill: FD.G4, bold: true, numFmt: TOTAL_FMT });
   if (useActual) platActual(13, "H2"); else platSumif(13, FD.G4);
-  fdCell(ws, 13, 13, { formula: "SUM(C13:L13)" }, { fill: FD.G4, bold: true });
+  fdCell(ws, 13, 13, { formula: "SUM(C13:L13)" }, { fill: FD.G4, bold: true, numFmt: TOTAL_FMT });
   for (let i = 0; i < NP; i++) {
     const cL = fdColL(3 + i);
     fdCell(ws, 14, 3 + i, { formula: `SUM(${cL}12:${cL}13)` }, { fill: FD.GREEN });
