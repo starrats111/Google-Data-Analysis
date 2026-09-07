@@ -27,11 +27,13 @@ function cnyRow(i: number, date: string, cny: number): ParsedBankRow {
 }
 
 /** 一笔打款单：usd 是平台打款原值，cny 是按打款日汇率折出来的值（人民币行才用） */
-function payment(no: string, date: string, usd: number, methodId = METHOD_HK.id, platform = "PM"): ImportPayment {
+function payment(no: string, date: string, usd: number, methodId = METHOD_HK.id, platform = "PM", requestDate?: string): ImportPayment {
   return {
     paymentKey: `${platform}\u0000${no}`,
     platform,
     date,
+    // D-314.2：默认申请日 = 打款日前 8 天（全库平均间隔 7.9 天）；要单独构造的用例自己传
+    requestDate: requestDate ?? new Date(Date.parse(date) - 8 * 86400000).toISOString().slice(0, 10),
     methodId,
     userId: "5",
     username: "wj04",
@@ -187,6 +189,52 @@ describe("D-314.1 香港卡换汇划回不重复记账", () => {
  * 龚建成 011769338833），月表账号列写的却是银行名（恒生 / 汇丰）——不做映射的话，
  * 龚建成的汇丰行会整行判「无收款方式」，一笔都导不进来。
  */
+/**
+ * D-314.2（07 2026-09-05 拍板「这一笔实际就是八月的，不能记到九月，这种数据不能错」）：
+ * 到账日与平台打款日差得远时，用**申请日**判断是谁写错的 —— 钱不可能在申请之前到账。
+ * 生产实证：CG 8153325 —— 8-15 申请、8-20 钱进香港卡、CG 直到 9-04 才盖 paid_date。
+ */
+describe("D-314.2 到账日归属：银行日期 vs 平台补盖的打款日", () => {
+  const bankRow = (date: string, usd: number, note = "CG1248（美金） / CG"): ParsedBankRow => ({
+    key: "hk#0", sheet: "8月", rowNo: 10, date, payee: "龚建成", acct: "恒生",
+    cny: null, usd, note, counterparty: "",
+  });
+
+  it("平台打款日晚于到账日（CG 补盖）→ 以银行到账日为准，记进 8 月", () => {
+    // 8-15 申请 → 8-20 到账 $1,338.74（= $1,353.74 − $15 电汇费）→ CG 9-04 才盖 paid_date
+    const [p] = match(
+      [bankRow("2026-08-20", 1338.74)],
+      [payment("8153325", "2026-09-04", 1353.74, METHOD_HK.id, "CG", "2026-08-15")],
+    );
+    assert.equal(p.txnDate, "2026-08-20", "到账日必须是银行的 8-20，不能被平台的 9-04 顶掉");
+    assert.equal(p.txnDate!.slice(0, 7), "2026-08");
+    assert.equal(p.sourceDate, "2026-09-04", "批次日仍记平台打款日（防重复用）");
+    assert.equal(p.fee, 15);
+    assert.equal(p.status, "review", "跨 15 天必须标复核，不能静默入账");
+    assert.ok(p.warnings.some((w) => /补盖晚了/.test(w)), `告警要说清是平台补盖：${p.warnings.join("；")}`);
+  });
+
+  it("到账日早于申请日 → 钱不可能在申请前到账，判财务写错，按库内打款日入账（D-290 口径保留）", () => {
+    // D-290 实证：PM 那批 2-15 申请 / 3-02 打款，月表把到账写成 2-12（比申请日还早 3 天）
+    const [p] = match(
+      [bankRow("2026-02-12", 1000, "")],
+      [payment("8150393", "2026-03-02", 1000, METHOD_HK.id, "PM", "2026-02-15")],
+    );
+    assert.equal(p.txnDate, "2026-03-02", "表格日期比申请日还早，应按库内打款日入账");
+    assert.ok(p.warnings.some((w) => /早于该批次申请日/.test(w)), p.warnings.join("；"));
+  });
+
+  it("正常情形（到账在申请之后、与打款日差 ≤5 天）不出日期告警", () => {
+    const [p] = match(
+      [bankRow("2026-08-14", 995)],
+      [payment("p1", "2026-08-13", 1000, METHOD_HK.id, "CG", "2026-08-05")],
+    );
+    assert.equal(p.txnDate, "2026-08-14");
+    assert.equal(p.status, "auto");
+    assert.deepEqual(p.warnings, []);
+  });
+});
+
 describe("D-314 月表写银行名、系统里是「香港」渠道", () => {
   const HK_ZWJ: ImportMethod = { id: "6", payeeName: "张文俊", payChannel: "香港", cardNo: "971520622888" };
   const HK_GJC: ImportMethod = { id: "7", payeeName: "龚建成", payChannel: "香港", cardNo: "011769338833" };

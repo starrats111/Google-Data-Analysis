@@ -286,6 +286,12 @@ export interface ImportPayment {
   platform: string;
   /** 批次日（paid_date 优先） YYYY-MM-DD */
   date: string;
+  /**
+   * 申请日（request_date）YYYY-MM-DD，判「到账日到底是谁写错了」用（D-314.2）。
+   * 钱不可能在申请之前到账，这是唯一能把「财务写错日期」与「平台补盖打款日」分开的硬信号。
+   * 全库 732 笔打款单该字段无一为空；真为空时退回旧口径。
+   */
+  requestDate: string | null;
   methodId: string;
   userId: string;
   username: string;
@@ -972,16 +978,26 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
     if (c.tier === 1) {
       warnings.push(`表格卡号对应的卡在打款记录里对不上，按金额比对归属到同收款人的「${m.payChannel || "另一张卡"}」，请复核`);
     }
-    // 表格日期早于库内打款日：小幅早于是常态（平台记的 paid_date 会晚于实际到账，实测 LH 6-22 批 6-18 就到账），
-    // 07 2026-08-27 拍板「相差 ≤5 天以银行流水为准」，故只有超过这个阈值才判表格有误、
-    // 改按库内打款日入账（07 2026-08-26「表格确实有误，按照库内收款日导」，实证 2/12 vs 3/4 差 20 天）。
-    // D-314：表格日期这条判定与币种无关，美金行同样适用（原先美金行不入账才跳过这段）
-    const sheetDateTooEarly = signedDays(sourceDate, rs[0].date) > DATE_FIX_MAX_DAYS;
-    const useDbDate = c.rescued || sheetDateTooEarly;
-    if (c.rescued) {
-      warnings.push(`表格日期 ${rs[0].date} 与库内打款日 ${sourceDate} 相差 ${Math.round(c.dateDist)} 天，判定表格日期有误，已按库内打款日入账，请复核`);
-    } else if (sheetDateTooEarly) {
-      warnings.push(`表格日期 ${rs[0].date} 早于库内打款日 ${sourceDate} 超过 ${DATE_FIX_MAX_DAYS} 天，判定表格日期有误，已按库内打款日入账，请复核`);
+    // 到账日归属（D-314.2，07 2026-09-05 拍板「这一笔实际就是八月的，不能记到九月，这种数据不能错」）：
+    // 表格日期与库内打款日差得远时，用**申请日**判断是谁错，不再一律以打款日为准 ——
+    // - 到账日早于申请日 → 钱在申请之前就到账，物理不可能 → 财务写错日期，按库内打款日入账
+    //   （D-290 的实证：PM 那批 2-15 申请 / 3-02 打款，月表写成 2-12，比申请日还早 3 天）；
+    // - 到账日在申请日之后 → 到账合理，是平台把 paid_date 补盖晚了 → **以银行到账日为准**，只标 review。
+    //   （实证 CG 8153325：8-15 申请、8-20 钱就进了香港卡、9-04 才盖上 paid_date；全库 732 笔
+    //   申请→打款平均 7.9 天、最长 20 天，所以 8-20 到账完全正常，记成 9 月才是错的。）
+    // 留 2 天余量给跨时区与平台记账时刻的抖动。requestDate 为空时退回旧口径（按库内打款日）。
+    const requestDate = [...new Set(ps.map((p) => p.requestDate || "").filter(Boolean))].sort()[0] ?? "";
+    const gapToSource = signedDays(sourceDate, rs[0].date); // 正 = 库内打款日晚于表格日期
+    const useDbDate = requestDate
+      ? signedDays(requestDate, rs[0].date) > 2
+      : c.rescued || gapToSource > DATE_FIX_MAX_DAYS;
+    if (useDbDate) {
+      warnings.push(requestDate
+        ? `表格日期 ${rs[0].date} 早于该批次申请日 ${requestDate}，钱不可能在申请之前到账，判定表格日期有误，已按库内打款日 ${sourceDate} 入账，请复核`
+        : `表格日期 ${rs[0].date} 与库内打款日 ${sourceDate} 相差 ${Math.round(c.dateDist)} 天，且该批次没有申请日可判，沿用旧口径按库内打款日入账，请复核`);
+    } else if (Math.abs(gapToSource) > DATE_FIX_MAX_DAYS) {
+      warnings.push(`银行到账日 ${rs[0].date} 与平台打款日 ${sourceDate} 相差 ${Math.round(Math.abs(gapToSource))} 天`
+        + `（该批次 ${requestDate} 申请，到账在申请之后，判定平台打款日补盖晚了）——已按银行到账日入账，记入 ${rs[0].date.slice(0, 7)}，请复核`);
     } else if (c.dateDist > 7) {
       warnings.push(`打款日与到账日相差 ${Math.round(c.dateDist)} 天，请复核`);
     }

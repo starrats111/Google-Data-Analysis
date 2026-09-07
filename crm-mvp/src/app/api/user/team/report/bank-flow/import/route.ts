@@ -225,6 +225,8 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
       paymentKey: `${p.platform}\u0000${p.payment_no}`,
       platform: p.platform,
       date: day,
+      // D-314.2：申请日用来判「到账日是财务写错了，还是平台把打款日补盖晚了」
+      requestDate: p.request_date ? p.request_date.toISOString().slice(0, 10) : null,
       methodId,
       userId: conn ? String(conn.user_id) : String(p.user_id),
       username: m?.username || "",
