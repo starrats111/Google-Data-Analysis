@@ -113,12 +113,20 @@ async function doDailySync() {
       log(`Pause time refine failed (non-fatal): ${e instanceof Error ? e.message : e}`);
     }
 
+    // D-314.3（07 2026-09-07 拍板）：打款同步**必须排在交易同步之前**。
+    // 实证：交易同步每天 07:51 前后把 Node 堆撑爆（NODE_OPTIONS=--max-old-space-size=768，
+    // 崩在 765MB），V8 直接 FATAL、进程被 pm2 重启 —— 堆溢出是致命错误，try/catch 接不住，
+    // 顺序是唯一能保住后面步骤的手段。原来打款同步排在交易之后（Step 3.5），于是
+    // 2026-08-29 之后一次都没轮到过：affiliate_payments 停更一周，全组银行流水核对都在用旧数据，
+    // 财务导月表时对不上（D-314.2 那笔 CG 8153325 就是这么被拖住的）。
+    // 打款同步只依赖 platform_connections + 各平台支付 API，不依赖交易数据，前移安全。
+    log("Step 2.8: Syncing payment/withdrawal data for all users (D-314.3 前移，避免被交易同步的 OOM 拖死)...");
+    await syncAllUsersPayments();
+
     log("Step 3: Syncing transaction data for all users...");
     await syncAllUsersTransactions();
 
-    log("Step 3.5: Syncing payment/withdrawal data for all users...");
-    await syncAllUsersPayments();
-
+    // 已付剖分要把**已存在的交易行**标成 paid，必须留在交易同步之后，不能跟着打款同步前移
     log("Step 3.6: Carving RW/LH/LB paid bucket from payment details...");
     await carvePaidForAllUsers();
 
