@@ -224,6 +224,44 @@ describe("D-314.2 到账日归属：银行日期 vs 平台补盖的打款日", (
     assert.ok(p.warnings.some((w) => /早于该批次申请日/.test(w)), p.warnings.join("；"));
   });
 
+  it("条目已被登记成 9 月时，重新导入要出「校正到账日」把它挪回 8 月", () => {
+    // 线上实况：id=83 条目 txn 2026-09-04、month 2026-09，银行流水明明是 8-20
+    const wrongEntry: ExistingEntry = {
+      ids: ["83"], methodId: METHOD_HK.id, payChannel: "香港",
+      amount: 1338.74, currency: "USD", txnDate: "2026-09-04",
+      expected: 1353.74, fee: 15,
+      breakdown: [{ userId: "3", username: "wj02", displayName: "朱于森", platform: "CG", account: "wenjun3", amount: 1353.74, sourceDate: "2026-09-04" }],
+      splittable: true,
+    };
+    const [p] = match(
+      [bankRow("2026-08-20", 1338.74)],
+      [payment("8153325", "2026-09-04", 1353.74, METHOD_HK.id, "CG", "2026-08-15")],
+      [wrongEntry],
+    );
+    assert.equal(p.status, "date_fix", "应出校正到账日提案，而不是「已录过」跳过");
+    assert.deepEqual(p.entryIds, ["83"]);
+    assert.equal(p.txnDate, "2026-08-20");
+    assert.ok(/补盖晚了/.test(p.matchNote) && /2026-08/.test(p.matchNote), p.matchNote);
+  });
+
+  it("已登记条目的到账日早于申请日 → 判表格有误，保留登记日（D-290 口径保留）", () => {
+    const entry: ExistingEntry = {
+      ids: ["9"], methodId: METHOD_HK.id, payChannel: "香港",
+      amount: 1000, currency: "USD", txnDate: "2026-03-02",
+      expected: 1000, fee: 0,
+      breakdown: [{ userId: "3", username: "wj02", displayName: "朱于森", platform: "PM", account: "a", amount: 1000, sourceDate: "2026-03-02" }],
+      splittable: true,
+    };
+    const [p] = match(
+      [bankRow("2026-02-12", 1000, "")],
+      [payment("8150393", "2026-03-02", 1000, METHOD_HK.id, "PM", "2026-02-15")],
+      [entry],
+    );
+    assert.equal(p.status, "exists");
+    assert.equal(p.txnDate, "2026-03-02");
+    assert.ok(/早于该批次申请日/.test(p.matchNote), p.matchNote);
+  });
+
   it("正常情形（到账在申请之后、与打款日差 ≤5 天）不出日期告警", () => {
     const [p] = match(
       [bankRow("2026-08-14", 995)],

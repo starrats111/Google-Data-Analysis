@@ -666,6 +666,24 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
   const proposals: ImportProposal[] = [];
   const assigned = new Set<string>(); // row key
 
+  // ── D-314.2：批次申请日索引（卡×平台×批次日 → 最早申请日） ──
+  // 用途：判「到账日是财务写错了，还是平台把 paid_date 补盖晚了」。钱不可能在申请之前到账。
+  // 注意用全量 payments（不是剔除已登记批次后的 pool）——「已录过」的条目要判日期，靠的正是
+  // 那些已被登记过的批次。
+  const requestDateByBatch = new Map<string, string>();
+  for (const p of payments) {
+    if (!p.requestDate) continue;
+    const k = `${p.methodId}\u0000${p.platform}\u0000${p.date}`;
+    const prev = requestDateByBatch.get(k);
+    if (!prev || p.requestDate < prev) requestDateByBatch.set(k, p.requestDate);
+  }
+  /** 既有条目所属批次的申请日（按明细的 平台×批次日 反查，取最早）；查不到返回空串 */
+  const entryRequestDate = (e: ExistingEntry): string =>
+    e.breakdown
+      .map((it) => requestDateByBatch.get(`${e.methodId}\u0000${it.platform}\u0000${String(it.sourceDate ?? "")}`) ?? "")
+      .filter(Boolean)
+      .sort()[0] ?? "";
+
   // ── 0. 卡归属（候选列表，金额比对定夺归属；同卡号多渠道时谁的批次对得上就是谁） ──
   const methodsOf = new Map<string, ImportMethod[]>();
   for (const r of rows) methodsOf.set(r.key, resolveMethodCandidates(r, methods));
@@ -698,6 +716,29 @@ export function matchBankRows(input: MatchInput): ImportProposal[] {
         proposals.push({ ...base, status: "exists", txnDate: e.txnDate, matchNote: "与已登记流水金额一致，跳过" });
         return;
       }
+      // D-314.2：先用申请日判「到账日到底是谁写错的」（与新条目那条路同一判据）——
+      // 钱不可能在申请之前到账；到账在申请之后，说明是平台把 paid_date 补盖晚了，银行日期可信。
+      const reqDate = entryRequestDate(e);
+      if (reqDate) {
+        if (signedDays(reqDate, rs[0].date) > 2) {
+          // 到账日早于申请日 → 表格写错（D-290 实证：申请 2-15、打款 3-02，月表写 2-12）
+          proposals.push({
+            ...base, status: "exists", txnDate: e.txnDate,
+            matchNote: `与已登记流水金额一致（表格日期 ${rs[0].date} 早于该批次申请日 ${reqDate}，钱不可能在申请之前到账，表格有误），保留登记日 ${e.txnDate}，跳过`,
+          });
+          return;
+        }
+        // 到账在申请之后 → 以银行到账日为准，差多少天都校正（实证 CG 8153325：8-15 申请、
+        // 8-20 到账、9-04 才盖 paid_date，条目被登记成 9 月，必须挪回 8 月）
+        proposals.push({
+          ...base, status: "date_fix", entryIds: e.ids, txnDate: rs[0].date,
+          matchNote: Math.abs(gap) <= DATE_FIX_MAX_DAYS
+            ? `金额与已登记流水一致，登记日 ${e.txnDate} 与银行 ${rs[0].date} 差 ${Math.abs(gap)} 天（≤${DATE_FIX_MAX_DAYS} 天以银行为准），校正到账日`
+            : `金额与已登记流水一致，登记日 ${e.txnDate} 与银行到账日 ${rs[0].date} 差 ${Math.abs(gap)} 天；该批次 ${reqDate} 申请，到账在申请之后，判定平台打款日补盖晚了 —— 以银行为准校正到账日，条目将记入 ${rs[0].date.slice(0, 7)}`,
+        });
+        return;
+      }
+      // 没有申请日可判（该批次打款单不在本次候选里）：沿用旧口径
       // 银行日期早于打款日 = 物理不可能，按表格日期改反而错（留 2 天时区/记账余量）
       const impossible = !!batchDate && signedDays(batchDate, rs[0].date) > 2;
       if (Math.abs(gap) <= DATE_FIX_MAX_DAYS && !impossible) {
