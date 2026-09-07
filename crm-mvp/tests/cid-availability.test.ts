@@ -76,7 +76,9 @@ describe("rankCidsForAutoPick", () => {
 });
 
 describe("CID_WRITE_GUARD", () => {
-  test("guard 是 not-D 过滤条件（批量 Y/N 回写不得覆盖停用终态）", () => {
-    assert.deepEqual(CID_WRITE_GUARD, { is_available: { not: "D" } });
+  test("guard 同时挡住 D 与非 active（批量 Y/N 回写不得覆盖停用/注销终态）", () => {
+    // D-324：原来只挡 is_available=D，于是「status 已 cancelled、is_available 还停在 Y/N」的行
+    // 照样被日巡冲成 N，库里躺了 139 条「已注销却标占用中」的脏行 —— 故一并锁 status。
+    assert.deepEqual(CID_WRITE_GUARD, { is_available: { not: "D" }, status: "active" });
   });
 });
