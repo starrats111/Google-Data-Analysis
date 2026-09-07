@@ -9,6 +9,7 @@ import {
   UnorderedListOutlined, DeleteOutlined, EyeOutlined, SendOutlined, CopyOutlined, LinkOutlined, SearchOutlined, ReloadOutlined, CalendarOutlined,
 } from "@ant-design/icons";
 import { sanitizeHtml, proxifyImgSrcs } from "@/lib/sanitize";
+import { PUBLISH_TIMEOUT_MS, readArticleUpdatedAt, confirmPublishedAfter } from "@/lib/publish-status-check";
 import PublishSiteSelect from "@/components/PublishSiteSelect";
 import AppPageHeader from "@/components/AppPageHeader";
 
@@ -88,18 +89,24 @@ export default function ArticlesPage() {
 
   const submitPublish = async () => {
     const values = await publishForm.validateFields();
+    const articleId = publishArticle?.id;
+    if (!articleId) return;
     setPublishing(true);
-    message.loading({ content: "正在发布，图片处理中，请耐心等待...", key: "publish", duration: 0 });
+    message.loading({ content: "正在推送到站点，图片下载中（最长约 1 分钟）...", key: "publish", duration: 0 });
+    // D-326：记下发起前的 updated_at，断线后靠它分辨「这次发成功了」和「本来就已发布」
+    const baseUpdatedAt = await readArticleUpdatedAt(articleId);
     try {
       const publishTime: Dayjs = values.publish_time || dayjs();
       const res = await fetch("/api/user/articles/publish-to-site", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          article_id: publishArticle?.id,
+          article_id: articleId,
           site_id: values.publish_site_id,
           publish_time: publishTime.toISOString(),
         }),
-        signal: AbortSignal.timeout(180000),
+        // D-326：原先是 180 秒，比 CDN 的 100 秒还长，等于永远等不到自己的超时，
+        // 只会先收到 CDN 甩回来的 524 HTML 把 r.json() 噎死。改成赶在 CDN 之前断。
+        signal: AbortSignal.timeout(PUBLISH_TIMEOUT_MS),
       }).then((r) => r.json());
       if (res.code === 0) {
         message.success({ content: `发布成功${res.data?.url ? `，访问: ${res.data.url}` : ""}`, key: "publish" });
@@ -109,9 +116,21 @@ export default function ArticlesPage() {
         message.error({ content: res.message, key: "publish" });
       }
     } catch (err) {
-      const errMsg = err instanceof Error && err.name === "TimeoutError"
-        ? "发布超时，请稍后在列表中检查状态" : "发布请求失败";
-      message.error({ content: errMsg, key: "publish" });
+      // D-326：请求断了不等于没发出去，服务端往往还在跑并且最终成功。回查一次再下结论。
+      message.loading({ content: "请求已中断，正在核对文章是否已发布...", key: "publish", duration: 0 });
+      const confirmed = await confirmPublishedAfter(articleId, baseUpdatedAt);
+      if (confirmed) {
+        message.success({ content: `发布成功${confirmed.url ? `，访问: ${confirmed.url}` : ""}（页面等待超时，已核对状态确认）`, key: "publish" });
+        setPublishModal(false);
+      } else {
+        message.error({
+          content: err instanceof Error && err.name === "TimeoutError"
+            ? "发布超时，服务端可能仍在处理，请稍后刷新列表确认状态，先别重复发布"
+            : "发布请求失败",
+          key: "publish",
+        });
+      }
+      fetchArticles();
     } finally {
       setPublishing(false);
     }

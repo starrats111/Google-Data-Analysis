@@ -2126,6 +2126,20 @@ async function syncDateToHomepageFiles(
 
 const MAX_IMAGES = 25;
 
+// D-326：外链图下载的**总预算**。
+// 单张图的重试是 15+20+25=60 秒，串行跑 25 张最坏 25 分钟，整个发布请求就卡死在这里。
+// 2026-09-07 wj11 那两次「转圈发不出去」就是这么来的：文章里 2 张 static.musicarts.com
+// 的图被 Akamai 静默黑洞（HTTP/1.1 连上后一个字节都不回，HTTP/2 直接 INTERNAL_ERROR），
+// Node 的 fetch 只走 HTTP/1.1，于是每张都把 60 秒跑满，两张 120 秒，CDN 到点掐连接。
+// 现在整个下载阶段共用这一份预算，用完的图按失败处理（保留原 URL），发布本身照常完成。
+const IMAGE_DOWNLOAD_BUDGET_MS = 30000;
+
+// D-326：再给单张图一个上限，否则第一张挂死的图会把 30 秒预算独吞，
+// 后面本来 30 毫秒就能下完的图反而一张都拿不到（实测过：4 张图会从 2 成功变成 0 成功）。
+// 12 秒足够跑完一次正常请求；重试真正要救的是「秒回 403 防盗链」——那种失败很快，
+// 三种 Referer 策略照样能在 12 秒内轮完，被砍掉的只有「连上了不回数据」那类死等。
+const IMAGE_DOWNLOAD_PER_IMAGE_MS = 12000;
+
 const REFERER_STRATEGIES: ((url: string) => string)[] = [
   (url: string) => {
     try { return new URL(url).origin + "/"; } catch { return ""; }
@@ -2137,10 +2151,18 @@ const REFERER_STRATEGIES: ((url: string) => string)[] = [
 async function downloadImageWithRetry(
   imageUrl: string,
   baseTimeoutMs = 15000,
+  budgetMs = Number.POSITIVE_INFINITY,
 ): Promise<{ buffer: Buffer; contentType: string } | null> {
+  const startedAt = Date.now();
   for (let attempt = 0; attempt < REFERER_STRATEGIES.length; attempt++) {
+    // D-326：剩余预算不够就不再开新的一轮，别让重试把整份预算吃光
+    const budgetLeft = budgetMs - (Date.now() - startedAt);
+    if (budgetLeft <= 0) {
+      console.warn(`[Publisher] 图片下载已耗 ${Date.now() - startedAt}ms 用尽预算，放弃剩余 ${REFERER_STRATEGIES.length - attempt} 次重试: ${imageUrl.slice(0, 80)}`);
+      return null;
+    }
     const getReferer = REFERER_STRATEGIES[attempt];
-    const timeoutMs = baseTimeoutMs + attempt * 5000;
+    const timeoutMs = Math.min(baseTimeoutMs + attempt * 5000, budgetLeft);
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -2216,6 +2238,9 @@ async function syncArticleImages(
   let updatedContent = content;
   let processed = 0;
   let failed = 0;
+  // D-326：所有外链图共享这一份下载预算（内部上传图走本地磁盘，不计入）
+  let downloadBudgetLeft = IMAGE_DOWNLOAD_BUDGET_MS;
+  let skippedByBudget = 0;
 
   for (const { fullTag, url, attr, isInternal } of matches) {
     if (processed >= MAX_IMAGES) break;
@@ -2233,7 +2258,20 @@ async function syncArticleImages(
           contentType = result.contentType;
         }
       } else {
-        const result = await downloadImageWithRetry(url);
+        if (downloadBudgetLeft <= 0) {
+          // 预算已被前面的图耗尽：直接按失败处理，保留原 URL，不再等这一张
+          failed++;
+          skippedByBudget++;
+          console.warn(`[Publisher] 图片下载总预算(${IMAGE_DOWNLOAD_BUDGET_MS}ms)已用尽，跳过并保留原 URL: ${url.slice(0, 80)}`);
+          continue;
+        }
+        const downloadStartedAt = Date.now();
+        const result = await downloadImageWithRetry(
+          url,
+          15000,
+          Math.min(downloadBudgetLeft, IMAGE_DOWNLOAD_PER_IMAGE_MS),
+        );
+        downloadBudgetLeft -= Date.now() - downloadStartedAt;
         if (result) {
           buffer = result.buffer;
           contentType = result.contentType;
@@ -2269,7 +2307,10 @@ async function syncArticleImages(
     }
   }
 
-  console.log(`[Publisher] 文章 ${articleId}: 本地化 ${processed}/${matches.length} 张图片` + (failed > 0 ? ` (${failed} 张失败)` : ""));
+  console.log(
+    `[Publisher] 文章 ${articleId}: 本地化 ${processed}/${matches.length} 张图片`
+    + (failed > 0 ? ` (${failed} 张失败` + (skippedByBudget > 0 ? `，其中 ${skippedByBudget} 张因下载预算耗尽未尝试` : "") + ")" : "")
+  );
   return updatedContent;
 }
 

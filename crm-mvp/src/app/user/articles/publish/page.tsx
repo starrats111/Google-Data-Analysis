@@ -15,6 +15,7 @@ import {
 import { compareConnections, connectionLabel } from "@/lib/connection-label";
 import { COUNTRY_OPTIONS, countryFilterOption, countryFilterSort, marketLanguage } from "@/lib/countries";
 import { sanitizeHtml, proxifyImgSrcs } from "@/lib/sanitize";
+import { PUBLISH_TIMEOUT_MS, readArticleUpdatedAt, confirmPublishedAfter } from "@/lib/publish-status-check";
 import PublishSiteSelect from "@/components/PublishSiteSelect";
 import AppPageHeader from "@/components/AppPageHeader";
 import dayjs from "dayjs";
@@ -175,6 +176,8 @@ export default function ArticlePublishPage() {
   const [publishing, setPublishing] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
   const [publishResult, setPublishResult] = useState<{ url: string } | null>(null);
+  // D-326：发布期间的阶段性文案，别让用户对着一个不说话的转圈等两分钟
+  const [publishHint, setPublishHint] = useState("");
 
   useEffect(() => {
     // 获取已领取的商家（用于默认列表）
@@ -496,6 +499,12 @@ export default function ArticlePublishPage() {
       return;
     }
     setPublishing(true);
+    setPublishHint("正在保存文章内容…");
+    // D-326：记下发起前的 updated_at 作为基线。请求断了以后要靠它判断
+    // 「服务端是不是其实已经发成功了」，而不是把之前就已发布的状态误认成本次成功。
+    let baseUpdatedAt: number | null = null;
+    // 只有真的把发布请求发出去了才值得回查；卡在前面那步保存就挂了的，回查没有意义
+    let publishRequestFired = false;
     try {
       // 发布前先将最终预览内容保存到数据库，确保发布器读到的是带正确图片的 HTML
       // D-163⑫：落库失败必须中止发布，否则发布器会把库里的旧内容发出去
@@ -515,6 +524,10 @@ export default function ArticlePublishPage() {
         return;
       }
 
+      baseUpdatedAt = await readArticleUpdatedAt(articlePreview.id);
+      setPublishHint("正在推送到站点，图片下载中（最长约 1 分钟）…");
+      publishRequestFired = true;
+
       const res = await fetch("/api/user/articles/publish-to-site", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -523,6 +536,9 @@ export default function ArticlePublishPage() {
           site_id: selectedSite,
           publish_time: publishTime.toISOString(),
         }),
+        // D-326：发布是同步长请求，CDN 到 100 秒左右就会掐连接。自己先超时，
+        // 好歹能进到下面的「回查状态」分支，而不是永远转圈。
+        signal: AbortSignal.timeout(PUBLISH_TIMEOUT_MS),
       }).then((r) => r.json());
 
       if (res.code === 0) {
@@ -532,10 +548,27 @@ export default function ArticlePublishPage() {
       } else {
         message.error(res.message || "发布失败");
       }
-    } catch {
-      message.error("发布请求失败");
+    } catch (err) {
+      // D-326：请求断了不等于没发出去 —— 2026-09-07 wj11 报「一直转圈发不出去」，
+      // 服务端那两趟其实都发成功了，文章早就在站上了。断线后回查一次再下结论。
+      setPublishHint("请求已中断，正在核对文章是否已发布…");
+      const confirmed = publishRequestFired
+        ? await confirmPublishedAfter(articlePreview.id, baseUpdatedAt)
+        : null;
+      if (confirmed) {
+        setPublishResult({ url: confirmed.url });
+        setStep(5);
+        message.success("发布成功！（页面等待超时，已核对站点状态确认）");
+      } else {
+        message.error(
+          err instanceof Error && err.name === "TimeoutError"
+            ? "发布超时，服务端可能仍在处理，请稍后到文章列表确认状态，先别重复发布"
+            : "发布请求失败"
+        );
+      }
     } finally {
       setPublishing(false);
+      setPublishHint("");
     }
   }, [articlePreview, selectedSite, publishTime, message]);
 
@@ -1018,6 +1051,12 @@ export default function ArticlePublishPage() {
               确认发布
             </Button>
           </Space>
+          {/* D-326：发布要等服务端逐张下载外链图，慢的时候一分钟起步；把当前阶段说出来 */}
+          {publishing && publishHint && (
+            <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>
+              {publishHint}
+            </Paragraph>
+          )}
         </Card>
       )}
 
