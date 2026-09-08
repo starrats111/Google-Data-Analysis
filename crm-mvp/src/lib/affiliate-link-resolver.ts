@@ -28,6 +28,7 @@ import { probeExitIp } from "@/lib/suffix-engine/exit-ip";
 import { pickMobileUserAgent } from "@/lib/mobile-user-agents";
 import { registerBrowser, closeBrowserSafely, getStealthLauncher } from "@/lib/puppeteer-browser-registry";
 import { sameRootDomain, landingMatchesTarget } from "@/lib/root-domain";
+import { checkLandingOwnership } from "@/lib/landing-ownership";
 import { fetchChainViaKy } from "@/lib/link-resolver";
 
 // tracker_forbidden：联盟跳板在「自己的重定向端点」返回 4xx（401/403/404/410/451 等）拒绝了这次点击——
@@ -83,6 +84,15 @@ const EGRESS_VERIFY = process.env.RESOLVER_EGRESS_VERIFY !== "0";
  * 只有权威来源参与硬判，是为了不拿「从链接解包猜出来的域名」去否决真实结果。
  */
 const LANDING_GUARD = process.env.RESOLVER_LANDING_GUARD !== "0";
+
+/**
+ * D-328：硬层要拦下之前，是否抓一次落地页让它自证归属（默认开，置 0 关闭退回纯 D-316 判据）。
+ *
+ * 治的是「改名子品牌」这一类误杀：D-316/D-318 只比域名字面，而 Tapo 与 TP-Link、
+ * 这类母子品牌字面上毫无关系，商家自己的门店会被判成第三方中转，且换链接无法自愈
+ * （每轮重巡都再撞一次）。只在即将拦下时才抓，正常放行的链接不增加任何请求。
+ */
+const LANDING_OWNERSHIP_RECHECK = process.env.RESOLVER_LANDING_OWNERSHIP !== "0";
 
 
 /**
@@ -1778,17 +1788,37 @@ export async function resolveAffiliateLink(
       /* 解析不了就不判，交给既有逻辑 */
     }
     if (landedHost && !landingMatchesTarget(landedHost, opts.targetDomain)) {
-      console.warn(
-        `[AffiliateResolver] D-316：巡航终点 ${landedHost} 不在商家域 ${opts.targetDomain} 下，` +
-          `判定未跟到广告主落地页（usedBrowser=${result.usedBrowser}） url=${affiliateUrl.slice(0, 120)}`,
-      );
-      result.status = "resolve_failed";
-      result.error =
-        `停在第三方中转域名 ${landedHost}（商家域 ${opts.targetDomain}），未跟到广告主落地页` +
-        `——该链接需真实浏览器跟随其 JS 跳转，或上级发布商中转页本身不可跟`;
-      result.landingUrl = null;
-      result.trackingLink = null;
-      result.finalUrl = null;
+      // ── D-328：拦下之前先让页面自证一次 ──
+      // D-316/D-318 的判据只比域名字面，对「改名子品牌」无效：商家 us.store.tp-link.com
+      // 落到 us.store.tapo.com（Tapo 是 TP-Link 自己的子品牌），互不包含、共同前缀仅 1 字符，
+      // 被误判成第三方中转，wj11 换两次链接都没用——每轮重巡都再撞一次同一道闸。
+      // 这里抓一次落地页，商家品牌段出现在 title/canonical/资源域里就放行。
+      // 抓不到或找不到品牌段时维持原判，不拿网络故障当放行理由。
+      const ownership = LANDING_OWNERSHIP_RECHECK
+        ? await checkLandingOwnership(result.finalUrl, opts.targetDomain)
+        : null;
+
+      if (ownership?.verdict === "brand_hit_allow") {
+        console.warn(
+          `[AffiliateResolver] D-328：巡航终点 ${landedHost} 不在商家域 ${opts.targetDomain} 下，` +
+            `但页面自证属于该商家（品牌段「${ownership.brand}」命中 ${ownership.hitIn}）→ 放行，` +
+            `不判第三方中转 url=${affiliateUrl.slice(0, 120)}`,
+        );
+      } else {
+        console.warn(
+          `[AffiliateResolver] D-316：巡航终点 ${landedHost} 不在商家域 ${opts.targetDomain} 下，` +
+            `判定未跟到广告主落地页（usedBrowser=${result.usedBrowser}` +
+            `${ownership ? `, D-328 复核=${ownership.verdict}/fetched=${ownership.fetched}` : ""}）` +
+            ` url=${affiliateUrl.slice(0, 120)}`,
+        );
+        result.status = "resolve_failed";
+        result.error =
+          `停在第三方中转域名 ${landedHost}（商家域 ${opts.targetDomain}），未跟到广告主落地页` +
+          `——该链接需真实浏览器跟随其 JS 跳转，或上级发布商中转页本身不可跟`;
+        result.landingUrl = null;
+        result.trackingLink = null;
+        result.finalUrl = null;
+      }
     }
   }
 
