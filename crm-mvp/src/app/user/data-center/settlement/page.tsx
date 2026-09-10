@@ -127,6 +127,30 @@ const RANGE_OPTIONS = [
 
 const PLATFORM_OPTIONS = PLATFORMS.map((p) => ({ value: p.code, label: `${p.code} (${p.name})` }));
 
+/** 率的分母统一为总佣金（含待审核，不扣除）；总佣金为 0 的行返回 null，避免 0/0 显示成 0% */
+const rateOf = (num: number, total: number): number | null => (total > 0 ? (num / total) * 100 : null);
+
+/** 率列排序值：整行无佣金的沉底 */
+const rateSort = (num: number, total: number): number => rateOf(num, total) ?? -1;
+
+/** 率单元格：与同组金额列同色，无佣金显示 "-" */
+const renderRate = (v: number | null, color: string, bold = false) =>
+  v === null ? (
+    <span style={{ color: "#bfbfbf" }}>-</span>
+  ) : (
+    <span style={{ color: v > 0 ? color : undefined, fontWeight: bold && v > 0 ? 600 : 400 }}>{v.toFixed(2)}%</span>
+  );
+
+/** 率列表头：虚线下划线 + 口径悬停说明 */
+const rateTitle = (label: string, tip: string) => (
+  <Tooltip title={tip}>
+    <span style={{ borderBottom: "1px dashed #aaa", cursor: "help" }}>{label}</span>
+  </Tooltip>
+);
+
+const SETTLE_RATE_TIP = "结算率 = 已支付 / 总佣金。分母为总佣金（含待审核，不扣除），所以单子还在审核期的商家结算率天然偏低。与本页顶部「结算率」仪表盘同口径，随上方时间/平台/员工筛选一起变。";
+const REJECT_RATE_TIP = "拒付率 = 拒付 / 总佣金。分母为总佣金（含待审核，不扣除）。与本页顶部「拒付率」仪表盘同口径，随上方时间/平台/员工筛选一起变。";
+
 export default function SettlementPage() {
   const { message } = App.useApp();
   const [range, setRange] = useState<string>("1m");
@@ -299,9 +323,21 @@ export default function SettlementPage() {
       render: (v: number) => <span style={{ color: v > 0 ? "#1890ff" : undefined }}>${v.toFixed(2)}</span>,
     },
     {
+      title: rateTitle("结算率", SETTLE_RATE_TIP),
+      key: "settle_rate", width: 84, align: "right",
+      sorter: (a, b) => rateSort(a.paid, a.total) - rateSort(b.paid, b.total),
+      render: (_: unknown, r: MerchantRow) => renderRate(rateOf(r.paid, r.total), "#1890ff"),
+    },
+    {
       title: "拒付($)", dataIndex: "rejected", width: 100, align: "right",
       sorter: (a, b) => a.rejected - b.rejected,
       render: (v: number) => <span style={{ color: v > 0 ? "#cf1322" : undefined, fontWeight: v > 0 ? 600 : 400 }}>${v.toFixed(2)}</span>,
+    },
+    {
+      title: rateTitle("拒付率", REJECT_RATE_TIP),
+      key: "reject_rate", width: 84, align: "right",
+      sorter: (a, b) => rateSort(a.rejected, a.total) - rateSort(b.rejected, b.total),
+      render: (_: unknown, r: MerchantRow) => renderRate(rateOf(r.rejected, r.total), "#cf1322", true),
     },
     {
       title: "待审核($)", dataIndex: "pending", width: 100, align: "right",
@@ -337,6 +373,12 @@ export default function SettlementPage() {
       render: (v: number) => <span style={{ color: "#1890ff" }}>${v.toFixed(2)}</span>,
     },
     {
+      title: rateTitle("结算率", SETTLE_RATE_TIP),
+      key: "settle_rate", width: 100,
+      sorter: (a, b) => rateSort(a.paid, a.total) - rateSort(b.paid, b.total),
+      render: (_: unknown, r: MonthlyRow) => renderRate(rateOf(r.paid, r.total), "#1890ff"),
+    },
+    {
       title: "拒付($)", dataIndex: "rejected", width: 120,
       sorter: (a, b) => a.rejected - b.rejected,
       render: (v: number) => (
@@ -344,6 +386,12 @@ export default function SettlementPage() {
           ${v.toFixed(2)}
         </span>
       ),
+    },
+    {
+      title: rateTitle("拒付率", REJECT_RATE_TIP),
+      key: "reject_rate", width: 100,
+      sorter: (a, b) => rateSort(a.rejected, a.total) - rateSort(b.rejected, b.total),
+      render: (_: unknown, r: MonthlyRow) => renderRate(rateOf(r.rejected, r.total), "#cf1322", true),
     },
     {
       title: "待审核($)", dataIndex: "pending", width: 120,
@@ -379,9 +427,21 @@ export default function SettlementPage() {
       render: (v: number) => <span style={{ color: v > 0 ? "#1890ff" : undefined }}>${v.toFixed(2)}</span>,
     },
     {
+      title: rateTitle("结算率", SETTLE_RATE_TIP),
+      key: "settle_rate", width: 84, align: "right",
+      sorter: (a, b) => rateSort(a.paid, a.total) - rateSort(b.paid, b.total),
+      render: (_: unknown, r: MemberRow) => renderRate(rateOf(r.paid, r.total), "#1890ff"),
+    },
+    {
       title: "拒付($)", dataIndex: "rejected", width: 100, align: "right",
       sorter: (a, b) => a.rejected - b.rejected,
       render: (v: number) => <span style={{ color: v > 0 ? "#cf1322" : undefined, fontWeight: v > 0 ? 600 : 400 }}>${v.toFixed(2)}</span>,
+    },
+    {
+      title: rateTitle("拒付率", REJECT_RATE_TIP),
+      key: "reject_rate", width: 84, align: "right",
+      sorter: (a, b) => rateSort(a.rejected, a.total) - rateSort(b.rejected, b.total),
+      render: (_: unknown, r: MemberRow) => renderRate(rateOf(r.rejected, r.total), "#cf1322", true),
     },
     {
       title: "待审核($)", dataIndex: "pending", width: 100, align: "right",
@@ -837,7 +897,7 @@ export default function SettlementPage() {
                 dataSource={data?.members || []}
                 rowKey="user_id"
                 size="small"
-                scroll={{ x: 850 }}
+                scroll={{ x: 1020 }}
                 pagination={false}
                 summary={() => {
                   if (!data?.members?.length) return null;
@@ -857,10 +917,12 @@ export default function SettlementPage() {
                         <Table.Summary.Cell index={1} align="right"><Text strong>${totals.total.toFixed(2)}</Text></Table.Summary.Cell>
                         <Table.Summary.Cell index={2} align="right"><Text strong style={{ color: COLORS.successGreen }}>${totals.approved.toFixed(2)}</Text></Table.Summary.Cell>
                         <Table.Summary.Cell index={3} align="right"><Text strong style={{ color: "#1890ff" }}>${totals.paid.toFixed(2)}</Text></Table.Summary.Cell>
-                        <Table.Summary.Cell index={4} align="right"><Text strong style={{ color: "#cf1322" }}>${totals.rejected.toFixed(2)}</Text></Table.Summary.Cell>
-                        <Table.Summary.Cell index={5} align="right"><Text strong style={{ color: "#faad14" }}>${totals.pending.toFixed(2)}</Text></Table.Summary.Cell>
-                        <Table.Summary.Cell index={6} align="right"><Text strong>{totals.orders}</Text></Table.Summary.Cell>
-                        <Table.Summary.Cell index={7} align="right"><Text strong>${totals.order_amount.toFixed(2)}</Text></Table.Summary.Cell>
+                        <Table.Summary.Cell index={4} align="right"><Text strong>{renderRate(rateOf(totals.paid, totals.total), "#1890ff")}</Text></Table.Summary.Cell>
+                        <Table.Summary.Cell index={5} align="right"><Text strong style={{ color: "#cf1322" }}>${totals.rejected.toFixed(2)}</Text></Table.Summary.Cell>
+                        <Table.Summary.Cell index={6} align="right"><Text strong>{renderRate(rateOf(totals.rejected, totals.total), "#cf1322", true)}</Text></Table.Summary.Cell>
+                        <Table.Summary.Cell index={7} align="right"><Text strong style={{ color: "#faad14" }}>${totals.pending.toFixed(2)}</Text></Table.Summary.Cell>
+                        <Table.Summary.Cell index={8} align="right"><Text strong>{totals.orders}</Text></Table.Summary.Cell>
+                        <Table.Summary.Cell index={9} align="right"><Text strong>${totals.order_amount.toFixed(2)}</Text></Table.Summary.Cell>
                       </Table.Summary.Row>
                     </Table.Summary>
                   );
@@ -872,7 +934,7 @@ export default function SettlementPage() {
                 dataSource={data?.merchants || []}
                 rowKey={(r) => `${r.platform}:${r.merchant_id}`}
                 size="small"
-                scroll={{ x: 900 }}
+                scroll={{ x: 1130 }}
                 pagination={{ defaultPageSize: 50, showTotal: (t) => `共 ${t} 个商家`, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"] }}
                 summary={() => {
                   if (!data?.merchants.length) return null;
@@ -892,10 +954,12 @@ export default function SettlementPage() {
                         <Table.Summary.Cell index={2} align="right"><Text strong>${totals.total.toFixed(2)}</Text></Table.Summary.Cell>
                         <Table.Summary.Cell index={3} align="right"><Text strong style={{ color: COLORS.successGreen }}>${totals.approved.toFixed(2)}</Text></Table.Summary.Cell>
                         <Table.Summary.Cell index={4} align="right"><Text strong style={{ color: "#1890ff" }}>${totals.paid.toFixed(2)}</Text></Table.Summary.Cell>
-                        <Table.Summary.Cell index={5} align="right"><Text strong style={{ color: "#cf1322" }}>${totals.rejected.toFixed(2)}</Text></Table.Summary.Cell>
-                        <Table.Summary.Cell index={6} align="right"><Text strong style={{ color: "#faad14" }}>${totals.pending.toFixed(2)}</Text></Table.Summary.Cell>
-                        <Table.Summary.Cell index={7} align="right"><Text strong>{totals.orders}</Text></Table.Summary.Cell>
-                        <Table.Summary.Cell index={8} align="right"><Text strong>${totals.order_amount.toFixed(2)}</Text></Table.Summary.Cell>
+                        <Table.Summary.Cell index={5} align="right"><Text strong>{renderRate(rateOf(totals.paid, totals.total), "#1890ff")}</Text></Table.Summary.Cell>
+                        <Table.Summary.Cell index={6} align="right"><Text strong style={{ color: "#cf1322" }}>${totals.rejected.toFixed(2)}</Text></Table.Summary.Cell>
+                        <Table.Summary.Cell index={7} align="right"><Text strong>{renderRate(rateOf(totals.rejected, totals.total), "#cf1322", true)}</Text></Table.Summary.Cell>
+                        <Table.Summary.Cell index={8} align="right"><Text strong style={{ color: "#faad14" }}>${totals.pending.toFixed(2)}</Text></Table.Summary.Cell>
+                        <Table.Summary.Cell index={9} align="right"><Text strong>{totals.orders}</Text></Table.Summary.Cell>
+                        <Table.Summary.Cell index={10} align="right"><Text strong>${totals.order_amount.toFixed(2)}</Text></Table.Summary.Cell>
                       </Table.Summary.Row>
                     </Table.Summary>
                   );
@@ -907,6 +971,7 @@ export default function SettlementPage() {
                 dataSource={data?.monthly || []}
                 rowKey="month"
                 size="small"
+                scroll={{ x: 990 }}
                 pagination={false}
                 summary={() => {
                   if (!data?.monthly.length) return null;
@@ -925,9 +990,11 @@ export default function SettlementPage() {
                         <Table.Summary.Cell index={1} align="right"><Text strong>${totals.total.toFixed(2)}</Text></Table.Summary.Cell>
                         <Table.Summary.Cell index={2} align="right"><Text strong style={{ color: COLORS.successGreen }}>${totals.approved.toFixed(2)}</Text></Table.Summary.Cell>
                         <Table.Summary.Cell index={3} align="right"><Text strong style={{ color: "#1890ff" }}>${totals.paid.toFixed(2)}</Text></Table.Summary.Cell>
-                        <Table.Summary.Cell index={4} align="right"><Text strong style={{ color: "#cf1322" }}>${totals.rejected.toFixed(2)}</Text></Table.Summary.Cell>
-                        <Table.Summary.Cell index={5} align="right"><Text strong style={{ color: "#faad14" }}>${totals.pending.toFixed(2)}</Text></Table.Summary.Cell>
-                        <Table.Summary.Cell index={6} align="right"><Text strong>{totals.orders}</Text></Table.Summary.Cell>
+                        <Table.Summary.Cell index={4}><Text strong>{renderRate(rateOf(totals.paid, totals.total), "#1890ff")}</Text></Table.Summary.Cell>
+                        <Table.Summary.Cell index={5} align="right"><Text strong style={{ color: "#cf1322" }}>${totals.rejected.toFixed(2)}</Text></Table.Summary.Cell>
+                        <Table.Summary.Cell index={6}><Text strong>{renderRate(rateOf(totals.rejected, totals.total), "#cf1322", true)}</Text></Table.Summary.Cell>
+                        <Table.Summary.Cell index={7} align="right"><Text strong style={{ color: "#faad14" }}>${totals.pending.toFixed(2)}</Text></Table.Summary.Cell>
+                        <Table.Summary.Cell index={8} align="right"><Text strong>{totals.orders}</Text></Table.Summary.Cell>
                       </Table.Summary.Row>
                     </Table.Summary>
                   );
