@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { normalizePlatformCode } from "@/lib/constants";
-import { nowCST, dateColumnStart, dateColumnEndExclusive } from "@/lib/date-utils";
+import { nowCST, parseTxnDateStart, parseTxnDateEndExclusive } from "@/lib/date-utils";
 import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
 import { applyAffiliateCommissionToDailyStats } from "@/lib/daily-stats-commission";
 import { aggregateRawTransactions } from "@/lib/affiliate-txn-aggregate";
@@ -151,9 +151,16 @@ async function runQuickSync(startTime: number): Promise<NextResponse> {
   const startStr = cstNow.subtract(QUICK_SYNC_DAYS, "day").format("YYYY-MM-DD");
   const endStr = cstNow.format("YYYY-MM-DD");
 
-  // 用于 ads_daily_stats 佣金回写的 UTC 边界（DATE 列按 UTC 日期对齐 ads_daily_stats.date）
-  const statsRangeStart = dateColumnStart(startStr);
-  const statsRangeEnd = dateColumnEndExclusive(endStr);
+  // D-331 佣金回写区间：这对边界在 applyAffiliateCommissionToDailyStats 里被两处共用——
+  // affiliate_transactions.transaction_time（DATETIME，按 CST 切日聚合）与 ads_daily_stats.date（DATE 列）。
+  // 旧的 dateColumnStart/EndExclusive 给的是 UTC 零点，比 CST 零点晚 8 小时：
+  // 窗口首日 CST 00:00-08:00 的单落在聚合区间外，而那一天的行照样被对齐成「无佣金」，
+  // 次日该日期滑出 14 天窗口后再也不会重算，佣金就永久停在 0 上。
+  // 改用 CST 零点对 DATE 列同样正确：DATE 与 DATETIME 比较按 00:00 补齐，
+  // date >= CST 零点（UTC 前一日 16:00）恰好从 startStr 当天起，date < CST 次日零点恰好含 endStr 当天。
+  // 其余四个调用方（daily-sync / data-center sync / sync-transactions / c082）本来就是这个口径。
+  const statsRangeStart = parseTxnDateStart(startStr);
+  const statsRangeEnd = parseTxnDateEndExclusive(endStr);
 
   const results: Record<string, unknown> = {};
   let totalChanged = 0;
