@@ -42,13 +42,17 @@ export async function POST(req: NextRequest) {
       ? []
       : await prisma.platform_connections.findMany({
           where: { user_id: { in: ownerIds }, is_deleted: 0, status: "connected" },
-          select: { id: true, user_id: true, platform: true, account_name: true, api_key: true, channel_id: true, created_at: true },
+          select: { id: true, user_id: true, platform: true, account_name: true, api_key: true, channel_id: true, created_at: true, payment_account_key: true },
         });
 
     const { fetchPlatformPayments, platformSupportsPayments } = await import("@/lib/payment-api");
     const { resolveMainConnectionMap } = await import("@/lib/payment-main-connection");
-    // 同主账号(同 user+平台+账号名)多连接 → 打款统一写主连接，避免账户级打款单按 api_key 重复入库
+    // 同一物理账户的多连接 → 打款统一写主连接，避免账户级打款单按 api_key 重复入库
     const mainConnMap = await resolveMainConnectionMap(connections);
+    // D-322：打款行必须整行归主连接——user_id 也取主连接的归属人。
+    // 否则跨成员误挂时会写出 user_id=A 但 platform_connection_id 指向 B 连接的错行，
+    // 报表按 conn 关联账号列、按 user_id 过滤，这种行会错列或凭空消失。
+    const ownerByConnId = new Map(connections.map((c) => [String(c.id), c.user_id]));
 
     const validConnsRaw = connections
       .filter((c) => c.api_key && c.api_key.length > 5 && platformSupportsPayments(normalizePlatformCode(c.platform)))
@@ -56,10 +60,14 @@ export async function POST(req: NextRequest) {
 
     // 病灶根除：联盟「支付/打款」接口按 api_key（账号级）返回，与连接(channel/成员)无关。
     // 同一物理账号若配置了多条连接（如同一 CG 账号挂在不同成员名下），逐条同步会把
-    // 同一笔打款单写成多行。按 (platform, api_key) 去重，每个物理账号只同步一次。
+    // 同一笔打款单写成多行。每个物理账号只同步一次。
+    // D-322：去重键优先用 payment_account_key（显式物理账户）——同一账户签发多把 key 时
+    // 按 api_key 去重不命中，会各拉一遍再各写一份。未标注的回退 api_key。
     const seenAccounts = new Set<string>();
     const validConns = validConnsRaw.filter((c) => {
-      const key = `${normalizePlatformCode(c.platform)}::${c.api_key}`;
+      const platform = normalizePlatformCode(c.platform);
+      const acctKey = (c.payment_account_key || "").trim().toLowerCase();
+      const key = acctKey ? `${platform}::acct::${acctKey}` : `${platform}::${c.api_key}`;
       if (seenAccounts.has(key)) return false;
       seenAccounts.add(key);
       return true;
@@ -105,6 +113,7 @@ export async function POST(req: NextRequest) {
       await markConnectionSuccess(conn.id);
 
       const mainConnId = mainConnMap.get(String(conn.id)) ?? conn.id;
+      const ownerId = ownerByConnId.get(String(mainConnId)) ?? conn.user_id;
       let synced = 0;
       let paidAmount = 0;
       for (let i = 0; i < payments.length; i += 50) {
@@ -121,7 +130,7 @@ export async function POST(req: NextRequest) {
                 },
               },
               create: {
-                user_id: conn.user_id,
+                user_id: ownerId,
                 platform,
                 platform_connection_id: mainConnId,
                 payment_no: p.payment_no,
@@ -137,6 +146,7 @@ export async function POST(req: NextRequest) {
                 raw_json: p.raw_json || null,
               },
               update: {
+                user_id: ownerId, // D-322：修正存量错归的行（跨成员误挂时旧行 user_id 是次要连接的人）
                 source_kind: p.source_kind,
                 paid_date: p.paid_date ? new Date(p.paid_date) : null,
                 request_date: p.request_date ? new Date(p.request_date) : null,

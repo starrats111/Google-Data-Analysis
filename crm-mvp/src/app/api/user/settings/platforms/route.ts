@@ -312,8 +312,12 @@ export async function DELETE(req: NextRequest) {
   // 联动清理三：软删除该连接下的所有打款记录（affiliate_payments）
   // 病灶根除：此前删连接只清交易/商家，漏了打款记录，导致已删连接的打款单
   // 仍残留在「打款明细」里重复显示（典型如同一物理账号双配置后删其一）。
+  // D-322：**不再按 user_id 过滤**。同一物理账户被错挂到两个成员时，打款行的 user_id
+  // 可能是另一个人（LH conn#323 即此例），加了 user_id 条件就漏删，留下的孤儿行会被
+  // 月报「该平台仅剩一个活跃账号则并入该列」的兜底吸进别人的列里双计。
+  // 打款行始终随连接走，连接删了它就该跟着删，与归属人无关。
   await prisma.affiliate_payments.updateMany({
-    where: { user_id: userId, platform_connection_id: connId, is_deleted: 0 },
+    where: { platform_connection_id: connId, is_deleted: 0 },
     data: { is_deleted: 1 },
   });
 

@@ -414,7 +414,7 @@ export async function buildMemberMonthlyReport(
   // ── 1. 动态账号列（活跃连接按 平台+trim(账号名) 去重合并） ──────────
   const conns = await prisma.platform_connections.findMany({
     where: { user_id: userId, is_deleted: 0 },
-    select: { id: true, platform: true, account_name: true, payment_method_id: true },
+    select: { id: true, platform: true, account_name: true, payment_method_id: true, payment_account_key: true },
     orderBy: { created_at: "asc" },
   });
 
@@ -422,6 +422,8 @@ export async function buildMemberMonthlyReport(
   const colByKey = new Map<ColKey, AccountColumn>();
   const colKeyByConnId = new Map<string, ColKey>();
   const methodIdByColKey = new Map<ColKey, bigint | null>();
+  /** D-322：每列覆盖的物理账户集合（一列可合并多条连接，故为 Set），用于收紧打款兜底 */
+  const acctKeysByColKey = new Map<ColKey, Set<string>>();
 
   for (const c of conns) {
     const name = (c.account_name || "").trim();
@@ -453,13 +455,21 @@ export async function buildMemberMonthlyReport(
     }
     colByKey.get(key)!.connectionIds.push(String(c.id));
     colKeyByConnId.set(String(c.id), key);
+    const ak = (c.payment_account_key || "").trim().toLowerCase();
+    if (ak) {
+      let s = acctKeysByColKey.get(key);
+      if (!s) { s = new Set(); acctKeysByColKey.set(key, s); }
+      s.add(ak);
+    }
   }
 
-  /** 把（可能已删除的）连接归到列：先按 conn id，再按 平台+名称 合并，最后回退平台唯一列 */
+  /** 把（可能已删除的）连接归到列：先按 conn id，再按 平台+名称 合并，最后回退平台唯一列。
+   *  requireAccountKey：见下方 D-322 注释，打款口径专用的兜底收紧参数。 */
   const resolveColKey = (
     connId: string | null,
     platform: string,
     fallbackName?: string,
+    requireAccountKey?: string | null,
   ): ColKey | null => {
     if (connId && colKeyByConnId.has(connId)) return colKeyByConnId.get(connId)!;
     if (fallbackName !== undefined) {
@@ -467,8 +477,17 @@ export async function buildMemberMonthlyReport(
       if (colByKey.has(key)) return key;
     }
     const platformCols = [...colByKey.keys()].filter((k) => k.startsWith(`${platform}\u0000`));
-    if (platformCols.length === 1) return platformCols[0];
-    return null;
+    if (platformCols.length !== 1) return null;
+    // D-322：打款口径（传了 requireAccountKey）时，平台唯一列兜底必须**同一物理账户**才生效。
+    // 否则同一物理账户被错挂到两个成员时，已删连接的孤儿打款行会被吸进另一个人的列里双计
+    // （LH conn#323 那 16 笔 $16,995.58 就这样进了 林念槐 的 LH 列，钱其实是 胡婷婷 的）。
+    // 佣金(交易)口径不传此参数，保持 C-173 原行为。
+    if (requireAccountKey !== undefined) {
+      // 未标注物理账户的一律不兜底：宁可报警漏计，也不把别人的钱并进来
+      if (!requireAccountKey) return null;
+      if (!acctKeysByColKey.get(platformCols[0])?.has(requireAccountKey)) return null;
+    }
+    return platformCols[0];
   };
 
   // ── 2. 账面/失效佣金（当月交易，平台后台时间口径） ──────────────────
@@ -551,10 +570,30 @@ export async function buildMemberMonthlyReport(
   // 只在该列确有修正时才生效，没修正的列一律不碰，历史月快照的冻结口径原样保留。
   const actualCardByCol = new Map<AccountColumn, ActualCards>();
 
+  // D-322：孤儿打款行（连接已软删）走兜底时要求同一物理账户，故需知道各打款行所属连接的账户标识。
+  // 只查活跃连接之外的那些（活跃的已在 acctKeysByColKey 里）。
+  const payConnIds = [...new Set(
+    payments.map((p) => p.platform_connection_id).filter((x): x is bigint => x != null).map(String),
+  )].filter((id) => !colKeyByConnId.has(id));
+  const acctKeyByPayConnId = new Map<string, string>();
+  if (payConnIds.length > 0) {
+    const orphanConns = await prisma.platform_connections.findMany({
+      where: { id: { in: payConnIds.map((id) => BigInt(id)) } },
+      select: { id: true, payment_account_key: true },
+    });
+    for (const c of orphanConns) {
+      const ak = (c.payment_account_key || "").trim().toLowerCase();
+      if (ak) acctKeyByPayConnId.set(String(c.id), ak);
+    }
+  }
+
   for (const p of payments) {
+    const connIdStr = p.platform_connection_id ? String(p.platform_connection_id) : null;
     const key = resolveColKey(
-      p.platform_connection_id ? String(p.platform_connection_id) : null,
+      connIdStr,
       p.platform,
+      undefined,
+      connIdStr ? (acctKeyByPayConnId.get(connIdStr) ?? null) : null,
     );
     if (!key) {
       warnings.push(`${p.platform} 有打款记录无法归属到现有账号，已忽略（$${r2(Number(p.amount))}）`);

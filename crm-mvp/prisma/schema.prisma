@@ -121,6 +121,11 @@ model platform_connections {
   // D-180：联盟序号用户确认时间。NULL=未确认（含存量自动分配 + 多连接未核对）；
   // 有值=用户已确认或单连接平台系统自动确认。多连接平台存在 NULL 时登录强制弹窗要求确认。
   account_index_confirmed_at DateTime? @db.DateTime(0)
+  // D-322：物理联盟账户标识。联盟「支付/打款」接口是账户级返回，同一账户签发的多把 api_key
+  // （或改名后的连接）拿回的是同一批打款单。同一物理账户的连接共享同一个 key，
+  // 打款去重/归主连接以它为准，不再依赖易变的 api_key / account_name。
+  // NULL = 未标注，回退旧口径（api_key 相同 + 账号名相同）。
+  payment_account_key  String?   @db.VarChar(64)
   api_key              String?   @db.Text
   channel_id           String?   @db.VarChar(64) // 历史遗留（AD 平台已下线），保留不再使用
   payee                String?   @db.VarChar(64) // D-077：该账号打款的收款人（如 张文俊 / 龚建成）。R-01 起弃用，改用 payment_method_id
@@ -140,6 +145,7 @@ model platform_connections {
 
   @@index([user_id, platform], map: "idx_user_platform")
   @@index([status, last_sync_attempt_at], map: "idx_status_attempt") // D-026: 健康巡检 cron 用
+  @@index([platform, payment_account_key], map: "idx_pc_payment_account_key") // D-322: 物理账户归一
 }
 
 // -----------------------------------------------------------

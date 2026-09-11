@@ -1316,22 +1316,37 @@ async function syncAllUsersPayments(): Promise<unknown> {
   });
 
   const results: Record<string, unknown> = {};
-  // 病灶根除：联盟支付接口按 api_key（账号级）返回，同一物理账号(api_key)即使被
+  // 病灶根除：联盟支付接口按 api_key（账号级）返回，同一物理账号即使被
   // 配置成多条连接 / 挂在不同成员名下，也只能同步一次，否则同一打款单会重复入库。
   const syncedAccounts = new Set<string>();
 
+  // D-322：连接必须**一次性全量取**，再整体归主连接。
+  // 原来在 per-user 循环里各取各的，resolveMainConnectionMap 只看得见单个成员的连接，
+  // 同一物理账户被错挂到两个成员时永远归不到一起（LH conn#243 用户29 / #323 用户19 即此例，
+  // 2026-08-25 同步给用户19 又写了整份 16 笔）。
+  const allConns = await prisma.platform_connections.findMany({
+    where: { is_deleted: 0, status: "connected" },
+    select: { id: true, user_id: true, platform: true, account_name: true, api_key: true, created_at: true, payment_account_key: true },
+  });
+  const mainConnMap = await resolveMainConnectionMap(allConns);
+  const ownerByConnId = new Map(allConns.map((c) => [String(c.id), c.user_id]));
+  const connsByUser = new Map<string, typeof allConns>();
+  for (const c of allConns) {
+    const k = String(c.user_id);
+    const arr = connsByUser.get(k);
+    if (arr) arr.push(c);
+    else connsByUser.set(k, [c]);
+  }
+
   for (const user of users) {
     try {
-      const conns = await prisma.platform_connections.findMany({
-        where: { user_id: user.id, is_deleted: 0, status: "connected" },
-        select: { id: true, user_id: true, platform: true, account_name: true, api_key: true, created_at: true },
-      });
-      // 同主账号(同 user+平台+账号名)多连接 → 打款统一写主连接，避免账户级打款单按 api_key 重复入库
-      const mainConnMap = await resolveMainConnectionMap(conns);
+      const conns = connsByUser.get(String(user.id)) ?? [];
       const validConns = conns.filter(
         (c) => c.api_key && c.api_key.length > 5 && platformSupportsPayments(normalizePlatformCode(c.platform)),
       ).filter((c) => {
-        const key = `${normalizePlatformCode(c.platform)}::${c.api_key}`;
+        const platform = normalizePlatformCode(c.platform);
+        const acctKey = (c.payment_account_key || "").trim().toLowerCase();
+        const key = acctKey ? `${platform}::acct::${acctKey}` : `${platform}::${c.api_key}`;
         if (syncedAccounts.has(key)) return false;
         syncedAccounts.add(key);
         return true;
@@ -1349,6 +1364,8 @@ async function syncAllUsersPayments(): Promise<unknown> {
             continue;
           }
           const mainConnId = mainConnMap.get(String(conn.id)) ?? conn.id;
+          // D-322：整行归主连接——user_id 也取主连接归属人，避免写出 user_id 与 conn 不一致的错行
+          const ownerId = ownerByConnId.get(String(mainConnId)) ?? user.id;
           for (const p of payments) {
             if (p.status === "paid") paidAmount += p.amount;
             await prisma.affiliate_payments.upsert({
@@ -1360,7 +1377,7 @@ async function syncAllUsersPayments(): Promise<unknown> {
                 },
               },
               create: {
-                user_id: user.id, platform, platform_connection_id: mainConnId, payment_no: p.payment_no,
+                user_id: ownerId, platform, platform_connection_id: mainConnId, payment_no: p.payment_no,
                 source_kind: p.source_kind,
                 paid_date: p.paid_date ? new Date(p.paid_date) : null,
                 request_date: p.request_date ? new Date(p.request_date) : null,
@@ -1369,6 +1386,7 @@ async function syncAllUsersPayments(): Promise<unknown> {
                 raw_json: p.raw_json || null,
               },
               update: {
+                user_id: ownerId, // D-322：修正存量跨成员错归的行
                 source_kind: p.source_kind,
                 paid_date: p.paid_date ? new Date(p.paid_date) : null,
                 request_date: p.request_date ? new Date(p.request_date) : null,
