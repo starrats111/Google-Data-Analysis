@@ -2058,7 +2058,31 @@ export async function buildCrawlCache(
   // 关键：ensureCountryEgressHttpProxy 内部会先调 ipinfo.io 校验出口 IP 国家是否匹配 country，
   // 不匹配则换 sid 重试（最多 3 次）。每次重试都会重新生成随机 sid，确保 sid 实时更新。
   // 校验通过的 proxyUrl 才返回；3 次都不符 → 返回 null，上层降级直连，避免错国出口浪费 100s+ 抓取时间。
-  const puppeteerProxyUrl = country ? (await ensureCountryEgressHttpProxy(country).catch(() => null)) : null;
+  //
+  // D-333（2026-09-11）：探活超时不再丢弃代理。原来「校验失败即降级直连」的底气是下面
+  // ensureCountryEgressHttpProxyDetailed 里那句「直连虽然出口在腾讯云 CN，但很多站点接受」——
+  // 对直连能通的站成立，对按来源 IP 段封锁国内的站正好相反：直连拿 0 字节，是死路。
+  // eliandelm.com 即此形态（DNS SERVFAIL + TCP 80/443 全封，同 /24 网关却 ping 得通；
+  // 同一时刻日本机器 301/0.9s、US 住宅代理 301/1.5s）。代理为 null 时三个 puppeteer 策略
+  // 拿到的是 undefined（见 runPuppeteer），等于全在直连，熬满 165s 预算，真实候选 0 条。
+  // 而失败的并不是代理：探活预算 5s、代理实测 1.0-1.8s，是这台 3.6G 机器常态吃 1.7G swap,
+  // 事件循环卡顿把 5s 定时器误触发（与 connection-health.ts 记的 D-220 同源），日志记 Aborted。
+  // 与 D-222 实测一致（漏国 2.5% vs 探活失败 10%，失败是漏国的 4 倍）：超时不构成「出口国不符」
+  // 的证据，故按模板国家放行最后一个会话。真探到错国出口仍返回 null，降级直连的老路径不变。
+  // retryOnProbeError=false：超时重拨每次白赔 5s，且换会话对「本机卡顿」这个真因无效。
+  // checkTimeoutMs 5000→12000：只提 AI 路径，不动共享默认值。5s 是给「代理正常时探活要多久」
+  // 定的（实测 1.0-1.8s），但故障时卡的不是代理而是本机事件循环，5s 太紧就会把好代理判死。
+  // 放宽后大多数情况能拿到**真正校验过**的出口国，而不是靠 fallbackToUnverified 按模板放行——
+  // 后者是兜底，不该变成常态。代价：代理真不可达时这一发从 5s 变 12s（retry 已关，只一发，
+  // 对 165s 预算可忽略）。不改 checkProxyEgress 的默认值，是因为换链接路径 maxRetries:2 且开重拨，
+  // 跟着变会让最坏耗时 10s→24s，那是本次没被要求碰的热路径。
+  const puppeteerProxyUrl = country
+    ? (await ensureCountryEgressHttpProxy(country, {
+        fallbackToUnverified: true,
+        retryOnProbeError: false,
+        checkTimeoutMs: 12_000,
+      }).catch(() => null))
+    : null;
   if (puppeteerProxyUrl) console.log(`[CrawlPipeline] Puppeteer 将使用 HTTP 代理: ${puppeteerProxyUrl.replace(/:[^@]+@/, ':***@')}`);
   else if (country) console.warn(`[CrawlPipeline] ${country} 代理不可用或出口国校验失败，降级为直连`);
 

@@ -276,6 +276,10 @@ async function verifyCountryEgress(
 
   let lastProxyUrl: string | null = null;
   let lastFailure: "probe_error" | "mismatch" | null = null;
+  // D-333：留住最后一条探活错误原文。放行/降级那两行原来统一写「探活超时」，可 probe_error
+  // 里混着 `ipinfo HTTP 502`（线上 988 次全是它，不是超时）——写死成超时会让人去查网络和超时阈值，
+  // 而 502 是 ipinfo 侧的响应，方向完全不同。
+  let lastProbeError = "";
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     const proxyUrl = await acquire().catch(() => null);
     if (!proxyUrl) {
@@ -294,9 +298,10 @@ async function verifyCountryEgress(
       console.warn(`[CrawlProxy] ${label} 出口国不符 (尝试${attempt}/${maxRetries}): 期望=${targetCountry} 实际=${egress.country} ip=${egress.ip}，换会话重拨`);
     } catch (err) {
       lastFailure = "probe_error";
+      lastProbeError = err instanceof Error ? err.message : String(err);
       const retry = options.retryOnProbeError !== false;
       console.warn(
-        `[CrawlProxy] ${label} 探活失败 (尝试${attempt}/${maxRetries}): ${err instanceof Error ? err.message : err}，${retry ? "换会话重拨" : "不重拨（超时非漏国证据）"}`,
+        `[CrawlProxy] ${label} 探活失败 (尝试${attempt}/${maxRetries}): ${lastProbeError}，${retry ? "换会话重拨" : "不重拨（探活失败非漏国证据）"}`,
       );
       if (!retry) break;
     }
@@ -304,10 +309,16 @@ async function verifyCountryEgress(
   // 最后一次尝试仅是探活超时/网络错（没有「出口国不符」的确定性证据）→ 按模板国家未验证放行，
   // 保住会话避免白烧；真探到错国出口才彻底放弃。
   if (options.fallbackToUnverified && lastProxyUrl && lastFailure === "probe_error") {
-    console.warn(`[CrawlProxy] ${label} ${targetCountry} 出口校验 ${maxRetries} 次均为探活超时（非出口国不符），按模板国家未验证放行，避免丢弃可用会话`);
+    console.warn(`[CrawlProxy] ${label} ${targetCountry} 出口校验未完成（探活失败：${lastProbeError}，非出口国不符），按模板国家未验证放行，避免丢弃可用会话`);
     return { proxyUrl: lastProxyUrl, exitIp: null, egressVerified: false };
   }
-  console.warn(`[CrawlProxy] ${label} 出口校验 ${maxRetries} 次均不符 ${targetCountry}，降级处理`);
+  // D-333：原来这里不分原因统一印「均不符 <国家>」，探活超时也被写成出口国不符
+  // （09-10 15:58 那批 US 失败全是 Aborted 超时，日志却说不符 US，照着查会去翻代理配置和国家映射）。
+  console.warn(
+    lastFailure === "probe_error"
+      ? `[CrawlProxy] ${label} ${targetCountry} 出口校验未完成（探活失败：${lastProbeError}），降级处理`
+      : `[CrawlProxy] ${label} 出口校验 ${maxRetries} 次均不符 ${targetCountry}，降级处理`,
+  );
   options.onFailure?.(lastFailure ?? "no_proxy");
   return null;
 }
@@ -351,10 +362,16 @@ export async function ensureCountryEgressSocksProxyDetailed(
   );
 }
 
-/** 兼容旧签名（AI 爬虫路径 crawl-pipeline 在用）：仅返回校验通过的 proxyUrl，行为与改造前完全一致。 */
+/**
+ * 兼容旧签名（AI 爬虫路径 crawl-pipeline 在用）：只回 proxyUrl，不回 exitIp/egressVerified。
+ *
+ * D-333：入参从字面量收窄改为直接复用 EgressVerifyOptions —— 原来的字面量漏掉了
+ * fallbackToUnverified / retryOnProbeError / onFailure，AI 路径想用就得先改类型，
+ * 等于把「超时别丢代理」这个选项挡在门外。返回值语义不变。
+ */
 export async function ensureCountryEgressHttpProxy(
   country: string,
-  options: { maxRetries?: number; checkTimeoutMs?: number; userId?: bigint | null; exchange?: boolean } = {},
+  options: EgressVerifyOptions = {},
 ): Promise<string | null> {
   const res = await ensureCountryEgressHttpProxyDetailed(country, options);
   return res?.proxyUrl ?? null;
