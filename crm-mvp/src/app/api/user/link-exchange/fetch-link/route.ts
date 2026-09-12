@@ -32,7 +32,11 @@ export async function POST(req: NextRequest) {
   }
 
   // 不传 campaignId → 不做出口 IP 去重、不写库存；仅按国家取 kookeey 出口跟链一次。
-  const r = await generateOneSuffix(affiliateUrl, country, null, { userId: BigInt(user.userId) })
+  // D-334 interactive：人正在页面上等 → 浏览器兜底的 exchange 槽位插到 cron 等待者前面。
+  const r = await generateOneSuffix(affiliateUrl, country, null, {
+    userId: BigInt(user.userId),
+    interactive: true,
+  })
 
   if (r.ok) {
     return NextResponse.json({

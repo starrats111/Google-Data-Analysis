@@ -44,8 +44,14 @@ async function isLinkExchangeDisabled(userId: bigint): Promise<boolean> {
 const MAX_ITEMS_PER_CRON = 40
 /** 单次 cron 单个任务最多执行多少个子项（其余留待下次 cron，自然分摊负载） */
 const MAX_ITEMS_PER_TASK_PER_CRON = 8
-/** 跨任务并行度 */
-const TASK_CONCURRENCY = 8
+/** 跨任务并行度。
+ *  D-334（2026-09-12 yz07「换链接一直超时」）：8→2。exchange 车道上限只有 1-2 个槽
+ *  （高峰 1 / 低谷 2，见 puppeteer-semaphore currentQuota），需要浏览器兜底的点击一次
+ *  最多也只能有 2 条真在跑。放 8 条进去，多出来的 6 条只是在队列里干等 30s 再超时——
+ *  不产出，还把队列堆到 exchangeQ=11，把人工取链接挤到抢不到槽（30s 必失败）。
+ *  实测：09 时成功率 29%、10 时 0%，吞吐反而从 ~1000/h 掉到 98/h，过量投喂是负收益。
+ *  纯 HTTP 的点击不占浏览器槽，本就不靠这个并发度提速；真要提吞吐应加机器而非加排队。 */
+const TASK_CONCURRENCY = 2
 /** 同一任务内连续点击的真人间隔（毫秒） */
 const MIN_CLICK_INTERVAL_MS = 3000
 const MAX_CLICK_INTERVAL_MS = 9000
@@ -59,6 +65,20 @@ const RETRY_MARK = '[retry]'
 /** 重排延后区间（毫秒）：等并发尖峰过去、会话名额释放后再试 */
 const REQUEUE_MIN_MS = 120_000
 const REQUEUE_MAX_MS = 300_000
+
+// ── D-334 零成功熔断（2026-09-12） ──
+// 事故：09 时成功率 29%、10 时 0%，但 cron 仍每分钟猛冲。每条失败都要占 40-60s
+// （抢槽 30s + 跟链超时 55s），全压在 exchange 车道上，把人工取链接一起饿死。
+// 「全军覆没」几乎只有两种因：机器扛不住 或 代理/上游整体不可用——都不是「再多试几条」能解决的，
+// 继续冲只是把故障放大。故连续零成功即停一段时间，让机器喘匀、也把车道让回给人工请求。
+/** 连续多少轮「执行过但零成功」触发熔断 */
+const ZERO_SUCCESS_STREAK_THRESHOLD = 3
+/** 熔断后跳过多少轮（cron 每分钟一轮 → 约 5 分钟） */
+const CIRCUIT_SKIP_ROUNDS = 5
+/** 连续零成功轮数（进程内；pm2 重启清零，与本模块其它台账口径一致） */
+let _zeroSuccessStreak = 0
+/** 剩余待跳过轮数 */
+let _skipRoundsLeft = 0
 
 export interface BrushStartResult {
   ok: true
@@ -521,6 +541,10 @@ export interface ClickExecuteResult {
   succeeded: number
   failed: number
   tasksFinalized: number
+  /** D-334：本轮被零成功熔断跳过时为 true（cron 日志据此一眼看出「不是没任务，是在冷却」） */
+  circuitSkipped?: boolean
+  /** D-334：熔断剩余跳过轮数，便于排障判断还要冷却多久 */
+  circuitSkipRoundsLeft?: number
 }
 
 /**
@@ -535,6 +559,17 @@ export async function executeClickTaskItems(): Promise<ClickExecuteResult> {
   let succeeded = 0
   let failed = 0
   let tasksFinalized = 0
+
+  // D-334：熔断冷却中——本轮不执行任何点击，但仍做卡死回收与 finalize，
+  // 否则子项会僵在 executing、任务僵在 running（占坑导致该系列无法新建刷点击任务）。
+  const circuitSkipped = _skipRoundsLeft > 0
+  if (circuitSkipped) {
+    _skipRoundsLeft--
+    console.warn(
+      `[click-brush] D-334 零成功熔断中，本轮跳过执行（剩余 ${_skipRoundsLeft} 轮）。` +
+        `多为机器过载或代理整体不可用，继续冲只会把跟链车道占死。`,
+    )
+  }
 
   try {
     await recoverStuckItems(now)
@@ -560,7 +595,7 @@ export async function executeClickTaskItems(): Promise<ClickExecuteResult> {
       select: { id: true, task_id: true },
     })
 
-    if (candidates.length > 0) {
+    if (candidates.length > 0 && !circuitSkipped) {
       // 2. 公平挑选：按任务限额 + 总量限额
       const perTaskCount = new Map<string, number>()
       const selectedByTask = new Map<string, bigint[]>()
@@ -619,5 +654,30 @@ export async function executeClickTaskItems(): Promise<ClickExecuteResult> {
     console.error('[click-brush] executeClickTaskItems error:', err instanceof Error ? err.message : err)
   }
 
-  return { executed, succeeded, failed, tasksFinalized }
+  // D-334 熔断计数：只看「真执行过」的轮次。
+  // executed=0 的轮次（没到期子项 / 本轮被熔断跳过）既不累计也不清零——
+  // 否则冷却期内的空轮会把 streak 自己抹掉，冷却一结束又立刻满速冲进同一个故障。
+  if (!circuitSkipped && executed > 0) {
+    if (succeeded > 0) {
+      _zeroSuccessStreak = 0
+    } else {
+      _zeroSuccessStreak++
+      if (_zeroSuccessStreak >= ZERO_SUCCESS_STREAK_THRESHOLD) {
+        _skipRoundsLeft = CIRCUIT_SKIP_ROUNDS
+        _zeroSuccessStreak = 0
+        console.warn(
+          `[click-brush] D-334 连续 ${ZERO_SUCCESS_STREAK_THRESHOLD} 轮零成功（本轮 executed=${executed}），` +
+            `熔断跳过后续 ${CIRCUIT_SKIP_ROUNDS} 轮，让机器与跟链车道回气。`,
+        )
+      }
+    }
+  }
+
+  return {
+    executed,
+    succeeded,
+    failed,
+    tasksFinalized,
+    ...(circuitSkipped ? { circuitSkipped: true, circuitSkipRoundsLeft: _skipRoundsLeft } : {}),
+  }
 }

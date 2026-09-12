@@ -125,6 +125,9 @@ export async function generateOneSuffix(
     needsBrowser?: boolean
     /** D-203：按系列灰度 V2 跟跳引擎。undefined = 不表态，沿用全局 AFFILIATE_RESOLVER_V2 */
     useV2Engine?: boolean | null
+    /** D-334：页面上有人正等这条结果（取链接 / 手工换链接）→ 浏览器兜底槽位插队，
+     *  优先于 cron（刷点击 click-execute / 补货 suffix-replenish）的等待者。cron 路径不要传。 */
+    interactive?: boolean
   } = {},
 ): Promise<GenResult> {
   if (!affiliateUrl || !/^https?:\/\//i.test(affiliateUrl)) {
@@ -185,6 +188,7 @@ export async function generateOneSuffix(
         proxyUrl,
         targetDomain: opts.targetDomain,
         useV2Engine: opts.useV2Engine,
+        interactive: opts.interactive === true,
       }),
       STOCK_CONFIG.GEN_TIMEOUT_MS,
     )

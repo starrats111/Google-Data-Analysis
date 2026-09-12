@@ -968,6 +968,8 @@ async function resolveViaBrowser(
     reuseProxyUrl?: string | null;
     /** D-193：第一步已探到的广告主域名。命中即掐断导航、不下整页 HTML（见落地早停）。 */
     targetHost?: string | null;
+    /** D-334：页面上有人正等这条结果 → exchange 槽位插队，优先于 cron 的等待者。 */
+    interactive?: boolean;
   } = {},
 ): Promise<BrowserChainResult> {
   const chain: string[] = [];
@@ -1050,7 +1052,7 @@ async function resolveViaBrowser(
   // D-172：换链接专用快车道（可借主爬预留余量、唤醒优先于 normal 队列），
   // 不再与 sitelinks 兜底/图片代理的长批量同挤 normal 池被饿死。
   let slotErr = "";
-  const release = await acquireExchangeSlot(30000).catch((e) => {
+  const release = await acquireExchangeSlot(30000, browserOpts.interactive === true).catch((e) => {
     slotErr = e instanceof Error ? e.message : String(e);
     return null;
   });
@@ -1316,6 +1318,9 @@ export async function resolveAffiliateLink(
     /** D-203：按调用方覆盖 V2 引擎开关，用于按系列灰度放量。
      *  不传（undefined）= 不表态，沿用全局 `AFFILIATE_RESOLVER_V2`。 */
     useV2Engine?: boolean | null
+    /** D-334：页面上有人正等这条结果（取链接 / 手工换链接）→ 浏览器兜底的 exchange 槽位插队，
+     *  优先于 cron（刷点击 / 补货）的等待者。cron 调用方一律不传。 */
+    interactive?: boolean
   } = {}
 ): Promise<ResolveResult> {
   const base: ResolveResult = {
@@ -1668,6 +1673,7 @@ export async function resolveAffiliateLink(
       // 否则浏览器另取一个会话，写进 suffix_pool.exit_ip 的就不是去重台账认可的那个出口。
       reuseProxyUrl: opts.proxyUrl ?? null,
       targetHost: useV2 ? effectiveTargetDomain || null : null,
+      interactive: opts.interactive === true,
     });
     if (br.finalUrl) {
       browserExitIp = br.exitIp ?? null;
@@ -1737,7 +1743,10 @@ export async function resolveAffiliateLink(
       affiliateUrl,
       cc,
       opts.userId,
-      useV2 ? { reuseProxyUrl: httpProxyUsed, targetHost } : {},
+      // interactive 与 V2 无关，必须落在三元之外——否则非 V2 路径会把插队标记丢掉
+      useV2
+        ? { reuseProxyUrl: httpProxyUsed, targetHost, interactive: opts.interactive === true }
+        : { interactive: opts.interactive === true },
     ).catch(
       (e) =>
         ({

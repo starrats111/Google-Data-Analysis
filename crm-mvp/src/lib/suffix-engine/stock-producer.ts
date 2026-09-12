@@ -358,10 +358,12 @@ async function doReplenish(
   // ── probe：先探一条 ──
   // D-197：needsBrowser 系列跳过必败的 HTTP 第一步。probe 一定跑在 batch 之前，所以每天的
   // 「HTTP 回探名额」总是落在 probe 上——正好是负责学习 suffix_needs_browser 的那一条。
-  let probe = await generateOneSuffix(effectiveUrl, country, platform, { userId: campaign.user_id, campaignId, teamId, merchantId: merchantIdStr, referer: refererUrl, targetDomain: merchant.merchant_url, needsBrowser, useV2Engine })
+  // D-334：人工入口（页面补货/重验/换链接）→ interactive，槽位插队到 cron 等待者前面。
+  const interactive = !!opts.manual
+  let probe = await generateOneSuffix(effectiveUrl, country, platform, { userId: campaign.user_id, campaignId, teamId, merchantId: merchantIdStr, referer: refererUrl, targetDomain: merchant.merchant_url, needsBrowser, useV2Engine, interactive })
   if (!probe.ok && probe.reason === 'no_tracking' && trackingFallback && trackingFallback !== effectiveUrl) {
     // 挑中链接落地无追踪参数：改用商家动态 tracking_link 重试一次。
-    const retry = await generateOneSuffix(trackingFallback, country, platform, { userId: campaign.user_id, campaignId, teamId, merchantId: merchantIdStr, referer: refererUrl, targetDomain: merchant.merchant_url, needsBrowser, useV2Engine })
+    const retry = await generateOneSuffix(trackingFallback, country, platform, { userId: campaign.user_id, campaignId, teamId, merchantId: merchantIdStr, referer: refererUrl, targetDomain: merchant.merchant_url, needsBrowser, useV2Engine, interactive })
     if (retry.ok) {
       effectiveUrl = trackingFallback
       probe = retry
@@ -376,7 +378,7 @@ async function doReplenish(
       // 再跑一遍同引擎同参数只会得到同样的结果，纯白烧一次真实点击——此时不给复验回调。
       useV2Engine === true
         ? undefined
-        : () => generateOneSuffix(effectiveUrl, country, platform, { userId: campaign.user_id, campaignId, teamId, merchantId: merchantIdStr, referer: refererUrl, targetDomain: merchant.merchant_url, needsBrowser, useV2Engine: true }),
+        : () => generateOneSuffix(effectiveUrl, country, platform, { userId: campaign.user_id, campaignId, teamId, merchantId: merchantIdStr, referer: refererUrl, targetDomain: merchant.merchant_url, needsBrowser, useV2Engine: true, interactive }),
     )
     return { campaignId: cid, skipped: false, reason, before, generated: 0, after: before, failed, probeError: probe.error, probeFinalUrl: probe.finalUrl ?? null }
   }
@@ -422,6 +424,9 @@ async function doReplenish(
     // D-231：probe 用上浏览器 = 本系列每条都要开浏览器，按 exchange 车道真实可用槽位投喂。
     // 用 probe.usedBrowser 而非库里的 needs_browser 标记：前者是本轮实测，后者可能还没学到。
     const concurrency = probe.usedBrowser ? STOCK_CONFIG.BROWSER_CONCURRENCY : STOCK_CONFIG.CONCURRENCY
+    // D-334：批量阶段**不传** interactive，即便本轮是人工发起。人工补货一次要生成十几二十条，
+    // 全部插队等于让一次手工操作霸占整条 exchange 车道，把别人的取链接又饿死一遍。
+    // 人在页面上等的是 probe 那一条结论（已插队），批量补满慢一轮无感。
     await runWithConcurrency(remaining, concurrency, async () => {
       if (circuitOpen) return
       const r = await generateOneSuffix(effectiveUrl, country, platform, { userId: campaign.user_id, campaignId, teamId, merchantId: merchantIdStr, referer: refererUrl, targetDomain: merchant.merchant_url, needsBrowser, useV2Engine })

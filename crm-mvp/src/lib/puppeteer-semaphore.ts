@@ -170,6 +170,14 @@ let _activeExchangeTotal = 0;
 const _waitersMain: Array<(released: SlotRelease) => void> = [];
 const _waitersExchange: Array<(released: SlotRelease) => void> = [];
 const _waitersNormal: Array<(released: SlotRelease) => void> = [];
+/**
+ * D-334：各队列里「人在等」的等待者数量。
+ *
+ * 按队列分开记而不是用一个全局数：这个值同时充当**插队下标**（人工段末尾），
+ * 拿跨车道的总数去 splice 另一条队列会插错位置。目前只有 exchange 传 interactive，
+ * 但下标语义必须自洽，不能依赖「只有一条车道用」这个偶然。
+ */
+const _queuedInteractiveByLane: Record<SlotLane, number> = { main: 0, exchange: 0, normal: 0 };
 
 function isDisabled(): boolean {
   return process.env.PUPPETEER_SEMAPHORE_OFF === "1";
@@ -426,9 +434,15 @@ export async function acquireMainCrawlSlot(timeoutMs = 60000): Promise<SlotRelea
  * 两路配额：保底快车道（EXCHANGE_FAST_SLOTS=1，可借主爬预留余量，唤醒优先级仅次于 main）
  * 保证不被 sitelinks/图片代理长批量饿死；突发时额外会话走弹性配额（normal 池余量，
  * 唤醒优先级排在 normal 之后），不反过来饿死 sitelinks。
+ *
+ * D-334 `interactive`：true = 页面上有人正等这条结果（取链接 / 手工换链接）。
+ * 该请求插到 exchange 队首，优先于 cron（刷点击 click-execute、补货 suffix-replenish）的等待者。
+ * 起因：click-execute 每分钟 8 路并发压满 exchange 车道（上限 1-2），FIFO 下手工请求恒排在
+ * 十余个 cron waiter 之后，30s 必然抢不到槽 → 前端弹「跟链超时，请重试或更换国家」，
+ * 而换国家无用（同一队列）。cron 只是慢一轮，人却是当场失败，故让人优先。
  */
-export async function acquireExchangeSlot(timeoutMs = 30000): Promise<SlotRelease> {
-  return _acquire(timeoutMs, "exchange");
+export async function acquireExchangeSlot(timeoutMs = 30000, interactive = false): Promise<SlotRelease> {
+  return _acquire(timeoutMs, "exchange", interactive);
 }
 
 function grant(kind: GrantKind): SlotRelease {
@@ -438,7 +452,7 @@ function grant(kind: GrantKind): SlotRelease {
   return makeReleaser(kind);
 }
 
-async function _acquire(timeoutMs: number, lane: SlotLane): Promise<SlotRelease> {
+async function _acquire(timeoutMs: number, lane: SlotLane, interactive = false): Promise<SlotRelease> {
   if (isDisabled()) {
     return noopSlotRelease();
   }
@@ -467,9 +481,12 @@ async function _acquire(timeoutMs: number, lane: SlotLane): Promise<SlotRelease>
       settled = true;
       const idx = queue.indexOf(onReady);
       if (idx >= 0) queue.splice(idx, 1);
+      if (interactive) {
+        _queuedInteractiveByLane[lane] = Math.max(0, _queuedInteractiveByLane[lane] - 1);
+      }
       const err = new Error(
         `Puppeteer slot timeout after ${timeoutMs}ms ` +
-          `(active=${_active}/${MAX_PUPPETEER_SLOTS}, mainQ=${_waitersMain.length}, exchangeQ=${_waitersExchange.length}, normalQ=${_waitersNormal.length}, lane=${lane})`,
+          `(active=${_active}/${MAX_PUPPETEER_SLOTS}, mainQ=${_waitersMain.length}, exchangeQ=${_waitersExchange.length}, normalQ=${_waitersNormal.length}, lane=${lane}${interactive ? ", interactive" : ""})`,
       );
       (err as Error & { code?: string }).code = "PUPPETEER_SLOT_TIMEOUT";
       reject(err);
@@ -482,9 +499,24 @@ async function _acquire(timeoutMs: number, lane: SlotLane): Promise<SlotRelease>
       }
       settled = true;
       clearTimeout(timer);
+      if (interactive) {
+        _queuedInteractiveByLane[lane] = Math.max(0, _queuedInteractiveByLane[lane] - 1);
+      }
       resolve(released);
     };
-    queue.push(onReady);
+    // D-334：人在等的请求（取链接/换链接页面手工触发）优先于 cron，cron 一律排队尾。
+    // 唤醒侧统一 shift() 取队首，故插队无需改动释放逻辑。
+    // 只在同车道内重排顺序，不改配额、不多占槽——手工请求要的是「别等 cron 那 8 个」，不是更多并发。
+    //
+    // 插在「人工段末尾」而不是队首：直接 unshift 会让后到的人工请求盖过先到的，
+    // 人工之间变成后进先出——两个人同时点「取链接」，先点的那个反而后拿到，属可感知的不公平。
+    // 故只跨过 cron，不跨过同类。
+    if (interactive) {
+      queue.splice(_queuedInteractiveByLane[lane], 0, onReady);
+      _queuedInteractiveByLane[lane]++;
+    } else {
+      queue.push(onReady);
+    }
   });
 }
 
@@ -613,6 +645,8 @@ export function puppeteerSemaphoreStats(): {
   queuedMain: number;
   queuedExchange: number;
   queuedNormal: number;
+  /** D-334：排队中的「人在等」请求数（含在 queuedExchange 内） */
+  queuedInteractive: number;
   max: number;
   normalMax: number;
   exchangeFastMax: number;
@@ -639,6 +673,8 @@ export function puppeteerSemaphoreStats(): {
     queuedMain: _waitersMain.length,
     queuedExchange: _waitersExchange.length,
     queuedNormal: _waitersNormal.length,
+    queuedInteractive:
+      _queuedInteractiveByLane.main + _queuedInteractiveByLane.exchange + _queuedInteractiveByLane.normal,
     max: MAX_PUPPETEER_SLOTS,
     normalMax: NORMAL_SLOTS,
     exchangeFastMax: EXCHANGE_FAST_SLOTS,
