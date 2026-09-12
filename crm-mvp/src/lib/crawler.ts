@@ -1218,6 +1218,12 @@ export async function batchFetchMetaViaPuppeteer(
     "--disable-gpu", "--disable-software-rasterizer",
     "--ignore-certificate-errors",
     "--ozone-platform=headless",
+    // 2026-09-12：每个 browser 只允许 1 个 renderer 进程。缺这条时 3 个 slot 会长成 19 个
+    //   chrome 进程（实证 meyercanada.ca 事故），CPU pressure 打到 52%，next-server 的事件
+    //   循环被抢占 → AbortSignal/setTimeout 定时器提前触发，落地页探测在站点实际 200/0.35s
+    //   的情况下报 timeout（D-050 误硬卡）。槽位数限制的是 browser 数，不是进程数。
+    "--renderer-process-limit=1",
+    "--js-flags=--max-old-space-size=256",
   ];
 
   let proxyServerArg: string | null = null;
@@ -1482,6 +1488,12 @@ export async function fetchImagesViaPuppeteerBatch(
     "--disable-gpu", "--disable-software-rasterizer",
     "--ignore-certificate-errors",
     "--ozone-platform=headless",
+    // 2026-09-12：每个 browser 只允许 1 个 renderer 进程。缺这条时 3 个 slot 会长成 19 个
+    //   chrome 进程（实证 meyercanada.ca 事故），CPU pressure 打到 52%，next-server 的事件
+    //   循环被抢占 → AbortSignal/setTimeout 定时器提前触发，落地页探测在站点实际 200/0.35s
+    //   的情况下报 timeout（D-050 误硬卡）。槽位数限制的是 browser 数，不是进程数。
+    "--renderer-process-limit=1",
+    "--js-flags=--max-old-space-size=256",
   ];
 
   let proxyAuth: { username: string; password: string } | null = null;
@@ -1706,6 +1718,12 @@ export async function harvestImagesFromPagesWithPuppeteer(
     "--disable-gpu", "--disable-software-rasterizer",
     "--ignore-certificate-errors",
     "--ozone-platform=headless",
+    // 2026-09-12：每个 browser 只允许 1 个 renderer 进程。缺这条时 3 个 slot 会长成 19 个
+    //   chrome 进程（实证 meyercanada.ca 事故），CPU pressure 打到 52%，next-server 的事件
+    //   循环被抢占 → AbortSignal/setTimeout 定时器提前触发，落地页探测在站点实际 200/0.35s
+    //   的情况下报 timeout（D-050 误硬卡）。槽位数限制的是 browser 数，不是进程数。
+    "--renderer-process-limit=1",
+    "--js-flags=--max-old-space-size=256",
   ];
 
   let proxyServerArg: string | null = null;
@@ -1912,6 +1930,10 @@ export async function crawlWithPuppeteerFull(
     "--disable-software-rasterizer",
     "--ignore-certificate-errors",     // 部分站点证书问题
     "--ozone-platform=headless",       // Chrome 112+ 无 X11 环境下必须显式指定
+    // 2026-09-12：见上方同批注释——限制 renderer 进程数，避免 3 个 slot 长成 19 个进程把
+    //   next-server 的事件循环挤饿，导致 HTTP 探测定时器虚假超时。
+    "--renderer-process-limit=1",
+    "--js-flags=--max-old-space-size=256",
   ];
 
   // 解析代理 URL，分离 host:port 和认证信息
