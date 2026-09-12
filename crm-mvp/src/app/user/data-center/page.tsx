@@ -392,7 +392,23 @@ export default function DataCenterPage() {
             body: JSON.stringify({ type: "platform", sync_start_date: syncStart, sync_end_date: syncEnd }),
           }).then((r) => r.json());
           if (res.code === 0) {
-            message.success(res.data?.transactions?.message || `交易同步完成（${syncStart} → ${syncEnd}）`);
+            // 2026-09-12：接口 code=0 只代表「流程跑完」，不代表拉到了数据。errors 非空时
+            // 旧逻辑照样弹绿色成功提示，8 个连接全挂也只有数字里那句「8 个错误」透露问题
+            // （wj11 事故）。这里把 errors 摊开：一条没同步到就按失败报，部分失败按警告报。
+            const txn = res.data?.transactions as
+              | { synced?: number; errors?: string[]; message?: string }
+              | undefined;
+            const txnErrors = txn?.errors ?? [];
+            const baseMsg = txn?.message || `交易同步完成（${syncStart} → ${syncEnd}）`;
+            if (txnErrors.length > 0) {
+              const detail = txnErrors.slice(0, 3).join("；")
+                + (txnErrors.length > 3 ? ` 等 ${txnErrors.length} 项` : "");
+              const notice = `${baseMsg}。失败明细：${detail}`;
+              if ((txn?.synced ?? 0) === 0) message.error(notice, 8);
+              else message.warning(notice, 8);
+            } else {
+              message.success(baseMsg);
+            }
             setSyncDialog({ open: false, type: null });
             refreshApi(/\/api\/user\/data-center/);
           } else {
@@ -463,7 +479,16 @@ export default function DataCenterPage() {
         body: JSON.stringify({ type: "platform", sync_start_date: sevenDaysAgoStr, sync_end_date: todayStr }),
       }).then((r) => r.json());
       if (txnRes.code === 0) {
-        transactionSynced = true;
+        // 2026-09-12：同上——code=0 不等于拉到了数据，连接级 errors 要单独看，
+        // 否则 8 个连接全挂仍显示「商家交易已完成」。
+        const txn = txnRes.data?.transactions as
+          | { synced?: number; errors?: string[] }
+          | undefined;
+        const txnErrors = txn?.errors ?? [];
+        transactionSynced = txnErrors.length === 0 || (txn?.synced ?? 0) > 0;
+        if (txnErrors.length > 0) {
+          errors.push(`商家交易 ${txnErrors.length} 个连接失败：${txnErrors[0]}`);
+        }
       } else {
         errors.push(`商家交易刷新失败：${txnRes.message || "未知错误"}`);
       }
