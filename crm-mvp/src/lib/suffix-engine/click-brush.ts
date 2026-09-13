@@ -42,8 +42,16 @@ async function isLinkExchangeDisabled(userId: bigint): Promise<boolean> {
 // 多数点击是纯 HTTP 跟链，提并发主要加速这部分。
 /** 单次 cron 最多执行多少个到期子项 */
 const MAX_ITEMS_PER_CRON = 40
-/** 单次 cron 单个任务最多执行多少个子项（其余留待下次 cron，自然分摊负载） */
-const MAX_ITEMS_PER_TASK_PER_CRON = 8
+/** 单次 cron 单个任务最多执行多少个子项（其余留待下次 cron，自然分摊负载）。
+ *  2026-09-13（yz04「刷一下午刷不了 1 个点击」）：8→3。真实吞吐由 TASK_CONCURRENCY=2
+ *  配 3-9s 真人间隔决定（实测 ~16 次/分钟），MAX_ITEMS_PER_CRON=40 那道总量闸门根本碰不到，
+ *  所以这个值不影响总产能，只决定「同样的 16 次分给几个任务」：
+ *    8 → 每轮最多服务 5 个任务；到期任务 95 个时，单个任务平均 19 分钟才轮到一次
+ *    3 → 每轮最多服务 13 个任务，平均 7 分钟轮到一次
+ *  单行进度条因此从「半天不动」变成持续可见，且大任务不再挡住最扎眼的高转化率商家。
+ *  代价：单任务补完全部缺口的耗时变长——但补刷是为了把订单/点击比压回区间，
+ *  「所有商家都在稀释」比「一个商家刷完、其余排队」更贴合这个目的。 */
+const MAX_ITEMS_PER_TASK_PER_CRON = 3
 /** 跨任务并行度。
  *  D-334（2026-09-12 yz07「换链接一直超时」）：8→2。exchange 车道上限只有 1-2 个槽
  *  （高峰 1 / 低谷 2，见 puppeteer-semaphore currentQuota），需要浏览器兜底的点击一次
