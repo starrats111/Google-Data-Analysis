@@ -32,6 +32,16 @@ module.exports = {
         PORT: '20050',
         TZ: 'Asia/Shanghai',
         CRON_SECRET: 'crm-daily-sync-2026',
+
+        // 2026-09-12：RSS 1118MB 但 V8 堆只用 251MB、堆外 Buffer 仅 42MB——825MB 的缺口
+        //   既不在堆里也回收不掉，smaps 里是 232/208/99/90MB 几大块匿名映射、共 1573 块。
+        //   这是 glibc malloc 的 per-thread arena 碎片：抓图/抓正文反复申请释放大 Buffer，
+        //   arena 撑大后不归还系统。2 核机默认允许 8×2=16 个 arena，每个能长到 64MB。
+        //   后果是 RSS 一路顶到 max_memory_restart(1600M) → pm2 重启（今日 31 次），
+        //   期间可用内存被压到 300-400MB，puppeteer 反压水位（800MB）全程拒绝开浏览器。
+        //   V8 的 --max-old-space-size 管不到这块，所以限 arena 数是唯一低成本手段。
+        //   代价：arena 少了多线程 malloc 会有锁竞争，但本服务瓶颈是内存不是 malloc 吞吐。
+        MALLOC_ARENA_MAX: '2',
       },
 
       // 日志配置（B-5）
