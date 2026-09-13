@@ -1,4 +1,5 @@
 import { fetchCompat, isHttpParseError, describeFetchFailure } from "@/lib/lenient-fetch";
+import { startEventLoopLagSampler } from "@/lib/event-loop-lag";
 
 const UA_POOL = [
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
@@ -240,10 +241,14 @@ export async function tryValidateUrl(url: string): Promise<UrlCheckResult> {
   // 取不到代理时也照旧在结论里写「含代理重试」，看结论的人会以为代理试过了，
   // 于是排查方向被带偏（D-311 实例：真因是证书链，却先去查代理池）。如实记录。
   let proxyAttempted = false;
+  // 直连失败是「本机被抢占」而非「站点不可达」：影响兜底文案，别让员工去删一条能打开的链接
+  let starvedAbort = false;
 
   for (let i = 0; i < UA_POOL.length; i++) {
     const ua = UA_POOL[i];
     const headers = buildStealthHeaders(ua);
+    // 每个 UA 单独采样：滞后要归因到「本次尝试」，跨轮复用会读到过期值
+    const stopLagSampler = startEventLoopLagSampler();
 
     try {
       const ctrl = new AbortController();
@@ -321,6 +326,20 @@ export async function tryValidateUrl(url: string): Promise<UrlCheckResult> {
     } catch (err) {
       const msg = err instanceof Error ? err.message : "";
       if (msg.includes("abort")) {
+        // 2026-09-12：区分「站点没响应」与「我们的定时器虚假触发」。
+        //   事件循环被 Puppeteer 抢占时 abort 与本次 UA 无关，换 UA 重试是纯浪费——
+        //   4 个 UA × (HEAD 10s + GET 12s) 最坏 88s，正是「后缀测试转圈 420s」的主要构成。
+        //   实证 meyercanada.ca：同机 curl HEAD/GET 全 200/0.15-0.44s，进程内却 abort。
+        //   被抢占时直接跳出 UA 轮换，交给下面的代理段/调用方，并如实写明原因。
+        const { lagMs, starved } = stopLagSampler();
+        if (starved) {
+          console.warn(
+            `[UrlValidator] 事件循环滞后 ${lagMs}ms → abort 与 UA 无关，跳过剩余 ${UA_POOL.length - 1 - i} 个 UA: ${url.slice(0, 80)}`,
+          );
+          lastDirectFailReason = `本机负载过高导致探测超时（事件循环滞后 ${lagMs}ms），非站点不可达`;
+          starvedAbort = true;
+          break;
+        }
         lastDirectFailReason = "请求超时";
         if (i < UA_POOL.length - 1) continue;
         break;
@@ -333,6 +352,9 @@ export async function tryValidateUrl(url: string): Promise<UrlCheckResult> {
         ? "目标站点返回的 HTTP 响应头不合规，无法自动校验（浏览器可正常打开）"
         : `请求异常: ${describeFetchFailure(err).slice(0, 60)}`;
       if (i < UA_POOL.length - 1) continue;
+    } finally {
+      // 幂等：上面 abort 分支可能已调用过；这里兜住 return/continue 路径不漏定时器
+      stopLagSampler();
     }
   }
 
@@ -398,6 +420,16 @@ export async function tryValidateUrl(url: string): Promise<UrlCheckResult> {
   }
 
   const proxyNote = proxyAttempted ? "含代理重试" : "无可用代理，未做代理重试";
+  // 2026-09-12：本机负载导致的超时不是链接的证据。原来一律回「请求超时（含代理重试）」，
+  //   员工据此以为链接坏了（wj11 反馈的正是这条文案）。如实区分，并提示可直接重试。
+  if (starvedAbort) {
+    return {
+      ok: false,
+      status: 0,
+      finalUrl: url,
+      reason: `${lastDirectFailReason}（${proxyNote}）——建议稍后重试，或在浏览器确认后直接保存`,
+    };
+  }
   return { ok: false, status: lastDirectFailStatus, finalUrl: url, reason: `${lastDirectFailReason}（${proxyNote}）` };
 }
 
