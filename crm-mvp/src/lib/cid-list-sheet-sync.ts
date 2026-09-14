@@ -244,6 +244,24 @@ export async function applyCidStatusChanges(
     }
   }
 
+  // ── D-330：本轮被标 suspended/cancelled 的 CID，旗下在投系列立即回停 ──
+  // 账户已死，其系列不可能在投；且撤销后它们永久从 Sheet CampaignInfo 消失，
+  // Sheet 驱动的状态同步会永久跳过它们（状态冻结在 active+ENABLED，人点同步也没用）。
+  if (changes.some((c) => c.kind !== "recover")) {
+    try {
+      const { reconcileOrphanCampaignsForSuspendedCids } = await import("@/lib/google-ads/orphan-campaign-reconcile");
+      const orphan = await reconcileOrphanCampaignsForSuspendedCids({ userId: mcc.user_id, mccIds: [mcc.id] });
+      if (orphan.paused > 0 || orphan.aligned > 0) {
+        log(
+          `  [CID状态] D-330 回停被中止 CID 旗下在投系列 ${orphan.paused} 个` +
+          `${orphan.aligned > 0 ? `，拉平内部状态 ${orphan.aligned} 个` : ""}`,
+        );
+      }
+    } catch (e) {
+      log(`  [CID状态] D-330 孤儿系列回停失败: ${e instanceof Error ? e.message.slice(0, 80) : e}`);
+    }
+  }
+
   // 站内通知（按 MCC 每轮各合并一条）+ 飞书群汇总
   try {
     const owner = await prisma.users.findFirst({
@@ -296,11 +314,27 @@ export async function applyCidStatusChanges(
  * enabledCids = 该 MCC 下仍有 ENABLED 系列的 CID 集合（纯数字），用作取消佐证：
  * 迭代器会排除 MCC 里被「隐藏」的账号，隐藏 ≠ 中止——消失但名下还有 ENABLED 系列的
  * 属矛盾态，标 cancelled 会把在投广告误锁成「被中止」（D-248 派生展示），只告警不取消。
+ *
+ * ─────────────────────────────────────────────────────────────
+ * D-330（2026-09-14）：上面这条佐证会和状态同步形成**循环依赖死锁**。
+ * 实证：jymcc 的 CID 1377549607 自 08-13 起卡死一个月，日志每天报
+ * 「不在 Sheet 但名下仍有 ENABLED 系列…不自动取消」。
+ *   - CID 不在 CID_List → 本该标 cancelled，但名下有 ENABLED 系列 → 被本守卫拦住
+ *   - 那条系列还是 ENABLED，是因为它不在 CampaignInfo 里 → 状态同步 `!sheetRow continue` 跳过
+ *   两个守卫各自把对方的过期值当证据，谁都不先动，人点多少次同步都无效。
+ *
+ * 破解：引入第三方证据 cidsInCampaignInfo（CampaignInfo tab 里出现过的 CID）。
+ * 同一张 Sheet 的两个 tab 由同一脚本同轮生成，若某 CID 在**两个 tab 里同时缺席**，
+ * 那就是「该账户已不在此 MCC 下」的独立佐证——此时「名下还有 ENABLED 系列」不是取消的
+ * 反证，恰恰是那批因跳过而冻结的脏数据，继续拦只会让死锁永续。
+ * 仅当 CampaignInfo 可读时才启用该判据（传 undefined = 拿不到，退回旧的保守行为）。
+ * ─────────────────────────────────────────────────────────────
  */
 export function diffCidList(
   sheetRows: CidListRow[],
   existing: ExistingCidRow[],
   enabledCids: Set<string> = new Set(),
+  cidsInCampaignInfo?: Set<string>,
 ): CidDiffAction {
   const sheetMap = new Map(sheetRows.map((r) => [r.customer_id, r]));
   const existingMap = new Map(existing.map((r) => [r.customer_id, r]));
@@ -335,7 +369,11 @@ export function diffCidList(
   const cancelBlocked: Array<{ id: bigint; customer_id: string }> = [];
   if (!cancelSkippedByGuard) {
     for (const ex of missingActive) {
-      if (enabledCids.has(ex.customer_id)) {
+      // D-330：ENABLED 佐证只在「该 CID 的系列确实还出现在 CampaignInfo 里」时才成立。
+      // 两个 tab 同时缺席 ⟹ 账户已不在此 MCC 下，库内那批 ENABLED 是被跳过的冻结值，
+      // 不能再当作「还在投」的证据（否则与状态同步互相锁死，见函数头注释）。
+      const stillInCampaignInfo = cidsInCampaignInfo ? cidsInCampaignInfo.has(ex.customer_id) : true;
+      if (enabledCids.has(ex.customer_id) && stillInCampaignInfo) {
         cancelBlocked.push({ id: ex.id, customer_id: ex.customer_id });
       } else {
         cancel.push({ id: ex.id, customer_id: ex.customer_id });
@@ -402,7 +440,25 @@ export async function syncCidListFromSheets(log: (msg: string) => void): Promise
     });
     const enabledCids = new Set(enabledRows.map((r) => (r.customer_id || "").replace(/\D/g, "")).filter(Boolean));
 
-    const diff = diffCidList(sheetRows, existing, enabledCids);
+    // D-330 破死锁用的第三方证据：CampaignInfo tab 里出现过的 CID 集合。
+    // 读失败/无该 tab → undefined，diffCidList 退回旧的保守行为（宁可不取消）。
+    let cidsInCampaignInfo: Set<string> | undefined;
+    try {
+      const { readCampaignInfoStatuses } = await import("@/lib/sheet-status-sync");
+      const infoMap = await readCampaignInfoStatuses(mcc.sheet_url);
+      if (infoMap) {
+        const s = new Set<string>();
+        for (const v of infoMap.values()) {
+          if (v.customerId) s.add(v.customerId.replace(/\D/g, ""));
+        }
+        // 空集合说明 CampaignInfo 无 CustomerId 列（老脚本），不能当证据用
+        if (s.size > 0) cidsInCampaignInfo = s;
+      }
+    } catch {
+      // 忽略：拿不到就退回旧行为
+    }
+
+    const diff = diffCidList(sheetRows, existing, enabledCids, cidsInCampaignInfo);
     stats.mccs++;
 
     if (diff.cancelSkippedByGuard) {
@@ -445,7 +501,9 @@ export async function syncCidListFromSheets(log: (msg: string) => void): Promise
       stats.cancelled++;
     }
     if (diff.cancelBlocked.length > 0) {
-      const w = `${label}: ${diff.cancelBlocked.length} 个 CID 不在 Sheet 但名下仍有 ENABLED 系列（可能被 MCC「隐藏」），不自动取消：${diff.cancelBlocked.map((c) => c.customer_id).join("/")}`;
+      // D-330：能走到这里说明该 CID 的系列仍在 CampaignInfo 里 → 确实是「隐藏」而非撤销，
+      // 保持只告警。两个 tab 同时缺席的那批已在 diff 里改判为 cancel，不再进这个分支。
+      const w = `${label}: ${diff.cancelBlocked.length} 个 CID 不在 CID_List 但名下仍有 ENABLED 系列且系列仍在 CampaignInfo（判定为被 MCC「隐藏」），不自动取消：${diff.cancelBlocked.map((c) => c.customer_id).join("/")}`;
       stats.warnings.push(w);
       log(`  [CID_List] ⚠️ ${w}`);
     }

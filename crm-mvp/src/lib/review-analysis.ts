@@ -31,10 +31,15 @@ export const PAUSE_SOURCE_LABELS: Record<string, string> = {
   sync: "同步发现(近似)",
   change_history: "谷歌记录(精确)",
   backfill: "历史回填(近似)",
+  // D-330：所属 CID 被撤销/停用 → 系统回停（时间=发现时刻，非 Google 真实停投时刻）
+  cid_revoked: "CID已撤销(近似)",
 };
 
-/** 暂停时间为近似值的来源（UI 标 ≈）：sync=发现时刻（最多晚一天）、backfill=按最后消费日推算 */
-export const APPROX_PAUSE_SOURCES = new Set(["sync", "backfill"]);
+/**
+ * 暂停时间为近似值的来源（UI 标 ≈）：sync=发现时刻（最多晚一天）、backfill=按最后消费日推算、
+ * cid_revoked=发现 CID 已撤销的时刻（真实停投时刻在 Google 撤销那一刻，可能早得多）
+ */
+export const APPROX_PAUSE_SOURCES = new Set(["sync", "backfill", "cid_revoked"]);
 
 export interface PauseWindow {
   /** 暂停日（CST，YYYY-MM-DD） */

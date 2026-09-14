@@ -90,7 +90,7 @@ const statusLabels: Record<string, string> = { PAUSED: "暂停", REMOVED: "移�
 const statusColors: Record<string, string> = { PAUSED: "orange", REMOVED: "red" };
 const sourceColors: Record<string, string> = {
   manual: "blue", spend_guard: "volcano", ai_apply: "purple", sync: "default",
-  change_history: "green", backfill: "default",
+  change_history: "green", backfill: "default", cid_revoked: "red",
 };
 // 暂停时间为近似值的来源（标 ≈）：sync=同步发现时刻（最多晚一天）、backfill=按最后消费日推算；
 // 每日同步会用 Google 变更历史把近几天的近似值修正为精确时间（→ change_history）

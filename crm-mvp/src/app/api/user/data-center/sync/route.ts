@@ -473,6 +473,23 @@ async function syncAdsData(
         console.error("全量状态同步失败:", err);
       }
 
+      // ── D-330：CID 已撤销/停用 → 回停其旗下「孤儿在投系列」（不依赖 Sheet 收录）──
+      // 上面的全量状态同步以 sheetStatusMap 为驱动，CID 撤销后该账户不再挂在 MCC 下、
+      // 统一脚本扫不到，其系列永久不在 Sheet 里 → 被永久跳过，状态冻结在 active+ENABLED。
+      // 这是「同步MCC 点多次无效」的根因，补一轮 CID 驱动的对账兜住。
+      try {
+        const { reconcileOrphanCampaignsForSuspendedCids } = await import("@/lib/google-ads/orphan-campaign-reconcile");
+        const orphan = await reconcileOrphanCampaignsForSuspendedCids({ userId, mccIds: [mcc.id] });
+        if (orphan.paused > 0 || orphan.aligned > 0) {
+          console.log(
+            `[Sync] D-330 MCC ${mcc.mcc_id} 已撤销 CID 旗下：回停在投系列 ${orphan.paused} 个` +
+            `${orphan.aligned > 0 ? `，拉平内部状态 ${orphan.aligned} 个` : ""}`,
+          );
+        }
+      } catch (err) {
+        console.error("[Sync] D-330 孤儿系列回停失败:", err);
+      }
+
       // ── D-040 v3 S1：显式拉本月 REMOVED 且有花费的 campaign，入库为独立 REMOVED 行 ──
       // 让 CRM 总花费包含后台删除/重发广告的花费，与 GAds 后台对齐
       try {
