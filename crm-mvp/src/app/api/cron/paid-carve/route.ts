@@ -2,7 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 300;
+// 首次全量实测 1326.4s（42 个用户串行调支付明细API，标记 77772 笔）。这里给 1800s，
+// 别照抄其它 cron 的 300 —— 那个数字对本路由的量级不成立。
+// 注意 crontab 侧的 curl 也要 -m 1800（其它 cron 惯例是 -m 280，本条是例外）：
+// 断连不会中止服务端处理，所以短超时的后果不是"跑一半"，而是日志里只剩空响应体、
+// 谁都看不出到底跑没跑完 —— 正是 daily-sync.log 当年那个「只有时间戳、响应体为空」的坑。
+export const maxDuration = 1800;
 
 /**
  * D-333 RW/LH/LB 已付剖分独立 cron（从 daily-sync Step 3.6 摘出）
