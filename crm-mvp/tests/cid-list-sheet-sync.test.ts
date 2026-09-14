@@ -216,3 +216,71 @@ describe("diffCidStatuses (D-277)", () => {
     assert.equal(changes.length, 0);
   });
 });
+
+// ─────────────────────────────────────────────────────────────
+// D-330：CID_List 取消佐证 vs 状态同步的循环依赖死锁
+// 实证：jymcc 的 1377549607 自 08-13 卡死一个月，日志每天报「不自动取消」。
+// 破解判据 = CampaignInfo tab 里还有没有这个 CID（同脚本同轮生成的第三方证据）。
+// ─────────────────────────────────────────────────────────────
+describe("diffCidList D-330 死锁破解", () => {
+  test("两个 tab 同时缺席 → 改判 cancel（ENABLED 是被跳过的冻结脏数据，不再当证据）", () => {
+    const d = diffCidList(
+      [],                                  // CID_List 里没有
+      [ex(1, "1377549607", "deadlocked")],
+      new Set(["1377549607"]),             // 库内名下仍有 ENABLED 系列
+      new Set(["9999999999"]),             // 但 CampaignInfo 里也没有它
+    );
+    assert.equal(d.cancel.length, 1);
+    assert.equal(d.cancel[0].customer_id, "1377549607");
+    assert.equal(d.cancelBlocked.length, 0);
+  });
+
+  test("系列仍在 CampaignInfo → 仍判定为「隐藏」，保持只告警不取消", () => {
+    const d = diffCidList(
+      [],
+      [ex(1, "1111111111", "hiddenButLive")],
+      new Set(["1111111111"]),
+      new Set(["1111111111"]),             // CampaignInfo 里还在 → 真的是隐藏
+    );
+    assert.equal(d.cancel.length, 0);
+    assert.equal(d.cancelBlocked.length, 1);
+    assert.equal(d.cancelBlocked[0].customer_id, "1111111111");
+  });
+
+  test("拿不到 CampaignInfo（undefined）→ 退回旧的保守行为，不误取消", () => {
+    const d = diffCidList(
+      [],
+      [ex(1, "1111111111", "hiddenButLive")],
+      new Set(["1111111111"]),
+      undefined,
+    );
+    assert.equal(d.cancel.length, 0);
+    assert.equal(d.cancelBlocked.length, 1);
+  });
+
+  test("名下本来就没有 ENABLED 系列 → 与 CampaignInfo 无关，照常 cancel", () => {
+    const d = diffCidList(
+      [],
+      [ex(1, "2222222222", "trulyGone")],
+      new Set(),
+      new Set(["2222222222"]),             // 即便 CampaignInfo 里有，也不影响
+    );
+    assert.equal(d.cancel.length, 1);
+    assert.equal(d.cancelBlocked.length, 0);
+  });
+
+  test("缩水保护优先于 D-330 改判：疑似残表时一个都不取消", () => {
+    const existing = Array.from({ length: 12 }, (_, i) =>
+      ex(i + 1, String(1000000000 + i), `a${i}`),
+    );
+    const d = diffCidList(
+      [{ customer_id: "1000000000", customer_name: "a0" }], // 1 行 << 12 个 active 的一半
+      existing,
+      new Set(["1000000001"]),
+      new Set([]),                          // CampaignInfo 空集合也不该突破残表保护
+    );
+    assert.equal(d.cancelSkippedByGuard, true);
+    assert.equal(d.cancel.length, 0);
+    assert.equal(d.cancelBlocked.length, 0);
+  });
+});

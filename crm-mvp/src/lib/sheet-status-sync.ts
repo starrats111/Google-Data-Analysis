@@ -13,16 +13,24 @@
  * - customer_id 缺失时回填
  * - Sheet 中不存在的系列一律不动（可能是脚本未跑完/新 MCC 未配 Sheet，宁可不改）
  * - 不在此处创建新系列（新系列回填由 today-merchants-sync 每 30 分钟负责）
+ *
+ * D-330 例外（2026-09-14）：「Sheet 里没有就不动」有个盲区——CID 被撤销后该账户不再挂在 MCC 下，
+ * 统一脚本扫不到它，其旗下系列**永久**从 CampaignInfo 消失，于是被永久跳过、状态冻结在
+ * active + ENABLED（点多少次同步都跳过同一批）。这类系列的失效依据是 CID 终态而非 Sheet 快照，
+ * 故在 Sheet 驱动的循环之后追加一轮 CID 驱动的回停对账，见 orphan-campaign-reconcile.ts。
  */
 import prisma from "@/lib/prisma";
 import { readSheetCsv, extractSheetId } from "@/lib/sheet-sync";
 import { syncMerchantStatusForUser } from "@/lib/campaign-merchant-link";
+import { reconcileOrphanCampaignsForSuspendedCids } from "@/lib/google-ads/orphan-campaign-reconcile";
 
 interface SheetSyncResult {
   mcc: string;
   campaigns: number;
   updated: number;
   new_campaigns: number;
+  /** D-330：本轮因所属 CID 已撤销/停用而被回停的「孤儿在投系列」数 */
+  orphans_paused?: number;
   error?: string;
 }
 
@@ -159,6 +167,29 @@ export async function syncUserCampaignStatusesFromSheet(userId: bigint): Promise
         error: e instanceof Error ? e.message : String(e),
       });
     }
+  }
+
+  // ── D-330：CID 驱动的孤儿系列回停（不依赖 Sheet 是否收录）──
+  // 放在 Sheet 循环之后：Sheet 有收录的已按真值刷完，这里只兜「Sheet 永远不会再有」的那批。
+  // 永不打断主流程（失败仅记日志），且必须在商家状态同步之前跑，让回停结果参与下面的联动。
+  let orphansPaused = 0;
+  try {
+    const orphan = await reconcileOrphanCampaignsForSuspendedCids({ userId });
+    orphansPaused = orphan.paused;
+    if (orphan.paused > 0 || orphan.aligned > 0) {
+      anyChange = true;
+      console.log(
+        `[SheetStatusSync] D-330 CID 已撤销/停用：回停在投系列 ${orphan.paused} 个` +
+        `${orphan.aligned > 0 ? `，拉平内部状态 ${orphan.aligned} 个` : ""}`,
+      );
+    }
+  } catch (e) {
+    console.error("[SheetStatusSync] D-330 孤儿系列回停失败:", e instanceof Error ? e.message : e);
+  }
+  if (orphansPaused > 0) {
+    // 挂在首条结果上，供 refresh-status 的返回文案汇总（无 MCC 结果时补一条）
+    if (results.length > 0) results[0].orphans_paused = orphansPaused;
+    else results.push({ mcc: "-", campaigns: 0, updated: 0, new_campaigns: 0, orphans_paused: orphansPaused });
   }
 
   // 商家状态强关联同步（DB 内操作，与旧流程一致；仅在有变化时执行避免无谓写放大）

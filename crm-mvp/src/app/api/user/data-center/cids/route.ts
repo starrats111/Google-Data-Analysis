@@ -203,9 +203,27 @@ export async function POST(req: NextRequest) {
       };
     });
 
+    // ── D-330：本轮刚标 cancelled 的 CID，旗下在投系列立即回停 ──
+    // 撤销是在这一步被发现的（Google 不再返回 → 标 cancelled）。若不在此处联动，
+    // 这些系列要等下一次「同步MCC」才会被回停，而它们已不在 Sheet 里、旧逻辑还会跳过它们。
+    let orphansPaused = 0;
+    try {
+      const { reconcileOrphanCampaignsForSuspendedCids } = await import("@/lib/google-ads/orphan-campaign-reconcile");
+      const orphan = await reconcileOrphanCampaignsForSuspendedCids({
+        userId: BigInt(user.userId),
+        mccIds: [BigInt(mcc_account_id)],
+      });
+      orphansPaused = orphan.paused;
+      if (orphansPaused > 0) {
+        console.log(`[CID Sync] D-330 回停已撤销/停用 CID 旗下在投系列 ${orphansPaused} 个`);
+      }
+    } catch (err) {
+      console.error("[CID Sync] D-330 孤儿系列回停失败:", err instanceof Error ? err.message : err);
+    }
+
     return apiSuccess(serializeData({
       cids: cidsWithCounts,
-      synced: { created, updated, cancelled, restored, total: allCids.length },
+      synced: { created, updated, cancelled, restored, total: allCids.length, orphans_paused: orphansPaused },
     }));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
