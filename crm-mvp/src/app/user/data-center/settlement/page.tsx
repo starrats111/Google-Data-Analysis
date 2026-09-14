@@ -7,10 +7,15 @@ import {
 } from "antd";
 import {
   SearchOutlined, AccountBookOutlined,
-  DollarOutlined, SyncOutlined, BankOutlined, EditOutlined,
+  DollarOutlined, SyncOutlined, BankOutlined, EditOutlined, DownloadOutlined,
 } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
+import type { SorterResult } from "antd/es/table/interface";
 import { COLORS } from "@/styles/themeConfig";
+import {
+  exportSheet, applyTableState, rateCell,
+  type ExportColumn, type TableState,
+} from "@/lib/settlement-export";
 import { PLATFORMS } from "@/lib/constants";
 import { TXN_TZ_NOTE } from "@/lib/report-metrics";
 import MonthlySettleProgressCard from "@/components/data-center/MonthlySettleProgressCard";
@@ -151,6 +156,7 @@ const rateTitle = (label: string, tip: string) => (
 const SETTLE_RATE_TIP = "结算率 = 已支付 / 总佣金。分母为总佣金（含待审核，不扣除），所以单子还在审核期的商家结算率天然偏低。与本页顶部「结算率」仪表盘同口径，随上方时间/平台/员工筛选一起变。";
 const REJECT_RATE_TIP = "拒付率 = 拒付 / 总佣金。分母为总佣金（含待审核，不扣除）。与本页顶部「拒付率」仪表盘同口径，随上方时间/平台/员工筛选一起变。";
 
+
 export default function SettlementPage() {
   const { message } = App.useApp();
   const [range, setRange] = useState<string>("1m");
@@ -165,6 +171,12 @@ export default function SettlementPage() {
   const [payAggTab, setPayAggTab] = useState<string>("detail");
   const [payData, setPayData] = useState<PaymentsData | null>(null);
   const [paySyncing, setPaySyncing] = useState(false);
+
+  // 导出：接住三张明细表的表头筛选/排序状态，让导出结果与屏幕完全一致
+  const [exporting, setExporting] = useState(false);
+  const [merchantTableState, setMerchantTableState] = useState<TableState>({});
+  const [monthlyTableState, setMonthlyTableState] = useState<TableState>({});
+  const [memberTableState, setMemberTableState] = useState<TableState>({});
 
   // C-179：逐笔修正打款方式
   interface TeamMethod { id: string; payee_name: string; pay_channel: string; card_no: string }
@@ -458,6 +470,135 @@ export default function SettlementPage() {
       sorter: (a, b) => a.order_amount - b.order_amount,
     },
   ];
+
+  // ─── 导出列定义 ───
+  // 与页面列一一对应，两处差异是刻意的：
+  //   1. 页面「商家」一格里塞了名称 +(MID)，导出拆两列，方便 Excel 里做 VLOOKUP
+  //   2. 金额/率写 number 不写 "$1,234.00" / "24.66%" 字符串，否则同事拿去没法求和排序
+  const merchantExportColumns: ExportColumn<MerchantRow>[] = [
+    { header: "平台", value: (r) => r.platform, format: "text", width: 8 },
+    { header: "商家名称", value: (r) => r.merchant_name, format: "text", width: 32 },
+    { header: "MID", value: (r) => r.merchant_id, format: "text", width: 12 },
+    { header: "总佣金($)", value: (r) => r.total, format: "money", width: 13 },
+    { header: "已确认($)", value: (r) => r.approved, format: "money", width: 13 },
+    { header: "已支付($)", value: (r) => r.paid, format: "money", width: 13 },
+    { header: "结算率", value: (r) => rateCell(r.paid, r.total), format: "percent", width: 10 },
+    { header: "拒付($)", value: (r) => r.rejected, format: "money", width: 13 },
+    { header: "拒付率", value: (r) => rateCell(r.rejected, r.total), format: "percent", width: 10 },
+    { header: "待审核($)", value: (r) => r.pending, format: "money", width: 13 },
+    { header: "订单数", value: (r) => r.orders, format: "int", width: 9 },
+    { header: "订单金额($)", value: (r) => r.order_amount, format: "money", width: 14 },
+  ];
+
+  const monthlyExportColumns: ExportColumn<MonthlyRow>[] = [
+    { header: "月份", value: (r) => r.month, format: "text", width: 12 },
+    { header: "总佣金($)", value: (r) => r.total, format: "money", width: 13 },
+    { header: "已确认($)", value: (r) => r.approved, format: "money", width: 13 },
+    { header: "已支付($)", value: (r) => r.paid, format: "money", width: 13 },
+    { header: "结算率", value: (r) => rateCell(r.paid, r.total), format: "percent", width: 10 },
+    { header: "拒付($)", value: (r) => r.rejected, format: "money", width: 13 },
+    { header: "拒付率", value: (r) => rateCell(r.rejected, r.total), format: "percent", width: 10 },
+    { header: "待审核($)", value: (r) => r.pending, format: "money", width: 13 },
+    { header: "订单数", value: (r) => r.orders, format: "int", width: 9 },
+  ];
+
+  const memberExportColumns: ExportColumn<MemberRow>[] = [
+    { header: "员工", value: (r) => r.display_name || r.username, format: "text", width: 16 },
+    { header: "账号", value: (r) => r.username, format: "text", width: 16 },
+    { header: "总佣金($)", value: (r) => r.total, format: "money", width: 13 },
+    { header: "已确认($)", value: (r) => r.approved, format: "money", width: 13 },
+    { header: "已支付($)", value: (r) => r.paid, format: "money", width: 13 },
+    { header: "结算率", value: (r) => rateCell(r.paid, r.total), format: "percent", width: 10 },
+    { header: "拒付($)", value: (r) => r.rejected, format: "money", width: 13 },
+    { header: "拒付率", value: (r) => rateCell(r.rejected, r.total), format: "percent", width: 10 },
+    { header: "待审核($)", value: (r) => r.pending, format: "money", width: 13 },
+    { header: "订单数", value: (r) => r.orders, format: "int", width: 9 },
+    { header: "订单金额($)", value: (r) => r.order_amount, format: "money", width: 14 },
+  ];
+
+  /** 文件名/口径说明里的时间范围描述，跟上方筛选一致 */
+  const rangeLabel = dateRange
+    ? `${dateRange[0].format("YYYY-MM-DD")}至${dateRange[1].format("YYYY-MM-DD")}`
+    : RANGE_OPTIONS.find((o) => o.value === range)?.label || range;
+
+  /** 金额合计：只累加导出的那些行（筛选后），不是全量 */
+  const sumBy = <T,>(rows: T[], pick: (r: T) => number): number =>
+    rows.reduce((acc, r) => acc + pick(r), 0);
+
+  const handleExport = async () => {
+    if (!data) return;
+    setExporting(true);
+    try {
+      const notes = [
+        `结算查询 · 时间范围：${rangeLabel}${platform ? ` · 平台：${platform}` : ""}${mid.trim() ? ` · MID：${mid.trim()}` : ""}`,
+        TXN_TZ_NOTE,
+      ];
+
+      if (activeTab === "merchant") {
+        const rows = applyTableState(data.merchants, merchantColumns, merchantTableState);
+        const t = {
+          total: sumBy(rows, (r) => r.total), approved: sumBy(rows, (r) => r.approved),
+          paid: sumBy(rows, (r) => r.paid), rejected: sumBy(rows, (r) => r.rejected),
+          pending: sumBy(rows, (r) => r.pending), orders: sumBy(rows, (r) => r.orders),
+          orderAmount: sumBy(rows, (r) => r.order_amount),
+        };
+        await exportSheet({
+          fileName: `结算查询-按商家-${rangeLabel}.xlsx`,
+          sheetName: "按商家",
+          columns: merchantExportColumns,
+          rows,
+          notes,
+          totalRow: [
+            "合计", `${rows.length} 个商家`, null,
+            t.total, t.approved, t.paid, rateCell(t.paid, t.total),
+            t.rejected, rateCell(t.rejected, t.total), t.pending, t.orders, t.orderAmount,
+          ],
+        });
+      } else if (activeTab === "monthly") {
+        const rows = applyTableState(data.monthly, monthlyColumns, monthlyTableState);
+        const t = {
+          total: sumBy(rows, (r) => r.total), approved: sumBy(rows, (r) => r.approved),
+          paid: sumBy(rows, (r) => r.paid), rejected: sumBy(rows, (r) => r.rejected),
+          pending: sumBy(rows, (r) => r.pending), orders: sumBy(rows, (r) => r.orders),
+        };
+        await exportSheet({
+          fileName: `结算查询-按月份-${rangeLabel}.xlsx`,
+          sheetName: "按月份",
+          columns: monthlyExportColumns,
+          rows,
+          notes,
+          totalRow: [
+            "合计", t.total, t.approved, t.paid, rateCell(t.paid, t.total),
+            t.rejected, rateCell(t.rejected, t.total), t.pending, t.orders,
+          ],
+        });
+      } else {
+        // 按员工：仅组长可见（页签本身受 isLeader 控制），这里不额外放权
+        const rows = applyTableState(data.members || [], memberColumns, memberTableState);
+        const t = {
+          total: sumBy(rows, (r) => r.total), approved: sumBy(rows, (r) => r.approved),
+          paid: sumBy(rows, (r) => r.paid), rejected: sumBy(rows, (r) => r.rejected),
+          pending: sumBy(rows, (r) => r.pending), orders: sumBy(rows, (r) => r.orders),
+          orderAmount: sumBy(rows, (r) => r.order_amount),
+        };
+        await exportSheet({
+          fileName: `结算查询-按员工-${rangeLabel}.xlsx`,
+          sheetName: "按员工",
+          columns: memberExportColumns,
+          rows,
+          notes,
+          totalRow: [
+            "合计", null, t.total, t.approved, t.paid, rateCell(t.paid, t.total),
+            t.rejected, rateCell(t.rejected, t.total), t.pending, t.orders, t.orderAmount,
+          ],
+        });
+      }
+    } catch (e) {
+      message.error(`导出失败：${e instanceof Error ? e.message : "未知错误"}`);
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const SOURCE_KIND_LABEL: Record<string, string> = {
     payment_summary: "打款单",
@@ -879,16 +1020,29 @@ export default function SettlementPage() {
             size="small"
             styles={{ body: { padding: "0 8px 8px" } }}
             title={
-              <Segmented
-                value={activeTab}
-                onChange={(v) => setActiveTab(v as string)}
-                options={[
-                  { label: `按商家 (${data?.merchants.length || 0})`, value: "merchant" },
-                  { label: `按月份 (${data?.monthly.length || 0})`, value: "monthly" },
-                  ...(isLeader ? [{ label: `按员工 (${data?.members?.length || 0})`, value: "member" }] : []),
-                ]}
-                size="small"
-              />
+              <Space style={{ width: "100%", justifyContent: "space-between" }}>
+                <Segmented
+                  value={activeTab}
+                  onChange={(v) => setActiveTab(v as string)}
+                  options={[
+                    { label: `按商家 (${data?.merchants.length || 0})`, value: "merchant" },
+                    { label: `按月份 (${data?.monthly.length || 0})`, value: "monthly" },
+                    ...(isLeader ? [{ label: `按员工 (${data?.members?.length || 0})`, value: "member" }] : []),
+                  ]}
+                  size="small"
+                />
+                <Tooltip title="导出当前页签的全部行（不只当前分页），平台筛选和排序与屏幕一致">
+                  <Button
+                    size="small"
+                    icon={<DownloadOutlined />}
+                    loading={exporting}
+                    disabled={!data}
+                    onClick={handleExport}
+                  >
+                    导出 Excel
+                  </Button>
+                </Tooltip>
+              </Space>
             }
           >
             {activeTab === "member" && isLeader ? (
@@ -899,6 +1053,10 @@ export default function SettlementPage() {
                 size="small"
                 scroll={{ x: 1020 }}
                 pagination={false}
+                onChange={(_p, filters, sorter) => {
+                  const s = sorter as SorterResult<MemberRow>;
+                  setMemberTableState({ filters, sortKey: s?.columnKey, sortOrder: s?.order });
+                }}
                 summary={() => {
                   if (!data?.members?.length) return null;
                   const totals = data.members.reduce(
@@ -936,6 +1094,10 @@ export default function SettlementPage() {
                 size="small"
                 scroll={{ x: 1130 }}
                 pagination={{ defaultPageSize: 50, showTotal: (t) => `共 ${t} 个商家`, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"] }}
+                onChange={(_p, filters, sorter) => {
+                  const s = sorter as SorterResult<MerchantRow>;
+                  setMerchantTableState({ filters, sortKey: s?.columnKey, sortOrder: s?.order });
+                }}
                 summary={() => {
                   if (!data?.merchants.length) return null;
                   const totals = data.merchants.reduce(
@@ -973,6 +1135,10 @@ export default function SettlementPage() {
                 size="small"
                 scroll={{ x: 990 }}
                 pagination={false}
+                onChange={(_p, filters, sorter) => {
+                  const s = sorter as SorterResult<MonthlyRow>;
+                  setMonthlyTableState({ filters, sortKey: s?.columnKey, sortOrder: s?.order });
+                }}
                 summary={() => {
                   if (!data?.monthly.length) return null;
                   const totals = data.monthly.reduce(
