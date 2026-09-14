@@ -165,10 +165,25 @@ export async function GET(req: NextRequest) {
 
   const fix2 = (n: number) => +n.toFixed(2);
   // 确认率=(approved+paid)/总（paid 是 approved 的后继状态，确认口径须含已打款部分）；
-  // 拒付率=拒付/总；结算率=已支付(交易 paid 桶)/总。
+  // 拒付率=拒付/总；
+  // 结算率=(已确认 approved + 已支付 paid)/总 —— D-335（2026-09-14，01 拍板）改的口径。
+  //
+  // 原口径是「paid 桶 / 总」，问题是 paid 桶只对 v3 平台（CG/PM/BSH/CF/MUI/EV）可信：
+  // RW/LH/LB 的交易API 根本不返回打款状态，paid 只能靠支付明细API 事后剖分回填，
+  // 剖分一旦断（D-333：剖分挂在 daily-sync Step 3.6，被前一步交易同步的 OOM 吃掉，
+  // 半年没跑到过）paid 桶就冻在原地，结算率跟着塌成个位数——数字不反映生意，只反映同步健康度。
+  // approved 是所有平台交易API 直接返回的字段，正常维护，不依赖剖分。
+  // 改成 approved+paid 后，钱在 approved 还是 paid 不影响这个比率，
+  // 剖分断了也只影响「已支付/待打款」两列的拆分，不再污染结算率本身。
+  //
+  // 与 C-019-R1.3（§19.6.9）商家页「已结算佣金 = approved + paid」及其 settle_rate 归一，
+  // 全站「结算」一词从此只有一个分子口径。分母仍是总佣金、不扣待审核（D-332 不变），
+  // 所以整单还在审核期的商家依旧天然偏低——这是设计意图，别再"修"。
+  // 副作用：本口径下 结算率 恒等于 确认率（同分子同分母）。仪表盘三率因此会出现两个相同数字，
+  // 01 已知情并拍板保留——两个词在业务语境里各有用处（「确认」对平台，「结算」对财务）。
   const approvalRate   = totalCommission > 0 ? fix2((approvedCommission + paidCommission) / totalCommission * 100) : 0;
   const rejectionRate  = totalCommission > 0 ? fix2(rejectedCommission / totalCommission * 100) : 0;
-  const settlementRate = totalCommission > 0 ? fix2(paidCommission     / totalCommission * 100) : 0;
+  const settlementRate = totalCommission > 0 ? fix2((approvedCommission + paidCommission) / totalCommission * 100) : 0;
 
   // ── 2. 按商家聚合 ──────────────────────────────────────────────────────────
   const merchantRows = await prisma.$queryRawUnsafe<{
