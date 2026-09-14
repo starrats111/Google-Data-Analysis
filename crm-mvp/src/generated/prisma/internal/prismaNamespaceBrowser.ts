@@ -82,6 +82,7 @@ export const ModelName = {
   affiliate_transactions: 'affiliate_transactions',
   affiliate_click_daily: 'affiliate_click_daily',
   affiliate_payments: 'affiliate_payments',
+  affiliate_paid_signids: 'affiliate_paid_signids',
   notifications: 'notifications',
   notification_preferences: 'notification_preferences',
   user_table_preferences: 'user_table_preferences',
@@ -828,6 +829,15 @@ export const Affiliate_paymentsScalarFieldEnum = {
 } as const
 
 export type Affiliate_paymentsScalarFieldEnum = (typeof Affiliate_paymentsScalarFieldEnum)[keyof typeof Affiliate_paymentsScalarFieldEnum]
+
+
+export const Affiliate_paid_signidsScalarFieldEnum = {
+  platform: 'platform',
+  sign_id: 'sign_id',
+  created_at: 'created_at'
+} as const
+
+export type Affiliate_paid_signidsScalarFieldEnum = (typeof Affiliate_paid_signidsScalarFieldEnum)[keyof typeof Affiliate_paid_signidsScalarFieldEnum]
 
 
 export const NotificationsScalarFieldEnum = {
@@ -2063,6 +2073,14 @@ export const affiliate_paymentsOrderByRelevanceFieldEnum = {
 } as const
 
 export type affiliate_paymentsOrderByRelevanceFieldEnum = (typeof affiliate_paymentsOrderByRelevanceFieldEnum)[keyof typeof affiliate_paymentsOrderByRelevanceFieldEnum]
+
+
+export const affiliate_paid_signidsOrderByRelevanceFieldEnum = {
+  platform: 'platform',
+  sign_id: 'sign_id'
+} as const
+
+export type affiliate_paid_signidsOrderByRelevanceFieldEnum = (typeof affiliate_paid_signidsOrderByRelevanceFieldEnum)[keyof typeof affiliate_paid_signidsOrderByRelevanceFieldEnum]
 
 
 export const notificationsOrderByRelevanceFieldEnum = {

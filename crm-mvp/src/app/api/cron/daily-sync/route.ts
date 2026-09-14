@@ -126,9 +126,13 @@ async function doDailySync() {
     log("Step 3: Syncing transaction data for all users...");
     await syncAllUsersTransactions();
 
-    // 已付剖分要把**已存在的交易行**标成 paid，必须留在交易同步之后，不能跟着打款同步前移
-    log("Step 3.6: Carving RW/LH/LB paid bucket from payment details...");
-    await carvePaidForAllUsers();
+    // D-333：原 Step 3.6「已付剖分」已摘出为独立 cron `/api/cron/paid-carve`（09:40 CST）。
+    // 它必须排在交易同步之后（改的正是交易同步刚写完的行），所以躲不开 Step 3 的 OOM：
+    // Step 3 每天把堆撑爆（FATAL 稳定在 07:51 前后），堆溢出 try/catch 接不住、进程被
+    // pm2 重启，于是这一步一次都没跑到过 —— pm2 日志实测 `Step 3` 出现 14 次、
+    // `Step 3.6` 与 `All done in` 各 0 次，RW/LH/LB 的 paid 桶因此冻结了半年
+    // （LB 停在 2026-02-24、RW 2026-03-05、LH 2026-06-07，而实际打款已到 09-11）。
+    // 与 D-314.3 的区别：打款同步能靠前移躲开，剖分不能，只能拆成独立进程周期。
 
     log("Step 4: Auto-repairing published articles...");
     await autoRepairPublishedArticles({ limit: 50 });
@@ -1394,28 +1398,7 @@ async function syncAllUsersPayments(): Promise<unknown> {
   return results;
 }
 
-// ── RW/LH/LB 已付剖分（口径A 配套，交易+支付同步后执行） ──
-
-async function carvePaidForAllUsers(): Promise<void> {
-  const { markPaidFromPaymentDetails } = await import("@/lib/affiliate-paid-carve");
-  const users = await prisma.users.findMany({
-    where: { is_deleted: 0, status: "active", role: { in: ["user", "leader"] } },
-    select: { id: true, username: true },
-  });
-  let totalMarked = 0;
-  for (const user of users) {
-    try {
-      const carve = await markPaidFromPaymentDetails(user.id);
-      totalMarked += carve.rows_marked_paid;
-      if (carve.rows_marked_paid > 0 || carve.errors.length > 0) {
-        log(`  [carve] ${user.username}: 标记 ${carve.rows_marked_paid} 笔 paid（明细 ${carve.detail_signids} 行）${carve.errors.length ? `，错误 ${carve.errors.length}` : ""}`);
-      }
-    } catch (e) {
-      log(`  [carve] ${user.username} error: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-  log(`  [carve] 全部完成：共标记 ${totalMarked} 笔 paid`);
-}
+// D-333：原 carvePaidForAllUsers() 已迁到 src/app/api/cron/paid-carve/route.ts。
 
 // ── 复用的关联逻辑（简化版） ──
 

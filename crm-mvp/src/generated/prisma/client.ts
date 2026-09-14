@@ -197,6 +197,11 @@ export type affiliate_click_daily = Prisma.affiliate_click_dailyModel
  */
 export type affiliate_payments = Prisma.affiliate_paymentsModel
 /**
+ * Model affiliate_paid_signids
+ * 
+ */
+export type affiliate_paid_signids = Prisma.affiliate_paid_signidsModel
+/**
  * Model notifications
  * 
  */

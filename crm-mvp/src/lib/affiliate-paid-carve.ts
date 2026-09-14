@@ -24,6 +24,47 @@ import { fetchPaymentDetail } from "@/lib/payment-detail-api";
 // RW/LH/LB 交易API 均不返回打款状态，需用支付细节API 剖分回 paid 桶。
 const CARVE_PLATFORMS = new Set(["RW", "LH", "LB"]);
 
+/** 该平台的 paid 桶是否由剖分维护（而非平台 API 自报）。 */
+export function isCarvePlatform(platform: string): boolean {
+  return CARVE_PLATFORMS.has(platform);
+}
+
+/**
+ * D-333：把剖分平台被交易同步打回的 paid 行重新归位。
+ *
+ * RW/LH/LB 的交易API 永远不会返回 paid（这正是剖分存在的理由），所以交易同步的
+ * update 路径无条件写 `status: txn.status` 时，会把剖分标好的 paid 行降级成
+ * approved/pending。daily-sync 每天只剖分一次，而 txn-quick-sync 每 30 分钟、
+ * 窗口 14 天地覆写一遍 —— 实测这三个平台 14 天窗口内的 paid 行数恰好是 0。
+ *
+ * 修法不能是「剖分平台一律不写 status」：那会连 approved↔pending↔rejected 的正常
+ * 迁移一起冻住。这里只封堵 paid → 非 paid 这一个方向：同步照常写状态，写完把
+ * 「支付明细证明已到账、却被这轮同步降级」的行重新标回 paid。
+ *
+ * 判定依据是 `affiliate_paid_signids` —— 剖分每次展开打款单明细时把行级 sign_id
+ * 落库（D-333 新增表）。这些 sign_id 是剖分唯一的昂贵产出（逐打款单请求支付明细API），
+ * 原先用完即丢；持久化之后，任何一轮交易同步都能零外部请求地自愈。
+ *
+ * 一条 set-based UPDATE 收工：不按 txnId 分批、不随本轮同步条数增长，
+ * 在这台常年 swap 的小机器上代价可以忽略（见 [[crm-swap-thrash-loop]] 的教训）。
+ *
+ * @param platform 平台代码（非剖分平台直接返回 0）
+ * @returns 重新标回 paid 的行数
+ */
+export async function restorePaidAfterSync(platform: string): Promise<number> {
+  if (!CARVE_PLATFORMS.has(platform)) return 0;
+
+  const affected = await prisma.$executeRawUnsafe(
+    `UPDATE affiliate_transactions t
+     JOIN affiliate_paid_signids s
+       ON s.platform = t.platform AND s.sign_id = t.transaction_id
+     SET t.status = 'paid'
+     WHERE t.platform = ? AND t.is_deleted = 0 AND t.status <> 'paid'`,
+    platform,
+  );
+  return Number(affected || 0);
+}
+
 export interface CarveResult {
   scanned_withdrawals: number;
   detail_signids: number;
@@ -104,6 +145,22 @@ export async function markPaidFromPaymentDetails(
     result.detail_signids += signIds.length;
     result.by_platform[platform].signids = signIds.length;
     if (signIds.length === 0) continue;
+
+    // D-333：把 sign_id 落库。这是剖分唯一的昂贵产出（逐打款单请求支付明细API），
+    // 原先用完即丢，导致下一轮交易同步把 paid 打回后无从恢复。持久化之后
+    // restorePaidAfterSync() 可以零外部请求地自愈。INSERT IGNORE 保证幂等。
+    if (!dryRun) {
+      for (let i = 0; i < signIds.length; i += 500) {
+        const batch = signIds.slice(i, i + 500);
+        const values = batch.map(() => "(?,?)").join(",");
+        const params: string[] = [];
+        for (const sid of batch) params.push(platform, sid);
+        await prisma.$executeRawUnsafe(
+          `INSERT IGNORE INTO affiliate_paid_signids (platform, sign_id) VALUES ${values}`,
+          ...params,
+        );
+      }
+    }
 
     let marked = 0;
     for (let i = 0; i < signIds.length; i += 500) {

@@ -307,6 +307,19 @@ export async function POST(req: NextRequest) {
 
     // 6. RW/LH/LB 已付剖分（口径A 配套）：交易同步会把它们的已打款订单重置为非 paid，
     //    这里用支付细节API 把它们重新归入 paid 桶，使「已支付=交易表 paid 桶」对 RW/LH/LB 也成立。
+    //    D-333：先做一次基于已落库 sign_id 的廉价自愈，再走逐单请求的完整剖分。
+    //    前者无外部请求、覆盖历史全量；后者负责发现新打款单。顺序无所谓（都幂等），
+    //    但先自愈能保证即使支付明细API 这次挂了，本轮同步也不会把 paid 桶留在降级态。
+    try {
+      const { restorePaidAfterSync } = await import("@/lib/affiliate-paid-carve");
+      for (const p of ["RW", "LH", "LB"]) {
+        const restored = await restorePaidAfterSync(p);
+        if (restored > 0) console.log(`[sync-txn] ${p}: 回收被本轮降级的 paid 行 ${restored} 条`);
+      }
+    } catch (e) {
+      console.log(`[sync-txn] paid 自愈异常: ${e instanceof Error ? e.message : String(e)}`);
+    }
+
     try {
       const { markPaidFromPaymentDetails } = await import("@/lib/affiliate-paid-carve");
       const carve = await markPaidFromPaymentDetails(userId);

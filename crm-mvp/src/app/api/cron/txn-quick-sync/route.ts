@@ -6,6 +6,7 @@ import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
 import { applyAffiliateCommissionToDailyStats } from "@/lib/daily-stats-commission";
 import { aggregateRawTransactions } from "@/lib/affiliate-txn-aggregate";
 import { markConnectionSuccess, markConnectionReachable, markConnectionFailure } from "@/lib/connection-health";
+import { isCarvePlatform, restorePaidAfterSync } from "@/lib/affiliate-paid-carve";
 
 /** 快速同步的时间窗口（天）：覆盖所有状态活跃中的订单 */
 const QUICK_SYNC_DAYS = 14;
@@ -165,6 +166,9 @@ async function runQuickSync(startTime: number): Promise<NextResponse> {
   const results: Record<string, unknown> = {};
   let totalChanged = 0;
   let totalCommissionUpdated = 0;
+  // D-333：本轮同步碰过的剖分平台（RW/LH/LB）。restorePaidAfterSync 是平台级
+  // set-based UPDATE，跟用户/连接数无关，放在用户循环里会重复全表扫，故收集后统一跑。
+  const touchedCarvePlatforms = new Set<string>();
 
   for (const user of users) {
     const userId = user.id;
@@ -355,6 +359,8 @@ async function runQuickSync(startTime: number): Promise<NextResponse> {
           }
 
           platformStats[platform] = (platformStats[platform] || 0) + r.transactions.length;
+          // D-333：本轮碰过的剖分平台，循环结束后统一回收被降级的 paid 行（见下）
+          if (isCarvePlatform(platform)) touchedCarvePlatforms.add(platform);
         } catch (e) {
           log(`  ${user.username} ${conn.account_name || platform} error: ${e instanceof Error ? e.message : String(e)}`);
         }
@@ -422,8 +428,25 @@ async function runQuickSync(startTime: number): Promise<NextResponse> {
     }
   }
 
+  // D-333：把本轮 upsert 打回的 paid 行按 sign_id 白名单标回来。
+  // 上面的 update 无条件写 `status: txn.status`，而 RW/LH/LB 的交易API 永远不返回
+  // paid（正是剖分存在的理由）；本 cron 每 30 分钟、窗口 14 天地覆写一遍，剖分每天
+  // 只跑一次，净效果是这三个平台 14 天内 paid 行恒为 0（实测），结算率被严重低估。
+  let totalPaidRestored = 0;
+  for (const platform of touchedCarvePlatforms) {
+    try {
+      const restored = await restorePaidAfterSync(platform);
+      if (restored > 0) {
+        totalPaidRestored += restored;
+        log(`  [carve-restore] ${platform}: 回收被降级的 paid 行 ${restored} 条`);
+      }
+    } catch (e) {
+      log(`  [carve-restore] ${platform} error: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-  log(`快速同步完成：${totalChanged}/${users.length} 用户有变动，回写佣金 ${totalCommissionUpdated} 行，耗时 ${elapsed}s`);
+  log(`快速同步完成：${totalChanged}/${users.length} 用户有变动，回写佣金 ${totalCommissionUpdated} 行，回收 paid ${totalPaidRestored} 行，耗时 ${elapsed}s`);
 
   return NextResponse.json({
     ok: true,
@@ -432,6 +455,7 @@ async function runQuickSync(startTime: number): Promise<NextResponse> {
     users_total: users.length,
     window_days: QUICK_SYNC_DAYS,
     commission_updated_total: totalCommissionUpdated,
+    paid_restored_total: totalPaidRestored,
     results,
   });
 }

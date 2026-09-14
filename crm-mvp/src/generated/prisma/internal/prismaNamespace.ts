@@ -415,6 +415,7 @@ export const ModelName = {
   affiliate_transactions: 'affiliate_transactions',
   affiliate_click_daily: 'affiliate_click_daily',
   affiliate_payments: 'affiliate_payments',
+  affiliate_paid_signids: 'affiliate_paid_signids',
   notifications: 'notifications',
   notification_preferences: 'notification_preferences',
   user_table_preferences: 'user_table_preferences',
@@ -474,7 +475,7 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
     omit: GlobalOmitOptions
   }
   meta: {
-    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "parent_networks" | "platform_blacklist" | "ad_rejection_feedback" | "merchant_violations" | "merchant_recommendations" | "holiday_nodes" | "sheet_configs" | "ad_default_settings" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "ad_generation_jobs" | "ad_submit_jobs" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "ai_recommendations" | "spend_guard_actions" | "google_mcc_accounts" | "affiliate_transactions" | "affiliate_click_daily" | "affiliate_payments" | "notifications" | "notification_preferences" | "user_table_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "kyads_click_task_items" | "proxy_exit_ip_usage" | "suffix_alerts" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "ad_creative_copy_cache" | "user_serpapi_keys" | "user_semrush_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log" | "semrush_keyword_cache" | "semrush_health_logs" | "payment_methods" | "report_overrides" | "payment_binding_snapshots" | "bank_flow_entries" | "policy_violations" | "team_developer_tokens" | "token_usage_daily" | "google_ads_api_usage" | "ad_decision_journal" | "ad_creation_drafts" | "brand_assessment_jobs" | "brand_assessment_results" | "brand_intel_cost_ledger" | "dataforseo_brand_keyword_cache"
+    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "parent_networks" | "platform_blacklist" | "ad_rejection_feedback" | "merchant_violations" | "merchant_recommendations" | "holiday_nodes" | "sheet_configs" | "ad_default_settings" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "ad_generation_jobs" | "ad_submit_jobs" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "ai_recommendations" | "spend_guard_actions" | "google_mcc_accounts" | "affiliate_transactions" | "affiliate_click_daily" | "affiliate_payments" | "affiliate_paid_signids" | "notifications" | "notification_preferences" | "user_table_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "kyads_click_task_items" | "proxy_exit_ip_usage" | "suffix_alerts" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "ad_creative_copy_cache" | "user_serpapi_keys" | "user_semrush_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log" | "semrush_keyword_cache" | "semrush_health_logs" | "payment_methods" | "report_overrides" | "payment_binding_snapshots" | "bank_flow_entries" | "policy_violations" | "team_developer_tokens" | "token_usage_daily" | "google_ads_api_usage" | "ad_decision_journal" | "ad_creation_drafts" | "brand_assessment_jobs" | "brand_assessment_results" | "brand_intel_cost_ledger" | "dataforseo_brand_keyword_cache"
     txIsolationLevel: TransactionIsolationLevel
   }
   model: {
@@ -2521,6 +2522,72 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         count: {
           args: Prisma.affiliate_paymentsCountArgs<ExtArgs>
           result: runtime.Types.Utils.Optional<Prisma.Affiliate_paymentsCountAggregateOutputType> | number
+        }
+      }
+    }
+    affiliate_paid_signids: {
+      payload: Prisma.$affiliate_paid_signidsPayload<ExtArgs>
+      fields: Prisma.affiliate_paid_signidsFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.affiliate_paid_signidsFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$affiliate_paid_signidsPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.affiliate_paid_signidsFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$affiliate_paid_signidsPayload>
+        }
+        findFirst: {
+          args: Prisma.affiliate_paid_signidsFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$affiliate_paid_signidsPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.affiliate_paid_signidsFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$affiliate_paid_signidsPayload>
+        }
+        findMany: {
+          args: Prisma.affiliate_paid_signidsFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$affiliate_paid_signidsPayload>[]
+        }
+        create: {
+          args: Prisma.affiliate_paid_signidsCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$affiliate_paid_signidsPayload>
+        }
+        createMany: {
+          args: Prisma.affiliate_paid_signidsCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.affiliate_paid_signidsDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$affiliate_paid_signidsPayload>
+        }
+        update: {
+          args: Prisma.affiliate_paid_signidsUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$affiliate_paid_signidsPayload>
+        }
+        deleteMany: {
+          args: Prisma.affiliate_paid_signidsDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.affiliate_paid_signidsUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.affiliate_paid_signidsUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$affiliate_paid_signidsPayload>
+        }
+        aggregate: {
+          args: Prisma.Affiliate_paid_signidsAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateAffiliate_paid_signids>
+        }
+        groupBy: {
+          args: Prisma.affiliate_paid_signidsGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Affiliate_paid_signidsGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.affiliate_paid_signidsCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Affiliate_paid_signidsCountAggregateOutputType> | number
         }
       }
     }
@@ -6153,6 +6220,15 @@ export const Affiliate_paymentsScalarFieldEnum = {
 export type Affiliate_paymentsScalarFieldEnum = (typeof Affiliate_paymentsScalarFieldEnum)[keyof typeof Affiliate_paymentsScalarFieldEnum]
 
 
+export const Affiliate_paid_signidsScalarFieldEnum = {
+  platform: 'platform',
+  sign_id: 'sign_id',
+  created_at: 'created_at'
+} as const
+
+export type Affiliate_paid_signidsScalarFieldEnum = (typeof Affiliate_paid_signidsScalarFieldEnum)[keyof typeof Affiliate_paid_signidsScalarFieldEnum]
+
+
 export const NotificationsScalarFieldEnum = {
   id: 'id',
   user_id: 'user_id',
@@ -7388,6 +7464,14 @@ export const affiliate_paymentsOrderByRelevanceFieldEnum = {
 export type affiliate_paymentsOrderByRelevanceFieldEnum = (typeof affiliate_paymentsOrderByRelevanceFieldEnum)[keyof typeof affiliate_paymentsOrderByRelevanceFieldEnum]
 
 
+export const affiliate_paid_signidsOrderByRelevanceFieldEnum = {
+  platform: 'platform',
+  sign_id: 'sign_id'
+} as const
+
+export type affiliate_paid_signidsOrderByRelevanceFieldEnum = (typeof affiliate_paid_signidsOrderByRelevanceFieldEnum)[keyof typeof affiliate_paid_signidsOrderByRelevanceFieldEnum]
+
+
 export const notificationsOrderByRelevanceFieldEnum = {
   type: 'type',
   title: 'title',
@@ -8020,6 +8104,7 @@ export type GlobalOmitConfig = {
   affiliate_transactions?: Prisma.affiliate_transactionsOmit
   affiliate_click_daily?: Prisma.affiliate_click_dailyOmit
   affiliate_payments?: Prisma.affiliate_paymentsOmit
+  affiliate_paid_signids?: Prisma.affiliate_paid_signidsOmit
   notifications?: Prisma.notificationsOmit
   notification_preferences?: Prisma.notification_preferencesOmit
   user_table_preferences?: Prisma.user_table_preferencesOmit

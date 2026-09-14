@@ -278,8 +278,11 @@ async function syncRecentTransactionsForUser(
   );
 
   const { fetchAllTransactions } = await import("@/lib/platform-api");
+  const { isCarvePlatform, restorePaidAfterSync } = await import("@/lib/affiliate-paid-carve");
   let totalSynced = 0;
   const errors: string[] = [];
+  // D-333：restorePaidAfterSync 是平台级 set-based UPDATE，与连接数无关，收集后统一跑
+  const touchedCarvePlatforms = new Set<string>();
 
   for (const conn of validConns) {
     const platform = normalizePlatformCode(conn.platform);
@@ -381,8 +384,21 @@ async function syncRecentTransactionsForUser(
         await Promise.all(ops);
         totalSynced += ops.length;
       }
+      // D-333：本轮碰过的剖分平台，循环结束后统一回收被降级的 paid 行
+      if (isCarvePlatform(platform)) touchedCarvePlatforms.add(platform);
     } catch (err) {
       errors.push(`${label}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // D-333：上面的 upsert 无条件写 `status: txn.status`，而 RW/LH/LB 的交易API 永远
+  // 不返回 paid（正是剖分存在的理由），本轮会把剖分标好的 paid 行打回 approved/pending。
+  // 按已落库的 sign_id 白名单标回来（平台级 set-based UPDATE，无外部请求）。
+  for (const p of touchedCarvePlatforms) {
+    try {
+      await restorePaidAfterSync(p);
+    } catch (err) {
+      errors.push(`${p} paid restore: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

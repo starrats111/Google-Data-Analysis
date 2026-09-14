@@ -875,6 +875,17 @@ model affiliate_payments {
   @@index([platform_connection_id], map: "idx_pay_platform_conn")
 }
 
+// D-333：剖分（RW/LH/LB 已付回填）产出的行级 sign_id 白名单。
+// sign_id = affiliate_transactions.transaction_id。只增不减：打款一旦发生不会撤销。
+// 存在的意义是让交易同步把 paid 打回后能零外部请求自愈，见 lib/affiliate-paid-carve.ts。
+model affiliate_paid_signids {
+  platform   String   @db.VarChar(8)
+  sign_id    String   @db.VarChar(128)
+  created_at DateTime @default(now()) @db.DateTime(0)
+
+  @@id([platform, sign_id])
+}
+
 // -----------------------------------------------------------
 // 18. 消息通知表
 // -----------------------------------------------------------
