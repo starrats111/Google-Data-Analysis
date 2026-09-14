@@ -2177,6 +2177,11 @@ export async function buildCrawlCache(
 
   type Strategy = { name: string; run: () => Promise<CrawlResultType> };
   const strategies: Strategy[] = [];
+  /**
+   * 单策略超时上限。预算判断（要不要启动下一个策略）与 race 实际砍断必须用同一个值，
+   * 否则「以为还跑得完」和「实际被砍」会脱节，重现 165s 撞顶。详见调用处注释。
+   */
+  const singleStrategyTimeoutMs = (isPuppeteer: boolean) => (isPuppeteer ? 90_000 : 22_000);
   if (merchantUrl) {
     // ══════════════════════════════════════════════════════
     // CRAWL-02 T-restore：恢复 5.10 健壮策略（07：一定要能爬到）。
@@ -2249,11 +2254,40 @@ export async function buildCrawlCache(
   let puppeteerChallenged = false;
   for (const strategy of strategies) {
     const elapsed = Date.now() - strategyStartedAt;
-    if (elapsed > STRATEGY_BUDGET_MS) {
-      console.warn(`[CrawlPipeline] 总时间已达 ${elapsed}ms > ${STRATEGY_BUDGET_MS}ms，跳过剩余策略（已完成质量 score=${crawlQuality.score}）`);
-      break;
-    }
     const isPuppeteerStrategy = strategy.name.includes("puppeteer");
+    // 2026-09-14：预算检查必须算上「这个策略最坏要跑多久」，否则拦不住溢出。
+    //   旧写法只看 elapsed > BUDGET：elapsed=159s 时 159<160 通过，随即启动一个上限 90s 的
+    //   Puppeteer 策略 → 最坏 249s，被外层 HANG_SAFETY_MS(165s) 一刀砍断。
+    //   实证：10 次「超过 165s 预算」全部落在 164999-165003ms（精确撞顶，非巧合），而内层
+    //   「总时间已达」历史仅触发 2 次、且都是无代理 90s 档并已溢出到 112001ms 才发现；
+    //   有代理的 160s 档一次都没触发过——160s 预算距 165s 铡刀只剩 5s，而单个 Puppeteer
+    //   策略要 90s，任何在 70-160s 之间启动的 Puppeteer 必然撞顶。溢出是结构性的。
+    //   改为「跑不完就不启动」：宁可少试一个策略，也要留时间给尾段 sitelink/图片产出
+    //   （撞顶会连尾段一起丢掉，那才是员工看到的「一直生成不出来」）。
+    //   单策略上限与下面 race 用的是同一个值（见 SINGLE_STRATEGY_TIMEOUT_MS 定义），
+    //   两处必须一致，否则预算判断会和实际砍断时间脱节。
+    const worstCaseMs = singleStrategyTimeoutMs(isPuppeteerStrategy);
+    // 最后一搏时收紧到剩余预算；正常路径保持 undefined = 用满 worstCaseMs
+    let cappedTimeoutMs: number | undefined;
+    if (elapsed + worstCaseMs > STRATEGY_BUDGET_MS) {
+      // 已有可用结果 → 直接收口。一个策略都还没成 → 允许最后一搏，否则反爬站策略全灭时
+      // 必然零产出；但这一搏要在外层铡刀**之前**收口，故用剩余预算当它的超时上限
+      // （见下方 strategyTimer），不能让它按 90s 跑过头。剩余不足 MIN_LAST_DITCH_MS
+      // 时连搏都没意义（goto 都握不完手），直接收口。
+      const remainingMs = STRATEGY_BUDGET_MS - elapsed;
+      const MIN_LAST_DITCH_MS = 15_000;
+      const lastDitch = crawlQuality.score === 0 && remainingMs >= MIN_LAST_DITCH_MS;
+      if (lastDitch) cappedTimeoutMs = remainingMs;
+      if (!lastDitch) {
+        console.warn(
+          `[CrawlPipeline] 预算不足：已用 ${elapsed}ms + ${strategy.name} 最坏 ${worstCaseMs}ms > ${STRATEGY_BUDGET_MS}ms，跳过剩余策略（已完成质量 score=${crawlQuality.score}）`,
+        );
+        break;
+      }
+      console.warn(
+        `[CrawlPipeline] 预算不足但尚无任何结果，最后一搏 ${strategy.name}（剩余 ${remainingMs}ms，最坏 ${worstCaseMs}ms 可能撞外层 165s 顶）`,
+      );
+    }
     if ((isPuppeteerStrategy && puppeteerChallenged) || (!isPuppeteerStrategy && httpChallenged)) {
       console.warn(`[CrawlPipeline] D-160：host 已命中拦截页，跳过同类策略 ${strategy.name}（止损省预算）`);
       continue;
@@ -2268,7 +2302,8 @@ export async function buildCrawlCache(
       // 2026-07-13（第六轮）：75s → 90s。CF 挑战循环最坏再 +18s（内部已按自身 deadline 提前
       // 收口，见 crawlWithPuppeteerFull pptrDeadlineAt），此前 75s race 在挑战站上必输，
       // Chrome 成孤儿烧槽位；90s 与内部 deadline(timeoutMs+45s≈80s) 对齐并留 buffer。
-      const SINGLE_STRATEGY_TIMEOUT_MS = isPuppeteerStrategy ? 90_000 : 22_000;
+      // cappedTimeoutMs 只在「最后一搏」时有值（收紧到剩余预算，保证在外层 165s 前收口）
+      const SINGLE_STRATEGY_TIMEOUT_MS = cappedTimeoutMs ?? singleStrategyTimeoutMs(isPuppeteerStrategy);
       // 2026-07-13：race 赢家出来后清掉输家的 timer（此前每策略泄漏一个挂起 setTimeout）
       let strategyTimer: NodeJS.Timeout | undefined;
       const result = await Promise.race([
