@@ -91,15 +91,31 @@ export async function POST(req: NextRequest) {
   }
   const normalizedMccId = `${mccDigits.slice(0, 3)}-${mccDigits.slice(3, 6)}-${mccDigits.slice(6)}`;
 
-  // 查重：同一用户下同号（按纯数字比对，容忍历史脏格式）的活跃 MCC 只允许一条
+  // 查重：DB 上 uniq_mcc_id_active（C-095 生成列）是**全局**唯一——同一真实 MCC 只允许一条 active 记录，
+  // 不区分归属人。历史 bug：这里只查当前用户，别人已绑的 MCC 查不到 → 放行 → create() 撞 P2002 抛未捕获异常
+  // → Next.js 返 500 HTML → 前端 r.json() 解析失败 → 误报「网络异常，保存失败，请重试」。
+  // 故查重范围必须与 DB 约束一致（全局），并按归属人给出不同的可执行提示。
   const activeMccs = await prisma.google_mcc_accounts.findMany({
-    where: { user_id: BigInt(user.userId), is_deleted: 0 },
-    select: { id: true, mcc_id: true, mcc_name: true },
+    where: { is_deleted: 0 },
+    select: { id: true, mcc_id: true, mcc_name: true, user_id: true },
   });
   const dup = activeMccs.find((m) => m.mcc_id.replace(/\D/g, "") === mccDigits);
   if (dup) {
+    if (dup.user_id === BigInt(user.userId)) {
+      return apiError(
+        `MCC ${normalizedMccId} 已存在（记录「${dup.mcc_name || dup.mcc_id}」）。同一 MCC 不允许重复添加，否则广告归属会分裂、CID 广告数量显示错误；如需修改凭证或 Sheet，请直接编辑现有记录。`,
+      );
+    }
+    const owner = await prisma.users.findUnique({
+      where: { id: dup.user_id },
+      select: { username: true, display_name: true },
+    });
+    const ownerLabel = owner
+      ? `${owner.display_name || owner.username}（${owner.username}）`
+      : `用户 #${dup.user_id}`;
     return apiError(
-      `MCC ${normalizedMccId} 已存在（记录「${dup.mcc_name || dup.mcc_id}」）。同一 MCC 不允许重复添加，否则广告归属会分裂、CID 广告数量显示错误；如需修改凭证或 Sheet，请直接编辑现有记录。`,
+      `MCC ${normalizedMccId} 已被 ${ownerLabel} 绑定（记录「${dup.mcc_name || dup.mcc_id}」），同一 MCC 全系统只能归属一人，无法重复添加。` +
+        `如该 MCC 应转由你管理，请让对方在「个人设置 → MCC 账户」中删除该记录后再添加；如属误绑请联系管理员处理。`,
     );
   }
 
@@ -110,17 +126,27 @@ export async function POST(req: NextRequest) {
     if (errMsg) return apiError(errMsg);
   }
 
-  const account = await prisma.google_mcc_accounts.create({
-    data: {
-      user_id: BigInt(user.userId),
-      mcc_id: normalizedMccId,
-      mcc_name: mcc_name?.trim() || null,
-      currency: currency || "USD",
-      service_account_json: sa,
-      sheet_url: sheet_url?.trim() || null,
-      developer_token: developer_token?.trim() || null,
-    },
-  });
+  // 并发兜底：上面的查重与 create 之间存在竞态窗口，仍可能撞 uniq_mcc_id_active。
+  // 必须捕获成 JSON 错误返回，否则未捕获异常会让 Next.js 返 500 HTML，前端只能显示「网络异常」。
+  let account;
+  try {
+    account = await prisma.google_mcc_accounts.create({
+      data: {
+        user_id: BigInt(user.userId),
+        mcc_id: normalizedMccId,
+        mcc_name: mcc_name?.trim() || null,
+        currency: currency || "USD",
+        service_account_json: sa,
+        sheet_url: sheet_url?.trim() || null,
+        developer_token: developer_token?.trim() || null,
+      },
+    });
+  } catch (e) {
+    if ((e as { code?: string })?.code === "P2002") {
+      return apiError(`MCC ${normalizedMccId} 已被绑定（同一 MCC 全系统只能归属一人），无法重复添加。请刷新页面确认最新状态。`, 409);
+    }
+    throw e;
+  }
 
   // 加固③：审计日志（只记 SA 邮箱，不记私钥）
   await logOperation({
