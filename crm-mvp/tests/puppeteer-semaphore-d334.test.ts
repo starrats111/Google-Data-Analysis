@@ -33,16 +33,26 @@ afterEach(() => {
   delete process.env.EXCHANGE_ISOLATION_WORK_DAYS;
   delete process.env.EXCHANGE_SLOTS_PEAK;
   delete process.env.EXCHANGE_SLOTS_OFFPEAK;
+  delete process.env.PUPPETEER_EXCHANGE_BORROW_OFF;
   const s = puppeteerSemaphoreStats();
   assert.equal(s.active, 0, "用例结束应无残留占用");
   assert.equal(s.activeExchangeTotal, 0, "换链接计数应归零");
   assert.equal(s.queuedInteractive, 0, "人工排队计数应归零");
 });
 
-/** 钉成恒高峰（换链接并发 1）：最容易复现排队饥饿的档位 */
+/**
+ * 钉成恒高峰（换链接并发 1）：最容易复现排队饥饿的档位。
+ *
+ * D-337 起同时关掉借用（PUPPETEER_EXCHANGE_BORROW_OFF=1）。本文件测的是**队列内的唤醒顺序**
+ * （人工插到 cron 之前），前提是超配额的 exchange 请求会真的排队；而 D-337 允许广告侧整体
+ * 闲置时借一个空槽，本文件又不占广告槽，于是第 2 个请求会被直接授予、根本进不了队列
+ * （表现为「3 个 cron 应在排队」实际只有 2）。关掉借用把变量隔离掉，插队语义单独可测；
+ * 借用本身在 slot-iso 用例里覆盖。
+ */
 function peakAlways() {
   process.env.EXCHANGE_ISOLATION_WORK_HOURS = "0-24";
   process.env.EXCHANGE_ISOLATION_WORK_DAYS = "0-6";
+  process.env.PUPPETEER_EXCHANGE_BORROW_OFF = "1";
   delete process.env.PUPPETEER_EXCHANGE_ISOLATION_OFF;
 }
 

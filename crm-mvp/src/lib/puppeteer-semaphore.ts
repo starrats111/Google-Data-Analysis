@@ -378,6 +378,71 @@ function canGrantExchangeReserve(): boolean {
   return _waitersMain.length === 0 && _active < MAX_PUPPETEER_SLOTS;
 }
 
+/**
+ * D-337：分区档下 exchange 借用广告车道的空闲槽——仅当广告侧确实没人在等且没在用。
+ *
+ * 真因（2026-09-15 生产实测）：当日 525 次 no_puppeteer_slot 全部来自 exchange 车道，
+ * 且 439 次现场快照是 `active=1/3` —— 3 个槽只用 1 个、另 2 个空着，exchangeQ 最深排到 10。
+ * 高峰档 `q.exchange=1` 封顶后，tryClassifyGrant/唤醒两处的分区判定都直接返回 null，
+ * D-199 加的 exchangeReserve 借用路径在 `laneQuotaActive()` 分支里根本走不到 ——
+ * 于是「第 3 槽空转」以新形式重演：不是资源不足（当日 low_memory 仅 4 次），是调度浪费。
+ *
+ * 后果不止是慢：抢不到槽的 CG/LB 系 JS 跳板只能保留首次 HTTP 结果，
+ * 会被记成 no_tracking/resolve_failed，正是 D-231「1577 次抢槽失败全计入死链」的老路径。
+ *
+ * 借用条件比 D-199 更严，三重约束：
+ *   1) main 与 normal 两个队列都必须为空，且广告侧当前占用为 0 —— 分区档的立意是
+ *      「高峰期员工在上广告，换链接让路」，只要广告侧有任何在跑或在等的会话就不借；
+ *   2) 借用后池子必须仍留 1 个空槽（`_active < MAX - RESERVED`）—— 保证员工点上广告随到随有。
+ *      低谷档（exchange=2 / ads=1）下这条同时防住「换链接占满 3 槽把广告压到 0」的静默饿死；
+ *      故净效果是：高峰 1→可借到 2，低谷 2→不再借（本来就够）；
+ *   3) 唤醒时垫最底 —— main/normal 一到即按既有顺序抢回。
+ *
+ * 高峰档（exchange=1, ads=2, MAX=3）下的净效果：换链接从「恒 1 并发、2 槽空转」变成
+ * 「广告闲置时 2 并发、广告一动即缩回 1」。广告侧最坏多等一个换链接会话（实测 1-14s）。
+ *
+ * 授予种类记 exchangeReserve（非 exchangeFast）：不占快车道配额计数，故快车道额度仍原样
+ * 留给下一个 exchange 请求；但计入 _activeExchangeTotal，受下方档位判定天然收敛。
+ * 唤醒优先级垫最底，main/normal 一到即按既有顺序抢回。
+ *
+ * PUPPETEER_EXCHANGE_BORROW_OFF=1 可单独回滚这一条，无需重新部署。
+ */
+/**
+ * D-337 结构性失效告警：池子小到「配额 + 留给广告的 1 个」已等于 MAX 时，借用永远不可能发生，
+ * 本修复退化为死代码而不报任何错——正是本文件反复吃过的「静默」亏。
+ *
+ * 具体地：MAX=2 时 exchange=1、留 1 个给广告，`_active < MAX - RESERVED` 恒不成立，
+ * 换链接又回到「恒 1 并发」，而 2026-09-15 的 525 次抢槽失败正是这个形态。
+ * 若日后因内存把 MAX 调回 2，必须改的是并发策略本身（或接受换链接排队），不能以为本修复还在生效。
+ * 每进程只喊一次，避免刷日志。
+ */
+let _borrowImpossibleWarned = false;
+function warnIfBorrowStructurallyImpossible(): void {
+  if (_borrowImpossibleWarned) return;
+  if (MAX_PUPPETEER_SLOTS - RESERVED_MAIN_CRAWL_SLOTS > currentQuota().exchange) return;
+  _borrowImpossibleWarned = true;
+  console.warn(
+    `[PuppeteerSemaphore] D-337 借用在当前配置下永不生效（MAX=${MAX_PUPPETEER_SLOTS}, ` +
+      `预留=${RESERVED_MAIN_CRAWL_SLOTS}, exchange配额=${currentQuota().exchange}）——` +
+      `换链接将回到恒 ${currentQuota().exchange} 并发，抢槽失败会重新累积，请重新评估并发策略。`,
+  );
+}
+
+function canGrantExchangeBorrow(): boolean {
+  if (process.env.PUPPETEER_EXCHANGE_BORROW_OFF === "1") return false;
+  warnIfBorrowStructurallyImpossible();
+  return (
+    _waitersMain.length === 0 &&
+    _waitersNormal.length === 0 &&
+    adsActive() === 0 &&
+    // 借用绝不吃掉最后一个空槽：留 1 个给广告，员工点上广告永远随到随有。
+    // 这条同时是低谷档的安全网 —— 低谷 exchange=2/ads=1，若按「配额+1」封顶，
+    // 换链接会占满 3 槽把广告压到 0，正是本文件开头 D-298 警告的「静默饿死」。
+    // 用「留一个」表达不变量，两档都成立：高峰 1→借到 2，低谷 2→不再借。
+    _active < MAX_PUPPETEER_SLOTS - RESERVED_MAIN_CRAWL_SLOTS
+  );
+}
+
 /** 请求到达时的授予判定；exchange 返回实际授予的种类，不可授予返回 null */
 function tryClassifyGrant(lane: SlotLane): GrantKind | null {
   // SLOT-ISO-01：按当前档位硬分区，双向不借用。
@@ -389,7 +454,10 @@ function tryClassifyGrant(lane: SlotLane): GrantKind | null {
       return adsActive() < q.ads && _active < MAX_PUPPETEER_SLOTS ? "main" : null;
     }
     if (lane === "exchange") {
-      return _activeExchangeTotal < q.exchange && _active < MAX_PUPPETEER_SLOTS ? "exchangeFast" : null;
+      if (_activeExchangeTotal < q.exchange && _active < MAX_PUPPETEER_SLOTS) return "exchangeFast";
+      // D-337：配额已满但广告侧整体闲置（两队列皆空且 adsActive()==0）→ 借空槽，不再干等 30s
+      if (canGrantExchangeBorrow()) return "exchangeReserve";
+      return null;
     }
     // normal：广告预算内仍尽量给主爬留预留（预算只剩 1 时不留，见 normalCap）
     return adsActive() < normalCap(q.ads) && _active < MAX_PUPPETEER_SLOTS ? "normal" : null;
@@ -568,6 +636,15 @@ function makeReleaser(kind: GrantKind): SlotRelease {
       if (_waitersNormal.length > 0 && adsActive() < normalCap(q.ads) && _active < MAX_PUPPETEER_SLOTS) {
         const next = _waitersNormal.shift()!;
         next(grant("normal"));
+        return;
+      }
+      // D-337 借用垫最底：上面三条都不成立（含 exchange 已满配额）时，广告侧整体闲置就把空槽
+      // 让给还在排队的 exchange。放在最后 = main/normal 永远优先，让路语义不变。
+      // 没有这一条的话，仅靠 tryClassifyGrant 改动只能救「到达即空闲」的请求；已经排在队里的
+      // 那些（现场快照 exchangeQ 深到 10）仍会干等到 30s 超时。
+      if (_waitersExchange.length > 0 && canGrantExchangeBorrow()) {
+        const next = _waitersExchange.shift()!;
+        next(grant("exchangeReserve"));
         return;
       }
       return;
