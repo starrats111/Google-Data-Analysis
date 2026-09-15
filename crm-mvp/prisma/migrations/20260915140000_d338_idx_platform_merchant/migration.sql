@@ -1,4 +1,4 @@
--- D-336：为「商家×平台」维度的佣金聚合补索引。
+-- D-338：为「商家×平台」维度的佣金聚合补索引。
 --
 -- 背景：我的商家 / 选取商家两个 tab 新增「待审核佣金」列（只做 LB），按
 -- (platform, merchant_id) 聚合 affiliate_transactions。原有索引都以 user_id 或

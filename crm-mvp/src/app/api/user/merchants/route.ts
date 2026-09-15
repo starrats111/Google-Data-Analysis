@@ -78,7 +78,7 @@ function rateSortValue(map: Map<string, MerchantRate>, platform: string, merchan
 }
 
 /**
- * D-336：LB 商家「待审核佣金」全员维度聚合（我的商家 / 选取商家两个 tab 共用）。
+ * D-338：LB 商家「待审核佣金」全员维度聚合（我的商家 / 选取商家两个 tab 共用）。
  *
  * 口径与结算查询页 pending_commission 完全一致：status NOT IN ('approved','rejected','paid')
  * 的 commission_amount 之和（见 api/user/data-center/settlement/route.ts）。
@@ -524,7 +524,7 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
     const connAccountMap = await loadConnectionAccountMap(pageMerchants, userId);
     // D-008 F-7=A：注入团队级 ATC 共享数据
     const teamAtcMap = await enrichWithTeamAtc(pageMerchants);
-    // D-336：LB 待审核佣金（非 LB 行为 null，前端渲染 "-"）
+    // D-338：LB 待审核佣金（非 LB 行为 null，前端渲染 "-"）
     const lbPendingMap = await batchLbPendingCommission(pageMerchants);
     const enriched = withLabels.map((m, i) => {
       const { _adStatus, _info } = pageSlice[i];
@@ -674,7 +674,7 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
     const connAccountMapAvail = await loadConnectionAccountMap(merchants, userId);
     // D-008 F-7=A：注入团队级 ATC 共享数据
     const teamAtcMapAvail = await enrichWithTeamAtc(merchants);
-    // D-336：LB 待审核佣金（非 LB 行为 null，前端渲染 "-"）
+    // D-338：LB 待审核佣金（非 LB 行为 null，前端渲染 "-"）
     const lbPendingMapAvail = await batchLbPendingCommission(merchants);
     for (const m of withLabels) {
       m.active_advertisers = advMap.get(`${m.platform}:${m.merchant_id}`) || 0;

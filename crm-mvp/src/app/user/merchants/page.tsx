@@ -130,7 +130,7 @@ interface Merchant {
   team_atc_region?: string | null;
   // D-004：API GET 返回的属于 current_user 的账号链接列表（多账号修复 BUG-1）
   connection_accounts?: ConnectionAccount[];
-  // D-336：LB 待审核佣金（全员维度）。非 LB 商家为 null
+  // D-338：LB 待审核佣金（全员维度）。非 LB 商家为 null
   lb_pending_commission?: number | null;
 }
 // D-004：MerchantIcon / MerchantNameCell 已抽到共享组件 @/components/MerchantNameCell
@@ -1080,7 +1080,7 @@ export default function MerchantsPage() {
     );
   }, [settlementRateMap]);
 
-  // D-336：LB 待审核佣金列渲染。仅 LB 商家有值（后端非 LB 返回 null → 显示「-」）。
+  // D-338：LB 待审核佣金列渲染。仅 LB 商家有值（后端非 LB 返回 null → 显示「-」）。
   // 口径同结算查询页 pending_commission；不设时间窗（待审核是当下余额，不是比率）。
   // 01 明确：只显示金额，不做阈值高亮。
   const renderLbPendingCol = useCallback((v: number | null | undefined) => {
@@ -1100,7 +1100,7 @@ export default function MerchantsPage() {
     { title: "佣金率", dataIndex: "commission_rate", width: 84, sorter: true, sortOrder: colSortOrder("commission_rate"), render: (v: string | null) => <CommissionCell v={v} /> },
     { title: "拒付率", dataIndex: "chargeback_rate", width: 76, align: "center" as const, render: renderChargebackRateCol },
     { title: "结算率", dataIndex: "settlement_rate", width: 76, align: "center" as const, sorter: true, sortOrder: colSortOrder("settlement_rate"), render: renderSettlementRateCol },
-    // D-336：LB 待审核佣金（只对 LB 出值，其余平台 "-"）
+    // D-338：LB 待审核佣金（只对 LB 出值，其余平台 "-"）
     { title: "待审核佣金", dataIndex: "lb_pending_commission", width: 100, align: "right" as const, render: renderLbPendingCol },
     { title: "支持地区", dataIndex: "supported_regions", width: 116, render: (v: unknown[] | null) => <RB r={v} /> },
     { title: "状态", dataIndex: "ad_status", width: 90, render: (v: string) => v === "ENABLED" ? <Tag color="green">已启用</Tag> : v === "PAUSED" ? <Tag color="orange">已暂停</Tag> : v === "NOT_SUBMITTED" ? <Tag color="blue">已领取</Tag> : <Tag>未知</Tag> },
@@ -1136,7 +1136,7 @@ export default function MerchantsPage() {
     { title: "佣金率", dataIndex: "commission_rate", width: 84, sorter: true, sortOrder: colSortOrder("commission_rate"), render: (v: string | null) => <CommissionCell v={v} /> },
     { title: "拒付率", dataIndex: "chargeback_rate", width: 76, align: "center" as const, render: renderChargebackRateCol },
     { title: "结算率", dataIndex: "settlement_rate", width: 76, align: "center" as const, sorter: true, sortOrder: colSortOrder("settlement_rate"), render: renderSettlementRateCol },
-    // D-336：LB 待审核佣金，与"我的商家"同列同口径（领取前就要看见）
+    // D-338：LB 待审核佣金，与"我的商家"同列同口径（领取前就要看见）
     { title: "待审核佣金", dataIndex: "lb_pending_commission", width: 100, align: "right" as const, render: renderLbPendingCol },
     { title: "支持地区", dataIndex: "supported_regions", width: 116, render: (v: unknown[] | null) => <RB r={v} /> },
     // C-091：选取商家 tab 也加 ATC 竞争度列，与"我的商家"完全一致——
