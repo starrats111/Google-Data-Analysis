@@ -78,6 +78,52 @@ function rateSortValue(map: Map<string, MerchantRate>, platform: string, merchan
 }
 
 /**
+ * D-336：LB 商家「待审核佣金」全员维度聚合（我的商家 / 选取商家两个 tab 共用）。
+ *
+ * 口径与结算查询页 pending_commission 完全一致：status NOT IN ('approved','rejected','paid')
+ * 的 commission_amount 之和（见 api/user/data-center/settlement/route.ts）。
+ *
+ * 三个刻意的取舍：
+ *  1. **只做 LB**（01 指定）。其余平台不查、不返回，前端也不出列。
+ *  2. **全员维度、不按 user_id 过滤**，与同页「拒付率/结算率」两列同源（07 决议 ⑥）。
+ *     选取商家里的商家尚未归属当前用户，按 user_id 聚合会让每行都是 0，
+ *     而这一列存在的意义正是"领之前就看见"，所以必须是商家×平台的固有属性。
+ *  3. **不加时间窗**：待审核是当下的资金余额（钱还压在平台手里），不是比率。
+ *     套上 2025-11-01 那种窗口会把窗口外仍未审核的老单算丢、低估风险。
+ *
+ * 只查当前页的 MID，避免全表聚合进热路径。
+ */
+async function batchLbPendingCommission(
+  merchants: { merchant_id: string; platform: string }[],
+): Promise<Map<string, number>> {
+  const lbMids = [...new Set(
+    merchants.filter(m => m.platform === "LB").map(m => m.merchant_id).filter(Boolean),
+  )];
+  if (lbMids.length === 0) return new Map<string, number>();
+
+  const placeholders = lbMids.map(() => "?").join(",");
+  const rows = await prisma.$queryRawUnsafe<Array<{
+    merchant_id: string; pending: number | string | null;
+  }>>(`
+    SELECT
+      merchant_id,
+      ROUND(SUM(CASE WHEN status NOT IN ('approved','rejected','paid')
+                     THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END), 2) AS pending
+    FROM affiliate_transactions
+    WHERE is_deleted = 0
+      AND platform = 'LB'
+      AND merchant_id IN (${placeholders})
+    GROUP BY merchant_id
+  `, ...lbMids);
+
+  const map = new Map<string, number>();
+  for (const r of rows) {
+    map.set(`LB:${r.merchant_id}`, Number(r.pending || 0));
+  }
+  return map;
+}
+
+/**
  * 批量匹配推荐/违规/政策标签
  * 用 merchant_name 做模糊匹配（大小写不敏感）
  */
@@ -478,6 +524,8 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
     const connAccountMap = await loadConnectionAccountMap(pageMerchants, userId);
     // D-008 F-7=A：注入团队级 ATC 共享数据
     const teamAtcMap = await enrichWithTeamAtc(pageMerchants);
+    // D-336：LB 待审核佣金（非 LB 行为 null，前端渲染 "-"）
+    const lbPendingMap = await batchLbPendingCommission(pageMerchants);
     const enriched = withLabels.map((m, i) => {
       const { _adStatus, _info } = pageSlice[i];
       const teamAtc = teamAtcMap.get(m.id.toString());
@@ -487,6 +535,9 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
         ad_campaign_name: _info?.campaignName || null,
         ad_campaign_id: _info?.campaignId || null,
         active_advertisers: advMap.get(`${m.platform}:${m.merchant_id}`) || 0,
+        lb_pending_commission: m.platform === "LB"
+          ? (lbPendingMap.get(`LB:${m.merchant_id}`) ?? 0)
+          : null,
         connection_accounts: buildConnectionAccounts((m as { connection_campaign_links?: unknown }).connection_campaign_links, connAccountMap),
         team_atc_count: teamAtc?.count ?? null,
         team_atc_synced_at: teamAtc?.syncedAt ?? null,
@@ -623,8 +674,13 @@ export const GET = withUser(async (req: NextRequest, { user }) => {
     const connAccountMapAvail = await loadConnectionAccountMap(merchants, userId);
     // D-008 F-7=A：注入团队级 ATC 共享数据
     const teamAtcMapAvail = await enrichWithTeamAtc(merchants);
+    // D-336：LB 待审核佣金（非 LB 行为 null，前端渲染 "-"）
+    const lbPendingMapAvail = await batchLbPendingCommission(merchants);
     for (const m of withLabels) {
       m.active_advertisers = advMap.get(`${m.platform}:${m.merchant_id}`) || 0;
+      (m as { lb_pending_commission?: number | null }).lb_pending_commission = m.platform === "LB"
+        ? (lbPendingMapAvail.get(`LB:${m.merchant_id}`) ?? 0)
+        : null;
       (m as { connection_accounts?: unknown }).connection_accounts = buildConnectionAccounts(
         (m as { connection_campaign_links?: unknown }).connection_campaign_links,
         connAccountMapAvail,

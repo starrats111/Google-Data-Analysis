@@ -811,6 +811,8 @@ model affiliate_transactions {
 
   @@unique([platform, transaction_id], map: "uk_platform_txn")
   @@index([user_id, merchant_id], map: "idx_user_merchant_id")
+  // D-336：商家×平台维度佣金聚合（待审核佣金列）。无此索引该聚合走全表扫描
+  @@index([platform, merchant_id], map: "idx_platform_merchant")
   @@index([user_id, transaction_time], map: "idx_user_txn_time")
   @@index([user_id, status], map: "idx_user_status")
   @@index([platform_connection_id], map: "idx_platform_conn")

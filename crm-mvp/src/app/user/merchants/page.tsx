@@ -130,6 +130,8 @@ interface Merchant {
   team_atc_region?: string | null;
   // D-004：API GET 返回的属于 current_user 的账号链接列表（多账号修复 BUG-1）
   connection_accounts?: ConnectionAccount[];
+  // D-336：LB 待审核佣金（全员维度）。非 LB 商家为 null
+  lb_pending_commission?: number | null;
 }
 // D-004：MerchantIcon / MerchantNameCell 已抽到共享组件 @/components/MerchantNameCell
 // 支持多账号 Popover；单账号场景行为不变
@@ -1078,6 +1080,18 @@ export default function MerchantsPage() {
     );
   }, [settlementRateMap]);
 
+  // D-336：LB 待审核佣金列渲染。仅 LB 商家有值（后端非 LB 返回 null → 显示「-」）。
+  // 口径同结算查询页 pending_commission；不设时间窗（待审核是当下余额，不是比率）。
+  // 01 明确：只显示金额，不做阈值高亮。
+  const renderLbPendingCol = useCallback((v: number | null | undefined) => {
+    if (v === null || v === undefined) return <span style={{ color: "#bfbfbf" }}>-</span>;
+    return (
+      <Tooltip title="LB 全员维度待审核佣金（钱还压在平台、未确认/未拒付/未支付），口径同结算查询页">
+        <span style={{ fontWeight: 600 }}>${Number(v).toFixed(2)}</span>
+      </Tooltip>
+    );
+  }, []);
+
   const claimedCols = useMemo(() => [
     { title: "商家名称", dataIndex: "merchant_name", width: 184, sorter: true, sortOrder: colSortOrder("merchant_name"), render: (_: string, rec: Merchant) => <MerchantNameCell rec={rec} /> },
     { title: "平台", dataIndex: "platform", width: 56, render: (v: string) => <Tag color={PC[v] || "default"} style={{ fontWeight: 600 }}>{v}</Tag> },
@@ -1086,6 +1100,8 @@ export default function MerchantsPage() {
     { title: "佣金率", dataIndex: "commission_rate", width: 84, sorter: true, sortOrder: colSortOrder("commission_rate"), render: (v: string | null) => <CommissionCell v={v} /> },
     { title: "拒付率", dataIndex: "chargeback_rate", width: 76, align: "center" as const, render: renderChargebackRateCol },
     { title: "结算率", dataIndex: "settlement_rate", width: 76, align: "center" as const, sorter: true, sortOrder: colSortOrder("settlement_rate"), render: renderSettlementRateCol },
+    // D-336：LB 待审核佣金（只对 LB 出值，其余平台 "-"）
+    { title: "待审核佣金", dataIndex: "lb_pending_commission", width: 100, align: "right" as const, render: renderLbPendingCol },
     { title: "支持地区", dataIndex: "supported_regions", width: 116, render: (v: unknown[] | null) => <RB r={v} /> },
     { title: "状态", dataIndex: "ad_status", width: 90, render: (v: string) => v === "ENABLED" ? <Tag color="green">已启用</Tag> : v === "PAUSED" ? <Tag color="orange">已暂停</Tag> : v === "NOT_SUBMITTED" ? <Tag color="blue">已领取</Tag> : <Tag>未知</Tag> },
     { title: "ATC竞争度", width: 148, render: renderAtcCompetitionCol },
@@ -1099,7 +1115,7 @@ export default function MerchantsPage() {
         <Popconfirm title="确认取消领取？" onConfirm={() => doRelease(rec.id)}><Button size="small" danger>取消领取</Button></Popconfirm>
       </Space>
     ) },
-  ], [doRelease, doRelaunch, showActiveAdv, sortField, sortOrder, renderAtcCompetitionCol, renderChargebackRateCol, renderSettlementRateCol, renderCategoryCol]);
+  ], [doRelease, doRelaunch, showActiveAdv, sortField, sortOrder, renderAtcCompetitionCol, renderChargebackRateCol, renderSettlementRateCol, renderLbPendingCol, renderCategoryCol]);
   const availCols = useMemo(() => [
     { title: "商家名称", dataIndex: "merchant_name", width: 188, sorter: true, sortOrder: colSortOrder("merchant_name"), render: (_: string, rec: Merchant) => {
       const hitRate = chargebackHitMap.get(`${rec.platform}-${rec.merchant_id}`);
@@ -1120,6 +1136,8 @@ export default function MerchantsPage() {
     { title: "佣金率", dataIndex: "commission_rate", width: 84, sorter: true, sortOrder: colSortOrder("commission_rate"), render: (v: string | null) => <CommissionCell v={v} /> },
     { title: "拒付率", dataIndex: "chargeback_rate", width: 76, align: "center" as const, render: renderChargebackRateCol },
     { title: "结算率", dataIndex: "settlement_rate", width: 76, align: "center" as const, sorter: true, sortOrder: colSortOrder("settlement_rate"), render: renderSettlementRateCol },
+    // D-336：LB 待审核佣金，与"我的商家"同列同口径（领取前就要看见）
+    { title: "待审核佣金", dataIndex: "lb_pending_commission", width: 100, align: "right" as const, render: renderLbPendingCol },
     { title: "支持地区", dataIndex: "supported_regions", width: 116, render: (v: unknown[] | null) => <RB r={v} /> },
     // C-091：选取商家 tab 也加 ATC 竞争度列，与"我的商家"完全一致——
     // 点 N 个 → 弹广告主列表 Modal → 操作列「查情报」跳转 /user/intelligence
@@ -1131,7 +1149,7 @@ export default function MerchantsPage() {
         {rec.policy_status === "prohibited" ? <Button size="small" disabled>禁止领取</Button> : <Button type="primary" size="small" icon={<CheckOutlined />} onClick={() => doClaim(rec)}>{rec.policy_status === "restricted" ? "领取(限制)" : "领取"}</Button>}
       </Space>
     ) },
-  ], [doClaim, showActiveAdv, sortField, sortOrder, chargebackHitMap, renderAtcCompetitionCol, renderChargebackRateCol, renderSettlementRateCol, renderCategoryCol]);
+  ], [doClaim, showActiveAdv, sortField, sortOrder, chargebackHitMap, renderAtcCompetitionCol, renderChargebackRateCol, renderSettlementRateCol, renderLbPendingCol, renderCategoryCol]);
   // C-019 拒付商家 Tab 的列定义
   const chargebackCols = useMemo(() => [
     { title: "平台", dataIndex: "platform", width: 80, render: (v: string) => <Tag color={PC[v] || "default"} style={{ fontWeight: 600 }}>{v}</Tag> },
