@@ -510,8 +510,11 @@ function resolveAndValidateUrl(rawUrl: string, baseUrl: string): string | null {
 
 /**
  * 判断两个 URL 是否相同（忽略末尾斜杠和片段标识符）
+ *
+ * D-337B 起对外导出：「取链接」要判断整条链有没有跳过（终点 === 输入），
+ * 用的正是这套语义，故复用而非再写一份。仅加 export，函数体未动。
  */
-function isSameUrl(url1: string, url2: string): boolean {
+export function isSameUrl(url1: string, url2: string): boolean {
   try {
     const u1 = new URL(url1)
     const u2 = new URL(url2)
