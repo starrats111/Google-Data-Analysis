@@ -76,6 +76,11 @@ interface TeamMerchant {
   category: string | null;
   active_advertisers: number;
   monthly_commission: number;
+  // D-340：本组全员、全时间的待审核佣金（不受页面「本月」区间影响）
+  pending_commission?: number | null;
+  // D-340：这笔钱由哪几个成员构成。running=在投（计入「在投人数」）；
+  // idle=仍持有商家但当前没在投；released=已退掉商家但钱还压在平台
+  pending_members?: { name: string; amount: number; state: "running" | "idle" | "released" }[];
   roi: number;
   total_cost: number;
 }
@@ -221,7 +226,7 @@ export default function TeamMerchantsPage() {
       width: 100,
       align: "center" as const,
       sorter: true,
-      sortOrder: sortField === "active_advertisers" ? (sortOrder === "asc" ? "ascend" : "descend") : undefined,
+      sortOrder: sortField === "active_advertisers" ? (sortOrder === "asc" ? "ascend" as const : "descend" as const) : undefined,
       render: (v: number, rec: TeamMerchant) =>
         v > 0 ? (
           <Button size="small" type="link" style={{ padding: 0, fontWeight: 600 }} onClick={() => showActiveAdv(rec)}>
@@ -237,12 +242,73 @@ export default function TeamMerchantsPage() {
       width: 110,
       align: "right" as const,
       sorter: true,
-      sortOrder: sortField === "monthly_commission" ? (sortOrder === "asc" ? "ascend" : "descend") : undefined,
+      sortOrder: sortField === "monthly_commission" ? (sortOrder === "asc" ? "ascend" as const : "descend" as const) : undefined,
       render: (v: number) => (
         <span style={{ color: v > 0 ? "#52c41a" : "#999", fontWeight: v > 0 ? 600 : 400 }}>
           ${v.toFixed(2)}
         </span>
       ),
+    },
+    {
+      // D-340：待审核佣金。注意本列**不跟随页头「数据区间：本月」**——01 要求的是
+      // 「商家的所有待审核佣金」，按月截断会偏小（结算查询页那列就是因为带时间窗而偏小）。
+      title: (
+        <Tooltip title="本组全员在该商家压在平台的全部待审核佣金（未确认／未拒付／未支付）。不限时间，也包含已停投的成员 —— 因此不跟随页头「本月」区间；比单人结算查询页的数字大">
+          <span style={{ borderBottom: "1px dashed #bfbfbf", cursor: "help" }}>待审核佣金</span>
+        </Tooltip>
+      ),
+      dataIndex: "pending_commission",
+      width: 124,
+      align: "right" as const,
+      render: (v: number | null | undefined, rec: TeamMerchant) => {
+        if (v === null || v === undefined) return <span style={{ color: "#bfbfbf" }}>-</span>;
+        const amount = (
+          <span style={{ color: v > 0 ? "#faad14" : "#999", fontWeight: v > 0 ? 600 : 400 }}>
+            ${v.toFixed(2)}
+          </span>
+        );
+        const list = rec.pending_members || [];
+        if (v <= 0 || list.length === 0) return amount;
+
+        // 不计入「在投人数」但仍有钱压在平台的成员数——「1 人」旁边挂着大额待审核时，
+        // 这个上标就是解释。实测主因是「仍持有商家但当前没在投」，不是「已退商家」。
+        const offCount = list.filter((m) => m.state !== "running").length;
+        return (
+          <Tooltip
+            title={
+              <div style={{ minWidth: 190 }}>
+                <div style={{ marginBottom: 4, opacity: 0.75, fontSize: 12 }}>
+                  {list.length} 名成员的待审核佣金（全时间）
+                </div>
+                {list.map((m) => (
+                  <div key={m.name} style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                    <span>
+                      {m.name}
+                      {m.state === "idle" && <span style={{ opacity: 0.65 }}>（未在投）</span>}
+                      {m.state === "released" && <span style={{ opacity: 0.65 }}>（已退商家）</span>}
+                    </span>
+                    <span style={{ fontWeight: 600 }}>${m.amount.toFixed(2)}</span>
+                  </div>
+                ))}
+                {offCount > 0 && (
+                  <div style={{ marginTop: 6, paddingTop: 4, borderTop: "1px solid rgba(255,255,255,.2)", fontSize: 12, opacity: 0.75 }}>
+                    其中 {offCount} 人不计入「在投人数」
+                  </div>
+                )}
+              </div>
+            }
+          >
+            <span style={{ cursor: "help", borderBottom: "1px dotted #d9d9d9" }}>
+              {amount}
+              {offCount > 0 && (
+                <sup style={{ color: "#8c8c8c", fontSize: 11, marginLeft: 2, fontWeight: 600 }}>
+                  +{offCount}
+                </sup>
+              )}
+            </span>
+          </Tooltip>
+        );
+      },
     },
     {
       title: "ROI",
