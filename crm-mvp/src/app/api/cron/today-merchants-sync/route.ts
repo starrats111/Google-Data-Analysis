@@ -162,8 +162,13 @@ async function backfillNewCampaigns(
 async function syncCampaignNames(
   nameByUserGcid: Map<string, Map<string, string>>,
   budgetByUserGcid: Map<string, Map<string, number>>,
-): Promise<{ updated: number; budgetUpdated: number; errors: string[] }> {
-  const out = { updated: 0, budgetUpdated: 0, errors: [] as string[] };
+): Promise<{ updated: number; budgetUpdated: number; errors: string[]; renamedUsers: Set<string> }> {
+  // renamedUsers：本轮真的发生过改名的用户。谷歌侧改名同步下来后必须对这些人重跑
+  // 一次 D-223 检测，否则名字变了而告警不弹 —— 归属仍按旧名的账号取链接/记佣金，
+  // 页面上「对应平台」只显示平台码（RW/MUI），肉眼看不出串号。
+  // 刻意不在这里自动重排归属：谷歌后台改个字符串就直接改 CRM 佣金归属没有确认环节，
+  // 由人在换链接页点「按系列名纠正归属」确认（CRM 内主动改名才自动重排）。
+  const out = { updated: 0, budgetUpdated: 0, errors: [] as string[], renamedUsers: new Set<string>() };
 
   const userIds = new Set([...nameByUserGcid.keys(), ...budgetByUserGcid.keys()]);
   for (const userId of userIds) {
@@ -196,6 +201,7 @@ async function syncCampaignNames(
           });
           if (nameChanged) {
             out.updated++;
+            out.renamedUsers.add(userId);
             log(`  [改名回写] campaign#${c.id}「${c.campaign_name}」→「${sheetName}」(user ${userId})`);
           }
           if (budgetChanged) {
@@ -425,6 +431,18 @@ export async function GET(req: NextRequest) {
     const nameSync = await syncCampaignNames(result.nameByUserGcid, result.budgetByUserGcid);
     if (nameSync.updated > 0) {
       log(`改名回写：更新 ${nameSync.updated} 条系列名`);
+      // D-339：改名同步下来后立刻重跑 D-223 名实不符检测。
+      // 上游 backfillNewCampaigns 里的那次只覆盖「本轮有新系列」的用户（touchedUsers），
+      // 且跑在改名回写之前 —— 谷歌给已存在的系列改名时，告警会整轮漏掉。
+      const { detectConnectionMismatch } = await import("@/lib/campaign-merchant-link");
+      for (const userId of nameSync.renamedUsers) {
+        try {
+          const n = await detectConnectionMismatch(BigInt(userId));
+          if (n > 0) log(`  [名实不符] user ${userId} 新增/维持 ${n} 条 D-223 告警（等人确认纠正归属）`);
+        } catch (e) {
+          log(`  [名实不符检测失败] user ${userId}: ${e instanceof Error ? e.message.slice(0, 80) : String(e)}`);
+        }
+      }
     }
     if (nameSync.budgetUpdated > 0) {
       log(`预算回写：更新 ${nameSync.budgetUpdated} 条系列预算（账户币种）`);
