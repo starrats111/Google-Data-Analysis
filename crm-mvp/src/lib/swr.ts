@@ -30,7 +30,13 @@ async function fetcher<T>(url: string): Promise<T> {
       }
       throw new Error("UNAUTHORIZED");
     }
-    throw new Error(`请求失败: ${res.status}`);
+    // D-341：非 2xx 时服务端的 message 原先被整个丢掉，前端只剩一个"请求失败: 429"。
+    // 像「上一次查询还没返回，请稍候再试」这种给人看的提示必须能传到界面上。
+    const msg = await res.json().then(
+      (j) => (j && typeof j.message === "string" ? j.message : ""),
+      () => "",
+    );
+    throw new Error(msg || `请求失败: ${res.status}`);
   }
   const json = await res.json();
   if (json.code !== 0) {

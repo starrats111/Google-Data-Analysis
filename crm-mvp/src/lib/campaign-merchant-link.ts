@@ -429,8 +429,23 @@ async function autoLinkCampaigns(userId: bigint): Promise<number> {
 
   if (unlinked.length === 0) return 0;
 
+  // D-341：只取「待关联系列名里真正出现过的 MID」，不再整户全量拉。
+  //   原实现 `where: { user_id, is_deleted: 0 }` 会把该用户全部商家读进内存（大户约 9 万行、
+  //   平均行宽 1107 字节），而下面两处消费方——merchantIndex 与 resolveMerchantByMidFallback——
+  //   都只按 MID 命中，多出来的行纯属白读。它是慢日志第一名（近 6 万行里 970 次），
+  //   user_merchants 表 2.7GB 对 512MB buffer pool，每次全量读都在挤掉热页，
+  //   顺带把「选取商家」搜索的缓存也冲掉（见 D-301 的后续：首搜 2.6~5.6s、重复搜 0.05~0.6s）。
+  //   candidates 本身有 take: 2000 上限，故 MID 集合天然有界。
+  //   实测 user_id=11：全量 4.58s → 按 MID 收窄 0.075s；user_id=27：2.90s → 0.002s。
+  const wantedMids = [...new Set(
+    unlinked
+      .map((c) => parseCampaignNameFull(c.campaign_name || "")?.mid)
+      .filter((mid): mid is string => !!mid),
+  )];
+  // 全部系列名都解析不出 MID 时，后面的循环也会整轮 continue，直接省掉这次查询。
+  if (wantedMids.length === 0) return 0;
   const userMerchants = await prisma.user_merchants.findMany({
-    where: { user_id: userId, is_deleted: 0 },
+    where: { user_id: userId, is_deleted: 0, merchant_id: { in: wantedMids } },
     select: { id: true, platform: true, merchant_id: true, merchant_name: true, status: true },
   });
   const merchantIndex = new Map<string, { id: bigint; platform: string; merchant_id: string }>(
