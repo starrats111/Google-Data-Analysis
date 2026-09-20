@@ -147,6 +147,7 @@ export async function DELETE(req: NextRequest) {
       String(article.id),
       article.slug || "",
       {
+        domain: site.domain,
         site_path: site.site_path,
         site_type: site.site_type,
         data_js_path: site.data_js_path,
