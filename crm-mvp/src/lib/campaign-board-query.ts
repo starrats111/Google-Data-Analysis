@@ -471,6 +471,9 @@ export async function queryCampaignBoard(
     id: String(c.id),
     userMerchantId: c.user_merchant_id ? String(c.user_merchant_id) : null,
     platformConnectionId: c.platform_connection_id ? String(c.platform_connection_id) : null,
+    // D-346：重投放按系列名里的投放日期接管
+    campaignName: c.campaign_name,
+    createdAt: c.created_at,
   }));
   let attributionPrimaryIdOf = new Map<string, string>();
   for (const c of allCampaigns) {
@@ -496,6 +499,7 @@ export async function queryCampaignBoard(
         user_merchant_id: true,
         platform_connection_id: true,
         created_at: true,
+        campaign_name: true, // D-346：解析系列名里的投放日期
       },
     });
     // 与上方筛选集合相同的 gcid 去重规则，保证组内组间 primaryId 一致
@@ -531,6 +535,9 @@ export async function queryCampaignBoard(
       id: String(c.id),
       userMerchantId: c.user_merchant_id ? String(c.user_merchant_id) : null,
       platformConnectionId: c.platform_connection_id ? String(c.platform_connection_id) : null,
+      // D-346：重投放按系列名里的投放日期接管
+      campaignName: c.campaign_name,
+      createdAt: c.created_at,
     }));
   }
 
