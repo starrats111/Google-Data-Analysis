@@ -119,7 +119,17 @@
 
 import fs from "fs";
 
-const MAX_PUPPETEER_SLOTS = 3;
+// 2026-09-13 实测（3.66GB 机器）：1 个 headless 浏览器 = 9 个进程 / 877MB
+//   （renderer 3×399MB + utility 2×188MB + gpu 98MB + browser/crashpad 3×192MB）。
+//   注意 `--renderer-process-limit=1` **没有生效**——5 处 launch 点都带了这个 flag，
+//   实测仍起 3 个 renderer，故不能按「1 槽=1 进程」估算内存。
+//   机器可留给 Chrome 的余量 ≈ 3660 - next(700) - mariadb(950) - 其他(200) ≈ 1800MB，
+//   故 MAX=3（≈2.6GB）必然超发：2026-09-12 09:15 事故现场就是 18-19 进程 / 2.1GB，
+//   MemAvailable 掉到 481MB、swap 2.25GB，next-server 事件循环被抢占，
+//   undici 的 AbortSignal 提前触发 → 所有联盟 fetch 报 fetch failed（见 D-334 前一条 commit）。
+//   取 2（≈1.76GB）：贴着余量上限，仍留 GC/缓冲空间。
+//   注意副作用：MAX=2 时 line ~272 的 `min(MAX-1, ...)` 会把低谷档换链接并发从 2 夹到 1。
+const MAX_PUPPETEER_SLOTS = 2;
 const RESERVED_MAIN_CRAWL_SLOTS = 1;
 const NORMAL_SLOTS = MAX_PUPPETEER_SLOTS - RESERVED_MAIN_CRAWL_SLOTS;  // 2
 const EXCHANGE_FAST_SLOTS = 1;
