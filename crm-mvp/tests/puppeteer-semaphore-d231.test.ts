@@ -54,14 +54,24 @@ async function expectRejectedWithCode(p: Promise<SlotRelease>, code: string, msg
   assert.equal((r as Error & { code?: string }).code, code, msg);
 }
 
-/** 占满全部 3 个槽（normal 吃满 2 个 + 主爬预留 1 个），返回释放器供用例按需放行 */
+/**
+ * 占满全池并返回释放器供用例按需放行。
+ *
+ * 2026-09-14：槽数从 stats 推导，不写死 3。D-335 把 MAX 3→2 时本文件因写死数字挂掉，
+ * 而本用例钉的是「满载该排队、有空槽才查内存」这个**时机**语义，与池子多大无关。
+ * 组成：normal 吃满自己的配额（normalMax），余下的预留槽由主爬占掉。
+ */
 async function fillPool(): Promise<SlotRelease[]> {
-  const slots = [
-    track(await acquirePuppeteerSlot(1000)),
-    track(await acquirePuppeteerSlot(1000)),
-    track(await acquireMainCrawlSlot(1000)),
-  ];
-  assert.equal(puppeteerSemaphoreStats().active, 3, "前提：池子已满");
+  const { max, normalMax } = puppeteerSemaphoreStats();
+  const slots: SlotRelease[] = [];
+  for (let i = 0; i < normalMax; i++) {
+    slots.push(track(await acquirePuppeteerSlot(1000)));
+  }
+  // 剩下的都是主爬预留，用主爬车道占掉（normal 摸不到预留槽）
+  for (let i = normalMax; i < max; i++) {
+    slots.push(track(await acquireMainCrawlSlot(1000)));
+  }
+  assert.equal(puppeteerSemaphoreStats().active, max, `前提：池子已满（${max} 槽）`);
   return slots;
 }
 
@@ -85,7 +95,7 @@ describe("D-231 内存反压只在真要 launch 那一刻判", () => {
 
     // 唤醒路径刻意不再查内存：一个约 350MB 的 Chrome 刚退出，正是内存最宽裕的时刻，
     // 此时再按「退出前」的读数把人拒掉，就又回到了事故当天那种自相矛盾的行为。
-    slots[2]();
+    slots[slots.length - 1]!();
     const granted = await pending;
     assert.equal(typeof granted, "function", "释放后排队者应当拿到槽位");
     track(granted);
