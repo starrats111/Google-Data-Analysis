@@ -5,6 +5,7 @@ import { ALL_COUNTRY_ENTRIES, getCountry } from "@/lib/countries";
 // CG: collabglow.com | PM: partnermatic.com | BSH: brandsparkhub.com | CF: creatorflare.com
 // MUI: ultrainfluence.com | EV: engagevantage.com | PB: partnerboost.com
 // FS: famesta.com（D-296：与 CG/CF/BSH/PM 同引擎的 SaaS 形态，四套接口全等价复用）
+// QUK: quk.com | BA: bonusarrive.com（D-349：两者都不是现有两套引擎，各自独立形态，见 platform-api.ts）
 // D-073：AD (AdsDoubler) 已全线下线，不再支持
 export const PLATFORMS = [
   { code: "CG", name: "CollabGlow", domain: "collabglow.com" },
@@ -18,6 +19,8 @@ export const PLATFORMS = [
   { code: "EV", name: "EngageVantage", domain: "engagevantage.com" },
   { code: "PB", name: "PartnerBoost", domain: "partnerboost.com" },
   { code: "FS", name: "Famesta", domain: "famesta.com" },
+  { code: "QUK", name: "Quk", domain: "quk.com" },
+  { code: "BA", name: "BonusArrive", domain: "bonusarrive.com" },
 ] as const;
 
 export type PlatformCode = (typeof PLATFORMS)[number]["code"];
@@ -87,6 +90,18 @@ const _PLATFORM_ALIAS_ENTRIES: [string, PlatformCode][] = [
   ["Famesta", "FS"], ["famesta", "FS"], ["FaMesta", "FS"],
   ["famesta.com", "FS"], ["www.famesta.com", "FS"], ["app.famesta.com", "FS"],
   ["api.famesta.com", "FS"],
+
+  // QUK = Quk (quk.com)。后台域名是 pub.quk.com，接口域名是 api.quk.com，两者都要认
+  ["QUK", "QUK"], ["quk", "QUK"], ["Quk", "QUK"],
+  ["quk.com", "QUK"], ["www.quk.com", "QUK"], ["pub.quk.com", "QUK"], ["api.quk.com", "QUK"],
+  // 内部口头/表格里常写成 "pub.quk"
+  ["pub.quk", "QUK"], ["Pub.Quk", "QUK"],
+
+  // BA = BonusArrive (bonusarrive.com)
+  ["BA", "BA"], ["ba", "BA"],
+  ["BonusArrive", "BA"], ["bonusarrive", "BA"], ["Bonusarrive", "BA"],
+  ["Bonus Arrive", "BA"], ["bonus arrive", "BA"],
+  ["bonusarrive.com", "BA"], ["www.bonusarrive.com", "BA"],
 ];
 
 export const PLATFORM_ALIASES: ReadonlyMap<string, PlatformCode> = new Map(_PLATFORM_ALIAS_ENTRIES);

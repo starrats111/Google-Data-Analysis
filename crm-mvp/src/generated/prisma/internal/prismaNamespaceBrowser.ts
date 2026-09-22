@@ -759,6 +759,7 @@ export const Google_mcc_accountsScalarFieldEnum = {
   developer_token: 'developer_token',
   is_active: 'is_active',
   is_deleted: 'is_deleted',
+  supersedes_id: 'supersedes_id',
   created_at: 'created_at',
   updated_at: 'updated_at'
 } as const

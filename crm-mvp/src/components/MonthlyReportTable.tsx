@@ -339,6 +339,14 @@ export default function MonthlyReportTable({
                   <td style={{ ...cellBase, background: rowBg, textAlign: "left" }}>
                     <Text strong style={{ fontSize: 12.5 }}>{m.mccName}</Text>
                     <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>{m.mccId}</Text>
+                    {/* D-348：并入了被接替旧号的花费，标注来源以便对账溯源 */}
+                    {!!m.mergedFromMccIds?.length && (
+                      <Tooltip title={`已并入被本号接替的旧号：${m.mergedFromMccIds.join("、")}${m.overrideFromMergedId ? "。本行纠正值沿用旧号遗留的手工值。" : ""}`}>
+                        <Tag color="orange" style={{ marginLeft: 6, fontSize: 10, lineHeight: "16px", padding: "0 4px" }}>
+                          含旧号 {m.mergedFromMccIds.join("、")}
+                        </Tag>
+                      </Tooltip>
+                    )}
                   </td>
                   <td style={{ ...cellBase, background: rowBg, textAlign: "center" }}>
                     <Tag color={m.currency === "CNY" ? "blue" : "green"} style={{ margin: 0 }}>{m.currency === "CNY" ? "人民币" : "美金"}</Tag>

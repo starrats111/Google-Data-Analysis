@@ -13,7 +13,9 @@
  *     + image proxy 单次 170s 占 slot，2 个 slot 全被吃光，katesomerville 主页
  *     主爬等 45s 拿不到 slot 直接 return null，UI 显示「爬取失败」假象。
  *   - 改造：MAX_SLOTS 2→3；其中 RESERVED_MAIN_CRAWL=1 个仅供主页主爬路径使用，
- *     普通调用（sitelinks 兜底 / image proxy）只能用剩下 NORMAL_SLOTS=2 个。
+ *     普通调用（sitelinks 兜底 / image proxy）只能用剩下 NORMAL_SLOTS 个。
+ *     ★ 2026-09-13 起 MAX 因内存实测回落到 2，故 NORMAL_SLOTS 现为 1；本段的
+ *     「2」是当年 MAX=3 时的数值，勿照此推算当前行为（见 MAX_PUPPETEER_SLOTS 注释）。
  *
  * D-028 收紧（2026-05-26 11:30，2C/3.6G 服务器 swap 抖动事件）：
  *   - 实证：MAX=3 时同时 3 个 Chrome 总 RSS≈2.1GB，吃掉 60% 内存，挤压 next/mariadb
@@ -119,9 +121,24 @@
 
 import fs from "fs";
 
-const MAX_PUPPETEER_SLOTS = 3;
+// 2026-09-13 实测（3.66GB 机器）：1 个 headless 浏览器 = 9 个进程 / 877MB
+//   （renderer 3×399MB + utility 2×188MB + gpu 98MB + browser/crashpad 3×192MB）。
+//   注意 `--renderer-process-limit=1` **没有生效**——5 处 launch 点都带了这个 flag，
+//   实测仍起 3 个 renderer，故不能按「1 槽=1 进程」估算内存。
+//   机器可留给 Chrome 的余量 ≈ 3660 - next(700) - mariadb(950) - 其他(200) ≈ 1800MB，
+//   故 MAX=3（≈2.6GB）必然超发：2026-09-12 09:15 事故现场就是 18-19 进程 / 2.1GB，
+//   MemAvailable 掉到 481MB、swap 2.25GB，next-server 事件循环被抢占，
+//   undici 的 AbortSignal 提前触发 → 所有联盟 fetch 报 fetch failed（见 D-334 前一条 commit）。
+//   取 2（≈1.76GB）：贴着余量上限，仍留 GC/缓冲空间。
+//   注意副作用：MAX=2 时 line ~272 的 `min(MAX-1, ...)` 会把低谷档换链接并发从 2 夹到 1。
+//   ★ 另一个未在上面提到的连带后果：高峰档 exchange=1 → ads=MAX-1=1，此时
+//   `normalCap(1)` 走「预算只剩 1 不再预留」分支返回 1，即 D-027 那个「主爬到达即有槽」
+//   的独占预留在高峰档不再成立，主爬与 sitelinks 兜底共用同一槽（主爬仍在唤醒队列排第一）。
+//   这是刻意接受的取舍：内存超发会拖死整台机器，主爬抢槽最多是慢。
+const MAX_PUPPETEER_SLOTS = 2;
 const RESERVED_MAIN_CRAWL_SLOTS = 1;
-const NORMAL_SLOTS = MAX_PUPPETEER_SLOTS - RESERVED_MAIN_CRAWL_SLOTS;  // 2
+// MAX=2 时为 1（D-027 原文按 MAX=3 写的 2，已随 MAX 下调失效）
+const NORMAL_SLOTS = MAX_PUPPETEER_SLOTS - RESERVED_MAIN_CRAWL_SLOTS;
 const EXCHANGE_FAST_SLOTS = 1;
 
 // D-067 安全网：任何 slot 被持有超过此时长则强制释放 + 唤醒队列。

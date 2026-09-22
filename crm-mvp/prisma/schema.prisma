@@ -780,10 +780,15 @@ model google_mcc_accounts {
   developer_token      String?  @db.VarChar(128) // Google Ads API Developer Token
   is_active            Int      @default(1) @db.TinyInt
   is_deleted           Int      @default(0) @db.TinyInt
+  // D-348：本号接替的旧 MCC 记录 id（代理商转移 / 删号重绑）。
+  // 报表把旧号的花费与遗留纠正值并入本号，避免同一笔广告费被两行各算一次。
+  supersedes_id        BigInt?  @db.UnsignedBigInt
   created_at           DateTime @default(now()) @db.DateTime(0)
   updated_at           DateTime @default(now()) @updatedAt @db.DateTime(0)
 
   @@index([user_id], map: "idx_user")
+  // 一个旧号只能被一个新号接替（NULL 不受唯一约束限制）
+  @@unique([supersedes_id], map: "uniq_mcc_supersedes")
 }
 
 // -----------------------------------------------------------

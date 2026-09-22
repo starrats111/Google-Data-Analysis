@@ -52,29 +52,49 @@ async function expectRejected(p: Promise<() => void>, msg: string) {
   assert.match((r as Error).message, /slot timeout/i, msg);
 }
 
+/**
+ * 2026-09-14：断言值一律从 stats 推导，不写死 2/3。
+ *   起因：D-335 因内存实测把 MAX_PUPPETEER_SLOTS 3→2，本文件 23 条断言集体挂掉，
+ *   而失败原因全是「测试写死了 MAX=3 的数字」，不是调度真的坏了。写死数字让这批测试
+ *   在容量调整时集体误报，反过来掩盖真正的回归。
+ *   钉的是**语义**（借预留能把池占满、总量不超 MAX、normal 摸不到预留槽），与 MAX 取值无关。
+ */
+const CAP = puppeteerSemaphoreStats();
+/** 共享池下换链接可占满的槽数 = 全池 */
+const POOL = CAP.max;
+/** normal 车道上限（= MAX - 主爬预留） */
+const NORMAL_MAX = CAP.normalMax;
+
+/** 连续申请 n 个槽，全部必须立即拿到 */
+async function fillWith(acquire: (ms: number) => Promise<() => void>, n: number, label: string) {
+  for (let i = 1; i <= n; i++) {
+    await expectImmediate(acquire(50), `${label} 第 ${i}/${n} 个`);
+  }
+}
+
 describe("D-199 换链接借用主爬预留槽", () => {
-  test("回归：快车道已占 + 弹性已占（active=2/3、主爬没排队）时，第三个换链接会话立即拿到槽", async () => {
-    await expectImmediate(acquireExchangeSlot(50), "第 1 个换链接应走快车道");
-    await expectImmediate(acquireExchangeSlot(50), "第 2 个换链接应走弹性配额");
+  test("回归：非预留槽已占满、主爬没排队时，下一个换链接会话仍立即拿到槽（借预留）", async () => {
+    // 先占满「不含主爬预留」的部分（快车道 + 弹性），此刻即线上超时现场：
+    // active = MAX-1，第 3 槽空着且无人排队，旧实现两条路全断会干等 30s。
+    await fillWith(acquireExchangeSlot, POOL - CAP.reservedMainCrawl, "占满非预留部分");
+    assert.equal(
+      puppeteerSemaphoreStats().active,
+      POOL - CAP.reservedMainCrawl,
+      `此时正是线上超时现场的 active=${POOL - CAP.reservedMainCrawl}/${POOL}`,
+    );
 
-    assert.equal(puppeteerSemaphoreStats().active, 2, "此时正是线上超时现场的 active=2/3");
-
-    // 修复前这里两条路全断（快车道封顶 1、normal 判定 _active<2 不成立），会干等 30s 后失败。
-    await expectImmediate(acquireExchangeSlot(50), "第 3 个换链接应借用空着的预留槽");
-    assert.equal(puppeteerSemaphoreStats().active, 3);
+    await expectImmediate(acquireExchangeSlot(50), "下一个换链接应借用空着的预留槽");
+    assert.equal(puppeteerSemaphoreStats().active, POOL, "借预留后应恰好占满全池");
   });
 
-  test("总并发上限仍是 3，借预留不会把池撑大", async () => {
-    await expectImmediate(acquireExchangeSlot(50), "1");
-    await expectImmediate(acquireExchangeSlot(50), "2");
-    await expectImmediate(acquireExchangeSlot(50), "3");
-    await expectRejected(acquireExchangeSlot(50), "第 4 个换链接必须被拒，否则内存上限失守");
+  test(`总并发上限仍是 MAX(${POOL})，借预留不会把池撑大`, async () => {
+    await fillWith(acquireExchangeSlot, POOL, "换链接");
+    await expectRejected(acquireExchangeSlot(50), `第 ${POOL + 1} 个换链接必须被拒，否则内存上限失守`);
   });
 
   test("主爬优先级不受影响：池被换链接占满后，第一个释放的槽归主爬而不是排队中的换链接", async () => {
-    const r1 = await expectImmediate(acquireExchangeSlot(50), "1");
-    await expectImmediate(acquireExchangeSlot(50), "2");
-    await expectImmediate(acquireExchangeSlot(50), "3");
+    const r1 = await expectImmediate(acquireExchangeSlot(50), "换链接 1");
+    await fillWith(acquireExchangeSlot, POOL - 1, "换链接占满余下");
 
     let mainGot = false;
     const mainP = acquireMainCrawlSlot(2000).then((rel) => {
@@ -99,16 +119,21 @@ describe("D-199 换链接借用主爬预留槽", () => {
     await exchangeP;
   });
 
-  test("normal 车道语义不变：仍只能用 2 个槽，不会因为新增借预留而摸到预留槽", async () => {
-    await expectImmediate(acquirePuppeteerSlot(50), "normal 1");
-    await expectImmediate(acquirePuppeteerSlot(50), "normal 2");
-    await expectRejected(acquirePuppeteerSlot(50), "normal 第 3 个必须被拒（预留槽只给主爬和换链接）");
+  test(`normal 车道语义不变：仍只能用 normalMax(${NORMAL_MAX}) 个槽，不会因为新增借预留而摸到预留槽`, async () => {
+    await fillWith(acquirePuppeteerSlot, NORMAL_MAX, "normal");
+    await expectRejected(
+      acquirePuppeteerSlot(50),
+      `normal 第 ${NORMAL_MAX + 1} 个必须被拒（预留槽只给主爬和换链接）`,
+    );
   });
 
   test("PUPPETEER_EXCHANGE_RESERVE_OFF=1 可单独回滚到旧行为", async () => {
     process.env.PUPPETEER_EXCHANGE_RESERVE_OFF = "1";
-    await expectImmediate(acquireExchangeSlot(50), "快车道不受回滚开关影响");
-    await expectImmediate(acquireExchangeSlot(50), "弹性配额不受回滚开关影响");
-    await expectRejected(acquireExchangeSlot(50), "回滚开关打开时，第 3 个换链接应恢复成拿不到槽");
+    // 回滚后换链接只能用「非预留」部分：快车道 + 弹性，拿不到预留槽。
+    await fillWith(acquireExchangeSlot, POOL - CAP.reservedMainCrawl, "回滚后换链接");
+    await expectRejected(
+      acquireExchangeSlot(50),
+      `回滚开关打开时，第 ${POOL - CAP.reservedMainCrawl + 1} 个换链接应恢复成拿不到槽`,
+    );
   });
 });

@@ -531,14 +531,24 @@ function MccAccountsTab() {
   const [form] = Form.useForm();
   // D-276: 本组 Token 池服务邮箱（需在 Google Ads 后台授权的 client_email 列表）
   const [saEmails, setSaEmails] = useState<string[]>([]);
+  // D-348: 可作为「接替旧号」的候选（已删 / 已停用的 MCC）
+  const [supersedeCandidates, setSupersedeCandidates] = useState<Record<string, unknown>[]>([]);
 
   const fetchData = async () => {
     const res = await fetch("/api/user/settings/mcc").then((r) => r.json());
     if (res.code === 0) setAccounts(res.data);
   };
 
+  const fetchCandidates = async () => {
+    try {
+      const res = await fetch("/api/user/settings/mcc?candidates=1").then((r) => r.json());
+      if (res.code === 0) setSupersedeCandidates(res.data || []);
+    } catch { /* 下拉候选取不到不该阻断 MCC 管理本身 */ }
+  };
+
   useEffect(() => {
     fetchData();
+    fetchCandidates();
     fetch("/api/user/team/token-pool/emails")
       .then((r) => r.json())
       .then((res) => { if (res.code === 0) setSaEmails(res.data || []); })
@@ -554,11 +564,14 @@ function MccAccountsTab() {
     if (method === "PUT" && body.developer_token === "") {
       delete body.developer_token;
     }
+    // D-348：清空下拉后 antd 给 undefined，JSON.stringify 会把键丢掉、后端读不到「要清除」，
+    // 所以显式转成 null
+    if (body.supersedes_id === undefined) body.supersedes_id = null;
     try {
       const res = await fetch("/api/user/settings/mcc", {
         method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
       }).then((r) => r.json());
-      if (res.code === 0) { message.success("保存成功"); setModalOpen(false); fetchData(); }
+      if (res.code === 0) { message.success("保存成功"); setModalOpen(false); fetchData(); fetchCandidates(); }
       else message.error(res.message);
     } catch {
       message.error("网络异常，保存失败，请重试");
@@ -591,7 +604,11 @@ function MccAccountsTab() {
             form.resetFields();
             // 编辑时不回填 developer_token（密码字段），避免误清空
             const { developer_token: _dt, service_account_json: _sa, ...rest } = record;
-            form.setFieldsValue(rest);
+            // D-348：Select 的 value 是字符串，BigInt 序列化结果统一转一下才能选中
+            form.setFieldsValue({
+              ...rest,
+              supersedes_id: rest.supersedes_id != null ? String(rest.supersedes_id) : undefined,
+            });
             setModalOpen(true);
           }}>编辑</Button>
           <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id as string)}>
@@ -619,6 +636,24 @@ function MccAccountsTab() {
           </Form.Item>
           <Form.Item name="currency" label="货币" initialValue="USD">
             <Select options={[{ value: "USD", label: "USD" }, { value: "CNY", label: "CNY" }]} />
+          </Form.Item>
+          {/* D-348：代理商转移 / 删号重绑时声明接替关系，报表据此把旧号并入本号 */}
+          <Form.Item
+            name="supersedes_id"
+            label="此号接替（选填）"
+            extra="代理商转移账号或删号重绑时选上旧号：结算报表会把旧号当月的广告费与遗留纠正值并入本号，避免同一笔钱被两行各算一次。"
+          >
+            <Select
+              allowClear
+              placeholder="无（本号不接替任何旧号）"
+              options={supersedeCandidates
+                .filter((c) => !c.takenBy || String(c.takenBy) === String(editItem?.id ?? ""))
+                .map((c) => ({
+                  value: String(c.id),
+                  label: `${c.mcc_name || c.mcc_id} · ${c.mcc_id}${c.is_deleted ? "（已删）" : "（已停用）"}`,
+                }))}
+              notFoundContent="没有已删 / 已停用的 MCC 可选"
+            />
           </Form.Item>
           {/* D-276: 上传凭证 JSON 改为提示授权 Token 池服务邮箱（凭证统一由组长在 Token 池维护） */}
           <Form.Item label="服务账号授权">

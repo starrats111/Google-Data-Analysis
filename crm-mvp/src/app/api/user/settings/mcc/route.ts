@@ -62,13 +62,82 @@ async function validateMccCredentials(
   }
 }
 
+/**
+ * D-348：校验「本号接替哪个旧号」的指向。
+ * 通过返回 null（并带回规范化后的值）；失败返回面向用户的中文错误。
+ * 约束：同属本人 / 不能指向自己 / 不能成环 / 一个旧号只能被一个新号接替。
+ */
+async function validateSupersedes(
+  rawValue: unknown,
+  userId: bigint,
+  selfId: bigint | null,
+): Promise<{ error: string } | { value: bigint | null }> {
+  if (rawValue === null || rawValue === undefined || rawValue === "") return { value: null };
+  const targetId = toBigIntId(rawValue);
+  if (!targetId) return { error: "「接替旧号」的 ID 格式无效" };
+  if (selfId != null && targetId === selfId) return { error: "不能设置为接替自己" };
+
+  const target = await prisma.google_mcc_accounts.findUnique({
+    where: { id: targetId },
+    select: { id: true, user_id: true, mcc_id: true },
+  });
+  if (!target) return { error: "「接替旧号」指向的 MCC 不存在" };
+  if (target.user_id !== userId) return { error: "「接替旧号」只能选择你自己名下的 MCC" };
+
+  // 一个旧号只能被一个新号接替（DB 有唯一索引兜底，这里给可读的提示）
+  const taken = await prisma.google_mcc_accounts.findFirst({
+    where: { supersedes_id: targetId, ...(selfId != null ? { id: { not: selfId } } : {}) },
+    select: { mcc_id: true, mcc_name: true },
+  });
+  if (taken) {
+    return { error: `旧号 ${target.mcc_id} 已被「${taken.mcc_name || taken.mcc_id}」接替，不能重复指向。` };
+  }
+
+  // 成环保护：沿 target 往上走，若回到 selfId 即成环
+  if (selfId != null) {
+    const seen = new Set<string>([String(targetId)]);
+    let cursor = target.id;
+    for (;;) {
+      const row = await prisma.google_mcc_accounts.findUnique({
+        where: { id: cursor },
+        select: { supersedes_id: true },
+      });
+      const next = row?.supersedes_id;
+      if (next == null) break;
+      if (next === selfId) return { error: "接替关系不能成环" };
+      const key = String(next);
+      if (seen.has(key)) break; // 已有脏环，不在本次校验范围内
+      seen.add(key);
+      cursor = next;
+    }
+  }
+  return { value: targetId };
+}
+
 // 获取 MCC 账户列表
+// D-348：?candidates=1 返回可作为「接替旧号」的记录（含已软删 / 已停用），供下拉选择
 export async function GET(req: NextRequest) {
   const user = getUserFromRequest(req);
   if (!user) return apiError("未授权", 401);
 
+  const userId = BigInt(user.userId);
+  if (req.nextUrl.searchParams.get("candidates") === "1") {
+    const rows = await prisma.google_mcc_accounts.findMany({
+      where: { user_id: userId, OR: [{ is_deleted: 1 }, { is_active: 0 }] },
+      select: { id: true, mcc_id: true, mcc_name: true, is_deleted: true, is_active: true, supersedes_id: true },
+      orderBy: { created_at: "desc" },
+    });
+    // 已被别的号接替的旧号不再作为候选（一个旧号只能被接替一次）
+    const takenRows = await prisma.google_mcc_accounts.findMany({
+      where: { user_id: userId, supersedes_id: { not: null } },
+      select: { id: true, supersedes_id: true },
+    });
+    const taken = new Map(takenRows.map((r) => [String(r.supersedes_id), String(r.id)]));
+    return apiSuccess(serializeData(rows.map((r) => ({ ...r, takenBy: taken.get(String(r.id)) ?? null }))));
+  }
+
   const accounts = await prisma.google_mcc_accounts.findMany({
-    where: { user_id: BigInt(user.userId), is_deleted: 0 },
+    where: { user_id: userId, is_deleted: 0 },
     orderBy: { created_at: "desc" },
   });
   return apiSuccess(serializeData(accounts));
@@ -79,7 +148,7 @@ export async function POST(req: NextRequest) {
   const user = getUserFromRequest(req);
   if (!user) return apiError("未授权", 401);
 
-  const { mcc_id, mcc_name, currency, service_account_json, sheet_url, developer_token } = await req.json();
+  const { mcc_id, mcc_name, currency, service_account_json, sheet_url, developer_token, supersedes_id } = await req.json();
   if (!mcc_id) return apiError("MCC ID 不能为空");
 
   // 2026-07-10 根治：MCC 客户编号统一规范化为 XXX-XXX-XXXX。
@@ -110,6 +179,10 @@ export async function POST(req: NextRequest) {
     if (errMsg) return apiError(errMsg);
   }
 
+  // D-348：新建时可声明本号接替哪个旧号（代理商转移 / 删号重绑）
+  const sup = await validateSupersedes(supersedes_id, BigInt(user.userId), null);
+  if ("error" in sup) return apiError(sup.error);
+
   const account = await prisma.google_mcc_accounts.create({
     data: {
       user_id: BigInt(user.userId),
@@ -119,6 +192,7 @@ export async function POST(req: NextRequest) {
       service_account_json: sa,
       sheet_url: sheet_url?.trim() || null,
       developer_token: developer_token?.trim() || null,
+      supersedes_id: sup.value,
     },
   });
 
@@ -129,7 +203,13 @@ export async function POST(req: NextRequest) {
     action: "mcc_create",
     targetType: "mcc",
     targetId: account.id,
-    detail: { mcc_id: normalizedMccId, mcc_name: mcc_name?.trim() || null, sa_email: extractSaEmail(sa), has_token: !!(developer_token?.trim()) },
+      detail: {
+      mcc_id: normalizedMccId,
+      mcc_name: mcc_name?.trim() || null,
+      sa_email: extractSaEmail(sa),
+      has_token: !!(developer_token?.trim()),
+      supersedes_id: sup.value != null ? String(sup.value) : null,
+    },
     req,
   });
 
@@ -142,7 +222,7 @@ export async function PUT(req: NextRequest) {
   const user = getUserFromRequest(req);
   if (!user) return apiError("未授权", 401);
 
-  const { id, mcc_name, currency, service_account_json, sheet_url, developer_token, is_active } = await req.json();
+  const { id, mcc_name, currency, service_account_json, sheet_url, developer_token, is_active, supersedes_id } = await req.json();
   if (!id) return apiError("缺少 ID");
   const parsedId = toBigIntId(id);
   if (!parsedId) return apiError("ID 格式无效");
@@ -162,6 +242,12 @@ export async function PUT(req: NextRequest) {
   if (sheet_url !== undefined) data.sheet_url = sheet_url;
   if (developer_token !== undefined && developer_token !== "") data.developer_token = developer_token.trim();
   if (is_active !== undefined) data.is_active = is_active;
+  // D-348：编辑已有 MCC 时也能设/清「接替旧号」——易诺这类已经建好的号靠这里补指向
+  if (supersedes_id !== undefined) {
+    const sup = await validateSupersedes(supersedes_id, BigInt(user.userId), parsedId);
+    if ("error" in sup) return apiError(sup.error);
+    data.supersedes_id = sup.value;
+  }
 
   // 加固①：若本次会修改服务账号，落库前用「待保存的 SA + 最终生效的 token」做只读测试
   const saChanged = service_account_json !== undefined && service_account_json !== null && service_account_json.trim() !== "";

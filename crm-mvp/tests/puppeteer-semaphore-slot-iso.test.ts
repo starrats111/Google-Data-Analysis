@@ -71,37 +71,112 @@ async function expectRejected(p: Promise<SlotRelease>, msg: string) {
   assert.match((r as Error).message, /slot timeout/i, msg);
 }
 
+/**
+ * 2026-09-14：配额一律向实现查询，不写死 1/2/3。
+ *
+ * 起因：D-335 因内存实测把 MAX_PUPPETEER_SLOTS 3→2，本文件 15 条断言集体挂掉，
+ * 而失败原因全是「测试写死了 MAX=3 时的配额数字」。写死数字让这批测试在容量调整时
+ * 集体误报，反过来掩盖真正的调度回归——正是它们本该拦住的那类问题。
+ *
+ * ⚠️ MAX=2 时 D-298 双档配额**整体塌平**：夹紧区间是 [1, MAX-1] = [1, 1]，
+ * 于是高峰与低谷都是 换链接 1 / 广告 1，EXCHANGE_SLOTS_PEAK/OFFPEAK 无论设成
+ * 0、3 还是非法值都没有任何效果（实测确认）。D-298 那句「白天让广告、夜间让换链接」
+ * 在 MAX=2 下不成立，不是配置错了，是池子太小分不出两档。
+ * 下面 `quotasCollapsed` 显式钉住这个事实：等哪天 MAX 回到 ≥3，双档差异会自动恢复，
+ * 该断言也会自动切回「两档必须不同」那一支，不需要再改测试。
+ */
+function quotasFor(mode: "peak" | "offpeak") {
+  mode === "peak" ? peakAlways() : offpeakAlways();
+  const s = puppeteerSemaphoreStats();
+  return {
+    exchange: s.quotaExchange,
+    ads: s.quotaAds,
+    max: s.max,
+    // normal 的**有效**上限随档位变，不等于 stats.normalMax（那是 D-027 的静态常量
+    // MAX-预留）。镜像实现里的 normalCap()：ads 预算 >1 时给主爬留 1 个预留，
+    // 恰好为 1 时不留（否则 normal 恒为 0 被饿死）。
+    normalCap: s.quotaAds > s.reservedMainCrawl ? s.quotaAds - s.reservedMainCrawl : s.quotaAds,
+  };
+}
+const PEAK = quotasFor("peak");
+const OFFPEAK = quotasFor("offpeak");
+// quotasFor 会写 env 钉档位，模块级探测完必须清掉，否则污染第一个用例的初始状态
+delete process.env.EXCHANGE_ISOLATION_WORK_HOURS;
+delete process.env.EXCHANGE_ISOLATION_WORK_DAYS;
+/** 池子小到分不出两档（MAX ≤ 2）时两档配额相同 */
+const quotasCollapsed = PEAK.exchange === OFFPEAK.exchange && PEAK.ads === OFFPEAK.ads;
+
+/** 连续申请 n 个槽，全部必须立即拿到 */
+async function fillWith(
+  acquire: (ms: number) => Promise<SlotRelease>,
+  n: number,
+  label: string,
+) {
+  for (let i = 1; i <= n; i++) {
+    await expectImmediate(acquire(50), `${label} 第 ${i}/${n} 个`);
+  }
+}
+
 describe("高峰档（工作日白天）：广告 2 / 换链接 1", () => {
-  test("换链接并发封顶 1，第 2 个被拒（哪怕池子还有空槽）", async () => {
+  test(`换链接并发封顶 quotaExchange(${PEAK.exchange})，超出的被拒（哪怕池子还有空槽）`, async () => {
     peakAlways();
-    await expectImmediate(acquireExchangeSlot(50), "第 1 个换链接应拿到专属槽");
-    assert.equal(puppeteerSemaphoreStats().active, 1, "池子明明还有 2 个空槽");
-    await expectRejected(acquireExchangeSlot(50), "第 2 个换链接必须被拒——不得再借弹性/预留");
+    await fillWith(acquireExchangeSlot, PEAK.exchange, "换链接");
+    assert.equal(
+      puppeteerSemaphoreStats().active,
+      PEAK.exchange,
+      `池子明明还有 ${PEAK.max - PEAK.exchange} 个空槽`,
+    );
+    await expectRejected(
+      acquireExchangeSlot(50),
+      `第 ${PEAK.exchange + 1} 个换链接必须被拒——不得再借弹性/预留`,
+    );
   });
 
-  test("换链接占着专属槽时，广告链路（normal+主爬）仍能拿满自己的 2 槽", async () => {
+  test(`换链接占着专属槽时，广告链路（normal+主爬）仍能拿满自己的 ${PEAK.ads} 槽`, async () => {
     peakAlways();
-    await expectImmediate(acquireExchangeSlot(50), "换链接占专属槽");
-    // 先 normal 后 main：normal 授予时 ads 池空（预留完整），main 用掉预留——三车道共存
-    await expectImmediate(acquirePuppeteerSlot(50), "normal（sitelinks 兜底）应有槽");
-    await expectImmediate(acquireMainCrawlSlot(50), "主爬应立即有槽（用预留）");
-    assert.equal(puppeteerSemaphoreStats().active, 3, "三条车道各归各位");
+    await fillWith(acquireExchangeSlot, PEAK.exchange, "换链接占专属槽");
+    // 先 normal 后 main：normal 授予时 ads 池空（预留完整），main 用掉预留——三车道共存。
+    // ads 预算为 1 时不再留预留（见 normalCap），此时 normal 就吃掉那 1 槽，主爬没有余量。
+    await fillWith(acquirePuppeteerSlot, PEAK.normalCap, "normal（sitelinks 兜底）");
+    const mainRoom = PEAK.ads - PEAK.normalCap;
+    if (mainRoom > 0) {
+      await fillWith(acquireMainCrawlSlot, mainRoom, "主爬（用预留）");
+    }
+    assert.equal(
+      puppeteerSemaphoreStats().active,
+      PEAK.exchange + PEAK.ads,
+      "各条车道应恰好占满自己的配额",
+    );
   });
 
-  test("广告侧吃不掉换链接的专属槽（ads 封顶 2），换链接随到随有", async () => {
+  test(`广告侧吃不掉换链接的专属槽（ads 封顶 ${PEAK.ads}），换链接随到随有`, async () => {
     peakAlways();
-    await expectImmediate(acquireMainCrawlSlot(50), "主爬 1");
-    await expectImmediate(acquireMainCrawlSlot(50), "主爬 2（ads 池上限）");
-    await expectRejected(acquireMainCrawlSlot(50), "第 3 个主爬必须被拒——那是换链接的专属槽");
+    await fillWith(acquireMainCrawlSlot, PEAK.ads, "主爬");
+    await expectRejected(
+      acquireMainCrawlSlot(50),
+      `第 ${PEAK.ads + 1} 个主爬必须被拒——那是换链接的专属槽`,
+    );
     await expectRejected(acquirePuppeteerSlot(50), "normal 同样不得越界");
     await expectImmediate(acquireExchangeSlot(50), "换链接的专属槽必须还空着、随到随有");
   });
 
-  test("normal 在 ads 池内仍给主爬留 1 个预留（D-027 语义不丢）", async () => {
+  test("normal 在 ads 池内仍给主爬留预留（D-027 语义不丢）", async () => {
     peakAlways();
-    await expectImmediate(acquirePuppeteerSlot(50), "normal 1");
-    await expectRejected(acquirePuppeteerSlot(50), "normal 2 必须被拒——ads 池内要给主爬留预留");
-    await expectImmediate(acquireMainCrawlSlot(50), "主爬到达即有槽");
+    await fillWith(acquirePuppeteerSlot, PEAK.normalCap, "normal");
+    await expectRejected(
+      acquirePuppeteerSlot(50),
+      `normal 第 ${PEAK.normalCap + 1} 个必须被拒——ads 池内要给主爬留预留`,
+    );
+    // ads 预算降到 1 时按设计不再留预留（normalCap），此时预留槽已被 normal 吃掉，
+    // 主爬拿不到是**预期行为**，不是回归；D-027 的「主爬随到随有」只在 ads ≥2 时成立。
+    if (PEAK.ads > PEAK.normalCap) {
+      await expectImmediate(acquireMainCrawlSlot(50), "主爬到达即有槽");
+    } else {
+      await expectRejected(
+        acquireMainCrawlSlot(50),
+        `ads 预算只剩 ${PEAK.ads} 时不留预留，主爬需排队（设计取舍，见 normalCap）`,
+      );
+    }
   });
 
   test("换链接释放专属槽后，排队中的换链接被唤醒接棒", async () => {
@@ -121,39 +196,64 @@ describe("高峰档（工作日白天）：广告 2 / 换链接 1", () => {
 });
 
 describe("D-298 低谷档（夜间 / 周末）：换链接 2 / 广告 1", () => {
-  test("换链接拿到 2 槽，第 3 个才被拒（高峰只给 1）", async () => {
+  test(`换链接拿到 quotaExchange(${OFFPEAK.exchange}) 槽，超出的被拒`, async () => {
     offpeakAlways();
-    await expectImmediate(acquireExchangeSlot(50), "换链接 1");
-    await expectImmediate(acquireExchangeSlot(50), "换链接 2 —— 低谷档就该比高峰多");
-    assert.equal(puppeteerSemaphoreStats().active, 2);
-    await expectRejected(acquireExchangeSlot(50), "第 3 个越界：那 1 槽留给广告");
+    await fillWith(acquireExchangeSlot, OFFPEAK.exchange, "换链接");
+    assert.equal(puppeteerSemaphoreStats().active, OFFPEAK.exchange);
+    await expectRejected(
+      acquireExchangeSlot(50),
+      `第 ${OFFPEAK.exchange + 1} 个越界：余下 ${OFFPEAK.ads} 槽留给广告`,
+    );
   });
 
-  test("广告降到 1 槽，但绝不为 0——主爬随到随有", async () => {
+  test("低谷档应比高峰给换链接更多槽——MAX ≤ 2 时两档必然塌平", async () => {
+    if (quotasCollapsed) {
+      // 这不是配置错误：夹紧区间 [1, MAX-1] 在 MAX=2 时只剩 [1,1]，两档无从区分。
+      assert.equal(
+        OFFPEAK.exchange,
+        PEAK.exchange,
+        "MAX ≤ 2：两档配额相同是数学必然（见文件头注释）",
+      );
+      assert.equal(PEAK.max, 2, "塌平只应发生在 MAX=2；MAX 更大却塌平说明夹紧逻辑坏了");
+      return;
+    }
+    assert.ok(
+      OFFPEAK.exchange > PEAK.exchange,
+      `低谷档换链接配额(${OFFPEAK.exchange})必须大于高峰(${PEAK.exchange})——D-298 的核心意图`,
+    );
+    assert.ok(OFFPEAK.ads < PEAK.ads, "对应地，低谷档广告配额应小于高峰");
+  });
+
+  test("广告配额绝不为 0——主爬随到随有", async () => {
     offpeakAlways();
-    await expectImmediate(acquireExchangeSlot(50), "换链接 1");
-    await expectImmediate(acquireExchangeSlot(50), "换链接 2");
-    await expectImmediate(acquireMainCrawlSlot(50), "广告最后 1 槽必须还在，不能被换链接吃掉");
-    assert.equal(puppeteerSemaphoreStats().active, 3);
+    await fillWith(acquireExchangeSlot, OFFPEAK.exchange, "换链接");
+    assert.ok(OFFPEAK.ads >= 1, "广告侧任何档位都不许被配成 0");
+    await expectImmediate(acquireMainCrawlSlot(50), "广告的槽必须还在，不能被换链接吃掉");
+    assert.equal(puppeteerSemaphoreStats().active, OFFPEAK.exchange + 1);
   });
 
   test("广告预算只剩 1 时不再给主爬预留，否则 normal 恒为 0 被饿死", async () => {
     offpeakAlways();
-    await expectImmediate(acquirePuppeteerSlot(50), "normal 必须拿得到——预算 1 时不留预留");
-    await expectRejected(acquirePuppeteerSlot(50), "但也只有这 1 个，第 2 个越界");
+    await fillWith(acquirePuppeteerSlot, OFFPEAK.normalCap, "normal（预算 1 时不留预留）");
+    await expectRejected(
+      acquirePuppeteerSlot(50),
+      `normal 只有 ${OFFPEAK.normalCap} 个，第 ${OFFPEAK.normalCap + 1} 个越界`,
+    );
   });
 
   test("统计口径暴露当前档位与配额", async () => {
     offpeakAlways();
     const s = puppeteerSemaphoreStats();
     assert.equal(s.quotaProfile, "offpeak");
-    assert.equal(s.quotaExchange, 2);
-    assert.equal(s.quotaAds, 1);
+    assert.equal(s.quotaExchange, OFFPEAK.exchange);
+    assert.equal(s.quotaAds, OFFPEAK.ads);
+    assert.equal(s.quotaExchange + s.quotaAds, s.max, "两条车道配额之和应恰好等于全池");
     peakAlways();
     const p = puppeteerSemaphoreStats();
     assert.equal(p.quotaProfile, "peak");
-    assert.equal(p.quotaExchange, 1);
-    assert.equal(p.quotaAds, 2);
+    assert.equal(p.quotaExchange, PEAK.exchange);
+    assert.equal(p.quotaAds, PEAK.ads);
+    assert.equal(p.quotaExchange + p.quotaAds, p.max, "高峰档同样应铺满全池");
   });
 });
 
@@ -173,22 +273,25 @@ describe("D-298 档位判定与配额夹紧", () => {
     process.env.EXCHANGE_SLOTS_OFFPEAK = "0";
     const s = puppeteerSemaphoreStats();
     assert.equal(s.quotaExchange, 1, "0 必须夹成 1");
-    assert.equal(s.quotaAds, 2);
+    assert.equal(s.quotaAds, s.max - 1, "余下的全给广告");
     await expectImmediate(acquireExchangeSlot(50), "夹紧后换链接仍拿得到槽");
   });
 
   test("配额被配成满池时夹到 MAX-1——广告侧同样不许饿死", async () => {
     offpeakAlways();
-    process.env.EXCHANGE_SLOTS_OFFPEAK = "3";
+    const { max } = puppeteerSemaphoreStats();
+    process.env.EXCHANGE_SLOTS_OFFPEAK = String(max + 1); // 故意超过全池
     const s = puppeteerSemaphoreStats();
-    assert.equal(s.quotaExchange, 2, "3 必须夹成 MAX-1");
+    assert.equal(s.quotaExchange, max - 1, `超出全池的值必须夹成 MAX-1(${max - 1})`);
     assert.equal(s.quotaAds, 1, "广告至少留 1");
   });
 
   test("非法配额值回退默认，不至于把池子配没", async () => {
     offpeakAlways();
     process.env.EXCHANGE_SLOTS_OFFPEAK = "abc";
-    assert.equal(puppeteerSemaphoreStats().quotaExchange, 2, "非法值应回退低谷默认 2");
+    const s = puppeteerSemaphoreStats();
+    assert.equal(s.quotaExchange, OFFPEAK.exchange, "非法值应回退低谷默认（再经夹紧）");
+    assert.ok(s.quotaExchange >= 1 && s.quotaAds >= 1, "回退后两条车道都不为 0");
   });
 });
 
@@ -197,10 +300,10 @@ describe("回滚开关", () => {
     process.env.EXCHANGE_ISOLATION_WORK_HOURS = "0-24";
     process.env.EXCHANGE_ISOLATION_WORK_DAYS = "0-6";
     process.env.PUPPETEER_EXCHANGE_ISOLATION_OFF = "1";
-    await expectImmediate(acquireExchangeSlot(50), "快车道");
-    await expectImmediate(acquireExchangeSlot(50), "弹性配额（分区已回滚，可借）");
-    await expectImmediate(acquireExchangeSlot(50), "借预留——共享池下换链接可占满 3 槽");
-    assert.equal(puppeteerSemaphoreStats().active, 3);
+    const { max } = puppeteerSemaphoreStats();
+    // 分区回滚后是 D-172/D-199 共享池：换链接走快车道 → 弹性 → 借预留，可占满全池
+    await fillWith(acquireExchangeSlot, max, "共享池下换链接");
+    assert.equal(puppeteerSemaphoreStats().active, max, "共享池下换链接可占满全池");
     assert.equal(puppeteerSemaphoreStats().quotaProfile, "off");
   });
 });

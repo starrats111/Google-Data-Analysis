@@ -50,6 +50,13 @@ export interface MccSection {
   costOriginal: number;
   /** 组员手动覆盖值（原币），null = 无覆盖 */
   override: number | null;
+  /**
+   * D-348：本行的 override 实际来自被接替的旧号（旧号活跃期填下的遗留纠正值）时，
+   * 记下那个旧号 id。前端据此提示来源，写入时仍只写本号的 key。
+   */
+  overrideFromMergedId?: string | null;
+  /** D-348：已并入本行的旧号客户编号列表（代理商转移 / 删号重绑），空数组 = 无合并 */
+  mergedFromMccIds?: string[];
   /** 覆盖优先后的原币值 */
   effectiveOriginal: number;
   /** 覆盖优先后的 USD 值 */
@@ -857,6 +864,69 @@ async function attachPaymentBindings(
 // 广告费 MCC 段
 // ─────────────────────────────────────────────────────────────
 
+/** D-348 合并输入：一条接替链上某个旧号在本月的账 */
+export interface SupersededMccInput {
+  /** 旧号记录 id */
+  oldId: string;
+  /** 旧号当月库内花费，null = 本月无花费 */
+  cost: { usd: number; cny: number } | null;
+  /** 旧号当月补差额（USD 口径） */
+  adjustment: number;
+  /** 旧号活跃期遗留的手工纠正值（原币），undefined = 无 */
+  legacyOverride?: number;
+}
+
+/**
+ * D-348：把被接替的旧号并入接替它的新号。
+ *
+ * 为什么需要：代理商转移账号 / 删号重绑后，旧号被软删但当月仍可能有库内花费，
+ * D-312 的 orphan 补段会把它单独补回报表；旧号活跃期填下的 override（常是代理商
+ * 当月**全量**广告费）随之复活，与新号那一行同时进合计 —— 同一笔钱算两遍。
+ * （易诺 2026-07：旧号 22.53 库内、override 1,339.72；新号 1,310.19，合计虚高约 1,310）
+ *
+ * 口径：花费与补差额相加；纠正值「本号自己的优先，否则沉用旧号遗留的那条」，
+ * 且纠正值是**整行采用**，不与库内值叠加（与既有 override 语义一致）。
+ */
+export function foldSupersededMcc(
+  own: { cost: { usd: number; cny: number } | null; adjustment: number; ownOverride?: number },
+  ancestors: SupersededMccInput[],
+): {
+  cost: { usd: number; cny: number };
+  adjustment: number;
+  override?: number;
+  /** 真正并入的旧号 id（没花费也没账的旧号不声明合并，避免行名挂无意义的号） */
+  mergedIds: string[];
+  /** override 来自哪个旧号；null = 来自本号自己或无 override */
+  overrideFromMergedId: string | null;
+} {
+  const cost = { usd: own.cost?.usd ?? 0, cny: own.cost?.cny ?? 0 };
+  let adjustment = own.adjustment;
+  const mergedIds: string[] = [];
+  let legacy: { id: string; value: number } | undefined;
+
+  for (const a of ancestors) {
+    if (!a.cost && a.adjustment === 0 && a.legacyOverride === undefined) continue;
+    if (a.cost) {
+      cost.usd += a.cost.usd;
+      cost.cny += a.cost.cny;
+    }
+    adjustment += a.adjustment;
+    if (legacy === undefined && a.legacyOverride !== undefined) {
+      legacy = { id: a.oldId, value: a.legacyOverride };
+    }
+    mergedIds.push(a.oldId);
+  }
+
+  const useOwn = own.ownOverride !== undefined;
+  return {
+    cost,
+    adjustment,
+    override: useOwn ? own.ownOverride : legacy?.value,
+    mergedIds,
+    overrideFromMergedId: !useOwn && legacy ? legacy.id : null,
+  };
+}
+
 async function buildMccSections(
   userId: bigint,
   month: string,
@@ -868,10 +938,18 @@ async function buildMccSections(
 ): Promise<MccSection[]> {
   const mccAccounts = await prisma.google_mcc_accounts.findMany({
     where: { user_id: userId, is_deleted: 0 },
-    select: { id: true, mcc_id: true, mcc_name: true, currency: true },
+    select: { id: true, mcc_id: true, mcc_name: true, currency: true, supersedes_id: true },
     orderBy: { created_at: "asc" },
   });
   if (mccAccounts.length === 0) return [];
+
+  // D-348：旧号 → 接替它的在用新号。代理商转移 / 删号重绑后，旧号的花费与
+  // 它活跃期遗留的 override 必须并入新号，否则 D-312 的 orphan 补段会把旧号
+  // 单独出一行，同一笔广告费被两行各算一次（易诺 2026-07 虚高 ~$1,310）。
+  const supersededBy = new Map<string, (typeof mccAccounts)[number]>();
+  for (const m of mccAccounts) {
+    if (m.supersedes_id != null) supersededBy.set(String(m.supersedes_id), m);
+  }
 
   // 库内 cost（USD）按 MCC 归集 + CNY MCC 按当日汇率反算原币
   const costRows = await prisma.$queryRawUnsafe<{
@@ -909,19 +987,62 @@ async function buildMccSections(
   });
   const adjustMap = new Map(adjustments.map((a) => [String(a.mcc_account_id), Number(a.amount)]));
 
+  // D-348：解析一条接替链上的全部旧号 id（新号 ← 旧号 ← 更旧的号）。
+  // 旧号通常已软删，不在上面的 mccAccounts 里，所以链条要用「含软删」的全量表走。
+  const chainRows = await prisma.google_mcc_accounts.findMany({
+    where: { user_id: userId },
+    select: { id: true, mcc_id: true, supersedes_id: true },
+  });
+  const supersedesOf = new Map(chainRows.map((m) => [String(m.id), m.supersedes_id]));
+  // 旧号 id → 客户编号，用于在合并行上标注来源（可追溯）
+  const oldMccLabel = new Map(chainRows.map((m) => [String(m.id), m.mcc_id]));
+  const chainAncestors = (headId: string): string[] => {
+    const out: string[] = [];
+    const seen = new Set<string>([headId]);
+    let cur = supersedesOf.get(headId) ?? null;
+    while (cur != null) {
+      const id = String(cur);
+      if (seen.has(id)) break; // 环保护：坏数据不至于把报表挂死
+      seen.add(id);
+      out.push(id);
+      cur = supersedesOf.get(id) ?? null;
+    }
+    return out;
+  };
+
+  // 已被并入某个在用号的旧号 → 目标段名，orphan 补段据此跳过，避免二次出行
+  const mergedInto = new Map<string, string>();
+
   const sections: MccSection[] = [];
   for (const mcc of mccAccounts) {
     const dbId = String(mcc.id);
-    const cost = costByMcc.get(dbId) || { usd: 0, cny: 0 };
-    const adj = adjustMap.get(dbId) || 0; // 补差额（USD 口径，与数据中心一致）
     const isCny = mcc.currency === "CNY";
+
+    // D-348：并入被本号接替的旧号——花费/补差额相加，纠正值本号优先、否则沉用旧号遗留值
+    const folded = foldSupersededMcc(
+      {
+        cost: costByMcc.get(dbId) ?? null,
+        adjustment: adjustMap.get(dbId) || 0, // 补差额（USD 口径，与数据中心一致）
+        ownOverride: overrides.get(`mcc:${dbId}`),
+      },
+      chainAncestors(dbId).map((oldId) => ({
+        oldId,
+        cost: costByMcc.get(oldId) ?? null,
+        adjustment: adjustMap.get(oldId) || 0,
+        legacyOverride: overrides.get(`mcc:${oldId}`),
+      })),
+    );
+    const cost = folded.cost;
+    const adj = folded.adjustment;
+    const mergedIds = folded.mergedIds;
+    for (const oldId of mergedIds) mergedInto.set(oldId, mcc.mcc_name || mcc.mcc_id);
 
     const costUsd = r2(cost.usd + adj);
     const costOriginal = isCny
       ? r2(cost.cny + (rate.cnyToUsd > 0 ? adj / rate.cnyToUsd : 0))
       : costUsd;
 
-    const ov = overrides.get(`mcc:${dbId}`);
+    const ov = folded.override;
     const override = ov !== undefined ? r2(ov) : null;
     const effectiveOriginal = override ?? costOriginal;
     const effectiveUsd = override != null
@@ -940,6 +1061,8 @@ async function buildMccSections(
       costUsd,
       costOriginal,
       override,
+      overrideFromMergedId: folded.overrideFromMergedId,
+      mergedFromMccIds: mergedIds.map((id) => oldMccLabel.get(id) || id),
       effectiveOriginal,
       effectiveUsd,
     });
@@ -947,8 +1070,9 @@ async function buildMccSections(
 
   // D-312：补出「有花费但不在本人活跃 MCC 列表里」的段——已删 MCC 的历史花费，
   // 以及挂在别人名下、承载了本人投放的 MCC。原先这些钱既不出段也不进合计，静默消失。
+  // D-348：已并入接替号的旧号不再单独出段，否则同一笔钱两行各算一次。
   const listedIds = new Set(sections.map((s) => s.mccDbId));
-  const orphanIds = [...costByMcc.keys()].filter((id) => !listedIds.has(id));
+  const orphanIds = [...costByMcc.keys()].filter((id) => !listedIds.has(id) && !mergedInto.has(id));
   if (orphanIds.length > 0) {
     const orphanRows = await prisma.google_mcc_accounts.findMany({
       where: { id: { in: orphanIds.map((id) => BigInt(id)) } },

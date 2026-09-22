@@ -31,6 +31,7 @@ export type Google_mcc_accountsAvgAggregateOutputType = {
   user_id: number | null
   is_active: number | null
   is_deleted: number | null
+  supersedes_id: number | null
 }
 
 export type Google_mcc_accountsSumAggregateOutputType = {
@@ -38,6 +39,7 @@ export type Google_mcc_accountsSumAggregateOutputType = {
   user_id: bigint | null
   is_active: number | null
   is_deleted: number | null
+  supersedes_id: bigint | null
 }
 
 export type Google_mcc_accountsMinAggregateOutputType = {
@@ -51,6 +53,7 @@ export type Google_mcc_accountsMinAggregateOutputType = {
   developer_token: string | null
   is_active: number | null
   is_deleted: number | null
+  supersedes_id: bigint | null
   created_at: Date | null
   updated_at: Date | null
 }
@@ -66,6 +69,7 @@ export type Google_mcc_accountsMaxAggregateOutputType = {
   developer_token: string | null
   is_active: number | null
   is_deleted: number | null
+  supersedes_id: bigint | null
   created_at: Date | null
   updated_at: Date | null
 }
@@ -81,6 +85,7 @@ export type Google_mcc_accountsCountAggregateOutputType = {
   developer_token: number
   is_active: number
   is_deleted: number
+  supersedes_id: number
   created_at: number
   updated_at: number
   _all: number
@@ -92,6 +97,7 @@ export type Google_mcc_accountsAvgAggregateInputType = {
   user_id?: true
   is_active?: true
   is_deleted?: true
+  supersedes_id?: true
 }
 
 export type Google_mcc_accountsSumAggregateInputType = {
@@ -99,6 +105,7 @@ export type Google_mcc_accountsSumAggregateInputType = {
   user_id?: true
   is_active?: true
   is_deleted?: true
+  supersedes_id?: true
 }
 
 export type Google_mcc_accountsMinAggregateInputType = {
@@ -112,6 +119,7 @@ export type Google_mcc_accountsMinAggregateInputType = {
   developer_token?: true
   is_active?: true
   is_deleted?: true
+  supersedes_id?: true
   created_at?: true
   updated_at?: true
 }
@@ -127,6 +135,7 @@ export type Google_mcc_accountsMaxAggregateInputType = {
   developer_token?: true
   is_active?: true
   is_deleted?: true
+  supersedes_id?: true
   created_at?: true
   updated_at?: true
 }
@@ -142,6 +151,7 @@ export type Google_mcc_accountsCountAggregateInputType = {
   developer_token?: true
   is_active?: true
   is_deleted?: true
+  supersedes_id?: true
   created_at?: true
   updated_at?: true
   _all?: true
@@ -244,6 +254,7 @@ export type Google_mcc_accountsGroupByOutputType = {
   developer_token: string | null
   is_active: number
   is_deleted: number
+  supersedes_id: bigint | null
   created_at: Date
   updated_at: Date
   _count: Google_mcc_accountsCountAggregateOutputType | null
@@ -282,6 +293,7 @@ export type google_mcc_accountsWhereInput = {
   developer_token?: Prisma.StringNullableFilter<"google_mcc_accounts"> | string | null
   is_active?: Prisma.IntFilter<"google_mcc_accounts"> | number
   is_deleted?: Prisma.IntFilter<"google_mcc_accounts"> | number
+  supersedes_id?: Prisma.BigIntNullableFilter<"google_mcc_accounts"> | bigint | number | null
   created_at?: Prisma.DateTimeFilter<"google_mcc_accounts"> | Date | string
   updated_at?: Prisma.DateTimeFilter<"google_mcc_accounts"> | Date | string
 }
@@ -297,6 +309,7 @@ export type google_mcc_accountsOrderByWithRelationInput = {
   developer_token?: Prisma.SortOrderInput | Prisma.SortOrder
   is_active?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
+  supersedes_id?: Prisma.SortOrderInput | Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
   _relevance?: Prisma.google_mcc_accountsOrderByRelevanceInput
@@ -304,6 +317,7 @@ export type google_mcc_accountsOrderByWithRelationInput = {
 
 export type google_mcc_accountsWhereUniqueInput = Prisma.AtLeast<{
   id?: bigint | number
+  supersedes_id?: bigint | number
   AND?: Prisma.google_mcc_accountsWhereInput | Prisma.google_mcc_accountsWhereInput[]
   OR?: Prisma.google_mcc_accountsWhereInput[]
   NOT?: Prisma.google_mcc_accountsWhereInput | Prisma.google_mcc_accountsWhereInput[]
@@ -318,7 +332,7 @@ export type google_mcc_accountsWhereUniqueInput = Prisma.AtLeast<{
   is_deleted?: Prisma.IntFilter<"google_mcc_accounts"> | number
   created_at?: Prisma.DateTimeFilter<"google_mcc_accounts"> | Date | string
   updated_at?: Prisma.DateTimeFilter<"google_mcc_accounts"> | Date | string
-}, "id">
+}, "id" | "supersedes_id">
 
 export type google_mcc_accountsOrderByWithAggregationInput = {
   id?: Prisma.SortOrder
@@ -331,6 +345,7 @@ export type google_mcc_accountsOrderByWithAggregationInput = {
   developer_token?: Prisma.SortOrderInput | Prisma.SortOrder
   is_active?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
+  supersedes_id?: Prisma.SortOrderInput | Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
   _count?: Prisma.google_mcc_accountsCountOrderByAggregateInput
@@ -354,6 +369,7 @@ export type google_mcc_accountsScalarWhereWithAggregatesInput = {
   developer_token?: Prisma.StringNullableWithAggregatesFilter<"google_mcc_accounts"> | string | null
   is_active?: Prisma.IntWithAggregatesFilter<"google_mcc_accounts"> | number
   is_deleted?: Prisma.IntWithAggregatesFilter<"google_mcc_accounts"> | number
+  supersedes_id?: Prisma.BigIntNullableWithAggregatesFilter<"google_mcc_accounts"> | bigint | number | null
   created_at?: Prisma.DateTimeWithAggregatesFilter<"google_mcc_accounts"> | Date | string
   updated_at?: Prisma.DateTimeWithAggregatesFilter<"google_mcc_accounts"> | Date | string
 }
@@ -369,6 +385,7 @@ export type google_mcc_accountsCreateInput = {
   developer_token?: string | null
   is_active?: number
   is_deleted?: number
+  supersedes_id?: bigint | number | null
   created_at?: Date | string
   updated_at?: Date | string
 }
@@ -384,6 +401,7 @@ export type google_mcc_accountsUncheckedCreateInput = {
   developer_token?: string | null
   is_active?: number
   is_deleted?: number
+  supersedes_id?: bigint | number | null
   created_at?: Date | string
   updated_at?: Date | string
 }
@@ -399,6 +417,7 @@ export type google_mcc_accountsUpdateInput = {
   developer_token?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   is_active?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
+  supersedes_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -414,6 +433,7 @@ export type google_mcc_accountsUncheckedUpdateInput = {
   developer_token?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   is_active?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
+  supersedes_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -429,6 +449,7 @@ export type google_mcc_accountsCreateManyInput = {
   developer_token?: string | null
   is_active?: number
   is_deleted?: number
+  supersedes_id?: bigint | number | null
   created_at?: Date | string
   updated_at?: Date | string
 }
@@ -444,6 +465,7 @@ export type google_mcc_accountsUpdateManyMutationInput = {
   developer_token?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   is_active?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
+  supersedes_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -459,6 +481,7 @@ export type google_mcc_accountsUncheckedUpdateManyInput = {
   developer_token?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   is_active?: Prisma.IntFieldUpdateOperationsInput | number
   is_deleted?: Prisma.IntFieldUpdateOperationsInput | number
+  supersedes_id?: Prisma.NullableBigIntFieldUpdateOperationsInput | bigint | number | null
   created_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   updated_at?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -480,6 +503,7 @@ export type google_mcc_accountsCountOrderByAggregateInput = {
   developer_token?: Prisma.SortOrder
   is_active?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
+  supersedes_id?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
 }
@@ -489,6 +513,7 @@ export type google_mcc_accountsAvgOrderByAggregateInput = {
   user_id?: Prisma.SortOrder
   is_active?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
+  supersedes_id?: Prisma.SortOrder
 }
 
 export type google_mcc_accountsMaxOrderByAggregateInput = {
@@ -502,6 +527,7 @@ export type google_mcc_accountsMaxOrderByAggregateInput = {
   developer_token?: Prisma.SortOrder
   is_active?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
+  supersedes_id?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
 }
@@ -517,6 +543,7 @@ export type google_mcc_accountsMinOrderByAggregateInput = {
   developer_token?: Prisma.SortOrder
   is_active?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
+  supersedes_id?: Prisma.SortOrder
   created_at?: Prisma.SortOrder
   updated_at?: Prisma.SortOrder
 }
@@ -526,6 +553,7 @@ export type google_mcc_accountsSumOrderByAggregateInput = {
   user_id?: Prisma.SortOrder
   is_active?: Prisma.SortOrder
   is_deleted?: Prisma.SortOrder
+  supersedes_id?: Prisma.SortOrder
 }
 
 
@@ -541,6 +569,7 @@ export type google_mcc_accountsSelect<ExtArgs extends runtime.Types.Extensions.I
   developer_token?: boolean
   is_active?: boolean
   is_deleted?: boolean
+  supersedes_id?: boolean
   created_at?: boolean
   updated_at?: boolean
 }, ExtArgs["result"]["google_mcc_accounts"]>
@@ -558,11 +587,12 @@ export type google_mcc_accountsSelectScalar = {
   developer_token?: boolean
   is_active?: boolean
   is_deleted?: boolean
+  supersedes_id?: boolean
   created_at?: boolean
   updated_at?: boolean
 }
 
-export type google_mcc_accountsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "mcc_id" | "mcc_name" | "currency" | "service_account_json" | "sheet_url" | "developer_token" | "is_active" | "is_deleted" | "created_at" | "updated_at", ExtArgs["result"]["google_mcc_accounts"]>
+export type google_mcc_accountsOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "user_id" | "mcc_id" | "mcc_name" | "currency" | "service_account_json" | "sheet_url" | "developer_token" | "is_active" | "is_deleted" | "supersedes_id" | "created_at" | "updated_at", ExtArgs["result"]["google_mcc_accounts"]>
 
 export type $google_mcc_accountsPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "google_mcc_accounts"
@@ -578,6 +608,7 @@ export type $google_mcc_accountsPayload<ExtArgs extends runtime.Types.Extensions
     developer_token: string | null
     is_active: number
     is_deleted: number
+    supersedes_id: bigint | null
     created_at: Date
     updated_at: Date
   }, ExtArgs["result"]["google_mcc_accounts"]>
@@ -959,6 +990,7 @@ export interface google_mcc_accountsFieldRefs {
   readonly developer_token: Prisma.FieldRef<"google_mcc_accounts", 'String'>
   readonly is_active: Prisma.FieldRef<"google_mcc_accounts", 'Int'>
   readonly is_deleted: Prisma.FieldRef<"google_mcc_accounts", 'Int'>
+  readonly supersedes_id: Prisma.FieldRef<"google_mcc_accounts", 'BigInt'>
   readonly created_at: Prisma.FieldRef<"google_mcc_accounts", 'DateTime'>
   readonly updated_at: Prisma.FieldRef<"google_mcc_accounts", 'DateTime'>
 }

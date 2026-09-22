@@ -109,7 +109,8 @@ export type SpendData = Record<string, Record<string, number>>;
 export type ReportMetricKey = "adSpend" | "total" | "rejected" | "active" | "net";
 
 /** 收支报表平台固定展示顺序（与团队 Excel 模板列序一致） */
-export const REPORT_PLATFORM_ORDER = ["RW", "LH", "CG", "LB", "PM", "CF", "BSH", "MUI", "EV", "PB", "FS"];
+// D-349：QUK / BA 追加在末尾，不插队——列序与团队 Excel 模板对齐，中间插入会错列。
+export const REPORT_PLATFORM_ORDER = ["RW", "LH", "CG", "LB", "PM", "CF", "BSH", "MUI", "EV", "PB", "FS", "QUK", "BA"];
 
 /**
  * 收支报表指标汇总：
