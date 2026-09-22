@@ -1,0 +1,35 @@
+---
+description: 查数据与下结论的强制校准规则（2026-08-18 由 07 拍板写入，起因=多窗口数据口径跑偏）
+alwaysApply: true
+---
+
+# 数据核验校准规则（2026-08-18）
+
+## 1. 数据只在生产服务器查
+
+- 凡是「数据 / 记录 / 谁干的 / 什么时候发生」类问题，**只在生产服务器上查**（SSH → mysql / nginx 访问日志 / PM2 日志），本机没有任何业务数据，一律不看本地。
+- 涉及部署代码逻辑时，以**服务器上已部署的代码**为准（`/home/ubuntu/Google-Data-Analysis/crm-mvp`），不以本地工作区代码为准。
+
+## 2. 「自动/手动」必须三方印证
+
+- 判断「系统会不会自动做某事」，必须同时核验：① crontab / 定时任务入口；② 部署代码的完整触发链路（谁调用、要不要登录态）；③ 实际执行日志。**缺一不下结论。**
+- 「代码里存在某能力」≠「系统会自动执行」。反面教训：kyads 的 AI 分析只产建议，执行必须人点 `apply-actions`；曾被错报成「自动暂停」。
+- 全体系的自动改状态入口（2026-08-18 修订）：① Hermes 止损自动暂停 + 出单自动复活（每小时 :12 巡检，mutate 用的 SA 可能显示为 xhmkyads / google-ads-sync / hxq-911 等池内凭证，别按 SA 名倒推系统）；② CRM daily-sync 的 D-034 漂移回停（每天 06:00，CRM 记 PAUSED 而 Google ENABLED 时自动重暂停——D-247 起对 `hermes_managed_at` 非空的系列不再回停，改跟随 Google）。曾因两者拉锯把 caledoniantravel 每天停/启循环，且被误报为「有人在 Google 后台手动停」。
+
+## 3. 时间口径写死
+
+- CRM 生产库：`NOW()` 返回北京时间，但 Prisma 写入的 `created_at` 等 DATETIME 字段是 **UTC**。
+- 给 07 展示任何时间，一律换算成北京时间（UTC+8）并注明「库存 UTC，已换算北京时间」。
+
+## 4. 执行流水必须并齐所有写入口
+
+- CRM 里能改动广告状态/参数的入口不止一个，出「执行记录」类结论前必须并齐：
+  - `operation_logs`（只有 data-center `apply-actions` 会写）；
+  - `campaigns.paused_at` / `pause_source`（data-center `campaigns/toggle` 暂停按钮写，**不写 operation_logs**）；
+  - nginx 访问日志（`/var/log/nginx/access.log`，可定位接口、时刻、来源 UA）；
+  - Hermes 远端同步、（已停用的）spend-guard 等其他入口。
+- **单查一张表不许下结论。** 反面教训：2026-08-18 早只查 operation_logs，漏掉 toggle 暂停，导致「07:53:59 降 CPC」与操作者本人记忆的「我是暂停广告」对不上（实际两者都发生了，暂停在 07:54:39 与 08:25:37 走 toggle）。
+
+## 5. 与 07 已知事实对账
+
+- 结论与 07 掌握的事实（如当事人口述）冲突时，先怀疑自己的数据口径不全或时区错误，回到生产服务器补全证据，再修正结论；不得坚持单一数据源的片面结论。
