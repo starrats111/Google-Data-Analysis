@@ -78,15 +78,42 @@ interface DraftDto {
   gap_report: { breaksRsaMinimum?: boolean; suggestionReason?: string } | null;
 }
 
+/**
+ * 统一请求封装：任何失败都折成 `{ code: -1, message }` 返回，绝不抛。
+ *
+ * 2026-09-06「第二个引擎点了确认发布没反应」的排查落点。原来这里是 `return res.json()`：
+ * 断网、502、401 被跳登录页返回 HTML、请求被中间层拦掉，res.json() 都会抛；而四个调用处
+ * （load / retry / saveAssets / confirmPublish）都是 try/finally 没有 catch，异常一路冒成
+ * unhandledrejection——按钮转一下就恢复，不弹错、不留痕，服务端日志里连一条请求都查不到，
+ * 员工只能报「好像用不了」。折成正常返回值后，各调用处已有的 `code !== 0` 分支就会把
+ * HTTP 状态和响应片段直接弹到员工眼前。
+ */
 async function callApi<T>(
   url: string,
   init?: { method?: string; body?: unknown },
 ): Promise<{ code: number; message: string; data: T }> {
-  const res = await fetch(url, {
-    method: init?.method || "GET",
-    ...(init?.body ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(init.body) } : {}),
-  });
-  return res.json();
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: init?.method || "GET",
+      ...(init?.body ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(init.body) } : {}),
+    });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    return { code: -1, message: `请求未发出或被中断：${detail}`, data: null as T };
+  }
+
+  const text = await res.text().catch(() => "");
+  try {
+    return JSON.parse(text) as { code: number; message: string; data: T };
+  } catch {
+    const snippet = text.trim().slice(0, 120);
+    return {
+      code: -1,
+      message: `服务端返回异常（HTTP ${res.status}）：${snippet || "空响应"}`,
+      data: null as T,
+    };
+  }
 }
 
 export default function RivalAdCreatePage() {

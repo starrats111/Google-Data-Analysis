@@ -9,6 +9,10 @@
  * 设计目标：绝对不让"网站打不开的广告"被推送到 Google Ads（会被立刻下架）。
  */
 
+// 事件循环滞后采样：判定 timeout 结论是否可信的统一依据（D-220 / eliandelm / meyercanada
+// 同一根因的第三次复现，见 @/lib/event-loop-lag 顶部注释）
+import { startEventLoopLagSampler, STARVATION_LAG_MS } from "@/lib/event-loop-lag";
+
 export interface ReachabilityResult {
   /** 最终落地页 URL（跟完所有 redirect 后）；fail 时等于输入 url */
   finalUrl: string;
@@ -26,6 +30,15 @@ export interface ReachabilityResult {
   chain?: { url: string; status: number }[];
   /** 总耗时 ms */
   elapsedMs: number;
+  /**
+   * 2026-09-12：探测期间本进程事件循环的最大滞后 ms。
+   *   Puppeteer 并发时 next-server 的事件循环会被抢占，`AbortSignal.timeout` / setTimeout
+   *   在墙钟上「早到」——站点实测 200/0.35s（curl 同机验证）却被判 timeout，进而 D-050 硬卡。
+   *   该值超过 STARVATION_LAG_MS 时，timeout 结论不可信，不得作为硬卡依据。
+   */
+  eventLoopLagMs?: number;
+  /** 事件循环被抢占（eventLoopLagMs 超阈值），timeout/network_error 结论不可信 */
+  hostStarved?: boolean;
 }
 
 export interface ReachabilityOptions {
@@ -65,6 +78,7 @@ export async function checkReachability(
   const retryBaseMs = opts.retryBaseMs ?? 1500;
 
   const startedAt = Date.now();
+  const stopLagSampler = startEventLoopLagSampler();
   let attempts = 0;
   let lastResult: Omit<ReachabilityResult, "attempts" | "elapsedMs"> = {
     finalUrl: url,
@@ -111,6 +125,38 @@ export async function checkReachability(
     }
   }
 
+  // 2026-09-12：事件循环被抢占时，连接级失败（timeout/network_error）是我们自己的定时器
+  //   虚假触发，不是站点不可达。用「宽松超时 + 单次」再探一次：真站点这一次会通过，真死链
+  //   仍然失败。meyercanada.ca 实证：同机 curl HEAD/GET 全 200/0.15-0.44s，而进程内探测报
+  //   timeout，只因 3 个 Puppeteer Chrome 把 CPU pressure 顶到 52%。
+  //   放在 CRAWL-04 代理兜底**之前**：虚假超时走代理是白烧 15s（问题在本机，不在出口 IP）。
+  let { lagMs, starved } = stopLagSampler();
+  if (!lastResult.reachable && starved) {
+    const fr = lastResult.failureReason || "";
+    if (fr.startsWith("network_error") || fr === "timeout") {
+      console.warn(
+        `[Reachability] 事件循环滞后 ${lagMs}ms（≥${STARVATION_LAG_MS}ms）→ ${fr} 结论不可信，用宽松超时重探 ${url.slice(0, 80)}`,
+      );
+      const stopRetryLag = startEventLoopLagSampler();
+      const relaxed = await singleProbeWithRedirects(url, {
+        timeoutMs: Math.max(timeoutMs * 3, 30000),
+        maxRedirects,
+      }).catch(() => null);
+      const retry = stopRetryLag();
+      if (retry.lagMs > lagMs) lagMs = retry.lagMs;
+      starved = lagMs >= STARVATION_LAG_MS;
+      if (relaxed) {
+        attempts += 1;
+        if (relaxed.reachable) {
+          console.warn(
+            `[Reachability] 宽松超时重探可达（status=${relaxed.statusCode}）→ 原 ${fr} 判定为虚假超时，放行 ${url.slice(0, 80)}`,
+          );
+        }
+        lastResult = relaxed;
+      }
+    }
+  }
+
   // CRAWL-04：直连「连接级失败」时走该国代理兜底探一次。
   //   对 timeout / network_error / server_error 触发——这些是「连不上/服务端抖动」，
   //   本机出口 IP 被地域封锁恰属此类（rcwilley 实证）。
@@ -139,6 +185,8 @@ export async function checkReachability(
     ...lastResult,
     attempts,
     elapsedMs: Date.now() - startedAt,
+    eventLoopLagMs: lagMs,
+    hostStarved: starved,
   };
 }
 
@@ -209,6 +257,11 @@ async function probeViaProxy(
 export function isHardUnreachable(r: ReachabilityResult): boolean {
   if (r.reachable) return false;
   const fr = r.failureReason || "";
+  // 2026-09-12：本进程事件循环被抢占（Puppeteer 并发）时，timeout/network_error 是我们的
+  //   定时器虚假触发，不是站点的证据——已在 checkReachability 里用宽松超时重探过一次仍失败，
+  //   但结论依旧不可信，不足以硬卡提交。放行并留日志（AdsBot 预检仍是第二道闸门）。
+  //   5xx 不在豁免内：那是目标站真的回了错误码，与本机负载无关。
+  if (r.hostStarved && (fr.startsWith("network_error") || fr === "timeout")) return false;
   if (fr.startsWith("network_error") || fr === "timeout" || fr === "server_error") return true;
   if (fr === "too_many_redirects" || fr === "redirect_no_location" || fr === "redirect_bad_location") return true;
   if (fr === "client_error" && (r.statusCode === 404 || r.statusCode === 410)) return true;
