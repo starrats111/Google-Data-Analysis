@@ -299,7 +299,7 @@ export async function POST(req: NextRequest) {
     // 新链接可能换了平台/跳板，重新学一次。
     await prisma.campaigns.update({
       where: { id: campaign.id },
-      data: { suffix_fail_count: 0, suffix_cooldown_until: null, suffix_no_tracking_streak: 0, suffix_needs_v2: 0 },
+      data: { suffix_fail_count: 0, suffix_cooldown_until: null, suffix_no_tracking_streak: 0, suffix_local_block_streak: 0, suffix_needs_v2: 0 },
     })
 
     // 即时巡航验证（最多 ~35s）：成功即返回状态；超时则后台继续，前端稍后刷新
@@ -414,7 +414,7 @@ export async function POST(req: NextRequest) {
     // 换号等价于换链接：旧号那条链接的失败历史对新号无意义，全部作废重新学
     await prisma.campaigns.update({
       where: { id: campaignId },
-      data: { suffix_fail_count: 0, suffix_cooldown_until: null, suffix_no_tracking_streak: 0, suffix_needs_v2: 0 },
+      data: { suffix_fail_count: 0, suffix_cooldown_until: null, suffix_no_tracking_streak: 0, suffix_local_block_streak: 0, suffix_needs_v2: 0 },
     })
     await resolveAlertsByType(userId, campaignId, ['connection_mismatch', 'invalid_link', 'merchant_not_found', 'brush_blocked', 'brush_failing'])
 

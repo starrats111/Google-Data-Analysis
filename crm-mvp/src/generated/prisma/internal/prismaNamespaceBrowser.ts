@@ -500,6 +500,7 @@ export const CampaignsScalarFieldEnum = {
   suffix_no_tracking_streak: 'suffix_no_tracking_streak',
   suffix_needs_v2: 'suffix_needs_v2',
   suffix_cooldown_until: 'suffix_cooldown_until',
+  suffix_local_block_streak: 'suffix_local_block_streak',
   is_deleted: 'is_deleted',
   created_at: 'created_at',
   updated_at: 'updated_at'
