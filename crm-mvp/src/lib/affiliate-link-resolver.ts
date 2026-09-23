@@ -285,6 +285,33 @@ export function sanitizeTrackingQuery(search: string | null | undefined): string
 }
 
 /**
+ * D-354：判断「用户填进 final_url_suffix 的值是不是整条跟踪链接」。
+ *
+ * 旧口径是 `includes("://")` —— 只要串里任何位置出现协议头就判为整条链接。这会误杀
+ * 合法后缀：联盟把落地页/中转页当成**某个参数的值**是常见写法
+ * （实测 Rewardoo：`utm_source=soicos&utm_term=26008&utm_campaign=https://www.rewardoo.com/_tnd-26008`），
+ * 此时 `://` 出现在 `=` 右边，是参数值的一部分，拼到 final_url 后面完全合法。
+ *
+ * 正确口径：只看**串的开头**是不是一个 URL。整条链接被误贴时长相必然是
+ * `https://…` / `http://…` / `%2F%2F…`（编码后），即第一段不是 `key=value`。
+ * 判为整条链接的条件：
+ *   1. 以协议头开头（含百分号编码形态）；或
+ *   2. 第一个 `&` 之前那段里，`://` 出现在第一个 `=` 之前（没有前导 key 的形态）。
+ */
+export function looksLikeWholeTrackingLink(suffix: string | null | undefined): boolean {
+  const raw = (suffix || "").trim().replace(/^[?&\s]+/, "");
+  if (!raw) return false;
+  // 1. 协议头开头：https:// http:// 以及 %3A%2F%2F / %2F%2F / // 等编码与省略形态
+  if (/^(https?(:|%3a)|%2f%2f|\/\/)/i.test(raw)) return true;
+  // 2. 第一段里协议头出现在 '=' 之前 → 这段不是 key=value，而是链接本体
+  const firstSeg = raw.split("&")[0] || "";
+  const eq = firstSeg.indexOf("=");
+  const proto = firstSeg.search(/:\/\/|%3a%2f%2f/i);
+  if (proto !== -1 && (eq === -1 || proto < eq)) return true;
+  return false;
+}
+
+/**
  * 落地页无 query 时的兜底取参：在跳转链里回溯与最终落地页「同根域名」且带联盟追踪参数的那一跳，
  * 返回该跳的 query 串（不含前导 ?）；未找到返回 null。
  */

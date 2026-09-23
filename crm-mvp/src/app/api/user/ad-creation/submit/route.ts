@@ -1262,9 +1262,11 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
     let finalUrlSuffix: string | undefined = rawFinalUrlSuffix
       ? (rawFinalUrlSuffix.trim().replace(/^[?&\s]+/, "").replace(/[?&\s]+$/, "").trim() || undefined)
       : undefined;
-    // 后缀里出现协议头 = 有人把整条追踪链接贴进了后缀（历史脏数据/误操作）。
+    // 后缀**开头**就是协议头 = 有人把整条追踪链接贴进了后缀（历史脏数据/误操作）。
     // 送到 Google 会拼出「落地页?https://...」的废到达页，宁可不带后缀也不能带废后缀。
-    if (finalUrlSuffix && (finalUrlSuffix.includes("://") || /^https?[:%]/i.test(finalUrlSuffix))) {
+    // D-354：与保存口径共用同一判断；参数值里含 URL（utm_campaign=https://...）是合法后缀，必须原样上传。
+    const { looksLikeWholeTrackingLink } = await import("@/lib/affiliate-link-resolver");
+    if (finalUrlSuffix && looksLikeWholeTrackingLink(finalUrlSuffix)) {
       console.warn(`[AdSubmit] final_url_suffix 疑似整条链接，已丢弃不上传: ${finalUrlSuffix.slice(0, 100)}`);
       finalUrlSuffix = undefined;
     }

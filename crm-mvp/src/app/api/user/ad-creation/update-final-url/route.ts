@@ -93,8 +93,11 @@ export async function PATCH(req: NextRequest) {
       ? (final_url_suffix.trim().replace(/^[?&\s]+/, "").replace(/[?&\s]+$/, "").trim() || null)
       : null;
     // 后缀必须是 query 参数串（k=v&k2=v2），不能是整条链接——历史上有员工把 linkhaitao/partnermatic
-    // 整条追踪链接贴进来，Google 端拼出 `落地页?https://...` 的废链接，换链/刷点击全部失效
-    if (suffixVal && (suffixVal.includes("://") || /^https?[:%]/i.test(suffixVal))) {
+    // 整条追踪链接贴进来，Google 端拼出 `落地页?https://...` 的废链接，换链/刷点击全部失效。
+    // D-354：只按「串的开头是不是 URL」判，不再 includes("://")——
+    // 参数值里带 URL（utm_campaign=https://...，Rewardoo/soicos 的正常写法）是合法后缀，之前被误杀导致存不进去。
+    const { looksLikeWholeTrackingLink } = await import("@/lib/affiliate-link-resolver");
+    if (suffixVal && looksLikeWholeTrackingLink(suffixVal)) {
       return apiError("最终到达网址后缀必须是追踪参数串（如 utm_source=xx&clickid=yy），不能填整条跟踪链接。整条链接请填在上方「联盟跟踪链接」输入框");
     }
     updates.push(prisma.campaigns.update({
