@@ -54,13 +54,34 @@ export interface ExistingCidRow {
   status: string;
 }
 
+/**
+ * 表头列定位。
+ *
+ * D-353（2026-09-23 实测）：部分 MCC 的 CID_List 表头单元格被合并，gviz 导出的第一行
+ * 变成「列名 + 被吞进来的前若干行值」，例：
+ *   "CustomerID 127-352-0631 130-586-4419 …","AccountName ","Status ENABLED CANCELED …"
+ * 精确 indexOf 匹配不上 → parseCidListRows 整表判 null → 两条 Sheet 同步路径静默跳过
+ * 该 MCC，库内 CID 状态从此永久冻结（wj11 / MCC 133 的 5664598997 已注销却仍 active，
+ * 页面显示「已启用」且任何启停都报 USER_PERMISSION_DENIED）。
+ * 体检结果：60 个配了 Sheet 的 MCC 里 25 个判 null，其中 5 个是这一类表头合并。
+ *
+ * 退化规则只认「首段等于列名」，不做宽松的 includes/startsWith——
+ * 后者会让 "statuschangedat" 之类的列名误命中 "status"。被吞的只是列名单元格本身，
+ * 数据行完整（实测 5 个 MCC 解析出 63~84 行，无丢行）。
+ */
+function findHeaderCol(hdr: string[], want: string): number {
+  const exact = hdr.indexOf(want);
+  if (exact >= 0) return exact;
+  return hdr.findIndex((h) => h.split(/[\s\r\n]+/)[0] === want);
+}
+
 /** Sheet CID_List 表头解析：返回 null 表示表头不符（老脚本/别的格式），调用方跳过 */
 export function parseCidListRows(rows: string[][]): CidListRow[] | null {
   if (rows.length === 0) return null;
   const hdr = rows[0].map((h) => h.trim().toLowerCase());
-  const ci = hdr.indexOf("customerid");
-  const ni = hdr.indexOf("accountname");
-  const si = hdr.indexOf("status"); // D-277 可选列：缺列=老脚本，google_status 全 null
+  const ci = findHeaderCol(hdr, "customerid");
+  const ni = findHeaderCol(hdr, "accountname");
+  const si = findHeaderCol(hdr, "status"); // D-277 可选列：缺列=老脚本，google_status 全 null
   if (ci < 0 || ni < 0) return null;
   const out: CidListRow[] = [];
   const seen = new Set<string>();
@@ -424,6 +445,10 @@ export async function syncCidListFromSheets(log: (msg: string) => void): Promise
     if (!sheetRows || sheetRows.length === 0) {
       // 无 tab / 老格式 / 空表（可能是脚本中断残表）——一律不动库
       stats.skipped++;
+      // D-353：这里原来静默 continue，是最贵的一条。CID 状态同步整轮不跑却零日志，
+      // 只能靠「某个 CID 状态为什么几个月不动」反查才发现（wj11 那次冻了三个月）。
+      // 打上表头首段，好判是老格式（无 CustomerID 列）还是表头被合并/残表。
+      log(`  [CID_List] ${label}: CID_List 解析不出有效行，跳过（raw=${rows.length} 行，表头=${JSON.stringify(rows[0]?.slice(0, 4).map((c) => c.split(/[\s\r\n]+/)[0]) ?? [])}）`);
       continue;
     }
 
@@ -539,8 +564,10 @@ export async function syncCidStatusesFromSheets(log: (msg: string) => void): Pro
   withStatusCol: number;
   updated: number;
   recovered: number;
+  /** D-353：CID_List 解析不出有效行的 MCC 数（表头合并/老格式/残表）——这些 MCC 本轮状态同步等于没跑 */
+  unparsable: number;
 }> {
-  const out = { mccs: 0, withStatusCol: 0, updated: 0, recovered: 0 };
+  const out = { mccs: 0, withStatusCol: 0, updated: 0, recovered: 0, unparsable: 0 };
   const mccs = await prisma.google_mcc_accounts.findMany({
     where: { is_deleted: 0, sheet_url: { not: null } },
     select: { id: true, mcc_id: true, mcc_name: true, sheet_url: true, user_id: true },
@@ -553,7 +580,9 @@ export async function syncCidStatusesFromSheets(log: (msg: string) => void): Pro
       if (!sid) continue;
       const rows = await readSheetCsv(sid, "CID_List");
       const sheetRows = parseCidListRows(rows);
-      if (!sheetRows || sheetRows.length === 0) continue;
+      // D-353：只计数不逐 MCC 打日志——这条半小时跑一轮 × 60 个 MCC，逐条会把日志冲掉；
+      // 汇总数字由调用方打一行，异常值（如 25/60）就是「大批 MCC 状态同步实际没跑」的信号。
+      if (!sheetRows || sheetRows.length === 0) { out.unparsable++; continue; }
       if (!sheetRows.some((r) => r.google_status != null)) continue; // 老脚本无状态列
       out.withStatusCol++;
 

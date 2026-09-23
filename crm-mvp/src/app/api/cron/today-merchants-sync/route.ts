@@ -471,12 +471,17 @@ export async function GET(req: NextRequest) {
     // D-277 账户状态半小时级同步：读各 MCC Sheet CID_List 的 Status 列（Google 账户
     // 状态真值），被停/注销跟随写库并告警归属人；老脚本（无状态列）的 MCC 自动跳过。
     // D-324：恢复方向也跟随真值写库（原来只提醒、等人点按钮）。
-    let cidStatus: { mccs: number; withStatusCol: number; updated: number; recovered: number } | null = null;
+    let cidStatus: { mccs: number; withStatusCol: number; updated: number; recovered: number; unparsable: number } | null = null;
     try {
       const { syncCidStatusesFromSheets } = await import("@/lib/cid-list-sheet-sync");
       cidStatus = await syncCidStatusesFromSheets(log);
       if (cidStatus.updated > 0 || cidStatus.recovered > 0) {
         log(`账户状态：${cidStatus.withStatusCol}/${cidStatus.mccs} 个 MCC 有状态列，标停跟随 ${cidStatus.updated}，自动恢复 ${cidStatus.recovered}`);
+      }
+      // D-353：解析不出来的 MCC 等于本轮状态同步没跑。原来这里完全静默，
+      // 只能靠「某个 CID 状态几个月不动」反查才发现，务必留一行可 grep 的痕迹。
+      if (cidStatus.unparsable > 0) {
+        log(`账户状态：⚠️ ${cidStatus.unparsable}/${cidStatus.mccs} 个 MCC 的 CID_List 解析不出有效行（表头合并/老格式/残表），这些 MCC 本轮状态未同步`);
       }
     } catch (e) {
       log(`账户状态同步失败: ${e instanceof Error ? e.message : String(e)}`);

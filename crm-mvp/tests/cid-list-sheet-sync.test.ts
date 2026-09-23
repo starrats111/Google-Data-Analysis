@@ -44,6 +44,30 @@ describe("parseCidListRows", () => {
     assert.equal(parseCidListRows([]), null);
   });
 
+  test("D-353 表头单元格被合并（列名后拼进了前几行值）仍能定位列", () => {
+    // gviz 导出的真实形态：表头合并后，列名单元格里跟着被吞进来的前若干行值
+    const rows = parseCidListRows([
+      ["CustomerID 127-352-0631 130-586-4419", "AccountName ", "Status ENABLED CANCELED"],
+      ["123-456-7890", "acc1", "ENABLED"],
+      ["566-459-8997", "", "CANCELED"],
+    ]);
+    assert.deepEqual(rows, [
+      { customer_id: "1234567890", customer_name: "acc1", google_status: "ENABLED" },
+      { customer_id: "5664598997", customer_name: "", google_status: "CANCELED" },
+    ]);
+  });
+
+  test("D-353 退化匹配只认首段，不把 StatusChangedAt 误当 Status 列", () => {
+    const rows = parseCidListRows([
+      ["CustomerID", "AccountName", "StatusChangedAt"],
+      ["123-456-7890", "acc1", "2026-09-01"],
+    ]);
+    // 没有 Status 列 → google_status 必须为 null，不能把日期当状态读进来
+    assert.deepEqual(rows, [
+      { customer_id: "1234567890", customer_name: "acc1", google_status: null },
+    ]);
+  });
+
   test("空 CID / 过短 / 重复行被剔除", () => {
     const rows = parseCidListRows([
       ["CustomerID", "AccountName"],
