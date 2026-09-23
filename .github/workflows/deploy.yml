@@ -152,8 +152,24 @@ jobs:
               else
                 pm2 start ecosystem.config.cjs
               fi
+              # D-353：把当前运行态存进 ~/.pm2/dump.pm2。
+              #   dump 决定「开机 systemd → pm2 resurrect」恢复出来的进程长什么样，
+              #   在此之前 CI 从不更新它：2026-09-05 有人跑过老 deploy.sh（拼命令行 + pm2 save），
+              #   dump 被写成 max_memory_restart=700M，而后续 CI 部署只 reload 不 save，
+              #   运行态一直是对的 1600M、dump 却一直错着，18 天没人发现（服务器已连续 121 天未重启，
+              #   一旦重启就会按 700M 起进程：比 ARCH-01 出事的 900M 还低，且丢掉 MALLOC_ARENA_MAX/TZ）。
+              #   加这一行后，每次正常部署都会把 dump 拉回与 ecosystem 一致。
+              pm2 save
               sleep 5
               pm2 status ad-automation
+              # 自检：dump 与运行态是否都为 ecosystem 里的 1600M（不一致只告警，不中断部署——
+              #   此刻新代码已上线且健康，为一个配置告警回滚反而扩大影响面）
+              ACTUAL_MEM=$(pm2 jlist 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const a=JSON.parse(s).find(x=>x.name==="ad-automation");const v=a&&a.pm2_env&&a.pm2_env.max_memory_restart;console.log(v?Math.round(v/1048576):0)}catch(e){console.log(0)}})' 2>/dev/null || echo 0)
+              if [ "$ACTUAL_MEM" != "1600" ]; then
+                echo "WARNING: max_memory_restart=${ACTUAL_MEM}M, expected 1600M — ecosystem.config.cjs 未生效？见 crm-mvp/deploy.sh 顶部 D-353 注释"
+              else
+                echo "Self-check: max_memory_restart=${ACTUAL_MEM}M OK"
+              fi
             else
               nohup npm start > logs/app.log 2>&1 &
               echo "Started with PID: $!"
