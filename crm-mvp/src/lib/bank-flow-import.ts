@@ -384,14 +384,17 @@ interface Candidate {
  * 两行都有标注且完全不相交 → 不许凑成一笔批次；有一边没标注就不拦（财务经常漏填）。
  */
 /** 财务表里写过的平台码，含笔误别名：HT 就是 LH（07 2026-08-27 确认「当时备注错了」） */
-const PLATFORM_CODE_RE = /\b(CG|BSH|RW|LH|LB|PM|MUI|EV|CF|DF|HT)\b/gi;
+// D-349：补上 QUK / BA / PB / FS。长码写在前面——交替分支按顺序命中，
+// 将来若加入互为前缀的码（如 P 与 PB），短码在前会把长码吃掉。
+const PLATFORM_CODE_RE = /\b(BSH|MUI|QUK|CG|RW|LH|LB|PM|EV|CF|DF|HT|PB|FS|BA)\b/gi;
 const PLATFORM_ALIAS: Record<string, string> = { HT: "LH" };
 const normPlatformCode = (c: string) => PLATFORM_ALIAS[c.toUpperCase()] ?? c.toUpperCase();
 /** 标注里的数字与分隔符（金额、单号、括号等），抽词前一律去掉 */
 const NOTE_NOISE_RE = /[\s0-9.,;:%/\\_·、（）()[\]{}<>+*=&#@!?~"'`|^$—–-]+/g;
 
 /** 平台码集合：抽对方户名时这些词要剔掉（「上海汇（rw52.39）」这种连在数字上的靠分词后再滤一遍） */
-const PLATFORM_CODES = new Set(["CG", "BSH", "RW", "LH", "LB", "PM", "MUI", "EV", "CF", "DF", "HT"]);
+// D-349：补上 QUK / BA，并把当初漏掉的 PB / FS 一并加入（DF、HT 是财务口头简称，非 PLATFORMS 成员）
+const PLATFORM_CODES = new Set(["CG", "BSH", "RW", "LH", "LB", "PM", "MUI", "EV", "CF", "DF", "HT", "PB", "FS", "QUK", "BA"]);
 /**
  * 财务偶尔把整句话写进标注（实证「实际发生日是3.4号」），这种不是户名。
  * 含句子虚词的词一律不当户名用。
