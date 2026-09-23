@@ -1385,7 +1385,9 @@ export default function AdPreviewPage() {
           const checkResults = await Promise.all(
             items.map(async (item, idx) => {
               if (!item.url || !item.url.startsWith("http")) return { idx, valid: false };
-              try { const r = await fetch(`/api/user/ad-creation/check-url?url=${encodeURIComponent(item.url)}`); const j = await r.json(); return { idx, valid: j.code === 0 && j.data?.ok }; }
+              // D-350：与手动「验证」按钮走同一套判定（带 campaign_id → 服务端附带域名归属裁决）。
+              // 此前这条路径只查可达性、完全没有域名闸，同一批链接里只有被点过验证的那条会变红。
+              try { const r = await fetch(`/api/user/ad-creation/check-url?url=${encodeURIComponent(item.url)}${campaignId ? `&campaign_id=${encodeURIComponent(campaignId)}` : ""}`); const j = await r.json(); return { idx, valid: j.code === 0 && j.data?.ok && j.data?.domainAllowed !== false }; }
               catch { return { idx, valid: false }; }
             }),
           );
@@ -1871,9 +1873,6 @@ export default function AdPreviewPage() {
   const fetchAndValidateSitelink = useCallback(async (idx: number): Promise<"valid" | "invalid" | ""> => {
     const url = sitelinks[idx]?.url;
     if (!url) return "";
-    const merchantDomain = preview?.merchant?.merchant_url || preview?.adCreative?.final_url || "";
-    let baseDomain = "";
-    try { baseDomain = new URL(merchantDomain).hostname.replace(/^www\./, ""); } catch {}
 
     if (!url.startsWith("http")) {
       setSitelinks((prev) => { const n = [...prev]; n[idx] = { ...n[idx], urlStatus: "invalid" }; return n; });
@@ -1881,23 +1880,24 @@ export default function AdPreviewPage() {
       return "invalid";
     }
     try {
-      const urlDomain = new URL(url).hostname.replace(/^www\./, "");
-      if (baseDomain && !urlDomain.includes(baseDomain) && !baseDomain.includes(urlDomain)) {
-        setSitelinks((prev) => { const n = [...prev]; n[idx] = { ...n[idx], urlStatus: "invalid" }; return n; });
-        message.error(`链接域名 (${urlDomain}) 与商家域名 (${baseDomain}) 不匹配`);
-        return "invalid";
-      }
+      new URL(url);
     } catch {
       setSitelinks((prev) => { const n = [...prev]; n[idx] = { ...n[idx], urlStatus: "invalid" }; return n; });
       message.error("URL 格式无效");
       return "invalid";
     }
+    // D-350：域名归属判定挪到服务端（check-url 带 campaign_id）。
+    // 此处原先自写一套 `urlDomain.includes(baseDomain) || baseDomain.includes(urlDomain)`，
+    // 比的还是 merchant_url（联盟登记域）而非落地页，两个错叠在一起把商家自己的域判成不匹配：
+    // Veracity 登记域 veracityselfcare.com、站内链接全在 veracityhealth.co/.com 上，
+    // 后端 D-318 判据（共同前缀 veracity=8≥6）本来就放行，前端这套更弱的判据却拦下。
+    // 而自动爬取那条路径根本没有这道闸，于是同一批链接里只有被点过「验证」的那条变红。
 
     setSitelinks((prev) => { const n = [...prev]; n[idx] = { ...n[idx], urlStatus: "checking" }; return n; });
     try {
       const country = (preview?.campaign?.target_country || "US").toUpperCase();
       const [checkRes, metaRes] = await Promise.all([
-        fetch(`/api/user/ad-creation/check-url?url=${encodeURIComponent(url)}`),
+        fetch(`/api/user/ad-creation/check-url?url=${encodeURIComponent(url)}${campaignId ? `&campaign_id=${encodeURIComponent(campaignId)}` : ""}`),
         fetch(`/api/user/ad-creation/fetch-url-meta?url=${encodeURIComponent(url)}&country=${country}`),
       ]);
       const checkData = await checkRes.json();
@@ -1906,7 +1906,10 @@ export default function AdPreviewPage() {
       const metaOk = metaData.code === 0 && metaData.data?.ok;
       const isFallbackTitle = metaData?.data?.isFallbackTitle === true;
       const isSoft404 = metaData?.data?.isSoft404 === true;
-      const isValid = checkOk && !isSoft404;
+      // D-350：域名归属由服务端裁决（D-316/D-318 字面判据 + D-328 页面自证）。
+      // 只有 domainAllowed === false（明确判为第三方中转域）才拦；判不出来时字段为 undefined，按放行。
+      const domainOff = checkData?.data?.domainAllowed === false;
+      const isValid = checkOk && !isSoft404 && !domainOff;
       // fallback title 来自 URL 路径，metaOk=false 时也可用
       const autoTitle = metaData.code === 0 ? (metaData.data?.title || "") : "";
       const autoDesc = metaOk ? (metaData.data?.description || "") : "";
@@ -1924,6 +1927,11 @@ export default function AdPreviewPage() {
 
       if (isSoft404) {
         message.error("链接页面显示「页面不存在」（软 404）");
+      } else if (domainOff) {
+        // 明确判为「不属于该商家」时才报这句，且说清基准是落地页而非联盟登记域
+        message.error(
+          `此链接不在商家站点下（已比对落地页${checkData?.data?.domainBaseline ? ` ${checkData.data.domainBaseline}` : ""}，页面也未自证归属），疑似第三方中转链接`,
+        );
       } else if (metaOk && isValid) {
         message.success("已自动获取页面标题和描述");
       } else if (isValid && isFallbackTitle) {
@@ -1940,7 +1948,7 @@ export default function AdPreviewPage() {
       message.warning("链接验证请求失败，请点击验证按钮重试");
       return "";
     }
-  }, [sitelinks, preview, message]);
+  }, [sitelinks, preview, message, campaignId]);
 
   // ─── 图片上传 ───
   const [imageCheckResults, setImageCheckResults] = useState<Record<number, { has_text: boolean; checking: boolean; text?: string }>>({});
