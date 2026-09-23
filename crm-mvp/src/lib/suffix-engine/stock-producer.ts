@@ -15,7 +15,7 @@ import { prisma } from '@/lib/prisma'
 import { STOCK_CONFIG } from './config'
 import { generateOneSuffix, type GenFailure, type GenResult } from './suffix-generator'
 import { raiseAlert, resolveAlertsByType } from './alerts'
-import { classifyNoTrackingRound, evaluateCooldownGate, parseV2Stage, shouldUseV2Engine } from './replenish-gate'
+import { classifyNoTrackingRound, evaluateCooldownGate, isLocalResourceBlocked, parseV2Stage, shouldUseV2Engine } from './replenish-gate'
 import { recordExitIp } from './exit-ip'
 import { resolveMerchantReferer } from './referer-resolver'
 import { randomPick, RESOLVE_REFERERS } from './click-scheduler'
@@ -78,6 +78,8 @@ interface CampaignForReplenish {
   google_campaign_id: string | null
   suffix_fail_count: number
   suffix_no_tracking_streak: number
+  /** D-351 连续「本机资源开不出浏览器」轮次 */
+  suffix_local_block_streak: number
   /** D-203：1 = 已学到「本系列必须走 V2 跟跳引擎」，跳过灰度阶段直接用 V2 */
   suffix_needs_v2: number
   suffix_cooldown_until: Date | null
@@ -172,6 +174,7 @@ async function doReplenish(
       google_campaign_id: true,
       suffix_fail_count: true,
       suffix_no_tracking_streak: true,
+      suffix_local_block_streak: true,
       suffix_needs_v2: true,
       suffix_cooldown_until: true,
     },
@@ -188,9 +191,14 @@ async function doReplenish(
   // 原因是这两条规则叠起来正好构成死循环——卡死系列库存恒为 0，于是**每次** lease 都 NO_STOCK
   // → force 补货 → 绕过冷却 → 开浏览器 → 又落官网首页零参数。实测 jwpei 约 130 次/天，
   // 远超 30min 冷却本该封顶的 48 次/天。只有人工入口（manual）能穿透，保证换了新链接能当场重试。
+  // D-351 同理：local_resource 连续达阈值的系列，force 也要被挡。D-201 只堵了 no_tracking 那扇门，
+  // 而「我方开不出浏览器」走的是同一个死循环——库存恒 0 → 每次 lease NO_STOCK → force 穿透 →
+  // 内存仍不够 → 库存仍 0。实测 27842 单日 10,598 次（7105 内存反压 + 3493 抢不到槽），
+  // 10min 冷却本该封顶 144 次，实际是它的 73 倍。
   const gate = evaluateCooldownGate({
     cooldownUntil: campaign.suffix_cooldown_until,
     noTrackingStreak: campaign.suffix_no_tracking_streak,
+    localBlockStreak: campaign.suffix_local_block_streak,
     force: !!opts.force,
     manual: !!opts.manual,
   })
@@ -396,8 +404,15 @@ async function doReplenish(
   }
   // probe 成功 = 链接确认活着且能拿到追踪参数：清 D-177 疑似死链计数与冷却，
   // 并清 D-201 连续零参数计数（否则换了好链接的系列仍背着「卡死」标记、force 继续被挡）。
-  if (campaign.suffix_fail_count > 0 || campaign.suffix_cooldown_until || campaign.suffix_no_tracking_streak > 0) {
-    await setFailCooldown(campaign, 0, null, 0)
+  // D-351 一并清连续本机资源阻塞计数：probe 成功即证明浏览器开出来了（或压根不需要），
+  // 资源已缓解。不清的话夜间攒下的 streak 会让白天恢复正常后仍被 gate 挡着。
+  if (
+    campaign.suffix_fail_count > 0 ||
+    campaign.suffix_cooldown_until ||
+    campaign.suffix_no_tracking_streak > 0 ||
+    campaign.suffix_local_block_streak > 0
+  ) {
+    await setFailCooldown(campaign, 0, null, 0, 0)
   }
   // 学习「必须浏览器」标记：probe 成功即知本系列纯 HTTP 能否跟到（usedBrowser）。
   // 双向回写——变为需要 → 置 1（下轮起低频补货）；恢复纯 HTTP 可跟 → 清 0（恢复正常水位）。仅变化时写库。
@@ -464,6 +479,28 @@ async function doReplenish(
     const allLocalResource =
       failures.length > 0 &&
       failures.every((f) => f.reason === 'local_resource' || f.reason === 'timeout' || f.reason === 'proxy_unavailable')
+    // D-351：批量全栽在本机资源上时，原先只抑制告警就 return —— 一行冷却都没写。
+    // probe 成功过（链接是好的），所以走不到 handleProbeFailure 那条累加路径，于是这个系列
+    // 下一轮、下一次 lease 立刻又被选中重打。批量阶段才是 69 倍放大的主场：probe 1 次成功，
+    // 后面 BROWSER_CONCURRENCY 路并发全被内存反压拒掉，每次拒掉前的 HTTP 抓取照样跑完。
+    // 这里与 probe 失败同口径累加计数 + 冷却，让它同样能被 gate 挡住。
+    if (allLocalResource && failures.some((f) => f.reason === 'local_resource')) {
+      const nextLocalStreak = campaign.suffix_local_block_streak + 1
+      const blocked = isLocalResourceBlocked(nextLocalStreak)
+      await setFailCooldown(
+        campaign,
+        campaign.suffix_fail_count,
+        new Date(Date.now() + (blocked ? STOCK_CONFIG.LOCAL_BLOCK_COOLDOWN_MS : STOCK_CONFIG.PROXY_UNAVAILABLE_COOLDOWN_MS)),
+        undefined,
+        nextLocalStreak,
+      )
+      if (blocked) {
+        console.warn(
+          `[stock-producer] D-351 ${cid} 批量阶段连续 ${nextLocalStreak} 轮本机资源不足（probe 已成功、链接正常），` +
+            `冷却 ${STOCK_CONFIG.LOCAL_BLOCK_COOLDOWN_MS / 60_000}min 且 force 不再穿透`,
+        )
+      }
+    }
     if (!allLocalResource) {
       await raiseAlert(campaign.user_id, {
         type: 'replenish_failed',
@@ -524,6 +561,7 @@ async function setFailCooldown(
   failCount: number,
   cooldownUntil: Date | null,
   noTrackingStreak?: number,
+  localBlockStreak?: number,
 ): Promise<void> {
   try {
     await prisma.campaigns.update({
@@ -532,11 +570,13 @@ async function setFailCooldown(
         suffix_fail_count: failCount,
         suffix_cooldown_until: cooldownUntil,
         ...(noTrackingStreak === undefined ? {} : { suffix_no_tracking_streak: noTrackingStreak }),
+        ...(localBlockStreak === undefined ? {} : { suffix_local_block_streak: localBlockStreak }),
       },
     })
     campaign.suffix_fail_count = failCount
     campaign.suffix_cooldown_until = cooldownUntil
     if (noTrackingStreak !== undefined) campaign.suffix_no_tracking_streak = noTrackingStreak
+    if (localBlockStreak !== undefined) campaign.suffix_local_block_streak = localBlockStreak
   } catch (e) {
     console.warn('[stock-producer] 更新失败冷却字段失败:', campaign.id.toString(), e instanceof Error ? e.message : e)
   }
@@ -585,13 +625,26 @@ async function handleProbeFailure(
   //     实测 2026-08-12 单日：exchange 车道 1577 次抢不到槽、193 次内存反压拒绝，全部计入死链，
   //     而告警点名的那条链接 curl 实测 HTTP 200 完全正常（详见设计方案 D-231）。
   //     冷却按性质区分：资源阻塞是瞬时的，10 分钟后再试；超时可能是慢链，退到 30 分钟避免空转。
+  //     D-351：local_resource 另外累加 suffix_local_block_streak，达阈值后连 force 也挡住，
+  //     并把冷却从 10min 拉到 1h。不这么做的话冷却写了也白写——force 每次 lease 都穿透（见
+  //     evaluateCooldownGate 第 4 条）。计数只在 local_resource 上累，timeout 不累：后者可能是
+  //     慢链（链接侧），前者确定是我方机器，两者不该共用一个判据。
   if (fail.reason === 'local_resource' || fail.reason === 'timeout') {
-    const cooldownMs =
-      fail.reason === 'local_resource'
-        ? STOCK_CONFIG.PROXY_UNAVAILABLE_COOLDOWN_MS
-        : STOCK_CONFIG.ALIVE_LINK_COOLDOWN_MS
+    const isLocalBlock = fail.reason === 'local_resource'
+    const nextLocalStreak = isLocalBlock ? campaign.suffix_local_block_streak + 1 : 0
+    const cooldownMs = !isLocalBlock
+      ? STOCK_CONFIG.ALIVE_LINK_COOLDOWN_MS
+      : isLocalResourceBlocked(nextLocalStreak)
+        ? STOCK_CONFIG.LOCAL_BLOCK_COOLDOWN_MS
+        : STOCK_CONFIG.PROXY_UNAVAILABLE_COOLDOWN_MS
     // 保持 suffix_fail_count 不变：既不累加（不冤枉链接），也不清零（不抹掉真实的历史失败证据）
-    await setFailCooldown(campaign, campaign.suffix_fail_count, new Date(Date.now() + cooldownMs))
+    await setFailCooldown(campaign, campaign.suffix_fail_count, new Date(Date.now() + cooldownMs), undefined, nextLocalStreak)
+    if (isLocalBlock && isLocalResourceBlocked(nextLocalStreak)) {
+      console.warn(
+        `[stock-producer] D-351 ${cid} 连续 ${nextLocalStreak} 轮本机资源开不出浏览器（${fail.error ?? '-'}），` +
+          `冷却 ${STOCK_CONFIG.LOCAL_BLOCK_COOLDOWN_MS / 60_000}min 且 force 不再穿透，等资源缓解后自动恢复`,
+      )
+    }
     return fail.reason
   }
 
@@ -664,7 +717,8 @@ async function handleProbeFailure(
       if (v2.ok) {
         await prisma.campaigns.update({
           where: { id: campaign.id },
-          data: { suffix_fail_count: 0, suffix_cooldown_until: null, suffix_no_tracking_streak: 0, suffix_needs_v2: 1 },
+          // D-351 一并清本机资源阻塞计数：V2 复验跟通同样证明浏览器开得出来
+          data: { suffix_fail_count: 0, suffix_cooldown_until: null, suffix_no_tracking_streak: 0, suffix_local_block_streak: 0, suffix_needs_v2: 1 },
         }).catch((e) => {
           console.warn('[stock-producer] D-203 标记 suffix_needs_v2 失败:', cid, e instanceof Error ? e.message : e)
         })

@@ -16,6 +16,17 @@ export function isNoTrackingStuck(streak: number): boolean {
 }
 
 /**
+ * D-351 达到该连续轮次即判定「本机持续开不出浏览器」，force 路径也不再放行。
+ *
+ * 与 isNoTrackingStuck 的区别是判的对象：那个判**链接**（活着但不记点击），
+ * 这个判**我方机器**（内存/槽位持续不够）。两者都必须能挡 force，否则库存恒 0 的系列
+ * 会把 lease NO_STOCK → force → 失败 → 库存仍 0 走成无限循环。
+ */
+export function isLocalResourceBlocked(streak: number): boolean {
+  return streak >= STOCK_CONFIG.LOCAL_BLOCK_STREAK_THRESHOLD
+}
+
+/**
  * 又一轮「跟到官网但零追踪参数」后的处置：累加轮次，未达阈值维持短冷却重试，
  * 达阈值升级长冷却（并由调用方抛 no_tracking_stuck 告警）。
  */
@@ -38,6 +49,8 @@ export interface CooldownGateInput {
   cooldownUntil: Date | null
   /** 连续「落官网零参数」轮次 */
   noTrackingStreak: number
+  /** D-351 连续「本机资源开不出浏览器」轮次；省略按 0 处理（等于改动前行为） */
+  localBlockStreak?: number
   /** 忽略低水位强制补到目标（lease NO_STOCK 按需路径 / 人工入口都会带） */
   force: boolean
   /** 人工发起（页面补货/重验/换链接后验证）。只有它能穿透卡死长冷却 */
@@ -45,7 +58,7 @@ export interface CooldownGateInput {
   now?: Date
 }
 
-export type CooldownSkipReason = 'fail_cooldown' | 'no_tracking_stuck_cooldown'
+export type CooldownSkipReason = 'fail_cooldown' | 'no_tracking_stuck_cooldown' | 'local_resource_cooldown'
 
 /**
  * 是否应因冷却而跳过本轮补货。
@@ -55,6 +68,9 @@ export type CooldownSkipReason = 'fail_cooldown' | 'no_tracking_stuck_cooldown'
  *   2. 冷却期内且非 force → 跳过（reason=fail_cooldown），与 D-177 一致。
  *   3. 冷却期内且 force → 原本一律放行；D-201 起，若已判定 no_tracking 卡死且**非人工**，
  *      则同样跳过（reason=no_tracking_stuck_cooldown）。人工入口永远放行，保证换了新链接能当场重试。
+ *   4. D-351：冷却期内且 force，若已判定「本机持续开不出浏览器」且**非人工**，同样跳过
+ *      （reason=local_resource_cooldown）。与第 3 条同构，只是病灶在我方机器而非链接——
+ *      D-201 只堵了 no_tracking 那个入口，local_resource 走的是同一个死循环的另一扇门。
  */
 export function evaluateCooldownGate(input: CooldownGateInput): {
   skip: boolean
@@ -68,6 +84,9 @@ export function evaluateCooldownGate(input: CooldownGateInput): {
 
   if (isNoTrackingStuck(input.noTrackingStreak) && !input.manual) {
     return { skip: true, reason: 'no_tracking_stuck_cooldown' }
+  }
+  if (isLocalResourceBlocked(input.localBlockStreak ?? 0) && !input.manual) {
+    return { skip: true, reason: 'local_resource_cooldown' }
   }
   return { skip: false }
 }

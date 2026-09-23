@@ -290,10 +290,10 @@ async function applyNewLink(
     },
   })
 
-  // 旧链接的失败历史对新链接无意义（同 updateLink 的 D-178/D-201/D-203 口径）
+  // 旧链接的失败历史对新链接无意义（同 updateLink 的 D-178/D-201/D-203/D-351 口径）
   await prisma.campaigns.update({
     where: { id: campaign.id },
-    data: { suffix_fail_count: 0, suffix_cooldown_until: null, suffix_no_tracking_streak: 0, suffix_needs_v2: 0 },
+    data: { suffix_fail_count: 0, suffix_cooldown_until: null, suffix_no_tracking_streak: 0, suffix_local_block_streak: 0, suffix_needs_v2: 0 },
   })
 
   // 在跑补刷任务用的是 affiliate_url 快照，不刷新会继续拿死链去点
