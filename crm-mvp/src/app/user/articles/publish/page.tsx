@@ -81,6 +81,11 @@ export default function ArticlePublishPage() {
   const [platformConns, setPlatformConns] = useState<PlatformConnection[]>([]);
   const [loadingArticle, setLoadingArticle] = useState(false);
   const [boundSiteName, setBoundSiteName] = useState("");
+  // 站点列表这一路 fetch 的 promise。从广告页带 ?slug= 跳进来时，加载文章那个 effect
+  // 必须等它 resolve 再进 Step 4——否则 sites 还是 []，发布站点下拉框就是「暂无数据」，
+  // 而 selectedSite 其实已经从 article.publish_site_id 填好了（antd Select 配不出 label
+  // 也就照 placeholder 渲染），于是页面看着像没选站点，「确认发布」却能正常发出去。
+  const sitesReadyRef = useRef<Promise<Site[]> | null>(null);
 
   // Step 0: 选择商家
   const [selectedMerchant, setSelectedMerchant] = useState<Merchant | null>(null);
@@ -204,13 +209,20 @@ export default function ArticlePublishPage() {
           setPublishedMerchantIds(ids);
         }
       }).catch(() => {});
-    // 获取站点
-    fetch("/api/user/publish-sites")
+    // 获取站点。把 promise 存进 ref，让 ?slug= 那条路能 await 到同一次请求，
+    // 不必重新发一遍（原先第二处 fetch 拿到的结果只用于 boundSiteName，
+    // 且与这里的 setSites 互不相干，才留下了空下拉框）。
+    sitesReadyRef.current = fetch("/api/user/publish-sites")
       .then((r) => r.json())
       .then((res) => {
-        if (res.code === 0) setSites(res.data || []);
-        else message.error("站点列表加载失败，请刷新重试");
-      }).catch(() => { message.error("站点列表加载失败，请刷新重试"); });
+        if (res.code === 0) {
+          const list: Site[] = res.data || [];
+          setSites(list);
+          return list;
+        }
+        message.error("站点列表加载失败，请刷新重试");
+        return [];
+      }).catch(() => { message.error("站点列表加载失败，请刷新重试"); return []; });
     // 获取平台连接（含绑定站点）
     fetch("/api/user/settings/platforms")
       .then((r) => r.json())
@@ -284,13 +296,25 @@ export default function ArticlePublishPage() {
             content: finalContent,
             slug: article.slug || "",
           });
+          // 必须先等站点列表到位，再进 Step 4。挂载 effect 与本 effect 是两条并发的
+          // 异步链，本条只查一篇文章、通常先回来；抢跑的话 Step 4 渲染时 sites 还是 []，
+          // 下拉框就是「暂无数据」。等不到也照样往下走，只是下拉框会短暂为空。
+          const siteList = (await sitesReadyRef.current) ?? [];
           if (article.publish_site_id) {
-            setSelectedSite(String(article.publish_site_id));
-            fetch("/api/user/publish-sites").then((r) => r.json()).then((sRes) => {
-              const allSites = sRes.data || [];
-              const s = allSites.find((s: any) => String(s.id) === String(article.publish_site_id));
-              if (s) setBoundSiteName(`${s.site_name} (${s.domain})`);
-            }).catch(() => {});
+            const s = siteList.find((x) => String(x.id) === String(article.publish_site_id));
+            if (s) {
+              setSelectedSite(String(article.publish_site_id));
+              setBoundSiteName(`${s.site_name} (${s.domain})`);
+            } else if (siteList.length > 0) {
+              // 站点列表已到位却找不到这个 id（站点被删/停用）——别把一个选不中的值
+              // 塞进 selectedSite，否则下拉框看着是空的、点「确认发布」却过了校验，
+              // 最后死在发布器里。留空，让用户自己挑一个。
+              setSelectedSite("");
+              setBoundSiteName("");
+              message.warning("该文章原先绑定的发布站点已不可用，请重新选择站点");
+            } else {
+              setSelectedSite(String(article.publish_site_id));
+            }
           }
           setStep(4);
           setLoadingArticle(false);

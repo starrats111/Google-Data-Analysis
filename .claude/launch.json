@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "fernlight",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8811", "--directory", "fernlight"],
+      "port": 8811
+    },
+    {
+      "name": "crm",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "crm-mvp", "run", "dev"],
+      "port": 20050
+    }
+  ]
+}

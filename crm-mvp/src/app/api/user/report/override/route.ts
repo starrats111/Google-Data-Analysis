@@ -29,10 +29,23 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
   const userId = BigInt(user.userId);
 
   // mcc 覆盖需校验 MCC 归属本人
+  //
+  // D-348.1：**清除**（value=null）不要求 MCC 未删，新增/修改仍要求。
+  // 起因：纠正值填下时 MCC 还是活的，之后该号被软删（删号重绑/代理商转移），
+  // D-312 的 orphan 补段又会把已删号连同它遗留的 override 一起补回报表，
+  // 与接替它的新号同时进合计 → 重复计算；而旧的 is_deleted:0 校验让这条
+  // override 在页面上**点不掉**（复原图标报「MCC 账户不存在」），
+  // 组员只能找开发改库。放行清除即可自助止血，且不放宽写入面：
+  // 已删号仍然不能被填新值，归属校验（user_id）两种情形都保留。
   if (scope_key.startsWith("mcc:")) {
     const mccId = BigInt(scope_key.slice(4));
     const mcc = await prisma.google_mcc_accounts.findFirst({
-      where: { id: mccId, user_id: userId, is_deleted: 0 },
+      where: {
+        id: mccId,
+        user_id: userId,
+        // 清除时允许已软删的 MCC；写入时仍限活跃 MCC
+        ...(value === null ? {} : { is_deleted: 0 }),
+      },
       select: { id: true },
     });
     if (!mcc) return apiError("MCC 账户不存在");

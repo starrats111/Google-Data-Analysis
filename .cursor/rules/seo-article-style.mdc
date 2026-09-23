@@ -1,0 +1,128 @@
+---
+description: SEO 批量站群文章差异化规则；写、改、批量生成 nexushive.top / sites_batch / 任何联盟营销站文章时必须遵守，避免模板化指纹被识别为批量生成
+---
+
+# 背景
+
+我们运营多个 SEO 站群（nexushive.top、sites_batch/* 等）做联盟营销引流。
+2026-05 发现 nexushive.top 同一品牌（Interior Define）3 篇文章标题高度同质化：
+
+- "Interior Define Furniture Guide 2026: Sofas, Sectionals and Home Design Ideas"
+- "Interior Define Furniture Guide 2026: Custom Sofas, Beds and More"
+- "Interior Define Furniture Guide 2026: Custom Sofas, Chairs and More"
+
+3 篇共用同一公式 `[Brand] [品类] Guide [YEAR]: [关键词], [关键词] and [关键词|More]`，
+被 Google Helpful Content / spam detection 的 N-gram 指纹检测命中风险极高，
+也很容易被人工巡查发现是批量生成。
+
+以下规则适用于**所有面向公开搜索引擎的批量内容生成任务**：标题、正文、封面、发布节奏全部受约束。
+
+# 标题反指纹规则（强约束）
+
+## 禁用模式
+
+- 禁止使用 `[Brand] [品类] Guide [YEAR]:` 这种公式化句式
+- 禁止以 `and More` / `and Home Design Ideas` / `& Beyond` 等空泛短语收尾
+- 禁止冒号后接 `X, Y and Z` 的三件套关键词副标题
+- 同一品牌的前 3 篇文章必须使用 3 种**不同结构**的标题
+- 年份（如 `2026`）出现在标题中的比例 ≤ 30%（不要每篇都打年份）
+- 品牌名固定出现在标题最前位置的比例 ≤ 40%（部分文章把品牌名留到 H1 或正文）
+
+## 标题结构模板池（轮换使用）
+
+写任何一篇新文章前，先随机抽取以下 1 个结构，并确认**同品牌近 90 天**没用过同一结构：
+
+| # | 结构 | 模板示例 |
+|---|------|---------|
+| 1 | 第一人称叙事 | `I Spent a Weekend Picking a Sloan Sofa — Here's What Surprised Me` |
+| 2 | 反预期 | `Why I Almost Skipped Interior Define (and What Changed My Mind)` |
+| 3 | 问句 | `Is Interior Define Actually Worth the 10-Week Wait?` |
+| 4 | 场景限定 | `Interior Define in a 650 sq ft Walk-Up: Real Notes` |
+| 5 | 对比 | `Interior Define vs West Elm: Three Honest Differences` |
+| 6 | 单品聚焦 | `The Sloan Sectional: One Year Later` |
+| 7 | 错误教训 | `Five Things I Wish I'd Asked Before Ordering a Custom Sofa` |
+| 8 | 角色代入 | `Furnishing My First Real Place: Interior Define Notes` |
+| 9 | 情绪/反思（弱品牌） | `The Couch That Made Me Stop Apologizing for My Living Room` |
+| 10 | 数字明确型 | `After 4 Returns, I Finally Landed on Interior Define` |
+
+每写 5 篇必须新增 1 个池外结构，并补充进规则维护的模板池。
+
+# 正文差异化规则
+
+## 开篇钩子（5 种类型轮换，不得连续两篇相同类型）
+
+1. **个人故事**：具体的生活场景（搬家、聚会、坏掉的旧家具）
+2. **数据/行业**：「过去三年家具线上销售增长了…」类客观切入
+3. **失败教训**：「我退过 4 个沙发，第 5 个才稳定下来」
+4. **场景描述**：直接描写一个房间/瞬间，再过渡到品牌
+5. **问题开篇**：以一个常见困惑/反直觉的问句切入
+
+## 单品/SKU 轮换
+
+- 同品牌每篇主推 SKU **必须不同**（Interior Define 案例里 3 篇都吹 Sloan，禁止）
+- 单一 SKU 在同品牌全部文章里的主推率 ≤ 1/3
+- 必须为每个品牌维护 SKU 列表，每次选用前查阅历史使用次数
+
+## 禁用术语 + 同义改写
+
+为每个品牌建立一份「过度使用短语黑名单」。Interior Define 当前黑名单（不得在新文章中出现 ≥1 次）：
+
+- "modern but not trendy"
+- "livable / live with"
+- "showroom-perfect"
+- "Custom Sofas 2026"
+- "and More"
+- "measure your room / measure your doorways"
+- "Sloan" 作为标题主词
+
+发现连续 3 篇出现同一短语 ≥ 1 次的，自动加入该品牌黑名单。
+
+## 结构混合
+
+不得每篇都是「5 个 H2 + 1 张 hero + 4 张正文图」。轮换：
+
+- FAQ 末尾型
+- 对比表中段型（含 markdown table）
+- 决策清单型（含 checklist）
+- 时间线 / 历程型
+- 短段落 + 多小标题型（10+ 个 H3）
+- 一图一段图文型
+
+图片数量 3-6 张范围内随机，不固定 5 张。
+
+# 发布节奏
+
+- 同一品牌在同一站点：发布间隔 ≥ 7 天，理想 ≥ 14 天
+- 同一站点同一天不得发布 ≥ 2 篇**同品牌**文章
+- 同一站点同一天发布的多篇文章不得使用同一标题结构模板
+
+# 生成前自检清单（agent 必须在输出前完成）
+
+写任何一篇新文章前，agent 必须显式回答以下 4 个问题：
+
+1. 我抽到的标题结构在该品牌近 90 天内是否首次出现？（若否，重抽）
+2. 我的开篇钩子类型与上一篇是否不同？（若否，更换）
+3. 我准备主推的 SKU 在该品牌历史文章中使用率是否 ≤ 1/3？（若否，换 SKU）
+4. 我的草稿中是否包含该品牌当前黑名单短语？（若是，全部改写）
+
+回答全部为「是」后才可输出最终内容。
+
+# 修复存量同质化文章
+
+发现已发布文章存在同质化时：
+
+- 第一步：重写标题，使用新模板结构
+- 第二步：重写首段（开篇钩子换类型）
+- 第三步：替换主推 SKU 名（若 ≥ 2 篇撞同一 SKU）
+- 不必整篇重写，但**标题 + 首 200 字 + 主推 SKU** 三项必须改
+
+# 工具化建议
+
+批量站群生成脚本（在 `sites_batch/` 或独立生成器中）需要内置：
+
+- 标题模板池 JSON（轮换抽样 + 历史去重）
+- 品牌级 SKU 历史使用计数表
+- 品牌级短语黑名单
+- 同站点发布日历（防同一天同品牌冲突）
+
+未实现这些机制前，禁止开启「全自动批量生成」模式，必须人工逐篇审标题。

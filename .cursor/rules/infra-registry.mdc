@@ -1,0 +1,44 @@
+---
+description: 三套广告系统(CRM/kylink/kyads)总框架 + 服务器/密钥/数据库总账的定位指针；当用户提到某个系统、某台服务器、SSH/隧道/数据库连接、密钥，或要跨系统操作/集成时优先查阅
+alwaysApply: true
+---
+
+# 三系统总框架 + 基础设施总账（指针，不含机密）
+
+## 用户维护的系统全景
+
+用户同时维护 3 套**相关但代码独立**的自动化广告系统（均在本机），本工作区是其中的 CRM：
+
+| 系统 | 定位 | 本地代码位置 |
+|------|------|--------------|
+| **CRM**（本工作区 `crm-mvp`，名 ad-automation-publish） | 用户**自己的**自动上 Google 广告系统（主系统/整合中心） | `d:\Program Files (x86)\wz\Google Analysis\crm-mvp` |
+| **kylink（换链接）** | 联盟链接后缀池/换链接/追踪参数系统；**目标：能力并入 CRM** | `C:\Users\Administrator\Desktop\kylink` |
+| **kyads（ky中控）** | 与 CRM 同目标、异逻辑的自动上广告中控；作对照参考 | `C:\Users\Administrator\Desktop\kyads` |
+
+要点：
+- 用户希望**在本工作区窗口统一操纵三套系统**——kylink/kyads 在 `桌面\` 下，用绝对路径跨目录 Read/Grep/编辑即可。
+- 集成方向：**kylink 的换链接能力 → 并入 CRM**。
+- 三系统都是 Next.js + Prisma；CRM 用 Prisma 7 / MariaDB / google-ads-api / puppeteer。
+
+## 机密总账位置
+
+服务器、SSH 密钥、域名、数据库连接、隧道端口、各系统机密**完整信息统一存放在本机**：
+
+- 总账文件：`C:\Users\Administrator\.infra\服务器总账.md`
+- 三系统架构与集成评估：`C:\Users\Administrator\.infra\三系统架构与集成.md`（如存在）
+- 这些文件**不在任何 git 仓库**，含明文密码/密钥/Token，禁止复制进任何仓库或外发。
+
+当用户提到「某个系统 / 某台服务器 / kylink / kyads / CRM / 连数据库 / 开隧道 / 用哪个密钥 / 跨系统集成」时，先用 Read 读取上面的总账与架构文件定位，再行动。
+
+## 概要索引（非机密）
+
+| 项目 | 域名 | 服务器IP | 本地隧道端口 | dev端口 | 本地目录 |
+|------|------|----------|--------------|---------|----------|
+| kylink | xc.kyads.net | 43.106.49.28（阿里·新加坡） | 3307 | 51001 | `桌面\kylink` |
+| kyads | kyads.net | 216.67.230.8（hostingsg） | 3308 | 20050 | `桌面\kyads` |
+| CRM | google-data-analysis.top | 43.156.142.141（腾讯云） | — | 20050 | 本工作区 |
+| Hermes | fengdu-ads.top/hermes-approve | 43.165.170.242（腾讯云·海外） | — | 8787(回环) | 仅服务器(ubuntu+yangma0612.pem) |
+
+- 三台服务器的数据库都只监听 `127.0.0.1`，本地必须先开 SSH 隧道再连。
+- 隧道一键脚本：各项目目录下的 `start-db-tunnel.cmd`。
+- ⚠️ 本地连的都是生产库，禁止本地跑迁移/清理类脚本。
