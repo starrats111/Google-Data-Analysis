@@ -7,7 +7,12 @@
 // ── 平台 API 配置 ──
 
 interface PlatformApiConfig {
-  mode: "post_json" | "post_form" | "get";
+  /**
+   * D-349 新增两种形态：
+   * - get_query：GET + apiKey 走 query（QUK）。与旧 "get" 的区别是鉴权参数名不是 token
+   * - post_json_bearer：POST JSON + Authorization: Bearer 头（BA）。旧 post_json 把 token 放 body 且带 source
+   */
+  mode: "post_json" | "post_form" | "get" | "get_query" | "post_json_bearer";
   url: string;
   source?: string;
   pageKey: string;
@@ -16,6 +21,23 @@ interface PlatformApiConfig {
   rateLimitMs?: number;
   /** 该平台 API 本身只返回已加入的商家，无需再做 relationship_status 过滤 */
   assumeAllJoined?: boolean;
+  /**
+   * D-349 BA：服务端没有任何 relationship / merchant_status 过滤参数（实测传了 total 也不变），
+   * 只能把全量拉回来按这个字段值在本地筛。填字段名 → 只保留该字段等于 joinedFieldValue 的行。
+   */
+  joinedFilterField?: string;
+  joinedFilterValue?: string;
+  /**
+   * D-349 QUK：鉴权参数名（默认 "token"）。QUK 用 apiKey。
+   */
+  authParamKey?: string;
+  /**
+   * D-349：根级**数字** status 代表成功的值（BA=1）。其余平台的 status 是 {code,msg}
+   * 包装对象（LB/LH/RW/PB 文档实测），不设此项即不走数字判定。
+   * 别写成「status!==1 就算错」的硬编码：LH 的点击接口成功标志恰好是 status:0，
+   * 同字段同值含义相反，只能由平台自己声明。
+   */
+  successStatus?: number;
   /**
    * 该平台 API 要求显式携带 relationship 参数才能正常返回数据。
    * 设为 true 时请求会附带 relationshipValue（默认 "Joined"）
@@ -126,6 +148,38 @@ const PLATFORM_API_CONFIG: Record<string, PlatformApiConfig> = {
     assumeAllJoined: true,
     requiresRelationshipParam: true,
   },
+  // D-349 QUK (Quk)：Spring Boot，GET + apiKey 走 query。注意 base 必须带 /openapi/，少这段全 404。
+  //   三个接口的大小写风格不一致：商家 advertiserSearch 是 camelCase，
+  //   交易 transactiondetails / 点击 clickdetails 全小写——别照着一个推另一个。
+  //   relationship 取值 0-Pending 1-Approved 2-Rejected 3-无关系，嵌在 channelList[] 里按渠道。
+  //   实测：不传 relationship 返回全站 395,387 家（39,539 页），必须带 1 过滤 → 328 家 / 4 页。
+  //   pageSize 服务端硬顶 100（传 200/500/1000 都静默截断，size 恒为 100），maxSize 写 100 免得白翻页。
+  //   限流 15 次/60 秒且**跨接口共享同一个 Key 的池子**（实测连打 17 次，第 16 次起 1005），
+  //   故 rateLimitMs 取 4200（60/15=4000 再留 5% 余量），且同步层必须串行。
+  QUK: {
+    mode: "get_query",
+    url: "https://api.quk.com/api/v1/openapi/publisher/advertiserSearch",
+    authParamKey: "apiKey",
+    pageKey: "pageNum", sizeKey: "pageSize", maxSize: 100,
+    rateLimitMs: 4200,
+    assumeAllJoined: true,
+    requiresRelationshipParam: true,
+    relationshipValue: "1", // 1 = Approved
+  },
+  // D-349 BA (BonusArrive)：ThinkPHP 白牌（静态资源在 linksharehub.com），POST JSON + Bearer 头。
+  //   base 是 /slapi/ 不是 /sapi/——后者是前端文档页路由，打过去 404/506。
+  //   最大的坑：**没有任何 relationship 过滤参数**。merchant_status 只有 active(已加入)/
+  //   needapply(未加入)，实测传 merchant_status 或 relationship 服务端都不理，total 恒为全量。
+  //   只能 per_page=2000 两页拉回全量（3179 家 / 18s+7s）再本地筛 active（实测 503 家）。
+  //   所以这里 assumeAllJoined 不能设 true，改用 joinedFilterField 做本地过滤。
+  BA: {
+    mode: "post_json_bearer",
+    url: "https://www.bonusarrive.com/slapi/service/advertisers",
+    pageKey: "page", sizeKey: "per_page", maxSize: 2000,
+    joinedFilterField: "merchant_status",
+    joinedFilterValue: "active",
+    successStatus: 1,
+  },
 };
 
 // ── 统一商家数据结构 ──
@@ -222,7 +276,32 @@ async function callPlatformApi(
     try {
       let resp: Response;
 
-      if (mode === "post_json") {
+      if (mode === "post_json_bearer") {
+        // D-349 BA：token 走 Authorization 头，body 里不带 source，也没有 relationship 可传
+        const payload: Record<string, unknown> = {
+          [pageKey]: page,
+          [sizeKey]: maxSize,
+        };
+        resp = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json;charset=utf-8",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+      } else if (mode === "get_query") {
+        // D-349 QUK：鉴权参数名由 authParamKey 指定（apiKey），不是 token
+        const params = new URLSearchParams({
+          [config.authParamKey || "token"]: token,
+          [pageKey]: String(page),
+          [sizeKey]: String(maxSize),
+        });
+        if (relationship) params.set("relationship", relationship);
+        const sep = url.includes("?") ? "&" : "?";
+        resp = await fetch(`${url}${sep}${params}`, { signal: controller.signal });
+      } else if (mode === "post_json") {
         const payload: Record<string, unknown> = {
           source, token,
           [pageKey]: page,
@@ -298,14 +377,108 @@ function extractMerchantRawList(data: Record<string, unknown>): Record<string, u
   return Array.isArray(list) ? (list as Record<string, unknown>[]) : [];
 }
 
+/**
+ * D-349 BA：commissions 字段的类型不固定——实测 282 个 active 里 278 个是字符串
+ * （内容是 JSON 数组文本），4 个是数组（元素才是 JSON 文本）。按字符串遍历会一个字符
+ * 一个字符地跑，所以必须先归一。
+ *
+ * 更要紧的是：凡 name === "Contact for rates" 的行，commission_val 一律是硬编码的 70
+ * 配 commission_type:"percent"（全站 3179 家里 19 家，active 里 4 家）。那是「费率未公开、
+ * 需找 AM 询价」的占位值，不是真的 70%。照字面入库会让商家库凭空多出 4 个 70% 佣金的
+ * 商家，把选品和 ROI 直接带偏，所以这里当未知费率返回空串。
+ */
+function parseBaCommission(raw: unknown): string {
+  const entries: unknown[] = [];
+  const push = (v: unknown) => {
+    if (typeof v === "string") {
+      try {
+        const parsed = JSON.parse(v);
+        if (Array.isArray(parsed)) entries.push(...parsed);
+        else entries.push(parsed);
+      } catch { /* 非 JSON 文本，忽略 */ }
+    } else if (v && typeof v === "object") {
+      entries.push(v);
+    }
+  };
+  if (Array.isArray(raw)) raw.forEach(push);
+  else push(raw);
+
+  for (const e of entries) {
+    if (!e || typeof e !== "object") continue;
+    const row = e as Record<string, unknown>;
+    // 费率未公开的占位行：跳过，不要把 70 当成 70%
+    if (String(row.name || "").trim().toLowerCase() === "contact for rates") continue;
+    const val = row.commission_val;
+    if (val == null || val === "") continue;
+    const s = String(val).trim();
+    if (!s || s === "0" || s === "0%") continue;
+    // 正常行是带 % 的字符串（"7%"、"2.1%"）；裸数字按百分比补 %
+    return /%$/.test(s) ? s : `${s}%`;
+  }
+  return "";
+}
+
+/**
+ * D-349：把 QUK / BA 的异形字段摊平成通用解析器认得的形状。
+ * 只补通用兜底链覆盖不到的部分，其余仍走原逻辑。
+ */
+function preNormalizeMerchantItem(
+  platform: string,
+  item: Record<string, unknown>,
+): Record<string, unknown> {
+  if (platform === "QUK") {
+    // relationship / trackingUrl / datetime 都嵌在 channelList[] 里，按渠道一份。
+    // 带 relationship=1 过滤时 channelList 只含命中的那个渠道（实测 328 行全是 length=1），
+    // 这里仍按「取第一个已批准的、否则取第一个」兜底，避免多渠道账号拿错链接。
+    const channels = Array.isArray(item.channelList) ? (item.channelList as Record<string, unknown>[]) : [];
+    const approved = channels.find((c) => String(c?.relationship) === "1") || channels[0];
+    return {
+      ...item,
+      // merchantId 是 camelCase，通用链里只有 merchant_id/mid/m_id/id，会落空
+      mid: item.merchantId ?? item.mid,
+      tracking_url: approved?.trackingUrl ?? "",
+      datetime: approved?.datetime ?? null,
+      // channelList 里的 relationship 是数字码，转成通用解析器认的词
+      relationship: approved ? (String(approved.relationship) === "1" ? "joined" : "not_joined") : "not_joined",
+    };
+  }
+
+  if (platform === "BA") {
+    return {
+      ...item,
+      // site_logo_url 不在通用 logo 兜底链里
+      logo_url: item.site_logo_url ?? item.logo_url,
+      // 通用链取 item.category/categories，BA 拼错成 adv_catagory
+      category: item.adv_catagory ?? item.category,
+      // 商家名叫 site_name，通用链（merchant_name/name/merchantName）取不到 →
+      // 会一路落到 nameFallback 的「site_url 主机名」兜底，503 家全被写成
+      // nanobondus.com 这种域名而不是 "Nano Bond"
+      merchant_name: item.site_name ?? item.merchant_name,
+      // 地区字段是单数 region，通用链只找 support_region/supported_regions/regions/country
+      support_region: item.region ?? item.support_region,
+      commission_rate: parseBaCommission(item.commissions),
+      // merchant_status: active(已加入) / needapply(未加入)
+      relationship: String(item.merchant_status || "") === "active" ? "joined" : "not_joined",
+      // 文档写的是「加入/移除广告主的日期」，当入驻时间用
+      datetime: item.update_time ?? null,
+    };
+  }
+
+  return item;
+}
+
 function parseMerchants(
   platform: string,
   data: Record<string, unknown>,
   assumeAllJoined = false,
 ): PlatformMerchant[] {
-  const list = extractMerchantRawList(data);
+  const rawList = extractMerchantRawList(data);
 
-  if (!Array.isArray(list)) return [];
+  if (!Array.isArray(rawList)) return [];
+
+  const list = rawList.map((it) =>
+    preNormalizeMerchantItem(platform, (it ?? {}) as Record<string, unknown>),
+  );
 
   return list.map((item, idx) => {
     // LH 的字段命名和其他平台相反：mcid=数字MID，m_id=slug MCID
@@ -431,8 +604,8 @@ function normalizeStatus(s: string): string {
 function getTotalPages(data: Record<string, unknown>, maxSize: number): number {
   const root = (data.data || data) as Record<string, unknown>;
 
-  // 有些平台直接返回 total_page（总页数）
-  const totalPage = Number(root.total_page || root.totalPage || root.totalPages || 0);
+  // 有些平台直接返回 total_page（总页数）。D-349 QUK 的字段名是 pages
+  const totalPage = Number(root.total_page || root.totalPage || root.totalPages || root.pages || 0);
   if (totalPage > 0) return totalPage;
 
   // 其他平台返回 total（总条数），需要计算页数
@@ -479,14 +652,32 @@ export async function fetchAllMerchants(
     // 兼容两种错误格式：
     //   1. PM/BSH/CF/CG/MUI：{ "code": "1001", "message": "..." }（顶层 code）
     //   2. LB/LH/RW：{ "status": { "code": 1000, "msg": "..." }, "data": {...} }（status 包装层）
+    //   3. D-349 BA：{ "status": 1, "info": "success" } —— status 是**数字**而不是包装对象，
+    //      失败是 status:0 + info 文字（注意：文档写的数字码 1006 实测并不出现）。
+    //      旧逻辑 `status?.code` 在这里取到 undefined → 一律判成成功，失败会被当空列表静默放过，
+    //      所以 BA 必须单独判。
     const topCode = String((firstPage as Record<string, unknown>).code ?? "");
-    const statusCode = (firstPage as any).status?.code;
+    const rawStatus = (firstPage as any).status;
+    if (config.successStatus !== undefined) {
+      const num =
+        typeof rawStatus === "number"
+          ? rawStatus
+          : typeof rawStatus === "string" && /^-?\d+$/.test(rawStatus)
+            ? Number(rawStatus)
+            : NaN;
+      if (!Number.isNaN(num) && num !== config.successStatus) {
+        const msg = String((firstPage as Record<string, unknown>).info || "API 返回错误");
+        return { merchants: [], error: platformBizError(platform, String(rawStatus), msg) };
+      }
+    }
+    const statusCode = typeof rawStatus === "object" && rawStatus !== null ? rawStatus.code : undefined;
     const effectiveCode = topCode && topCode !== "0" ? topCode
       : (statusCode != null && statusCode !== 0 ? String(statusCode) : "0");
     if (effectiveCode !== "0" && effectiveCode !== "200") {
       const msg = String(
         (firstPage as Record<string, unknown>).message ||
         (firstPage as any).status?.msg ||
+        (firstPage as Record<string, unknown>).msg ||
         "API 返回错误"
       );
       // D-303：贴上业务码标记，下游 classifyConnFailure 才认得出「这是平台拒绝，不是密钥失效」
@@ -511,10 +702,19 @@ export async function fetchAllMerchants(
     // 获取首页原始列表数量（用于判断是否是最后一页，不受 parseMerchants 过滤影响）
     const firstRawCount = extractMerchantRawList(firstPage).length;
 
-    const firstBatch = parseMerchants(platform, firstPage, assumeAllJoined);
-    for (const m of firstBatch) {
-      if (!seen.has(m.merchant_id)) { seen.add(m.merchant_id); allMerchants.push(m); }
-    }
+    // D-349：BA 服务端没有 relationship 过滤参数（传了 total 也不变），只能本地筛。
+    // 放在收集环节而不是 parseMerchants 里，是为了让「拉了多少 / 留了多少」能分别打点——
+    // 否则一旦平台改了 merchant_status 取值，看到的只是商家数悄悄变 0。
+    const keepJoinedOnly = !!config.joinedFilterField;
+    let droppedNotJoined = 0;
+    const collect = (batch: PlatformMerchant[]) => {
+      for (const m of batch) {
+        if (keepJoinedOnly && m.relationship_status !== "joined") { droppedNotJoined++; continue; }
+        if (!seen.has(m.merchant_id)) { seen.add(m.merchant_id); allMerchants.push(m); }
+      }
+    };
+
+    collect(parseMerchants(platform, firstPage, assumeAllJoined));
 
     // 分页计算：API 实际返回条数可能小于请求的 maxSize（平台侧限制），
     // 必须用实际返回条数（而非 maxSize）来计算总页数和判断末页
@@ -579,16 +779,29 @@ export async function fetchAllMerchants(
       }
       consecutiveEmpty = 0;
 
-      const batch = parseMerchants(platform, pageData, assumeAllJoined);
-      for (const m of batch) {
-        if (!seen.has(m.merchant_id)) { seen.add(m.merchant_id); allMerchants.push(m); }
-      }
+      collect(parseMerchants(platform, pageData, assumeAllJoined));
 
       // 仅当 totalPages 是由 fallback（200）估算时，才用末页判断提前终止；
       // 若 API 已返回准确总数（totalPages 由 apiTotal 计算），则完全信任总页数，
       // 避免某页因网络抖动/限流返回不完整数据时错误截断后续分页。
       const totalPagesFromApi = apiTotal > 0 && actualPageSize > 0;
       if (!totalPagesFromApi && pageRawCount < actualPageSize) break;
+    }
+
+    if (keepJoinedOnly) {
+      console.log(
+        `[MerchantSync] ${platform}: 本地过滤 ${config.joinedFilterField}=${config.joinedFilterValue}，` +
+        `保留 ${allMerchants.length} 家，丢弃未加入 ${droppedNotJoined} 家`,
+      );
+      // 全量拉回来却一家都没留下 → 大概率是平台改了 merchant_status 取值，
+      // 而不是这个号真的没加入任何商家。当错误报出去，别让商家库被清空。
+      if (allMerchants.length === 0 && droppedNotJoined > 0) {
+        return {
+          merchants: [],
+          error: `${platform}: 拉到 ${droppedNotJoined} 家但无一条 ${config.joinedFilterField}=${config.joinedFilterValue}，` +
+                 `疑似平台改了状态取值，已中止以免清空商家库`,
+        };
+      }
     }
 
     return { merchants: allMerchants };
@@ -606,13 +819,18 @@ function sleep(ms: number) {
 // ══════════════════════════════════════════════════════════════
 
 interface PlatformTxnConfig {
-  mode: "post_json" | "post_form" | "get";
+  /** D-349：get_query（QUK，apiKey 走 query）/ post_json_bearer（BA，Bearer 头）见 PlatformApiConfig 注释 */
+  mode: "post_json" | "post_form" | "get" | "get_query" | "post_json_bearer";
   url: string;
   source?: string;
+  /** D-349 QUK：鉴权参数名（默认 token） */
+  authParamKey?: string;
+  /** D-349：根级数字 status 代表成功的值（BA=1）。见 PlatformApiConfig.successStatus */
+  successStatus?: number;
   /**
    * 日期参数命名：
-   *   - "camel"：beginDate/endDate（CG/CF/PM/BSH/MUI）
-   *   - "snake"：begin_date/end_date（RW/LH/LB）
+   *   - "camel"：beginDate/endDate（CG/CF/PM/BSH/MUI/QUK）
+   *   - "snake"：begin_date/end_date（RW/LH/LB/BA）
    *   - "ad"   ：transactionStart/transactionEnd（C-029 AD）
    */
   dateFormat: "camel" | "snake" | "ad";
@@ -728,6 +946,33 @@ const PLATFORM_TXN_CONFIG: Record<string, PlatformTxnConfig> = {
     omitStatusAll: true,
     maxDateSpanDays: 60,
   },
+  // D-349 QUK：GET + apiKey 走 query，路径是全小写 transactiondetails（商家那个却是 camelCase）。
+  //   无 status「全部」参数（orderStatus 省略即全部）→ omitStatusAll。
+  //   实测 418 天跨度都不报 1004，交易接口没有跨度上限，故不设 maxDateSpanDays。
+  //   dateType 0=按更新时间 1=按成交时间，默认成交时间，本同步用默认。
+  //   限流与商家接口共享同一个 Key 的 15 次/60 秒池子 → rateLimitMs 同样给 4200。
+  //   金额字段 saleAmount/commission 均为 USD；时间 GMT+00:00 → 不进 CST_FACE_PLATFORMS。
+  QUK: {
+    mode: "get_query",
+    url: "https://api.quk.com/api/v1/openapi/publisher/transactiondetails",
+    authParamKey: "apiKey",
+    dateFormat: "camel", pageKey: "pageNum", sizeKey: "pageSize", maxSize: 10000,
+    rateLimitMs: 4200,
+    omitStatusAll: true,
+  },
+  // D-349 BA：POST JSON + Bearer 头，/slapi/ 不是 /sapi/。
+  //   跨度上限 31 天（实测传 33 天回 status:0 +「The time span cannot exceed 31 days」，
+  //   注意不是文档写的数字码 1006）→ 30 天切片留余量。
+  //   无 status「全部」参数 → omitStatusAll。唯一 ID 是 sign_id（已在 txnId 候选链里）。
+  //   交易返回独立的 UTC 字段说明时区，配合 order_time/report_time 用。
+  BA: {
+    mode: "post_json_bearer",
+    url: "https://www.bonusarrive.com/slapi/service/transactions",
+    dateFormat: "snake", pageKey: "page", sizeKey: "per_page", maxSize: 2000,
+    omitStatusAll: true,
+    maxDateSpanDays: 30,
+    successStatus: 1,
+  },
 };
 
 export interface PlatformTransaction {
@@ -786,7 +1031,31 @@ async function callTxnApi(
     try {
       let resp: Response;
 
-      if (mode === "post_json") {
+      if (mode === "post_json_bearer") {
+        // D-349 BA：token 走 Authorization 头；无 dataScope / status / source
+        resp = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json;charset=utf-8",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            [beginKey]: startDate, [endKey]: endDate,
+            [pageKey]: page, [sizeKey]: maxSize,
+          }),
+          signal: controller.signal,
+        });
+      } else if (mode === "get_query") {
+        // D-349 QUK：apiKey 走 query，orderStatus 省略即「全部」
+        const params = new URLSearchParams({
+          [config.authParamKey || "token"]: token,
+          [beginKey]: startDate, [endKey]: endDate,
+          [pageKey]: String(page), [sizeKey]: String(maxSize),
+        });
+        if (!omitStatusAll) params.set("status", statusAll);
+        const sep = url.includes("?") ? "&" : "?";
+        resp = await fetch(`${url}${sep}${params}`, { signal: controller.signal });
+      } else if (mode === "post_json") {
         const payload: Record<string, unknown> = {
           token, [beginKey]: startDate, [endKey]: endDate,
           [pageKey]: page, [sizeKey]: maxSize,
@@ -910,8 +1179,24 @@ const TXN_STATUS_MAP: Record<string, string> = {
   "1": "pending", "2": "approved", "3": "rejected",
 };
 
-function normalizeTxnStatus(s: string): string {
+/**
+ * D-349 QUK 的 orderStatus 数字码与 AD 的**含义相反**，不能共用 TXN_STATUS_MAP：
+ *   QUK: 0-pending 1-approved 2-rejected
+ *   AD : 1-pending 2-approved 3-rejected（TXN_STATUS_MAP 里那三行）
+ * 若直接落到通用表，QUK 的「已批准」(1) 会被记成 pending、「已拒绝」(2) 会被记成 approved，
+ * 佣金和结算率全部算错且无任何报错。故按平台单独查表。
+ */
+const TXN_STATUS_MAP_QUK: Record<string, string> = {
+  "0": "pending", "1": "approved", "2": "rejected",
+};
+
+function normalizeTxnStatus(s: string, platform?: string): string {
   const lower = String(s).toLowerCase().trim();
+  if (platform === "QUK") {
+    // 数字码走 QUK 专表；万一平台改成返回英文词，回落通用表
+    if (TXN_STATUS_MAP_QUK[lower]) return TXN_STATUS_MAP_QUK[lower];
+    return TXN_STATUS_MAP[lower] || "pending";
+  }
   return TXN_STATUS_MAP[lower] || "pending";
 }
 
@@ -937,6 +1222,63 @@ function pickNumericField(...candidates: unknown[]): number {
 
 let _diagLogged = new Set<string>();
 
+/**
+ * D-349：把 QUK / BA 的交易字段摊平成通用解析器认得的形状。
+ */
+function preNormalizeTxnItem(
+  platform: string,
+  item: Record<string, unknown>,
+): Record<string, unknown> {
+  if (platform === "QUK") {
+    return {
+      ...item,
+      // 通用链找 status/raw_status，QUK 叫 orderStatus（数字码，由 normalizeTxnStatus 的
+      // QUK 专表解释——与 AD 的数字码含义相反，别并表）
+      status: item.orderStatus ?? item.status,
+      // 金额：saleAmount / commission（均 USD）
+      sale_amount: item.saleAmount ?? item.sale_amount,
+      sale_comm: item.commission ?? item.sale_comm,
+      // 时间：transactionDate = 成交时间（GMT+00:00），updateDate = 更新时间
+      order_time: item.transactionDate ?? item.order_time,
+      last_update_time: item.updateDate ?? item.last_update_time,
+      // 商家：merchantId / merchantName 都是 camelCase
+      mid: item.merchantId ?? item.mid,
+      merchant_name: item.merchantName ?? item.merchant_name,
+      // QUK 没有独立的行级唯一 ID，orderId 已在 txnId 兜底链里
+      order_id: item.orderId ?? item.order_id,
+    };
+  }
+
+  // BA
+  return {
+    ...item,
+    // sign_id 是行级唯一 ID，已在 txnId 候选链里；order_no 是订单号
+    order_id: item.order_no ?? item.order_id,
+    sale_amount: item.order_amount ?? item.sale_amount,
+    sale_comm: item.commission ?? item.sale_comm,
+    // status 已是英文词（pending/approved/declined/paid），通用表直接认
+    mid: item.m_id ?? item.mid,
+    merchant_name: item.site_name ?? item.merchant_name,
+    last_update_time: item.report_time ?? item.last_update_time,
+  };
+}
+
+/**
+ * D-349 待验证（上线后第一批真实订单到达时必须核一次）：
+ * BA 交易接口每行返回一个独立的 `UTC` 字段「说明当前时间的时区，请与 order_time/
+ * report_time 一起使用」。接入时该账号交易数为 0，拿不到样本，无法确认 order_time
+ * 到底是 UTC 还是 UTC+8（同平台的点击接口 click_time 明确是 UTC+8，两个接口口径不同）。
+ *
+ * 当前按「UTC」处理：不加入 report-metrics.ts 的 CST_FACE_PLATFORMS，
+ * 即入库视为真 UTC、展示层 +8。
+ *
+ * 核对方法：第一批订单入库后，取一行比对 BA 后台订单列表显示的时间与
+ * affiliate_transactions.transaction_time。若后台时间 = 入库时间（未 +8），
+ * 说明 order_time 其实是 CST 面孔 → 必须把 "BA" 加进 CST_FACE_PLATFORMS 并回刷历史，
+ * 否则会出现 D-2xx 那类 8 小时错月（见 [[crm-utc-vs-cst-sql-trap]]）。
+ */
+export const BA_TXN_TZ_UNVERIFIED = true;
+
 function parseTransactions(platform: string, data: Record<string, unknown>): PlatformTransaction[] {
   const root = (data.data || data) as Record<string, unknown>;
   let list = (root.list || root.transactions || root.items || []) as Record<string, unknown>[];
@@ -957,6 +1299,11 @@ function parseTransactions(platform: string, data: Record<string, unknown>): Pla
       }
     }
     list = flat;
+  }
+
+  // D-349：QUK / BA 的交易字段名与通用兜底链对不上，先摊平再走原解析
+  if (platform === "QUK" || platform === "BA") {
+    list = list.map((it) => preNormalizeTxnItem(platform, (it ?? {}) as Record<string, unknown>));
   }
 
   // 每个平台只打印一次首条交易的原始字段（诊断用）
@@ -1043,7 +1390,7 @@ function parseTransactions(platform: string, data: Record<string, unknown>): Pla
     const isPaid =
       (paidDateRaw != null && !["", "0", "null"].includes(String(paidDateRaw).trim())) ||
       String(paidStatusRaw ?? "") === "1";
-    const baseStatus = normalizeTxnStatus(rawStatus);
+    const baseStatus = normalizeTxnStatus(rawStatus, platform);
     const finalStatus = isPaid && baseStatus !== "rejected" ? "paid" : baseStatus;
 
     // C-082: transaction_time 严格使用 order_time（订单下单时间，唯一不变）。
@@ -1152,7 +1499,24 @@ export async function fetchAllTransactions(
       const firstPage = await callTxnApi(config, token, chunk.start, chunk.end, 1, opts);
       const code = String((firstPage as Record<string, unknown>).code ?? (firstPage as Record<string, unknown>).status ? ((firstPage as any).status?.code ?? "0") : "0");
 
-      const statusCode = (firstPage as any).status?.code;
+      // D-349 BA：status 是**数字**（1=成功，0=失败 + info 文字），不是 {code,msg} 包装对象。
+      // 下面那个 status?.code 在这里恒为 undefined → 失败会被当成空结果静默跳过，必须单独判。
+      const rawStatus = (firstPage as any).status;
+      if (config.successStatus !== undefined) {
+        const num =
+          typeof rawStatus === "number"
+            ? rawStatus
+            : typeof rawStatus === "string" && /^-?\d+$/.test(rawStatus)
+              ? Number(rawStatus)
+              : NaN;
+        if (!Number.isNaN(num) && num !== config.successStatus) {
+          const msg = String((firstPage as Record<string, unknown>).info || "API 返回错误");
+          if (msg.toLowerCase().includes("no data") || msg.toLowerCase().includes("no record")) continue;
+          return { transactions: allTxns, error: platformBizError(platform, String(rawStatus), msg) };
+        }
+      }
+
+      const statusCode = typeof rawStatus === "object" && rawStatus !== null ? rawStatus.code : undefined;
       if (statusCode !== undefined && statusCode !== 0 && String(statusCode) !== "0") {
         const msg = String((firstPage as any).status?.msg || "API 错误");
         if (msg.toLowerCase().includes("no data") || msg.toLowerCase().includes("no record")) continue;
@@ -1160,7 +1524,13 @@ export async function fetchAllTransactions(
         return { transactions: allTxns, error: platformBizError(platform, String(statusCode), msg) };
       }
       if (code !== "0" && code !== "200" && code !== "undefined") {
-        const msg = String((firstPage as Record<string, unknown>).message || "API 返回错误");
+        // D-349 QUK 的错误文字在 msg 里（message 是空的），不补这一环会把
+        // 「Invalid api key」显示成无信息的「API 返回错误」
+        const msg = String(
+          (firstPage as Record<string, unknown>).message ||
+          (firstPage as Record<string, unknown>).msg ||
+          "API 返回错误",
+        );
         if (msg.toLowerCase().includes("no data")) continue;
         return { transactions: allTxns, error: platformBizError(platform, code, msg) };
       }
@@ -1239,9 +1609,12 @@ export async function fetchAllTransactions(
 // ══════════════════════════════════════════════════════════════
 
 interface PlatformClickConfig {
-  mode: "post_json" | "post_form" | "get";
+  /** D-349：get_query（QUK）/ post_json_bearer（BA），见 PlatformApiConfig 注释 */
+  mode: "post_json" | "post_form" | "get" | "get_query" | "post_json_bearer";
   url: string;
   source?: string;
+  /** D-349 QUK：鉴权参数名（默认 token） */
+  authParamKey?: string;
   /** beginDate/endDate(camel) vs begin_date/end_date(snake) */
   dateFormat: "camel" | "snake";
   /** true=传 "YYYY-MM-DD HH:mm:ss"；false=传 "YYYY-MM-DD"(LH 按天) */
@@ -1255,6 +1628,14 @@ interface PlatformClickConfig {
   maxWindowHours: number;
   /** 列表所在位置：SaaS=data.list(code 0)；LH=根级 list(status 0)；LB/RW=payliad.list(原文档拼写,status 200) */
   listPath: "data" | "payload" | "payliad" | "root";
+  /**
+   * D-349：根级数字 status 表示「成功」的值。只在该值与其他平台冲突时才需要显式声明。
+   *
+   * 起因：BA 的成功包是 {status:1,...}、失败包是 {status:0,info:"..."}；
+   * 而 LH 恰好相反，status:0 就是成功。同一个字段同一个值含义相反，
+   * 光看响应内容无法区分，只能由平台自己声明。不声明就沿用旧口径（0/200 为成功）。
+   */
+  successStatus?: number;
 }
 
 const CLICK_RATE_SAAS = 6500; // 10/min
@@ -1284,6 +1665,17 @@ const PLATFORM_CLICK_CONFIG: Record<string, PlatformClickConfig> = {
   // C-183 PB：op=transfer，带时分秒窗口 ≤1h、限频 10/min（同 SaaS 节奏）；
   //     响应 {status:{code:0},data:{total_items,list}} → listPath=data，click_time 为 UTC+8，click_ref 可去重。
   PB:  { mode: "get", url: "https://app.partnerboost.com/api.php?mod=medium&op=transfer", dateFormat: "snake", withTime: true, pageKey: "page", sizeKey: "limit", maxSize: 2000, rateLimitMs: CLICK_RATE_SAAS, maxWindowHours: 1, listPath: "data" },
+  // D-349 QUK：GET + apiKey，路径全小写 clickdetails。窗口**上限 1 天**（超了回 1004），
+  //   且只收 'yyyy-MM-dd'（无时分秒）→ withTime: false，maxWindowHours: 24。
+  //   限流 15 次/60 秒，与商家/交易接口**共享同一个 Key 的池子** → 4200ms。
+  //   响应 {code:"200",data:{list,total,...}} → listPath=data；clickTime 为 GMT+00:00。
+  QUK: { mode: "get_query", url: "https://api.quk.com/api/v1/openapi/publisher/clickdetails", authParamKey: "apiKey", dateFormat: "camel", withTime: false, pageKey: "pageNum", sizeKey: "pageSize", maxSize: 10000, rateLimitMs: CLICK_RATE_LEGACY, maxWindowHours: 24, listPath: "data" },
+  // D-349 BA：POST JSON + Bearer。窗口上限 1 天、只收 'YYYY-MM-DD' → withTime: false。
+  //   限流 15 次/60 秒。响应 {status:1,data:{total_items,total_page,list}} → listPath=data。
+  //   ⚠️ click_time 是 **UTC+8**（同平台交易接口却另有 UTC 字段说明时区，两边口径不同）；
+  //   PlatformClickCount.click_date 本身就按 UTC+8 口径，故这里不需要再转。
+  //   商家 ID 字段叫 mid（商家/交易接口叫 m_id），pickClickMerchantId 的兜底链已覆盖。
+  BA:  { mode: "post_json_bearer", url: "https://www.bonusarrive.com/slapi/service/clickreports", dateFormat: "snake", withTime: false, pageKey: "page", sizeKey: "per_page", maxSize: 2000, rateLimitMs: CLICK_RATE_LEGACY, maxWindowHours: 24, listPath: "data", successStatus: 1 },
 };
 
 export interface PlatformClickCount {
@@ -1359,7 +1751,11 @@ function getClickTotalPages(listPath: PlatformClickConfig["listPath"], data: Rec
 
 /** 错误判定：SaaS code!="0"；LB/RW status="200" 成功、LH status="0" 成功（两者都接受，其余判为错误如 LB 1007）；
  *  PB（listPath=data 但 Legacy 引擎）错误包装为嵌套对象 {status:{code,msg}}，需单独识别 */
-function clickErrorMessage(listPath: PlatformClickConfig["listPath"], data: Record<string, unknown>): string | null {
+function clickErrorMessage(
+  listPath: PlatformClickConfig["listPath"],
+  data: Record<string, unknown>,
+  successStatus?: number,
+): string | null {
   // 嵌套 status 对象（PB 等 app.partnerboost.com 系）：{status:{code:0,msg:"Success"}}
   const nested = asObj(data.status);
   if (nested && nested.code !== undefined) {
@@ -1370,9 +1766,28 @@ function clickErrorMessage(listPath: PlatformClickConfig["listPath"], data: Reco
   // （status 为原始 0、错误文案在 info），不识别会被当成空页静默吞掉。
   // 加 list 兜底判断避免误伤 LH（root 级 list）等带 info 字段的正常响应
   if (data.info != null && data.data == null && !Array.isArray(data.list)) return String(data.info);
+  // D-349 BA：成功 {status:1,info:"success",data:{...}}，失败 {status:0,info:"...",data:""}。
+  // 失败时 data 是**空字符串**而不是 null，上面那条 `data.data == null` 判不出来；
+  // 且 BA 没有 code 字段，下面 listPath==="data" 的分支也会直接返回 null（判成成功），
+  // 结果限流/参数错会被当成「这一小时没有点击」静默吞掉。
+  //
+  // 注意不能写成「status!==0 才算错」：LH 的成功标志恰好就是 status:0，含义与 BA 相反。
+  // 所以只在平台显式声明了 successStatus 时按它判，其余平台一律不走这里。
+  if (successStatus !== undefined) {
+    const raw = data.status;
+    const num = typeof raw === "number" ? raw : typeof raw === "string" && /^-?\d+$/.test(raw) ? Number(raw) : NaN;
+    if (!Number.isNaN(num)) {
+      if (num === successStatus) return null;
+      return String(data.info ?? data.msg ?? data.message ?? `status ${raw}`);
+    }
+    // status 缺失或不是数字：形态与预期不符，不在这里下结论，落到后面的通用分支
+  }
   if (listPath === "data") {
     const code = data.code;
-    if (code !== undefined && String(code) !== "0") return String(data.message ?? `code ${code}`);
+    // D-349 QUK 成功码是 "200"（不是 "0"），错误文案在 msg
+    if (code !== undefined && String(code) !== "0" && String(code) !== "200") {
+      return String(data.message ?? data.msg ?? `code ${code}`);
+    }
     return null;
   }
   const status = data.status;
@@ -1414,7 +1829,30 @@ async function callClickApi(
     const timer = setTimeout(() => controller.abort(), 120000);
     try {
       let resp: Response;
-      if (mode === "post_json") {
+      if (mode === "post_json_bearer") {
+        // D-349 BA：Bearer 头 + 无 source/dataScope
+        resp = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json;charset=utf-8",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            [beginKey]: beginStr, [endKey]: endStr,
+            [pageKey]: page, [sizeKey]: maxSize,
+          }),
+          signal: controller.signal,
+        });
+      } else if (mode === "get_query") {
+        // D-349 QUK：apiKey 走 query
+        const params = new URLSearchParams({
+          [config.authParamKey || "token"]: token,
+          [beginKey]: beginStr, [endKey]: endStr,
+          [pageKey]: String(page), [sizeKey]: String(maxSize),
+        });
+        const sep = url.includes("?") ? "&" : "?";
+        resp = await fetch(`${url}${sep}${params}`, { signal: controller.signal });
+      } else if (mode === "post_json") {
         const payload: Record<string, unknown> = {
           token,
           [beginKey]: beginStr,
@@ -1527,7 +1965,7 @@ export async function fetchAllClicks(
       first = false;
       const firstPage = await callClickApi(config, token, beginStr, endStr, 1);
 
-      const errMsg = clickErrorMessage(config.listPath, firstPage);
+      const errMsg = clickErrorMessage(config.listPath, firstPage, config.successStatus);
       if (errMsg) {
         if (/no data|no record|无数据|empty/i.test(errMsg)) continue;
         return { clicks: toArray(), error: `${platform}: ${errMsg}` };
@@ -1584,3 +2022,14 @@ function splitDateRange(start: string, end: string, maxDays: number): { start: s
 }
 
 export { PLATFORM_API_CONFIG, PLATFORM_TXN_CONFIG, PLATFORM_CLICK_CONFIG };
+
+// D-349：以下几个仅为测试暴露（生产代码请勿直接调用）。
+// 钉住的是四处「错了也不报错」的口径：QUK 状态数字码与 AD 相反、BA 佣金占位值、
+// BA 商家字段名与通用兜底链不接、BA 数字 status 包被当成空结果吞掉。
+export const __d349Internals = {
+  normalizeTxnStatus,
+  parseBaCommission,
+  preNormalizeMerchantItem,
+  preNormalizeTxnItem,
+  clickErrorMessage,
+};

@@ -3,7 +3,10 @@ import { prisma } from '@/lib/prisma'
 import { getUserFromRequest } from '@/lib/auth'
 import { resolveMerchantReferer } from '@/lib/suffix-engine/referer-resolver'
 
-const VALID_NETWORKS = ['RW', 'LH', 'PM', 'LB', 'CG', 'CF', 'BSH', 'TJ', 'AW', 'MUI', 'EV', 'FS']
+// D-349：补上 QUK / BA，同时把当初漏掉的 PB 一并加入（FS 已在）。
+// 注意这份列表必须与 link-exchange-script-template.ts 里的同名常量保持一致——
+// 那份是注入浏览器脚本的副本，两边不同步会出现「CRM 认这个平台、脚本不认」。
+const VALID_NETWORKS = ['RW', 'LH', 'PM', 'LB', 'CG', 'CF', 'BSH', 'TJ', 'AW', 'MUI', 'EV', 'FS', 'PB', 'QUK', 'BA']
 
 function parseMid(name: string): { platform: string; mid: string; parsed: boolean } {
   if (!name) return { platform: '', mid: '', parsed: false }

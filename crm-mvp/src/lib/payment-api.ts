@@ -479,11 +479,110 @@ async function fetchPartnerboostPayments(
   return out;
 }
 
+/**
+ * D-349 BA (BonusArrive) 提现记录：POST JSON + Bearer 头，/slapi/service/withdrawals。
+ * 与 PAYMENT_SUMMARY_HOSTS 那套（GET api.<域名>/api/payment_summary + source/token）
+ * 完全不同构，故单独实现。
+ *
+ * 文档只列了 begin_date/end_date 两个必填参数（按打款日筛），返回里却有 total_page，
+ * 所以仍按分页处理并显式传 page/per_page；服务端若忽略这两个参数，
+ * 第 2 页会返回与第 1 页相同的数据 → 靠 withdrawal_id 去重 + 不满页即终止双重兜底。
+ *
+ * 金额口径：total = 提现总额，service_fee = 手续费。CRM 的 amount 记「到手净额」，
+ * gross_amount 记总额，与 bank-flow-fee 的口径一致（见 [[hajimi-gateway-billing-tiers]] 无关，
+ * 此处指 bank-flow-fee.ts 的 net/gross 约定）。
+ *
+ * ⚠️ 接入时该账号提现记录为 0 条，字段值形态（paid_status 的取值、货币符号）未获真实样本，
+ * 首次真实打款后需核对 status 归一是否正确。
+ */
+async function fetchBonusarrivePayments(
+  token: string,
+  startDate: string,
+  endDate: string,
+): Promise<PlatformPayment[]> {
+  const out: PlatformPayment[] = [];
+  const seen = new Set<string>();
+  const perPage = 2000;
+  let page = 1;
+
+  while (true) {
+    const data = await fetchWithRetry(
+      "https://www.bonusarrive.com/slapi/service/withdrawals",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json;charset=utf-8",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          begin_date: startDate,
+          end_date: endDate,
+          page,
+          per_page: perPage,
+        }),
+      },
+      "BA withdrawals",
+    );
+
+    // BA 的成功标志是 status:1（数字），失败是 status:0 + info 文字。
+    // checkApiCode 认的是 code/{status:{code}} 那两套，这里判不出来，故单独判。
+    const rawStatus = (data as Record<string, unknown>).status;
+    if (rawStatus != null && String(rawStatus) !== "1") {
+      throw new Error(String((data as Record<string, unknown>).info ?? `status ${rawStatus}`));
+    }
+
+    const root = (data.data || {}) as Record<string, unknown>;
+    const list = (root.list || []) as Record<string, unknown>[];
+    if (!Array.isArray(list) || list.length === 0) break;
+
+    let added = 0;
+    for (const it of list) {
+      const paymentNo = String(it.withdrawal_id ?? "").trim();
+      if (!paymentNo || seen.has(paymentNo)) continue;
+      seen.add(paymentNo);
+      added++;
+      const paidDate = toISO(it.payment_date);
+      const gross = parseAmount(it.total);
+      const fee = parseAmount(it.service_fee);
+      const rawPaidStatus = String(it.paid_status ?? "").trim();
+      out.push({
+        payment_no: paymentNo,
+        source_kind: "payment_summary",
+        paid_date: paidDate,
+        request_date: toISO(it.created_date),
+        // amount = 到手净额；gross_amount = 提现总额
+        amount: gross - fee,
+        gross_amount: gross,
+        currency: "USD",
+        // paid_status 的真实取值未获样本，先按「有打款日=已付」判定（与 PB 同款兜底），
+        // 同时把原值留在 raw_status 里便于上线后核对
+        status: paidDate ? "paid" : "processing",
+        raw_status: rawPaidStatus || (paidDate ? "paid" : "no_payment_date"),
+        payment_type: (it.bank_name ?? null) as string | null,
+        raw_json: JSON.stringify(it),
+      });
+    }
+
+    const totalPage = Number(root.total_page ?? 0);
+    // 服务端可能忽略 page 参数而恒返回首页：新增 0 条即终止，避免死循环
+    if (added === 0) break;
+    if (totalPage > 0 && page >= totalPage) break;
+    if (list.length < perPage) break;
+    page++;
+    if (page > 50) break; // 安全上限
+  }
+  return out;
+}
+
 /** 该平台是否支持支付 API */
 export function platformSupportsPayments(platform: string): boolean {
   return (
     !!PAYMENT_SUMMARY_HOSTS[platform] ||
-    platform === "RW" || platform === "LH" || platform === "LB" || platform === "PB"
+    platform === "RW" || platform === "LH" || platform === "LB" || platform === "PB" ||
+    // D-349：BA 有提现接口；QUK **没有**任何打款接口（后台只有点击/商家/交易/Postback
+    // 四个开发者工具页，api 文档目录下也无 Quk 支付文档），故 QUK 不在此列，
+    // 结算报表里 QUK 的「已支付」维度会一直为空。
+    platform === "BA"
   );
 }
 
@@ -505,7 +604,8 @@ export async function fetchPlatformPayments(
     if (platform === "LH") return { payments: await fetchLinkhaitaoPayments(token, startDate, endDate) };
     if (platform === "LB") return { payments: await fetchLinkbuxMerchantCommission(token, startDate, endDate) };
     if (platform === "PB") return { payments: await fetchPartnerboostPayments(token, startDate, endDate) };
-    return { payments: [] }; // AD 等无支付 API
+    if (platform === "BA") return { payments: await fetchBonusarrivePayments(token, startDate, endDate) };
+    return { payments: [] }; // AD / D-349 QUK 等无支付 API
   } catch (err) {
     return { payments: [], error: err instanceof Error ? err.message : String(err) };
   }
