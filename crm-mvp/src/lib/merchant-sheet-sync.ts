@@ -16,6 +16,16 @@ const PLATFORM_NAME_MAP: Record<string, string> = {
   collabglow: "CG", cg: "CG",
   brandsparkhub: "BSH", bsh: "BSH",
   creatorflare: "CF", cf: "CF",
+  // D-349 补齐：这张表原本只有 7 个平台，其余走 toUpperCase() 兜底 —— 表格里写
+  // "bonusarrive" 会被存成 "BONUSARRIVE" 而不是 "BA"。该字段只用于违规记录的展示
+  // （匹配走商家名 + 域名，见文件头），所以只是后台列表显示不统一，不影响拦截。
+  ultrainfluence: "MUI", mui: "MUI",
+  engagevantage: "EV", ev: "EV",
+  partnerboost: "PB", pb: "PB",
+  famesta: "FS", fs: "FS",
+  quk: "QUK",
+  bonusarrive: "BA", ba: "BA",
+  "bonus arrive": "BA",
 };
 
 export function normalizePlatform(raw: string): string {
