@@ -143,8 +143,8 @@ function formatCid(cid: string | number): string {
   return s;
 }
 
-// 默认日期 — 本月（东八区）
-const defaultStartDate = dayjs().tz(TZ).startOf("month");
+// 默认日期 — 最近七天（含今天，东八区）；仍可自行选择任意区间
+const defaultStartDate = dayjs().tz(TZ).subtract(6, "day").startOf("day");
 const defaultEndDate = dayjs().tz(TZ);
 
 export default function DataCenterPage() {
