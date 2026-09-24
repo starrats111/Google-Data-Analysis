@@ -874,40 +874,101 @@ async function buildMccSections(
   if (mccAccounts.length === 0) return [];
 
   // 库内 cost（USD）按 MCC 归集 + CNY MCC 按当日汇率反算原币
+  //
+  // D-355：**按 Google MCC 号（c.mcc_id 指向的 mcc_id 字符串）归集，不按库行 id**。
+  // 同一个 Google 账号删号重绑会在 google_mcc_accounts 留下多行（实测最多 8 行），
+  // 旧行与接替它的新行各自挂着同一批 ads_daily_stats，两行同时进合计 → 广告费翻倍。
+  // 去重口径：同一 `(google_campaign_id, 日期)` 在多行都有数据时只算一份（取最大值），
+  // 各行独有的系列全部保留。只按「日」取最大会丢掉非重叠系列的钱（实测全库少算 $1,299.84），
+  // 所以必须下到系列粒度。`google_campaign_id` 为 NULL 的（实测 47 个有花费、最大 $30.85）
+  // 无法跨行匹配，按各自独立处理——宁可保留也不误删真实花费。
   const costRows = await prisma.$queryRawUnsafe<{
-    mcc_id: bigint | null;
+    mcc_number: string | null;
     cost_usd: number;
     cost_cny: number;
   }[]>(`
     SELECT
-      c.mcc_id,
-      SUM(CAST(s.cost AS DECIMAL(16,6))) AS cost_usd,
-      SUM(
-        CASE WHEN e.rate_to_usd IS NOT NULL AND e.rate_to_usd > 0
-             THEN CAST(s.cost AS DECIMAL(16,6)) / e.rate_to_usd
-             ELSE 0 END
-      ) AS cost_cny
-    FROM ads_daily_stats s
-    JOIN campaigns c ON c.id = s.campaign_id
-    LEFT JOIN exchange_rate_snapshots e ON e.currency = 'CNY' AND e.date = s.date
-    WHERE s.user_id = ? AND s.is_deleted = 0
-      AND s.date >= ? AND s.date < ?
-    GROUP BY c.mcc_id
+      d.mcc_number,
+      SUM(d.cost_usd) AS cost_usd,
+      SUM(d.cost_cny) AS cost_cny
+    FROM (
+      SELECT
+        m.mcc_id AS mcc_number,
+        MAX(CAST(s.cost AS DECIMAL(16,6))) AS cost_usd,
+        MAX(
+          CASE WHEN e.rate_to_usd IS NOT NULL AND e.rate_to_usd > 0
+               THEN CAST(s.cost AS DECIMAL(16,6)) / e.rate_to_usd
+               ELSE 0 END
+        ) AS cost_cny
+      FROM ads_daily_stats s
+      JOIN campaigns c ON c.id = s.campaign_id
+      JOIN google_mcc_accounts m ON m.id = c.mcc_id
+      LEFT JOIN exchange_rate_snapshots e ON e.currency = 'CNY' AND e.date = s.date
+      WHERE s.user_id = ? AND s.is_deleted = 0
+        AND s.date >= ? AND s.date < ?
+      GROUP BY m.mcc_id, s.date,
+        COALESCE(c.google_campaign_id, CONCAT('r', c.mcc_id, '-', c.id))
+    ) d
+    GROUP BY d.mcc_number
   `, userId, dateColumnStart(monthStart), dateColumnStart(monthEnd));
 
-  const costByMcc = new Map<string, { usd: number; cny: number }>();
+  /** Google MCC 号 → 去重后的花费。跨库行已归一，键是号不是库行 id。 */
+  const costByNumber = new Map<string, { usd: number; cny: number }>();
   for (const row of costRows) {
-    if (row.mcc_id == null) {
-      if (Number(row.cost_usd || 0) > 0) warnings.push(`有 $${r2(Number(row.cost_usd))} 广告费未关联 MCC，未计入 MCC 段`);
-      continue;
-    }
-    costByMcc.set(String(row.mcc_id), { usd: Number(row.cost_usd || 0), cny: Number(row.cost_cny || 0) });
+    if (row.mcc_number == null) continue;
+    costByNumber.set(row.mcc_number, {
+      usd: Number(row.cost_usd || 0),
+      cny: Number(row.cost_cny || 0),
+    });
+  }
+
+  // 未关联 MCC 的花费：上面的 JOIN 会把 c.mcc_id IS NULL 的行滤掉，
+  // 这个告警是独立口径（与去重无关），单独查一次补回，别让它静默消失。
+  const orphanCost = await prisma.$queryRawUnsafe<{ cost_usd: number }[]>(`
+    SELECT SUM(CAST(s.cost AS DECIMAL(16,6))) AS cost_usd
+    FROM ads_daily_stats s
+    JOIN campaigns c ON c.id = s.campaign_id
+    WHERE s.user_id = ? AND s.is_deleted = 0
+      AND s.date >= ? AND s.date < ? AND c.mcc_id IS NULL
+  `, userId, dateColumnStart(monthStart), dateColumnStart(monthEnd));
+  const orphanUsd = Number(orphanCost[0]?.cost_usd || 0);
+  if (orphanUsd > 0) warnings.push(`有 $${r2(orphanUsd)} 广告费未关联 MCC，未计入 MCC 段`);
+
+  // D-355：把「号」的花费落到**在投行**（canonical 行）上，其余同号库行记 0。
+  // 这样下游一切仍按 mccDbId 走 —— 纠正值 scope_key（`mcc:{在投行id}`）、补差额、
+  // 前端行 key 都不用改，现有 report_overrides 全部继续生效，无需迁移数据。
+  const sameNumberRowIds = await prisma.google_mcc_accounts.findMany({
+    where: { mcc_id: { in: [...costByNumber.keys()] } },
+    select: { id: true, mcc_id: true },
+  });
+  /** 号 → 本人名下在投行 id（本函数只取本人活跃号，故必然是 canonical 行） */
+  const canonicalByNumber = new Map(mccAccounts.map((m) => [m.mcc_id, String(m.id)]));
+  /** 被并走的库行 id：同号但不是 canonical 行，花费已算进 canonical，这里必须记 0 防双计 */
+  const mergedAwayRowIds = new Set(
+    sameNumberRowIds
+      .filter((r) => canonicalByNumber.get(r.mcc_id) !== undefined
+        && canonicalByNumber.get(r.mcc_id) !== String(r.id))
+      .map((r) => String(r.id)),
+  );
+
+  const costByMcc = new Map<string, { usd: number; cny: number }>();
+  for (const [number, cost] of costByNumber) {
+    const canonical = canonicalByNumber.get(number);
+    if (canonical) costByMcc.set(canonical, cost);
   }
 
   const adjustments = await prisma.mcc_cost_adjustments.findMany({
     where: { user_id: userId, month, is_deleted: 0 },
   });
-  const adjustMap = new Map(adjustments.map((a) => [String(a.mcc_account_id), Number(a.amount)]));
+  // 补差额也按号归一：它挂在某个库行上，同号多行时要并到 canonical 行，否则删号重绑后补差额丢失
+  const adjustMap = new Map<string, number>();
+  const rowNumberById = new Map(sameNumberRowIds.map((r) => [String(r.id), r.mcc_id]));
+  for (const a of adjustments) {
+    const rowId = String(a.mcc_account_id);
+    const number = rowNumberById.get(rowId);
+    const key = (number && canonicalByNumber.get(number)) || rowId;
+    adjustMap.set(key, (adjustMap.get(key) || 0) + Number(a.amount));
+  }
 
   const sections: MccSection[] = [];
   for (const mcc of mccAccounts) {
@@ -947,22 +1008,39 @@ async function buildMccSections(
 
   // D-312：补出「有花费但不在本人活跃 MCC 列表里」的段——已删 MCC 的历史花费，
   // 以及挂在别人名下、承载了本人投放的 MCC。原先这些钱既不出段也不进合计，静默消失。
+  //
+  // D-355：这一段改为按**号**驱动。号已在上面并行，所以：
+  // - 号有本人在投行 → 花费已并进该行，这里不能再出段（否则又双计）；
+  // - 号没有本人在投行（纯已删号 / 挂别人名下）→ 照旧出段，钱一分不少。
+  //   实测全库 49 个这类组合共 $21,421.57，是重绑前的真实历史，砍掉就是丢钱。
+  //   锚点行取该号「最近更新」的那行（全删号也有稳定锚点）。
   const listedIds = new Set(sections.map((s) => s.mccDbId));
-  const orphanIds = [...costByMcc.keys()].filter((id) => !listedIds.has(id));
-  if (orphanIds.length > 0) {
+  const orphanNumbers = [...costByNumber.keys()].filter((n) => {
+    const canonical = canonicalByNumber.get(n);
+    return !(canonical && listedIds.has(canonical));
+  });
+  if (orphanNumbers.length > 0) {
     const orphanRows = await prisma.google_mcc_accounts.findMany({
-      where: { id: { in: orphanIds.map((id) => BigInt(id)) } },
-      select: { id: true, mcc_id: true, mcc_name: true, currency: true, is_deleted: true, user_id: true },
+      where: { mcc_id: { in: orphanNumbers } },
+      select: {
+        id: true, mcc_id: true, mcc_name: true, currency: true,
+        is_deleted: true, user_id: true, updated_at: true,
+      },
+      orderBy: { updated_at: "desc" },
     });
-    const orphanMeta = new Map(orphanRows.map((m) => [String(m.id), m]));
-    for (const dbId of orphanIds) {
-      const cost = costByMcc.get(dbId)!;
+    /** 号 → 锚点行（最近更新的那行；同号多行只出一段，不再按行铺开） */
+    const orphanMeta = new Map<string, (typeof orphanRows)[number]>();
+    for (const r of orphanRows) if (!orphanMeta.has(r.mcc_id)) orphanMeta.set(r.mcc_id, r);
+
+    for (const number of orphanNumbers) {
+      const cost = costByNumber.get(number)!;
       if (r2(cost.usd) === 0) continue;
-      const meta = orphanMeta.get(dbId);
+      const meta = orphanMeta.get(number);
       if (!meta) {
-        warnings.push(`有 $${r2(cost.usd)} 广告费所挂的 MCC 行(id=${dbId})已不存在，未计入`);
+        warnings.push(`有 $${r2(cost.usd)} 广告费所挂的 MCC(${number})已不存在，未计入`);
         continue;
       }
+      const dbId = String(meta.id);
       const isCny = meta.currency === "CNY";
       const adj = adjustMap.get(dbId) || 0;
       const costUsd = r2(cost.usd + adj);
@@ -1366,6 +1444,40 @@ export interface TeamAnnualReport {
   warnings: string[];
 }
 
+/** D-355 锚点行选择用的最小行形状 */
+export type MccAnchorRow = {
+  id: bigint | number | string;
+  mcc_id: string;
+  is_deleted: number;
+  updated_at: Date | null;
+};
+
+/**
+ * D-355：同一个 Google MCC 号在 `google_mcc_accounts` 可能有多行（删号重绑，实测最多 8 行）。
+ * 花费去重后归到「锚点行」，挂在其他同号行上的补差额/手填覆盖也必须跟过去，否则静默失效。
+ *
+ * 锚点规则（与 buildTeamAnnualReport 里那段 SQL 的 ORDER BY 必须一致）：
+ * **未删优先 → 最近更新 → id 大者**。全部行都已删的号（实测有 2 个）也因此有稳定锚点。
+ *
+ * @returns 库行 id → 锚点行 id；号只有一行时返回自身，未知 id 原样返回（不吞数据）
+ */
+export function buildRowToAnchor(rows: MccAnchorRow[]): (rowId: string) => string {
+  const anchorByNumber = new Map<string, string>();
+  const sorted = [...rows].sort((a, b) =>
+    (a.is_deleted - b.is_deleted)
+    || (b.updated_at?.getTime() ?? 0) - (a.updated_at?.getTime() ?? 0)
+    || (BigInt(a.id) < BigInt(b.id) ? 1 : -1)
+  );
+  for (const r of sorted) {
+    if (!anchorByNumber.has(r.mcc_id)) anchorByNumber.set(r.mcc_id, String(r.id));
+  }
+  const numberByRowId = new Map(rows.map((r) => [String(r.id), r.mcc_id]));
+  return (rowId: string): string => {
+    const num = numberByRowId.get(rowId);
+    return (num && anchorByNumber.get(num)) || rowId;
+  };
+}
+
 export async function buildTeamAnnualReport(
   teamId: bigint,
   leaderUserId: bigint,
@@ -1626,16 +1738,37 @@ export async function buildTeamAnnualReport(
     }
 
     // ── 3. 广告费（MCC×月，含补差额与组员覆盖） ──
+    //
+    // D-355：与月报同一处病。按 Google MCC 号去重后再落到锚点库行，
+    // 否则删号重绑的号在年报里同样双计（月报修了年报不修，两张表会对不上）。
+    // 去重粒度 `(号, 月, 日, google_campaign_id)` 取最大值，与月报口径一致。
     const costRows = await prisma.$queryRawUnsafe<{ mcc_id: bigint | null; m: string; usd: number; cny: number }[]>(`
-      SELECT c.mcc_id, DATE_FORMAT(s.date, '%Y-%m') AS m,
-        SUM(CAST(s.cost AS DECIMAL(16,6))) AS usd,
-        SUM(CASE WHEN e.rate_to_usd IS NOT NULL AND e.rate_to_usd > 0
-                 THEN CAST(s.cost AS DECIMAL(16,6)) / e.rate_to_usd ELSE 0 END) AS cny
-      FROM ads_daily_stats s
-      JOIN campaigns c ON c.id = s.campaign_id
-      LEFT JOIN exchange_rate_snapshots e ON e.currency = 'CNY' AND e.date = s.date
-      WHERE s.user_id IN (${uidIn}) AND s.is_deleted = 0 AND s.date >= ? AND s.date < ?
-      GROUP BY c.mcc_id, m
+      SELECT anchor.mcc_id, d.m, SUM(d.usd) AS usd, SUM(d.cny) AS cny
+      FROM (
+        SELECT m.mcc_id AS mcc_number, DATE_FORMAT(s.date, '%Y-%m') AS m,
+          MAX(CAST(s.cost AS DECIMAL(16,6))) AS usd,
+          MAX(CASE WHEN e.rate_to_usd IS NOT NULL AND e.rate_to_usd > 0
+                   THEN CAST(s.cost AS DECIMAL(16,6)) / e.rate_to_usd ELSE 0 END) AS cny
+        FROM ads_daily_stats s
+        JOIN campaigns c ON c.id = s.campaign_id
+        JOIN google_mcc_accounts m ON m.id = c.mcc_id
+        LEFT JOIN exchange_rate_snapshots e ON e.currency = 'CNY' AND e.date = s.date
+        WHERE s.user_id IN (${uidIn}) AND s.is_deleted = 0 AND s.date >= ? AND s.date < ?
+        GROUP BY m.mcc_id, m, s.date,
+          COALESCE(c.google_campaign_id, CONCAT('r', c.mcc_id, '-', c.id))
+      ) d
+      JOIN (
+        -- 锚点行：同号取「未删优先、其次最近更新」的那一行，全删号也有稳定锚点
+        SELECT a.mcc_id AS mcc_number, a.id AS mcc_id
+        FROM google_mcc_accounts a
+        WHERE a.id = (
+          SELECT b.id FROM google_mcc_accounts b
+          WHERE b.mcc_id = a.mcc_id
+          ORDER BY b.is_deleted ASC, b.updated_at DESC, b.id DESC
+          LIMIT 1
+        )
+      ) anchor ON anchor.mcc_number = d.mcc_number
+      GROUP BY anchor.mcc_id, d.m
     `, ...memberIds, dateColumnStart(yearStart), dateColumnStart(yearEndExcl));
 
     // D-312：花费按 campaigns.mcc_id（**行 id**）归集，而同一个 MCC 号换人重登记会留下 is_deleted=1
@@ -1646,17 +1779,20 @@ export async function buildTeamAnnualReport(
     const costMccIds = [...new Set(
       costRows.map((r) => r.mcc_id).filter((v): v is bigint => v != null),
     )];
-    const mccMeta = new Map(
-      (await prisma.google_mcc_accounts.findMany({
-        where: {
-          OR: [
-            { user_id: { in: memberIds } },
-            ...(costMccIds.length > 0 ? [{ id: { in: costMccIds } }] : []),
-          ],
-        },
-        select: { id: true, currency: true },
-      })).map((m) => [String(m.id), m.currency]),
-    );
+    const mccRowsForMeta = await prisma.google_mcc_accounts.findMany({
+      where: {
+        OR: [
+          { user_id: { in: memberIds } },
+          ...(costMccIds.length > 0 ? [{ id: { in: costMccIds } }] : []),
+        ],
+      },
+      select: { id: true, currency: true, mcc_id: true, is_deleted: true, updated_at: true },
+    });
+    const mccMeta = new Map(mccRowsForMeta.map((m) => [String(m.id), m.currency]));
+
+    // D-355：补差额与手填覆盖挂在「某个库行」上，而花费现已归到锚点行。
+    // 同号多行时必须把它们一起搬到锚点行，否则删号重绑后这些人工值静默失效。
+    const toAnchor = buildRowToAnchor(mccRowsForMeta);
     const adjustRows = await prisma.mcc_cost_adjustments.findMany({
       where: { user_id: { in: memberIds }, is_deleted: 0, month: { startsWith: `${year}-` } },
     });
@@ -1683,10 +1819,14 @@ export async function buildTeamAnnualReport(
       c.usd = Number(r.usd || 0);
       c.cny = Number(r.cny || 0);
     }
-    for (const a of adjustRows) cell(`${a.mcc_account_id}|${a.month}`).adj = Number(a.amount);
+    // D-355：两者都搬到锚点行；同号多行同月若各有值则累加补差额、覆盖取最后一条
+    for (const a of adjustRows) {
+      const k = `${toAnchor(String(a.mcc_account_id))}|${a.month}`;
+      cell(k).adj += Number(a.amount);
+    }
     for (const o of mccOvRows) {
       const id = o.scope_key.slice(4);
-      if (mccMeta.has(id)) cell(`${id}|${o.month}`).ov = Number(o.value);
+      if (mccMeta.has(id)) cell(`${toAnchor(id)}|${o.month}`).ov = Number(o.value);
     }
     for (const [key, c] of mccMonth) {
       const [mccId, m] = key.split("|");
