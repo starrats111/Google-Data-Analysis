@@ -374,8 +374,11 @@ export async function GET(req: NextRequest) {
     // D-285：脚本新旧检测——按 MCC 落库标记（budget-fix 接口做闸门用）+ 旧脚本定向弹窗催换。
     // 标记每半小时刷新：换上新脚本后 hasBudgetCol 翻 true，弹窗自动停、budget-fix 自动放行。
     let oldScriptCount = 0;
+    // D-361：这里只收集候选，通知推迟到 CID_List 的 Status 列检测出来之后一并发——
+    // Budget 列（看 CampaignInfo）与 Status 列（看 CID_List）是两个独立缺陷，同一个 MCC
+    // 可能只中其一，分两处各弹一条会变成同一件事催两遍。
+    const oldScriptCandidates = new Map<string, { dbId: bigint; mccId: string; mccName: string | null; userId: bigint }>();
     try {
-      const { notifyOldScriptMcc } = await import("@/lib/system-broadcast");
       for (const [mccDbId, info] of result.scriptStatusByMcc) {
         const key = `mcc_script_budget_col_${mccDbId}`;
         const value = JSON.stringify({ hasBudgetCol: info.hasBudgetCol, mccId: info.mccId, checkedAt: syncedAt });
@@ -389,12 +392,14 @@ export async function GET(req: NextRequest) {
           // 表本身就是坏的（空表等）时不催换脚本：CampaignInfo 故障弹窗已经在让他修脚本，
           // 再叠一条「换新版脚本」只会把人搞晕。表修好后这条自然恢复。
           if (!result.sheetIssueByMcc.has(mccDbId)) {
-            await notifyOldScriptMcc(BigInt(mccDbId), info.mccId, info.mccName, BigInt(info.userId));
+            oldScriptCandidates.set(info.mccId, {
+              dbId: BigInt(mccDbId), mccId: info.mccId, mccName: info.mccName, userId: BigInt(info.userId),
+            });
           }
         }
       }
       if (oldScriptCount > 0) {
-        log(`脚本检测：${result.scriptStatusByMcc.size} 个 MCC 可判定，旧脚本 ${oldScriptCount} 个（已定向提醒归属人，周去重）`);
+        log(`脚本检测：${result.scriptStatusByMcc.size} 个 MCC 可判定，缺 Budget 列 ${oldScriptCount} 个`);
       }
     } catch (e) {
       log(`脚本检测失败: ${e instanceof Error ? e.message : String(e)}`);
@@ -471,7 +476,10 @@ export async function GET(req: NextRequest) {
     // D-277 账户状态半小时级同步：读各 MCC Sheet CID_List 的 Status 列（Google 账户
     // 状态真值），被停/注销跟随写库并告警归属人；老脚本（无状态列）的 MCC 自动跳过。
     // D-324：恢复方向也跟随真值写库（原来只提醒、等人点按钮）。
-    let cidStatus: { mccs: number; withStatusCol: number; updated: number; recovered: number; unparsable: number; headerGap: number } | null = null;
+    let cidStatus: {
+      mccs: number; withStatusCol: number; updated: number; recovered: number;
+      unparsable: number; headerGap: number; missingStatusColMccs: string[];
+    } | null = null;
     try {
       const { syncCidStatusesFromSheets } = await import("@/lib/cid-list-sheet-sync");
       cidStatus = await syncCidStatusesFromSheets(log);
@@ -489,6 +497,48 @@ export async function GET(req: NextRequest) {
       }
     } catch (e) {
       log(`账户状态同步失败: ${e instanceof Error ? e.message : String(e)}`);
+    }
+
+    // D-361：旧脚本催换——Budget 列与 Status 列两个缺陷合并成一条通知，按实际检出的拼文案。
+    // Status 列缺失是后果最重的一条（账户被停 CRM 不知道，且 CID 能自动锁不能自动解），
+    // 原文案只讲预算显示失真，于是这条提醒挂了几个月没人动。
+    try {
+      const { notifyOldScriptMcc } = await import("@/lib/system-broadcast");
+      const missingStatus = new Set(cidStatus?.missingStatusColMccs ?? []);
+      const targets = new Map<string, {
+        dbId: bigint; mccId: string; mccName: string | null; userId: bigint;
+        missingBudgetCol: boolean; missingStatusCol: boolean;
+      }>();
+      for (const c of oldScriptCandidates.values()) {
+        targets.set(c.mccId, { ...c, missingBudgetCol: true, missingStatusCol: missingStatus.has(c.mccId) });
+      }
+      const statusOnly = [...missingStatus].filter((m) => !targets.has(m));
+      if (statusOnly.length > 0) {
+        // 只缺 Status 列的 MCC 不一定出现在 scriptStatusByMcc 里（那张表按 CampaignInfo 可判定性收），
+        // 单独补取归属人；表本身坏掉的照旧跳过，别在「先把表修好」之上再压一条。
+        const rows = await prisma.google_mcc_accounts.findMany({
+          where: { mcc_id: { in: statusOnly }, is_deleted: 0 },
+          select: { id: true, mcc_id: true, mcc_name: true, user_id: true },
+        });
+        for (const r of rows) {
+          if (result.sheetIssueByMcc.has(r.id.toString())) continue;
+          targets.set(r.mcc_id, {
+            dbId: r.id, mccId: r.mcc_id, mccName: r.mcc_name, userId: r.user_id,
+            missingBudgetCol: false, missingStatusCol: true,
+          });
+        }
+      }
+      for (const t of targets.values()) {
+        await notifyOldScriptMcc(t.dbId, t.mccId, t.mccName, t.userId, {
+          missingBudgetCol: t.missingBudgetCol, missingStatusCol: t.missingStatusCol,
+        });
+      }
+      const severe = [...targets.values()].filter((t) => t.missingStatusCol).length;
+      if (targets.size > 0) {
+        log(`旧脚本催换：${targets.size} 个 MCC（其中缺 Status 列 ${severe} 个：账户被停不会知道 + CID 锁了不会自动解），已定向提醒归属人，周去重`);
+      }
+    } catch (e) {
+      log(`旧脚本催换失败: ${e instanceof Error ? e.message : String(e)}`);
     }
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);

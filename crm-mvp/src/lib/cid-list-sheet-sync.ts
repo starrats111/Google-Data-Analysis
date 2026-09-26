@@ -632,8 +632,14 @@ export async function syncCidStatusesFromSheets(log: (msg: string) => void): Pro
   unparsable: number;
   /** D-359：表头吞掉开头若干行的 MCC 数——这些 MCC 的状态同步漏掉了被吞那几十个 CID */
   headerGap: number;
+  /**
+   * D-361：CID_List 能解析、但没有 Status 列的 MCC（mcc_id 原样）。
+   * 这些 MCC 的账户状态真值从来没进过 CRM，且形成「能自动锁、不能自动解」的单向门，
+   * 由调用方合并 Budget 列缺陷后一并催归属人换脚本（见 buildOldScriptAlert）。
+   */
+  missingStatusColMccs: string[];
 }> {
-  const out = { mccs: 0, withStatusCol: 0, updated: 0, recovered: 0, unparsable: 0, headerGap: 0 };
+  const out = { mccs: 0, withStatusCol: 0, updated: 0, recovered: 0, unparsable: 0, headerGap: 0, missingStatusColMccs: [] as string[] };
   const mccs = await prisma.google_mcc_accounts.findMany({
     where: { is_deleted: 0, sheet_url: { not: null } },
     select: { id: true, mcc_id: true, mcc_name: true, sheet_url: true, user_id: true },
@@ -652,7 +658,10 @@ export async function syncCidStatusesFromSheets(log: (msg: string) => void): Pro
       // D-359：吞行只会让这几十个 CID 本轮没被核对（状态停在旧值），不会写错——
       // 这条路径只按解析到的行更新状态，不做「消失即取消」。计数是为了让漏核对可见。
       if (countAbsorbedHeaderRows(rows) > 0) out.headerGap++;
-      if (!sheetRows.some((r) => r.google_status != null)) continue; // 老脚本无状态列
+      if (!sheetRows.some((r) => r.google_status != null)) {
+        out.missingStatusColMccs.push(mcc.mcc_id); // D-361：老脚本无状态列，交调用方催换脚本
+        continue;
+      }
       out.withStatusCol++;
 
       const existing = await prisma.mcc_cid_accounts.findMany({
