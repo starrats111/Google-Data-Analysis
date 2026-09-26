@@ -87,6 +87,17 @@ async function doDailySync() {
       log(`Sheet freshness check failed (non-fatal): ${e instanceof Error ? e.message : e}`);
     }
 
+    // D-360：Sheet 通道体检 + 管理员日报。既有告警（被封/结构/停更/CampaignInfo）都只发归属人
+    // 且挂着「近 7 天有数据」闸门，通道坏导致数据断流的 MCC 会把自己的告警静音，坏得越久越安静；
+    // 这一步不挂闸门、只发管理员一条汇总，补的是「没人看得到全局」那个洞。
+    log("Step 2.455: Checking sheet channel health (CID_List readability)...");
+    try {
+      const { checkSheetChannelHealth } = await import("@/lib/sheet-channel-health");
+      await checkSheetChannelHealth(log);
+    } catch (e) {
+      log(`Sheet channel health check failed (non-fatal): ${e instanceof Error ? e.message : e}`);
+    }
+
     // D-278：海外节点推荐提醒——节点前 lead_days 天全员站内通知一次（非弹窗，07 拍板发全员）
     log("Step 2.46: Checking holiday node reminders...");
     try {
