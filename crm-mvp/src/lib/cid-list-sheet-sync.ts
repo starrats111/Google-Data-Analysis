@@ -643,7 +643,7 @@ export async function syncCidStatusesFromSheets(log: (msg: string) => void): Pro
   for (const mcc of mccs) {
     try {
       const sid = extractSheetId(mcc.sheet_url || "");
-      if (!sid) continue;
+      if (!sid) { out.unparsable++; continue; } // D-360：链接坏了也是「本轮没跑」，一并计数
       const rows = await readSheetCsv(sid, "CID_List");
       const sheetRows = parseCidListRows(rows);
       // D-353：只计数不逐 MCC 打日志——这条半小时跑一轮 × 60 个 MCC，逐条会把日志冲掉；
@@ -669,7 +669,11 @@ export async function syncCidStatusesFromSheets(log: (msg: string) => void): Pro
       out.updated += s.updated;
       out.recovered += s.recovered;
     } catch (e) {
-      // 拉取失败（含被封）不在这里报警——被封告警由 broadcastSheetFailure 通道负责，避免双报
+      // 拉取失败（含被封）不在这里报警——被封告警由 broadcastSheetFailure 通道负责，避免双报。
+      // D-360：但必须计进 unparsable。原来抛异常的走这条分支只打日志、不计数，于是汇总行
+      // 报「20/60 没跑」而实际是 26 个（403/410 的 6 个全漏在计数外），对不上数还查不出差在哪。
+      // unparsable 的语义就是「本轮没拿到可用行的 MCC 数」，拉不到和解析不出同属此列。
+      out.unparsable++;
       log(`  [CID状态] ${mcc.mcc_name || mcc.mcc_id}: 本轮跳过（${e instanceof Error ? e.message.slice(0, 100) : e}）`);
     }
   }
