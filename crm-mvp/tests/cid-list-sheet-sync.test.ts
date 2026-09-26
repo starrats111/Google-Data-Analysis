@@ -2,6 +2,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
   parseCidListRows,
+  countAbsorbedHeaderRows,
   diffCidList,
   diffCidStatuses,
   mapSheetStatus,
@@ -282,12 +283,27 @@ describe("diffCidList D-330 死锁破解", () => {
     assert.equal(d.cancelBlocked.length, 1);
   });
 
-  test("名下本来就没有 ENABLED 系列 → 与 CampaignInfo 无关，照常 cancel", () => {
+  test("D-359 改判：名下没有 ENABLED 系列、但 CampaignInfo 里还在 → 不取消，只告警", () => {
+    // 原 D-330 口径在这种组合下照常 cancel（库内没 ENABLED 就当没在投）。
+    // D-359 实证这条放行了 3 个活账户：系列仍被脚本报进 CampaignInfo，说明账户还挂在本 MCC 下，
+    // 和「从 CID_List 消失」直接矛盾——矛盾态只告警，不锁账户。
+    const d = diffCidList(
+      [],
+      [ex(1, "2222222222", "stillReportedByScript")],
+      new Set(),
+      new Set(["2222222222"]),
+    );
+    assert.equal(d.cancel.length, 0);
+    assert.equal(d.cancelBlocked.length, 1);
+    assert.equal(d.cancelBlocked[0].customer_id, "2222222222");
+  });
+
+  test("D-359：两个 tab 同时缺席才取消（CampaignInfo 可读且没有它）", () => {
     const d = diffCidList(
       [],
       [ex(1, "2222222222", "trulyGone")],
       new Set(),
-      new Set(["2222222222"]),             // 即便 CampaignInfo 里有，也不影响
+      new Set(["9999999999"]),
     );
     assert.equal(d.cancel.length, 1);
     assert.equal(d.cancelBlocked.length, 0);
@@ -306,5 +322,74 @@ describe("diffCidList D-330 死锁破解", () => {
     assert.equal(d.cancelSkippedByGuard, true);
     assert.equal(d.cancel.length, 0);
     assert.equal(d.cancelBlocked.length, 0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// D-359：gviz 多行表头把开头若干数据行吞进列名单元格 → 解析结果缺行
+// ─────────────────────────────────────────────────────────────
+describe("countAbsorbedHeaderRows", () => {
+  test("干净表头 → 0", () => {
+    assert.equal(countAbsorbedHeaderRows([["CustomerID", "AccountName", "Status"], ["123-456-7890", "a", "ENABLED"]]), 0);
+    assert.equal(countAbsorbedHeaderRows([]), 0);
+  });
+
+  test("MCC 133 真实形态：18 行被吞进表头 → 返回 18", () => {
+    const hdr = [
+      "CustomerID 127-352-0631 130-586-4419 130-932-1064 154-602-4086 158-481-8752 170-703-1492 "
+      + "179-185-1397 188-887-2813 198-207-1598 202-830-5007 203-102-8617 204-552-0384 207-370-0523 "
+      + "212-758-0860 218-912-7848 222-639-9949 235-477-5945 251-062-2550",
+      "AccountName ",
+      "Status ENABLED ENABLED CANCELED ENABLED ENABLED CANCELED CANCELED ENABLED CANCELED ENABLED "
+      + "ENABLED SUSPENDED ENABLED CANCELED ENABLED ENABLED CANCELED ENABLED",
+    ];
+    assert.equal(countAbsorbedHeaderRows([hdr, ["272-098-3152", "1", "CANCELED"]]), 18);
+    // 被吞的 18 行确实不在数据区——这正是「从 Sheet 消失」的假象来源
+    const parsed = parseCidListRows([hdr, ["272-098-3152", "1", "CANCELED"]]);
+    assert.equal(parsed?.length, 1);
+    assert.equal(parsed?.some((r) => r.customer_id === "1273520631"), false);
+  });
+
+  test("带空格但不含 CID 的列名不误判（Customer ID / CustomerID 备注）", () => {
+    assert.equal(countAbsorbedHeaderRows([["CustomerID 备注", "AccountName"], ["123-456-7890", "a"]]), 0);
+  });
+
+  test("没有 CustomerID 列（老格式/别的 tab）→ 0，交给 parseCidListRows 判 null", () => {
+    assert.equal(countAbsorbedHeaderRows([["最近7天每日数据 广告系列名", ""]]), 0);
+  });
+});
+
+describe("diffCidList：D-359 表头吞行时不取消", () => {
+  const existing: ExistingCidRow[] = [
+    ex(1, "1273520631", "被吞掉的活账户"),
+    ex(2, "2189127848", "同上"),
+    ex(3, "2720983152", "数据区里还在"),
+  ];
+
+  test("吞行 → 整轮跳过取消，新增/改名照做", () => {
+    const d = diffCidList(
+      [{ customer_id: "2720983152", customer_name: "renamed", google_status: "ENABLED" },
+       { customer_id: "3333333333", customer_name: "新号", google_status: "ENABLED" }],
+      existing,
+      new Set(),            // 库内没有 ENABLED 系列佐证
+      undefined,            // CampaignInfo 也拿不到
+      { absorbedHeaderRows: 18 },
+    );
+    assert.equal(d.cancelSkippedByHeaderGap, true);
+    assert.equal(d.cancel.length, 0);
+    assert.equal(d.cancelBlocked.length, 0);
+    assert.equal(d.create.length, 1);
+    assert.equal(d.rename.length, 1);
+  });
+
+  test("表头干净时行为不变（吞行数 0 = 不传该参数）", () => {
+    const d = diffCidList(
+      [{ customer_id: "2720983152", customer_name: "", google_status: "ENABLED" }],
+      existing,
+      new Set(),
+      new Set(["2720983152"]),
+    );
+    assert.equal(d.cancelSkippedByHeaderGap, false);
+    assert.equal(d.cancel.length, 2);
   });
 });

@@ -45,6 +45,8 @@ export interface CidDiffAction {
   presentButDisabled: number;
   /** 缩水保护触发：本轮跳过取消 */
   cancelSkippedByGuard: boolean;
+  /** D-359：表头吞掉了开头若干行（解析结果缺行）→ 本轮跳过取消 */
+  cancelSkippedByHeaderGap: boolean;
 }
 
 export interface ExistingCidRow {
@@ -66,13 +68,48 @@ export interface ExistingCidRow {
  * 体检结果：60 个配了 Sheet 的 MCC 里 25 个判 null，其中 5 个是这一类表头合并。
  *
  * 退化规则只认「首段等于列名」，不做宽松的 includes/startsWith——
- * 后者会让 "statuschangedat" 之类的列名误命中 "status"。被吞的只是列名单元格本身，
- * 数据行完整（实测 5 个 MCC 解析出 63~84 行，无丢行）。
+ * 后者会让 "statuschangedat" 之类的列名误命中 "status"。
+ *
+ * D-359 更正 D-352 的一句话：「被吞的只是列名单元格本身，数据行完整」是错的。
+ * 被吞进表头的那几行**不会再出现在数据区**（见 countAbsorbedHeaderRows）。
  */
 function findHeaderCol(hdr: string[], want: string): number {
   const exact = hdr.indexOf(want);
   if (exact >= 0) return exact;
   return hdr.findIndex((h) => h.split(/[\s\r\n]+/)[0] === want);
+}
+
+/**
+ * D-359（2026-09-26 实测）：表头吞行检测——返回被吞进列名单元格的数据行数（0 = 表头干净）。
+ *
+ * 机理：gviz 的 `tqx=out:csv` 自己猜表头行数（headers=-1）。CID_List 三列全是文本时，
+ * 它会把开头若干**数据行**一并认成多行表头，按列用空格拼进列名单元格：
+ *   "CustomerID 127-352-0631 130-586-4419 …","AccountName ","Status ENABLED ENABLED …"
+ * 这些行从此不在数据区。D-352 让这种表头能认出列位置（此前整表判 null 被跳过），
+ * 代价是解析结果**缺开头那几十行**——而「不在 Sheet 里的 active 行」正是 diffCidList
+ * 判取消的依据，于是这批 CID 被自动标 cancelled + is_available=D，
+ * 展示层按 D-248 直接显示「所属 CID 已被 Google 中止，无法操作」。
+ *
+ * 实证（D-352 上线后三天）：MCC 133/123/167 共 5 个 CID 被误判中止，
+ * Sheet 的 Status 列其实全是 ENABLED；其中 133 的 127-352-0631 名下 855-MUI3-LittleEnglish
+ * 还在投——D-330 的孤儿回停只改库不动 Google，于是广告照常花钱、CRM 显示已暂停且锁操作。
+ * 全库扫描：60 个配 Sheet 的 MCC 中 5 个有吞行（吞 1/3/7/12/18 行），误判仅此 5 条。
+ *
+ * 根治在取数侧（readSheetCsv 的 gviz URL 带 headers=1，强制只认第一行当表头，实测
+ * 同一张表从 62 行恢复成 80 行）；本函数是第二道闸：列名后面还跟着值 = 本轮解析**缺行**，
+ * 缺行的表不配判「消失即取消」。空名字不会各留一个空格（实测 "AccountName " 只有一个
+ * 尾空格），所以无法靠 token 数把缺的行还原出来——只能识别缺、不能补齐。
+ */
+export function countAbsorbedHeaderRows(rows: string[][]): number {
+  if (rows.length === 0) return 0;
+  const hdr = rows[0].map((h) => h.trim());
+  const ci = findHeaderCol(hdr.map((h) => h.toLowerCase()), "customerid");
+  if (ci < 0) return 0;
+  // 只数长得像 CID 的段（≥8 位数字），免得「Customer ID」这类带空格的列名被误判成吞行
+  return (hdr[ci] ?? "")
+    .split(/[\s\r\n]+/)
+    .slice(1)
+    .filter((t) => t.replace(/\D/g, "").length >= 8).length;
 }
 
 /** Sheet CID_List 表头解析：返回 null 表示表头不符（老脚本/别的格式），调用方跳过 */
@@ -356,6 +393,7 @@ export function diffCidList(
   existing: ExistingCidRow[],
   enabledCids: Set<string> = new Set(),
   cidsInCampaignInfo?: Set<string>,
+  opts: { absorbedHeaderRows?: number } = {},
 ): CidDiffAction {
   const sheetMap = new Map(sheetRows.map((r) => [r.customer_id, r]));
   const existingMap = new Map(existing.map((r) => [r.customer_id, r]));
@@ -385,16 +423,29 @@ export function diffCidList(
   const activeCount = existing.filter((ex) => ex.status === "active").length;
   // 缩水保护：疑似残表（脚本中断在 clearContents 与写完之间）
   const cancelSkippedByGuard = missingActive.length >= 5 && sheetRows.length < activeCount * 0.5;
+  // D-359：表头吞行 ⟹ 解析结果开头缺了若干行，「不在 Sheet 里」不成立，整轮不取消。
+  // 缩水保护拦不住它：18/80 行的缺口既不到 50% 门槛，缺的又不是尾部而是开头。
+  const cancelSkippedByHeaderGap = (opts.absorbedHeaderRows ?? 0) > 0;
 
   const cancel: Array<{ id: bigint; customer_id: string }> = [];
   const cancelBlocked: Array<{ id: bigint; customer_id: string }> = [];
-  if (!cancelSkippedByGuard) {
+  if (!cancelSkippedByGuard && !cancelSkippedByHeaderGap) {
     for (const ex of missingActive) {
       // D-330：ENABLED 佐证只在「该 CID 的系列确实还出现在 CampaignInfo 里」时才成立。
       // 两个 tab 同时缺席 ⟹ 账户已不在此 MCC 下，库内那批 ENABLED 是被跳过的冻结值，
       // 不能再当作「还在投」的证据（否则与状态同步互相锁死，见函数头注释）。
-      const stillInCampaignInfo = cidsInCampaignInfo ? cidsInCampaignInfo.has(ex.customer_id) : true;
-      if (enabledCids.has(ex.customer_id) && stillInCampaignInfo) {
+      //
+      // D-359 收紧：CampaignInfo 可读时，判据从「库内 ENABLED 且在 CampaignInfo」
+      // 改成「在 CampaignInfo」即可拦。两个 tab 由同一脚本同轮生成，系列还被报上来
+      // ⟹ 该账户仍挂在本 MCC 下，与「从 CID_List 消失」直接矛盾——此时取消只可能是
+      // CID_List 那一侧丢了数据（吞行/半写表/串列），而库内 google_status 是过期快照，
+      // 拿它当唯一判据等于让一个陈旧字段决定要不要锁死一个活账户。D-359 的 5 条误判里
+      // 有 3 条正是「库内没有 ENABLED 系列、但 CampaignInfo 里还在」而被放行取消的。
+      // 拿不到 CampaignInfo（undefined）时退回 D-330 的旧判据，不放宽也不收紧。
+      const blocked = cidsInCampaignInfo
+        ? cidsInCampaignInfo.has(ex.customer_id)
+        : enabledCids.has(ex.customer_id);
+      if (blocked) {
         cancelBlocked.push({ id: ex.id, customer_id: ex.customer_id });
       } else {
         cancel.push({ id: ex.id, customer_id: ex.customer_id });
@@ -402,7 +453,7 @@ export function diffCidList(
     }
   }
 
-  return { create, rename, cancel, cancelBlocked, presentButDisabled, cancelSkippedByGuard };
+  return { create, rename, cancel, cancelBlocked, presentButDisabled, cancelSkippedByGuard, cancelSkippedByHeaderGap };
 }
 
 export interface CidListSyncStats {
@@ -412,6 +463,8 @@ export interface CidListSyncStats {
   renamed: number;
   cancelled: number;
   guardTriggered: number;
+  /** D-359：表头吞行导致本轮跳过取消的 MCC 数 */
+  headerGapTriggered: number;
   /** D-277：按 Sheet 状态列真值更新的行数（被停/注销跟随） */
   statusUpdated: number;
   /** D-324：Google 侧已恢复 ENABLED、自动写库解锁的行数（原为「只提醒」计数） */
@@ -421,7 +474,7 @@ export interface CidListSyncStats {
 
 /** 每日执行入口（daily-sync Step 2.4 挂载）：逐 MCC 读 Sheet CID_List 并比对入库 */
 export async function syncCidListFromSheets(log: (msg: string) => void): Promise<CidListSyncStats> {
-  const stats: CidListSyncStats = { mccs: 0, skipped: 0, created: 0, renamed: 0, cancelled: 0, guardTriggered: 0, statusUpdated: 0, recovered: 0, warnings: [] };
+  const stats: CidListSyncStats = { mccs: 0, skipped: 0, created: 0, renamed: 0, cancelled: 0, guardTriggered: 0, headerGapTriggered: 0, statusUpdated: 0, recovered: 0, warnings: [] };
 
   const mccs = await prisma.google_mcc_accounts.findMany({
     where: { is_deleted: 0, sheet_url: { not: null } },
@@ -483,8 +536,19 @@ export async function syncCidListFromSheets(log: (msg: string) => void): Promise
       // 忽略：拿不到就退回旧行为
     }
 
-    const diff = diffCidList(sheetRows, existing, enabledCids, cidsInCampaignInfo);
+    const absorbed = countAbsorbedHeaderRows(rows); // D-359：gviz 把开头几行吞进表头了
+    const diff = diffCidList(sheetRows, existing, enabledCids, cidsInCampaignInfo, {
+      absorbedHeaderRows: absorbed,
+    });
     stats.mccs++;
+
+    if (diff.cancelSkippedByHeaderGap) {
+      stats.headerGapTriggered++;
+      const w = `${label}: CID_List 表头吞掉了开头 ${absorbed} 行数据（gviz 多行表头误判），`
+        + `本轮解析到的 ${sheetRows.length} 行是残缺的——只登记新增/改名/跟状态，跳过取消，请复核脚本表头`;
+      stats.warnings.push(w);
+      log(`  [CID_List] ⚠️ ${w}`);
+    }
 
     if (diff.cancelSkippedByGuard) {
       stats.guardTriggered++;
@@ -550,7 +614,7 @@ export async function syncCidListFromSheets(log: (msg: string) => void): Promise
     }
   }
 
-  log(`  [CID_List] 完成：比对 ${stats.mccs} 个 MCC（跳过 ${stats.skipped}），新增 ${stats.created}、改名 ${stats.renamed}、取消 ${stats.cancelled}${stats.statusUpdated ? `、状态跟随 ${stats.statusUpdated}` : ""}${stats.recovered ? `、自动恢复 ${stats.recovered}` : ""}${stats.guardTriggered ? `、缩水保护触发 ${stats.guardTriggered}` : ""}`);
+  log(`  [CID_List] 完成：比对 ${stats.mccs} 个 MCC（跳过 ${stats.skipped}），新增 ${stats.created}、改名 ${stats.renamed}、取消 ${stats.cancelled}${stats.statusUpdated ? `、状态跟随 ${stats.statusUpdated}` : ""}${stats.recovered ? `、自动恢复 ${stats.recovered}` : ""}${stats.guardTriggered ? `、缩水保护触发 ${stats.guardTriggered}` : ""}${stats.headerGapTriggered ? `、表头吞行跳过取消 ${stats.headerGapTriggered}` : ""}`);
   return stats;
 }
 
@@ -566,8 +630,10 @@ export async function syncCidStatusesFromSheets(log: (msg: string) => void): Pro
   recovered: number;
   /** D-353：CID_List 解析不出有效行的 MCC 数（表头合并/老格式/残表）——这些 MCC 本轮状态同步等于没跑 */
   unparsable: number;
+  /** D-359：表头吞掉开头若干行的 MCC 数——这些 MCC 的状态同步漏掉了被吞那几十个 CID */
+  headerGap: number;
 }> {
-  const out = { mccs: 0, withStatusCol: 0, updated: 0, recovered: 0, unparsable: 0 };
+  const out = { mccs: 0, withStatusCol: 0, updated: 0, recovered: 0, unparsable: 0, headerGap: 0 };
   const mccs = await prisma.google_mcc_accounts.findMany({
     where: { is_deleted: 0, sheet_url: { not: null } },
     select: { id: true, mcc_id: true, mcc_name: true, sheet_url: true, user_id: true },
@@ -583,6 +649,9 @@ export async function syncCidStatusesFromSheets(log: (msg: string) => void): Pro
       // D-353：只计数不逐 MCC 打日志——这条半小时跑一轮 × 60 个 MCC，逐条会把日志冲掉；
       // 汇总数字由调用方打一行，异常值（如 25/60）就是「大批 MCC 状态同步实际没跑」的信号。
       if (!sheetRows || sheetRows.length === 0) { out.unparsable++; continue; }
+      // D-359：吞行只会让这几十个 CID 本轮没被核对（状态停在旧值），不会写错——
+      // 这条路径只按解析到的行更新状态，不做「消失即取消」。计数是为了让漏核对可见。
+      if (countAbsorbedHeaderRows(rows) > 0) out.headerGap++;
       if (!sheetRows.some((r) => r.google_status != null)) continue; // 老脚本无状态列
       out.withStatusCol++;
 
