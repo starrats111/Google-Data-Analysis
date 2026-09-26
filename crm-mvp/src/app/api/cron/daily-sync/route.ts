@@ -694,6 +694,12 @@ async function syncAllCampaignStatuses(): Promise<unknown> {
       const { loadSuspendedCidSet, normalizeCid } = await import("@/lib/google-ads/cid-suspension");
       const suspendedCids = await loadSuspendedCidSet([mcc.id]);
 
+      // D-362：D-247 的豁免只在 Hermes 还在行使主权时成立。它静默超阈值后，
+      // 人在 CRM 里停的广告必须由本分支守住——否则 Google 侧一漂回 ENABLED 就跟随，
+      // 用户刚停的广告第二天 06:00 自己又活了，而 Hermes 并不存在
+      const { getHermesStatusGate } = await import("@/lib/hermes-liveness");
+      const hermesGate = await getHermesStatusGate();
+
       // D-321：本地人工移除（拒登）的系列——状态是终态。成员收到拒登通知后自己去 Google 移除，
       // 在他动手之前 Google 仍返回 ENABLED，这里若跟随就会把它冲回「已启用」，
       // 员工点的「拒登」白点、CID 名额继续被占。这类行本轮只刷同步时间。
@@ -721,7 +727,8 @@ async function syncAllCampaignStatuses(): Promise<unknown> {
           // D-247：Hermes 在管系列状态主权归 Hermes——它的止损/复活是合法操作，不是漂移。
           // 不回停 mutate，CRM 跟随 Google 侧状态（2026-08-18 caledoniantravel 被 Hermes
           // 复活后又被本分支 06:24 回停的拉锯实证，07 拍板 CRM 只读）
-          if (existing.hermes_managed_at) {
+          // D-362：加活性判据。Hermes 静默超阈值时这条豁免失效，往下走正常回停流程
+          if (existing.hermes_managed_at && hermesGate.alive) {
             await prisma.campaigns.update({
               where: { id: existing.id },
               data: {
@@ -733,6 +740,9 @@ async function syncAllCampaignStatuses(): Promise<unknown> {
             updated++;
             log(`  [D-247] Hermes 主权系列跟随 Google：campaign_id=${existing.id} gcid=${s.campaign_id} PAUSED→ENABLED（不回停）`);
             continue;
+          }
+          if (existing.hermes_managed_at) {
+            log(`  [D-362] Hermes 已静默 ${hermesGate.silentHours}h（阈值 ${hermesGate.staleHours}h，源=${hermesGate.source}），主权回到 CRM：campaign_id=${existing.id} gcid=${s.campaign_id} 按正常漂移处理（回停）`);
           }
 
           // D-248：被中止 CID 旗下不回停，跟随 Google 状态（展示层会派生「被中止」）

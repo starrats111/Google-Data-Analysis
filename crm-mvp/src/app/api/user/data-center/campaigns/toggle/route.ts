@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { getUserFromRequest, serializeData } from "@/lib/auth";
 import { apiSuccess, apiError } from "@/lib/constants";
 import prisma from "@/lib/prisma";
+import type { HermesGate } from "@/lib/hermes-liveness";
 
 /**
  * POST /api/user/data-center/campaigns/toggle
@@ -22,8 +23,14 @@ export async function POST(req: NextRequest) {
   if (!campaign.google_campaign_id) return apiError("该广告系列尚未提交到 Google Ads");
   if (!campaign.mcc_id) return apiError("该广告系列未关联 MCC 账户");
   // D-247：Hermes 在管系列状态主权归 Hermes，CRM 一律只读不写状态（07 2026-08-18 拍板）
+  // D-362：主权只在 Hermes 还在行使时有效。原来这里只看 hermes_managed_at——一个只写一次、
+  // 永不清除的闩，Hermes 停了五天它照样拦，wj07 的四条 ENABLED 谁都停不了。加活性判据。
+  let hermesGate: HermesGate | null = null;
   if (campaign.hermes_managed_at) {
-    return apiError("该系列由 Hermes 智能投放体托管，状态主权归 Hermes：CRM 不能启用/暂停它，请通过飞书让 Hermes 处理（它的止损与复活会自动管理投放状态）", 403);
+    const { getHermesStatusGate, hermesAliveMessage } = await import("@/lib/hermes-liveness");
+    hermesGate = await getHermesStatusGate();
+    if (hermesGate.alive) return apiError(hermesAliveMessage(hermesGate, "toggle"), 403);
+    console.warn(`[CampaignToggle] D-362 Hermes 静默 ${hermesGate.silentHours}h（阈值 ${hermesGate.staleHours}h，源=${hermesGate.source}），CRM 接管状态写入 campaign_id=${campaign.id} action=${action}`);
   }
   // D-261：Google 侧已 REMOVED 的系列任何启停 mutate 必被拒（旧报错文案「当前账户不支持此广告操作」严重误导），提前明确拦截
   if (campaign.google_status === "REMOVED") {
@@ -113,7 +120,9 @@ export async function POST(req: NextRequest) {
       confirmedStatusStr === "ENABLED"
         ? { paused_at: null, pause_source: null }
         : confirmedStatusStr === "PAUSED" && campaign.google_status !== "PAUSED"
-          ? { paused_at: new Date(), pause_source: "manual" }
+          // D-362：Hermes 托管但已静默、主权回到 CRM 的那一停单独记来源，复盘时能看出
+          // 这条本该由 Hermes 止损、是人替它收的尾
+          ? { paused_at: new Date(), pause_source: hermesGate ? "hermes_takeover" : "manual" }
           : {};
     await prisma.campaigns.update({
       where: { id: campaign.id },
@@ -148,7 +157,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    return apiSuccess({ status: confirmedStatus, verify_ok: true }, `广告已${action === "enable" ? "启用" : "暂停"}`);
+    // D-362：走了接管路径就把「凭什么允许」一并回给用户——否则同一个按钮昨天报错今天放行，
+    // 界面上看不出区别，用户只会以为门是随机的
+    const takeover = hermesGate
+      ? (await import("@/lib/hermes-liveness")).hermesTakeoverNote(hermesGate)
+      : "";
+    return apiSuccess(
+      { status: confirmedStatus, verify_ok: true, hermes_takeover: !!hermesGate },
+      `广告已${action === "enable" ? "启用" : "暂停"}${takeover}`,
+    );
   } catch (err) {
     return apiError(`操作失败: ${err instanceof Error ? err.message : String(err)}`);
   }

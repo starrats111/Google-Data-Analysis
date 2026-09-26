@@ -33,6 +33,9 @@ export const PAUSE_SOURCE_LABELS: Record<string, string> = {
   backfill: "历史回填(近似)",
   // D-330：所属 CID 被撤销/停用 → 系统回停（时间=发现时刻，非 Google 真实停投时刻）
   cid_revoked: "CID已撤销(近似)",
+  // D-362：Hermes 托管中但已静默超阈值，主权回到 CRM，由人手动停的。
+  // 与 manual 分开记：复盘看到「手动暂停」会以为是正常操作，看不出这条本该由 Hermes 止损
+  hermes_takeover: "Hermes静默后手动停",
 };
 
 /**

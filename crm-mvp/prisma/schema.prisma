@@ -438,7 +438,7 @@ model campaigns {
   // D-245 复盘分析：暂停时间与来源。所有置 PAUSED 的写点统一写入；→ENABLED 时清空（自然移出复盘列表）；
   // REMOVED 保留（曾暂停过的进复盘）。backfill = 上线时用 last_google_sync_at 近似回填的存量值
   paused_at                  DateTime? @db.DateTime(0)
-  pause_source               String?   @db.VarChar(20) // manual / spend_guard / ai_apply / sync(近似) / change_history(精确) / backfill(近似) / cid_revoked(近似, D-330)
+  pause_source               String?   @db.VarChar(20) // manual / spend_guard / ai_apply / sync(近似) / change_history(精确) / backfill(近似) / cid_revoked(近似, D-330) / hermes_takeover(D-362)
   // D-321：本地人工移除（拒登）。非空 = 员工在 CRM 判定这条广告已死（Google 侧由成员自己移除），
   // google_status 置 REMOVED 后所有同步入口不得再冲回——sync 看到 remove_source 非空一律跳过状态写入。
   // 「重发此条」发出新广告时清空（状态跟随新广告）。巡检 removed-still-spending 负责兜住

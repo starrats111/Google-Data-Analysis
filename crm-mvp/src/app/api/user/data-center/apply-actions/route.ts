@@ -104,9 +104,17 @@ export async function POST(req: NextRequest) {
       }
       if (action.type === "pause") {
         // D-247：Hermes 在管系列状态主权归 Hermes，CRM 不写状态（预算/CPC 类动作不受限）
+        // D-362：改为只在 Hermes 确实还在行使主权时拦；它静默超阈值后主权回到 CRM
+        let hermesTookOver = false;
         if (campaign.hermes_managed_at) {
-          results.push({ type: action.type, success: false, message: "该系列由 Hermes 托管，状态主权归 Hermes：CRM 不执行暂停，请通过飞书让 Hermes 处理" });
-          continue;
+          const { getHermesStatusGate, hermesAliveMessage } = await import("@/lib/hermes-liveness");
+          const gate = await getHermesStatusGate();
+          if (gate.alive) {
+            results.push({ type: action.type, success: false, message: hermesAliveMessage(gate, "apply") });
+            continue;
+          }
+          hermesTookOver = true;
+          console.warn(`[ApplyActions] D-362 Hermes 静默 ${gate.silentHours}h（阈值 ${gate.staleHours}h，源=${gate.source}），CRM 接管暂停 campaign_id=${campaign.id}`);
         }
         const r = await updateCampaignStatus(credentials, campaign.customer_id || "", campaign.google_campaign_id, "PAUSED");
         if (r.success) {
@@ -117,7 +125,10 @@ export async function POST(req: NextRequest) {
               // D-246：实时 mutate 成功的状态，Sheet 快照同步在信任窗口内不得覆盖
               status_verified_at: new Date(),
               // D-245 复盘分析：记录暂停时间与来源（已是 PAUSED 时不覆盖更早的暂停时间）
-              ...(campaign.google_status !== "PAUSED" ? { paused_at: new Date(), pause_source: "ai_apply" } : {}),
+              // D-362：Hermes 静默后接管的那一停单独记来源
+              ...(campaign.google_status !== "PAUSED"
+                ? { paused_at: new Date(), pause_source: hermesTookOver ? "hermes_takeover" : "ai_apply" }
+                : {}),
             },
           });
         }
