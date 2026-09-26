@@ -164,25 +164,81 @@ export async function broadcastSheetFailure(
 }
 
 /**
- * D-285 弹窗一：MCC 还在旧版统一脚本（CampaignInfo 无 Budget 列）→ 定向弹窗催归属人换脚本。
+ * D-285 弹窗一：MCC 还在旧版统一脚本 → 定向弹窗催归属人换脚本。
  * 近期活跃闸门与其他 MCC 告警一致（废弃 MCC 的旧账不弹）；每周提醒一次；
  * 换上新脚本后检测不再触发，提醒自动停止。today-merchants-sync 每半小时接线调用。
+ *
+ * D-361（2026-09-26，01 指派）：原文案只讲 CampaignInfo 缺 Budget 列 → 预算显示失真，
+ * 那是最轻的一条后果，于是这条提醒被当成"显示问题"搁置——实测 wj/yz 两组有 9 个 MCC
+ * 长期挂着旧脚本，其中 6 个收过这条提醒仍没换。
+ *
+ * 真正重的后果是 **CID_List 缺 Status 列**（D-277 加的那列，Google 账户状态真值靠它回传）：
+ * 1) 这些 MCC 的账户被 Google 停用/注销，CRM 永远不知道（状态同步整段跳过）；
+ * 2) 更糟的是形成**单向门**——取消走的是名单路径（CID 从 CID_List 消失即标 cancelled，
+ *    与 Status 列无关），而恢复只认 Status 列真值（D-324）。所以这些 MCC 的 CID
+ *    能被自动锁死、却永远不会自动解锁。D-359 那 5 个被误锁的号能在半小时内自愈，
+ *    全靠 Status 列；同样的事落在这些 MCC 上只能人工解，而且没有任何告警会提示该去解。
+ *
+ * 两个缺陷的检出口径不同（Budget 看 CampaignInfo，Status 看 CID_List），同一个 MCC 可能
+ * 只中其一，所以文案按实际检出的缺陷拼装，不写没发生的事。
  */
+export interface OldScriptDefects {
+  /** CampaignInfo 缺 Budget 列（D-285 原判据） */
+  missingBudgetCol: boolean;
+  /** CID_List 缺 Status 列（D-361 新增判据，后果最重的一条） */
+  missingStatusCol: boolean;
+}
+
+/** 文案拼装（纯函数，可单测）。两个缺陷都没有时返回 null。 */
+export function buildOldScriptAlert(label: string, defects: OldScriptDefects): { title: string; content: string } | null {
+  if (!defects.missingBudgetCol && !defects.missingStatusCol) return null;
+  const harms: string[] = [];
+  if (defects.missingStatusCol) {
+    harms.push(
+      `① 数据表 CID_List 缺 Status 列 —— 该列是 Google 账户状态的真值来源。缺了它：\n`
+      + `　　· 这些账户被 Google 停用或注销，CRM 永远不会知道，页面上照旧显示"正常"；\n`
+      + `　　· 而且是单向的：CID 一旦被自动标成"已被 Google 中止"（走的是另一条判据），`
+      + `就再也不会自动恢复，只能人工解锁，且不会有任何提醒告诉你该去解锁。`,
+    );
+  }
+  if (defects.missingBudgetCol) {
+    harms.push(
+      `② 数据表 CampaignInfo 缺 Budget 列 —— 零花费/停投系列的预算同步不回来，`
+      + `数据中心的预算列会失真（例如实际 ¥13.46 显示成 $0.30）。`,
+    );
+  }
+  const severe = defects.missingStatusCol;
+  return {
+    title: severe
+      ? `你的 MCC ${label} 的旧脚本没回传账户状态，账户被停 CRM 不会知道`
+      : `你的 MCC ${label} 还在旧版统一脚本，请尽快更换`,
+    content:
+      `该 MCC 挂的是旧版统一脚本，影响如下：\n\n${harms.join("\n\n")}\n\n`
+      + `怎么修：到「设置 → MCC 账户」对该 MCC 点「复制脚本」，把新脚本粘贴到 Google Ads 后台替换旧脚本。`
+      + `脚本功能不变，只是多导出几列。换完后半小时内自动生效，此提醒自动消失。`,
+  };
+}
+
 export async function notifyOldScriptMcc(
   mccInternalId: bigint,
   mccId: string,
   mccName: string | null,
   userId: bigint,
+  defects: OldScriptDefects = { missingBudgetCol: true, missingStatusCol: false },
 ): Promise<void> {
   if (!(await mccRecentlyActive(mccInternalId))) return;
-  const label = mccName ? `${mccName}（${mccId}）` : mccId;
+  const label = mccName && mccName !== mccId ? `${mccName}（${mccId}）` : mccId;
+  const msg = buildOldScriptAlert(label, defects);
+  if (!msg) return;
   await sendCriticalAlert({
-    key: `old_script_${mccId}`,
+    // D-361：换了去重键。沿用 old_script_ 的话，最近一周收过旧文案的人要等到下周才看得到
+    // "账户被停不会知道"这句从没被告知过的话——这条提醒躺了几个月没人动，正是因为文案太轻。
+    key: `old_script2_${mccId}`,
     userIds: [userId],
     dedupeHours: 7 * 24,
     level: "warning",
-    title: `你的 MCC ${label} 还在旧版统一脚本，请尽快更换`,
-    content: `该 MCC 的数据表 CampaignInfo 缺 Budget 列（旧版脚本），零花费/停投系列的预算无法同步回 CRM，数据中心的预算列会失真（例如实际 ¥13.46 显示成 $0.30）。请到「设置 → MCC 账户」对该 MCC 点「复制脚本」，把新脚本粘贴到 Google Ads 后台替换旧脚本（脚本功能不变，只是多导出预算等列）。换完后预算半小时内自动刷正，此提醒自动消失。`,
+    title: msg.title,
+    content: msg.content,
   });
 }
 
