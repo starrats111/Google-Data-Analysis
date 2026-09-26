@@ -47,12 +47,27 @@ export function extractSheetId(url: string): string | null {
   return null;
 }
 
-/** 通过公开 CSV 导出链接读取指定 Tab 数据（导出供 today-merchants-sheet 等复用；无需 Sheets API） */
+/**
+ * 通过公开 CSV 导出链接读取指定 Tab 数据（导出供 today-merchants-sheet 等复用；无需 Sheets API）
+ *
+ * D-359：URL 必须带 `headers=1`。不带时 gviz 自己猜表头行数（headers=-1），
+ * 整表都是文本列的 tab（CID_List 三列全是字符串）会被它把**开头若干数据行**一并认成
+ * 多行表头，按列用空格拼进列名单元格：
+ *   "CustomerID 127-352-0631 130-586-4419 …","AccountName ","Status ENABLED ENABLED …"
+ * 这些行从此不在数据区。后果见 cid-list-sheet-sync 的 countAbsorbedHeaderRows：
+ * 缺的行被判成「从 Sheet 消失」，5 个活账户被自动锁成「已被 Google 中止」，
+ * 其中一个名下还有在投系列（回停只写库、Google 照常花钱）。
+ * `headers=1` 强制只认第一行当表头，同一张表从 62 行恢复成 80 行。
+ *
+ * 全量实测（60 个 MCC Sheet × CID_List/CampaignInfo/DailyData）：没有任何一张表行数变少，
+ * 7 张多出 1 行（原先被吞进表头的那行回到数据区），表头本身缺失的（tab 不存在、
+ * gviz 退回第一张表）加不加都解析不出来，行为不变。
+ */
 export async function readSheetCsv(
   spreadsheetId: string,
   sheetName: string
 ): Promise<string[][]> {
-  const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`;
+  const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv&headers=1&sheet=${encodeURIComponent(sheetName)}`;
 
   for (let attempt = 0; attempt < SHEET_MAX_RETRIES; attempt++) {
     try {

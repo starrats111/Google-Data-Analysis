@@ -60,7 +60,8 @@ async function sheetProvidesIs(sheetUrl: string | null): Promise<boolean> {
   if (!sid) return false;
   try {
     const resp = await fetch(
-      `https://docs.google.com/spreadsheets/d/${sid}/gviz/tq?tqx=out:csv&sheet=DailyData&range=A1:Z1`,
+      // headers=1 与 readSheetCsv 同口径（D-359）：不让 gviz 自己猜表头行数，把数据行拼进列名
+      `https://docs.google.com/spreadsheets/d/${sid}/gviz/tq?tqx=out:csv&headers=1&sheet=DailyData&range=A1:Z1`,
       { signal: AbortSignal.timeout(15_000) },
     );
     if (!resp.ok) return false;

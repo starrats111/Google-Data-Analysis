@@ -160,7 +160,9 @@ export default function MerchantSheetPage() {
         if (sheetIdMatch) {
           const sid = sheetIdMatch[1];
           const csvUrls = [
-            `https://docs.google.com/spreadsheets/d/${sid}/gviz/tq?tqx=out:csv&gid=0`,
+            // headers=1（D-359）：商家表也是整表文本列，不加的话 gviz 会把开头若干行商家
+            // 拼进列名单元格，那几行从此不在数据区——同步时表现为「开头几个商家莫名没同步」
+            `https://docs.google.com/spreadsheets/d/${sid}/gviz/tq?tqx=out:csv&headers=1&gid=0`,
             `https://docs.google.com/spreadsheets/d/${sid}/export?format=csv&gid=0`,
           ];
           for (const url of csvUrls) {
