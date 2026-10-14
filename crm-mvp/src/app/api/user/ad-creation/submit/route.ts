@@ -816,6 +816,8 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
       merchant_name: true, merchant_id: true, platform: true, platform_connection_id: true,
       tracking_link: true, campaign_link: true, connection_campaign_links: true,
       tracking_status: true, parent_network: true, parent_blacklisted: true, parent_checked_at: true,
+      // D-365：缓存新鲜时不巡航，后缀只能从这里拆
+      resolved_final_url: true,
     },
   });
   if (!submitMerchant) return apiError("商家不存在", 404);
@@ -826,6 +828,14 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
   //   结果缓存在 user_merchants（7 天 TTL）：复用避免每次提交都巡航。
   //   仅「黑名单」硬阻断；no_tracking / resolve_failed 仅记录（主 CRM 追踪走 final_url_suffix，
   //   且可达性另有 D-050 闸门），不阻断提交。
+  //
+  // D-365：本闸巡航拿到的 `cruise.trackingLink` 就是 final_url_suffix 要的 query 串，
+  //   原先只用来判黑名单、随后整个丢掉，于是「库里有后缀、Google 上没有」。
+  //   后缀的**唯一**自动写入点在 generate-extensions 的 D-101 前置巡航里，而那段压在
+  //   `adEngine !== "rival_intel"` 分支内（merchants/route.ts:989 跳过 triggerAdCopyGeneration），
+  //   竞品情报引擎走 publishDraft → submit 从不经过它 ⇒ 该字段天生 NULL，
+  //   payload 里也没有这个键（publish-draft.ts:86），两头都空 → 整个 key 不发给 Google。
+  //   这里按引擎无关的方式补：巡航成功且当前字段为空就回填，两个引擎同时受益。
   // ═════════════════════════════════════════════════════════════════
   try {
     // 取该商家本平台账号的联盟追踪链接（优先账号级 campaign_link，其次通用字段）
@@ -845,9 +855,37 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
       let blocked = false;
       let blockedNetwork = submitMerchant.parent_network || "";
 
+      // D-365：后缀回填。只在「当前为空」时写——不覆盖员工手填值（与 generate-extensions:777 同口径）。
+      // 这里只认 campaign 快照的值；bodyFinalUrlSuffix 非空说明前端显式带了后缀，无需回填。
+      const { normalizeSuffixForBackfill, hasExistingSuffix } = await import("@/lib/final-url-suffix");
+      const suffixAlreadySet = hasExistingSuffix(bodyFinalUrlSuffix, campaign.final_url_suffix);
+      const backfillSuffix = async (rawQuery: string | null | undefined, from: string) => {
+        if (suffixAlreadySet) return;
+        // 清洗口径（D-234 参数黑名单 / D-157 剥前导 / D-354 整链判定）统一在 final-url-suffix.ts
+        const cleaned = normalizeSuffixForBackfill(rawQuery);
+        if (!cleaned) return;
+        await prisma.campaigns.update({
+          where: { id: campaign.id },
+          data: { final_url_suffix: cleaned },
+        }).catch((e) => console.warn("[AdSubmit] D-365 后缀回填失败:", e instanceof Error ? e.message : e));
+        console.warn(
+          `[AdSubmit] D-365 回填 final_url_suffix（来源 ${from}）: campaign=${campaign.id} ${cleaned.slice(0, 80)}`,
+        );
+      };
+
       if (cacheFresh) {
         // 复用缓存：仅看黑名单结论
         blocked = submitMerchant.parent_blacklisted === 1 || submitMerchant.tracking_status === "forbidden_network";
+        // D-365：缓存新鲜时不会巡航，追踪串只能从 resolved_final_url 的 query 拆
+        // （与 generate-extensions:712 的缓存快路径同口径）。缓存落在中转域/非商家域属脏数据，
+        // 该判定已在 D-316/D-328 落在写入侧，这里只做最小校验：非中转域才取。
+        if (!blocked && submitMerchant.resolved_final_url) {
+          try {
+            const u = new URL(submitMerchant.resolved_final_url);
+            const { isNonLandingHost } = await import("@/lib/affiliate-link-resolver");
+            if (!isNonLandingHost(u.hostname)) await backfillSuffix(u.search, "缓存 resolved_final_url");
+          } catch { /* 缓存 URL 异常 → 不回填 */ }
+        }
       } else {
         // 现场巡航（纯 HTTP，足以识别跳板域名/上级联盟；总超时 60s）
         const { resolveAffiliateLink } = await import("@/lib/affiliate-link-resolver");
@@ -870,6 +908,9 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
               parent_check_reason: (cruise.error || (cruise.status === "ok" ? "巡航通过" : cruise.status)).slice(0, 255),
             },
           }).catch((e) => console.warn("[AdSubmit] D-101 巡航结果写回失败:", e instanceof Error ? e.message : e));
+          // D-365：黑名单命中的下面会 return 拦掉，不必回填；其余情况把追踪串落库。
+          // cruise.trackingLink 已是不含前导 ? 的 query 串（ResolveResult 注释见 resolver:154）。
+          if (!blocked) await backfillSuffix(cruise.trackingLink, "现场巡航");
         } else {
           console.warn("[AdSubmit] D-101 巡航超时（60s），放行本次提交（不阻断）");
         }
@@ -1254,17 +1295,24 @@ export async function runSubmitCore(userId: bigint, body: any): Promise<Response
       : "DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING";
 
     // 最终到达网址后缀：优先使用前端传入值，其次取 DB 中保存的值
+    // D-365：这里必须读 campaignFresh（本函数内对 campaigns 的第二次查询），不能读进函数时的 campaign 快照。
+    //   ① 上面 D-365 的巡航回填就写在快照之后，读快照等于读不到自己刚写的值；
+    //   ② 竞品引擎是 publishDraft 入队 → 前端 800ms 后跳到广告预览页 → 后台 job 才跑完
+    //      （rival-ad-create/[id]/page.tsx:241）。员工在预览页手填后缀点保存，若读快照则这次
+    //      保存永远追不上提交，表现为「存了但 Google 上还是空的」。
     const rawFinalUrlSuffix: string | undefined =
-      (bodyFinalUrlSuffix ?? ((campaign as any).final_url_suffix as string | null) ?? undefined) || undefined;
+      (bodyFinalUrlSuffix ?? campaignFresh.final_url_suffix ?? undefined) || undefined;
     // D-157：Google Ads 要求 final_url_suffix 是合法 query string，**不能以 '?' 或 '&' 开头**（否则 INVALID_ARGUMENT，
     // 报 "The final url suffix cannot begin with '?' or '&'…"）。前端/联盟后缀常带前导 '?'（如 ?utm_source=...&clickId=...），
     // 这里统一剥掉前导 ?/& 与首尾空白、去掉尾部多余 &，兼容已存库的脏值。
     let finalUrlSuffix: string | undefined = rawFinalUrlSuffix
       ? (rawFinalUrlSuffix.trim().replace(/^[?&\s]+/, "").replace(/[?&\s]+$/, "").trim() || undefined)
       : undefined;
-    // 后缀里出现协议头 = 有人把整条追踪链接贴进了后缀（历史脏数据/误操作）。
+    // 后缀**开头**就是协议头 = 有人把整条追踪链接贴进了后缀（历史脏数据/误操作）。
     // 送到 Google 会拼出「落地页?https://...」的废到达页，宁可不带后缀也不能带废后缀。
-    if (finalUrlSuffix && (finalUrlSuffix.includes("://") || /^https?[:%]/i.test(finalUrlSuffix))) {
+    // D-354：与保存口径共用同一判断；参数值里含 URL（utm_campaign=https://...）是合法后缀，必须原样上传。
+    const { looksLikeWholeTrackingLink } = await import("@/lib/affiliate-link-resolver");
+    if (finalUrlSuffix && looksLikeWholeTrackingLink(finalUrlSuffix)) {
       console.warn(`[AdSubmit] final_url_suffix 疑似整条链接，已丢弃不上传: ${finalUrlSuffix.slice(0, 100)}`);
       finalUrlSuffix = undefined;
     }

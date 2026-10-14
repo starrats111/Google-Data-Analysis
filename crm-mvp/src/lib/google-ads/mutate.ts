@@ -204,6 +204,51 @@ export async function renameCampaign(
 }
 
 /**
+ * 修改广告系列的「最终到达网址后缀」（final_url_suffix）。
+ *
+ * D-365：此前本文件只有 budget / maxCpc / name / status 四个 updater，没有后缀。
+ *   于是 update-final-url 保存后缀是**纯本地写库**——广告一旦建成，CRM 里那个值再也上不去，
+ *   界面却静默提示「后缀已保存」，员工以为生效了。唯一的自愈路径是换链脚本下一轮
+ *   lease 到后缀主动覆盖（ENABLE_PROACTIVE_FIRST_APPLY 对「从未换过」的系列会强制换一次），
+ *   但要等脚本轮次、且该系列得有后缀库存，8 条零库存系列等于永不自愈（见 D-234 盘点）。
+ *
+ * ⚠️ 传空串 = 清空 Google 上的后缀（update_mask 带字段 + 空值即清除语义）。调用方自己判断是否该清。
+ * ⚠️ 换链脚本每隔几分钟就会改同一字段（见 campaign-bid-sync:214 的 GOOGLE_ADS_SCRIPTS 过滤口径）。
+ *    本函数是「员工手动改后缀」的落点，与脚本是 last-write-wins —— 不要拿它做批量存量刷写，
+ *    会和换链抢写；存量清理仍按 D-234 口径等换链覆盖。
+ */
+export async function updateCampaignFinalUrlSuffix(
+  credentials: MccCredentials,
+  customerId: string,
+  campaignId: string,
+  newSuffix: string,
+): Promise<{ success: boolean; message: string }> {
+  try {
+    const cid = customerId.replace(/-/g, "");
+    const resourceName = `customers/${cid}/campaigns/${campaignId}`;
+    // Google Ads 拒绝以 '?' / '&' 开头的后缀（INVALID_ARGUMENT），与 D-157 保存口径一致先剥掉
+    const suffix = (newSuffix || "").trim().replace(/^[?&\s]+/, "").replace(/[?&\s]+$/, "").trim();
+
+    await mutateGoogleAds(credentials, customerId, [{
+      campaign_operation: {
+        update: {
+          resource_name: resourceName,
+          final_url_suffix: suffix,
+        },
+        update_mask: "final_url_suffix",
+      },
+    }]);
+
+    return {
+      success: true,
+      message: suffix ? `后缀已更新为 ${suffix}` : "后缀已清空",
+    };
+  } catch (err) {
+    return { success: false, message: `后缀修改失败: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
+/**
  * 暂停/启用广告系列
  */
 export async function updateCampaignStatus(

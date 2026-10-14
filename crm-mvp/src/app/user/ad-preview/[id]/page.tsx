@@ -2107,7 +2107,13 @@ export default function AdPreviewPage() {
       });
       const data = await res.json();
       if (data.code === 0) {
-        message.success("后缀已保存");
+        // D-365：已提交的系列会真推 Google，推失败时后端在 data 里带 suffix_pushed=false。
+        // 这种情况不能再报「已保存」—— 库里存上了但 Google 上没生效，员工必须知道。
+        if (data.data?.suffix_pushed === false) {
+          message.warning({ content: data.data?.message || data.message || "后缀已存库，但推送 Google Ads 失败", duration: 8 });
+        } else {
+          message.success(data.data?.message || "后缀已保存");
+        }
         setSuffixTestState("idle");
         mutate();
       } else {
@@ -3762,60 +3768,57 @@ export default function AdPreviewPage() {
               )}
             </div>
             {/* ── 最终到达网址后缀 ── */}
-            {!preview.campaign?.google_campaign_id && (
-              <div style={{ marginTop: 10 }}>
-                <Text type="secondary" style={{ fontSize: 12 }}>最终到达网址后缀：</Text>
-                <div style={{ marginTop: 4, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                  <Input
-                    size="small"
-                    placeholder="utm_source=partnerize&utm_medium=affiliate&utm_campaign=..."
-                    value={suffixInput}
-                    onChange={(e) => { setSuffixInput(e.target.value); setSuffixTestState("idle"); }}
-                    style={{ flex: 1, minWidth: 200 }}
-                    allowClear
-                  />
-                  <Button
-                    size="small"
-                    icon={suffixTestState === "testing" ? <LoadingOutlined /> : <CheckCircleOutlined />}
-                    onClick={handleTestSuffix}
-                    loading={suffixTestState === "testing"}
-                    disabled={!suffixInput.trim() || !preview.adCreative?.final_url}
-                  >测试</Button>
-                  <Button
-                    size="small"
-                    type="primary"
-                    loading={savingSuffix}
-                    onClick={handleSaveSuffix}
-                  >保存</Button>
-                </div>
-                {suffixTestState === "ok" && (
-                  <div style={{ marginTop: 4, fontSize: 11, color: "#52c41a" }}>
-                    <CheckCircleOutlined /> 测试通过 — 已找到落地页
-                    <div style={{ color: "#888", wordBreak: "break-all", marginTop: 2 }}>{suffixTestMsg}</div>
-                  </div>
-                )}
-                {suffixTestState === "fail" && (
-                  <div style={{ marginTop: 4, fontSize: 11, color: "#ff4d4f" }}>
-                    <ExclamationCircleOutlined /> 测试失败：{suffixTestMsg}
-                    <div style={{ color: "#888", wordBreak: "break-all", marginTop: 2 }}>{suffixInput.trim() && preview.adCreative?.final_url ? (preview.adCreative.final_url.includes("?") ? `${preview.adCreative.final_url}&${suffixInput.trim()}` : `${preview.adCreative.final_url}?${suffixInput.trim()}`) : ""}</div>
-                  </div>
-                )}
-                {(preview as any).campaign?.final_url_suffix && suffixTestState === "idle" && !suffixInput && (
-                  <div style={{ marginTop: 4, fontSize: 11, color: "#888" }}>
-                    当前已保存：<Text code style={{ fontSize: 11 }}>{(preview as any).campaign.final_url_suffix}</Text>
-                  </div>
-                )}
-                <div style={{ marginTop: 3, fontSize: 11, color: "#aaa" }}>
-                  提交 Google Ads 后会自动附加到所有落地页 URL 末尾（如 utm 追踪参数）
-                </div>
+            {/* D-365：已提交的系列原先整块隐藏（只剩一行只读回显），员工发现 Google 上没后缀
+                也改不了。现在后端能把后缀真推到 Google（update-final-url → updateCampaignFinalUrlSuffix），
+                所以提交后也放开编辑。 */}
+            <div style={{ marginTop: 10 }}>
+              <Text type="secondary" style={{ fontSize: 12 }}>最终到达网址后缀：</Text>
+              <div style={{ marginTop: 4, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                <Input
+                  size="small"
+                  placeholder="utm_source=partnerize&utm_medium=affiliate&utm_campaign=..."
+                  value={suffixInput}
+                  onChange={(e) => { setSuffixInput(e.target.value); setSuffixTestState("idle"); }}
+                  style={{ flex: 1, minWidth: 200 }}
+                  allowClear
+                />
+                <Button
+                  size="small"
+                  icon={suffixTestState === "testing" ? <LoadingOutlined /> : <CheckCircleOutlined />}
+                  onClick={handleTestSuffix}
+                  loading={suffixTestState === "testing"}
+                  disabled={!suffixInput.trim() || !preview.adCreative?.final_url}
+                >测试</Button>
+                <Button
+                  size="small"
+                  type="primary"
+                  loading={savingSuffix}
+                  onClick={handleSaveSuffix}
+                >保存</Button>
               </div>
-            )}
-            {preview.campaign?.google_campaign_id && (preview as any).campaign?.final_url_suffix && (
-              <div style={{ marginTop: 10 }}>
-                <Text type="secondary" style={{ fontSize: 12 }}>最终到达网址后缀：</Text>
-                <Text code style={{ fontSize: 11, marginLeft: 4 }}>{(preview as any).campaign.final_url_suffix}</Text>
+              {suffixTestState === "ok" && (
+                <div style={{ marginTop: 4, fontSize: 11, color: "#52c41a" }}>
+                  <CheckCircleOutlined /> 测试通过 — 已找到落地页
+                  <div style={{ color: "#888", wordBreak: "break-all", marginTop: 2 }}>{suffixTestMsg}</div>
+                </div>
+              )}
+              {suffixTestState === "fail" && (
+                <div style={{ marginTop: 4, fontSize: 11, color: "#ff4d4f" }}>
+                  <ExclamationCircleOutlined /> 测试失败：{suffixTestMsg}
+                  <div style={{ color: "#888", wordBreak: "break-all", marginTop: 2 }}>{suffixInput.trim() && preview.adCreative?.final_url ? (preview.adCreative.final_url.includes("?") ? `${preview.adCreative.final_url}&${suffixInput.trim()}` : `${preview.adCreative.final_url}?${suffixInput.trim()}`) : ""}</div>
+                </div>
+              )}
+              {(preview as any).campaign?.final_url_suffix && suffixTestState === "idle" && !suffixInput && (
+                <div style={{ marginTop: 4, fontSize: 11, color: "#888" }}>
+                  当前已保存：<Text code style={{ fontSize: 11 }}>{(preview as any).campaign.final_url_suffix}</Text>
+                </div>
+              )}
+              <div style={{ marginTop: 3, fontSize: 11, color: "#aaa" }}>
+                {preview.campaign?.google_campaign_id
+                  ? "该广告已提交，保存后会直接改 Google Ads 上的后缀（即时生效）"
+                  : "提交 Google Ads 后会自动附加到所有落地页 URL 末尾（如 utm 追踪参数）"}
               </div>
-            )}
+            </div>
           </Card>
 
           {!preview.adCreative?.final_url && !preview.campaign?.google_campaign_id && (
