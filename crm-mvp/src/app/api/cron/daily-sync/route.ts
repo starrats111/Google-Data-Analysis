@@ -525,6 +525,22 @@ async function syncAllUsersMcc(): Promise<unknown> {
                           }
                         : null;
                     if (!newC) {
+                      // D-366：created_at 落「该 gcid 在 Sheet 上最早的花费日」，不用表默认 now()。
+                      // 不传 = 入库时间，补录一批老系列就把它们全盖成今天，「今日投放」虚高
+                      // （wj05 19 条事件，根因见 today-merchants-sync 的 countTodayNewAds 注释）。
+                      // DailyData 没有创建日列，最早花费日是手上唯一的真值近似：它不早于真实
+                      // 创建日（有花费必已创建），足以把补录行挡在「今天新建」之外。
+                      // 本批 rows 的时间窗有上限，若该系列更早就在跑，这里会偏晚——不影响
+                      // 「今日投放」判定，等 MCC 换上带 CreationDateCST 的新脚本后由
+                      // today-merchants-sync 那条路径按真实创建日入库。
+                      let earliestSheetDate: string | null = null;
+                      for (const r of sheetResult.rows) {
+                        if (r.campaign_id !== gcid || !r.date) continue;
+                        if (!earliestSheetDate || r.date < earliestSheetDate) earliestSheetDate = r.date;
+                      }
+                      const creationAt = earliestSheetDate && /^\d{4}-\d{2}-\d{2}$/.test(earliestSheetDate)
+                        ? new Date(`${earliestSheetDate}T00:00:00+08:00`)
+                        : null;
                       newC = await prisma.campaigns.create({
                         data: {
                           user_id: uid, user_merchant_id: BigInt(0),
@@ -532,12 +548,14 @@ async function syncAllUsersMcc(): Promise<unknown> {
                           customer_id: sample.customer_id || null,
                           campaign_name: sample.campaign_name,
                           daily_budget: sample.budget,
+                          ...(creationAt ? { created_at: creationAt } : {}),
                           target_country: parseCampaignNameFull(sample.campaign_name || "")?.country || "US",
                           google_status: sample.status,
                           last_google_sync_at: new Date(),
                         },
                       });
-                      log(`  [新campaign] ${gcid} ${sample.campaign_name} (from Sheet)`);
+                      log(`  [新campaign] ${gcid} ${sample.campaign_name} (from Sheet` +
+                          (earliestSheetDate ? `, created_at=${earliestSheetDate} CST` : "") + `)`);
                     }
                     campaignByGcid.set(gcid, {
                       id: newC.id, google_campaign_id: gcid, customer_id: newC.customer_id,
