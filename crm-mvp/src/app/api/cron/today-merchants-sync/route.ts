@@ -21,6 +21,7 @@ import prisma from "@/lib/prisma";
 import { fetchTodayMerchantsFromSheets, type CampaignInfoRow } from "@/lib/today-merchants-sheet";
 import { parseCampaignNameFull, syncMerchantStatusForUser } from "@/lib/campaign-merchant-link";
 import { syncTodayCostFromSheets } from "@/lib/today-cost-sheet";
+import { computeTodayNewAds, type TodayDbCampaign, type TodaySheetCampaign } from "@/lib/today-new-ads";
 
 function verifyCron(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
@@ -115,6 +116,13 @@ async function backfillNewCampaigns(
         // 折美元会失真（yz01 ¥ MCC 显示 $0.30 事件根因），等 MCC 换新脚本后由
         // syncCampaignNames 的预算回写自动纠正。
         const parsed = parseCampaignNameFull(row.campaignName || "");
+        // D-366：created_at 落 Google 侧的真实创建日，不用表默认 now()。
+        // 不传就是「入库时间」，补录一批老系列等于给它们全盖上今天的日期，
+        // 「今日投放」立刻虚高（wj05 19 条事件）。CampaignInfo 的 CreationDateCST
+        // 已是 Asia/Shanghai 日期，按 CST 零点转 UTC 入库（库里存 UTC）。
+        const creationAt = /^\d{4}-\d{2}-\d{2}$/.test(row.creationDate || "")
+          ? new Date(`${row.creationDate}T00:00:00+08:00`)
+          : null;
         await prisma.campaigns.create({
           data: {
             user_id: uid,
@@ -124,6 +132,7 @@ async function backfillNewCampaigns(
             customer_id: row.customerId || null,
             campaign_name: row.campaignName || gcid,
             ...(row.budget != null ? { daily_budget: row.budget } : {}),
+            ...(creationAt ? { created_at: creationAt } : {}),
             target_country: parsed?.country || "US",
             google_status: ["ENABLED", "PAUSED", "REMOVED"].includes(gStatus) ? gStatus : "ENABLED",
             last_google_sync_at: new Date(),
@@ -226,20 +235,32 @@ async function syncCampaignNames(
  * 不会出现，计数**静默**少算，成员只看到数字比表格里的条数小。
  * 实证：wj11(user 39) 的 代理商MCC(577-319-9400) DailyData/CampaignInfo 自 2026-08-27 冻结，
  * 当天该 MCC 投的 2 条全部漏计，卡片显示 2 条、表格里实为 4 条。
+ *
+ * D-366：分支 ① 不能拿 `created_at` 当「投放时间」用——它是**入库时间**，不是广告在
+ * Google 上的创建时间。两条补录路径（本文件的 CampaignInfo 补录、daily-sync 的 Sheet 补录）
+ * 都不传 created_at，走表默认 now()，于是「晚发现」被记成「今天新投」。
+ * MCC 换人接手时这件事必然发生：查重口径是 (user_id, gcid)（campaign-dedup 的注释已说明，
+ * 这是刻意的——新主人要有自己的行），所以同一批老系列在新主人名下全部算「全新」，
+ * 补录任务跑完就是一堆 created_at=今天的行。
+ * 实证：wj05(user 6) 2026-10-14 卡片显示今日投放 19 条，实际 0 条。MCC 736-710-9619
+ * 于 10-13 01:42 从 wj07(user 8) 转登记给 wj05，10-14 06:11:37 一次性补录 19 行，
+ * 全部 created_at 相同；系列名里的日期是 0914~0919，真实花费落在 9/14–9/21 共 $72.73。
+ * 判据用「全库（不分 user）是否已存在更早的同 gcid 行」：gcid 在 Google 全局唯一，
+ * 真·今天新建的系列不可能有更早的同 gcid 行。当天 4 条真新建（wj07 2 / yz08 1 / wj11 1）
+ * 一条都没有更早同 gcid 行，19 条影子全都有，判据零误伤。
+ * 分支 ② 不受影响：它按 Sheet 的 CreationDateCST 过滤，本来就是 Google 侧的真实创建日。
  */
 async function countTodayNewAds(
   rows: Array<CampaignInfoRow & { userId: string; mccDbId: string }>,
   todayStr: string,
 ): Promise<Map<string, number>> {
-  const out = new Map<string, number>();
   const todayStartCST = new Date(`${todayStr}T00:00:00+08:00`);
 
-  // userId → (gcid → campaignName)，仅今日投出的行
-  const byUser = new Map<string, Map<string, string>>();
-
   // ① 库内今日新建并已提交 Google 的系列（gcid 非空 = 真发出去了；草稿不算投放）
+  let dbRows: TodayDbCampaign[] = [];
+  const preexistingGcids = new Set<string>();
   try {
-    const dbRows = await prisma.campaigns.findMany({
+    const raw = await prisma.campaigns.findMany({
       where: {
         is_deleted: 0,
         created_at: { gte: todayStartCST },
@@ -247,35 +268,54 @@ async function countTodayNewAds(
       },
       select: { user_id: true, google_campaign_id: true, campaign_name: true },
     });
-    for (const c of dbRows) {
-      const uid = String(c.user_id);
-      if (!byUser.has(uid)) byUser.set(uid, new Map());
-      byUser.get(uid)!.set(c.google_campaign_id!, c.campaign_name || "");
+    dbRows = raw.map((c) => ({
+      userId: String(c.user_id),
+      gcid: c.google_campaign_id!,
+      campaignName: c.campaign_name || "",
+    }));
+
+    // D-366：查「今日之前是否已有同 gcid 行」，用于剔除补录影子。
+    // 不加 user_id / is_deleted 条件：换人接手时旧行在原主人名下，
+    // 原主人的行被清洗成软删也不代表广告是新的。
+    const todayGcids = [...new Set(dbRows.map((c) => c.gcid))];
+    const BATCH_G = 300;
+    for (let i = 0; i < todayGcids.length; i += BATCH_G) {
+      const older = await prisma.campaigns.findMany({
+        where: {
+          google_campaign_id: { in: todayGcids.slice(i, i + BATCH_G) },
+          created_at: { lt: todayStartCST },
+        },
+        select: { google_campaign_id: true },
+      });
+      for (const o of older) if (o.google_campaign_id) preexistingGcids.add(o.google_campaign_id);
     }
   } catch (e) {
     log(`今日投放广告 库内今日新建查询失败: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`);
   }
 
-  // ② Sheet 今日行补充。同 gcid 已被 ① 收录时不覆盖：历史同名要拿库里的名字去比，
-  //    Sheet 上的名字可能已被 Google 后台改过（D-225 回写前后不一致）。
-  for (const r of rows) {
-    if (r.creationDate !== todayStr) continue;
-    if (!byUser.has(r.userId)) byUser.set(r.userId, new Map());
-    const m = byUser.get(r.userId)!;
-    if (!m.has(r.campaignId)) m.set(r.campaignId, r.campaignName || "");
-  }
+  // ② Sheet 今日行（CreationDateCST = 今日，Google 侧真实创建日）
+  const sheetRows: TodaySheetCampaign[] = rows
+    .filter((r) => r.creationDate === todayStr)
+    .map((r) => ({ userId: r.userId, gcid: r.campaignId, campaignName: r.campaignName || "" }));
 
-  for (const [userId, gcidToName] of byUser) {
-    const names = [...new Set([...gcidToName.values()].filter(Boolean))];
+  // 历史同名：按 user 查该人今日之前用过的系列名（复用旧名重开不算新投）
+  const candidateNamesByUser = new Map<string, Set<string>>();
+  for (const c of [...dbRows.filter((c) => !preexistingGcids.has(c.gcid)), ...sheetRows]) {
+    if (!c.campaignName) continue;
+    if (!candidateNamesByUser.has(c.userId)) candidateNamesByUser.set(c.userId, new Set());
+    candidateNamesByUser.get(c.userId)!.add(c.campaignName);
+  }
+  const historicalNamesByUser = new Map<string, Set<string>>();
+  for (const [userId, nameSet] of candidateNamesByUser) {
+    const names = [...nameSet];
     const historicalNames = new Set<string>();
     try {
       const BATCH = 300;
       for (let i = 0; i < names.length; i += BATCH) {
-        const batch = names.slice(i, i + BATCH);
         const hist = await prisma.campaigns.findMany({
           where: {
             user_id: BigInt(userId),
-            campaign_name: { in: batch },
+            campaign_name: { in: names.slice(i, i + BATCH) },
             created_at: { lt: todayStartCST },
           },
           select: { campaign_name: true },
@@ -285,14 +325,19 @@ async function countTodayNewAds(
     } catch (e) {
       log(`今日投放广告 名称去重查询失败 (user ${userId}): ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`);
     }
-
-    let count = 0;
-    for (const [, name] of gcidToName) {
-      if (name && historicalNames.has(name)) continue;
-      count++;
-    }
-    out.set(userId, count);
+    historicalNamesByUser.set(userId, historicalNames);
   }
+
+  const { countByUser, backfillSkipped } = computeTodayNewAds({
+    dbRows,
+    preexistingGcids,
+    sheetRows,
+    historicalNamesByUser,
+  });
+  if (backfillSkipped > 0) {
+    log(`今日投放广告 剔除补录影子 ${backfillSkipped} 条（今日入库但 gcid 早已存在，非今日新投）`);
+  }
+  const out = countByUser;
 
   return out;
 }
