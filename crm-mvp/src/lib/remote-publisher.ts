@@ -8,6 +8,7 @@ import { Client, SFTPWrapper } from "ssh2";
 import JSON5 from "json5";
 import { getBtSshConfig } from "@/lib/system-config";
 import { ARTICLE_HYPERLINK_STYLE_BLOCK, cleanArticleContent, emphasizeArticleHyperlinks } from "@/lib/sanitize";
+import { withSiteLock, writeJsDataFileGuarded, isJsDataFile, checkJsSyntax, isDataOnly, hasRenderer } from "@/lib/site-write-guard";
 
 // ─── 网站架构类型常量（与 Python 后端一致）───
 export const SITE_TYPES = {
@@ -181,6 +182,83 @@ function sftpWriteFile(sftp: SFTPWrapper, path: string, content: string): Promis
       else resolve();
     });
   });
+}
+
+/**
+ * D-368：写站点 JS 数据文件的唯一入口 —— 写前语法校验 + 写后回读比对。
+ *
+ * 不要再对 *.js 数据文件直接调 sftpWriteFile：那条路是静默的，文件写坏了
+ * （截断 / 并发互相覆盖到一半）发布接口照样报「成功」，而首页的文章列表、首图、
+ * 分类、分页全靠这个文件渲染，一旦语法错误整页就是空白。
+ * 详见 site-write-guard.ts 顶部注释与 D-368。
+ */
+/**
+ * D-370 原子写：先写 `<path>.tmp-<随机>`，再 rename 覆盖正式文件。
+ *
+ * 为什么必须这样：`sftp.writeFile` 用 `flag:'w'`，**先把目标文件截成 0 字节再逐块写**
+ * （ssh2 `writeAll`）。进程在这中间死掉——这台机 PM2 因内存被杀是常态，
+ * 设计方案里有单日 961 次、182 次的重启记录——callback 根本不会被调用，
+ * 文件就永久停在「写了一半」的状态，没有错误、没有日志。
+ * D-368 的写后回读校验发现不了它：进程已经没了，没人去读。
+ *
+ * rename 在同一文件系统上是原子的：最坏情况是留下一个 tmp 文件，
+ * 正式文件始终是完整的旧版本。这才是真正治住「写一半断」的办法。
+ *
+ * SFTP v3 的 `rename` 在目标已存在时报错，所以优先用 OpenSSH 的
+ * `posix-rename@openssh.com` 扩展（原子覆盖）；服务器不支持时退回
+ * 「unlink 正式文件 + rename」——那一瞬间有窗口，但比截零后逐块写的窗口小得多。
+ */
+function sftpAtomicWrite(sftp: SFTPWrapper, path: string, content: string): Promise<void> {
+  const tmp = `${path}.tmp-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  return new Promise((resolve, reject) => {
+    sftp.writeFile(tmp, content, "utf8", (writeErr) => {
+      if (writeErr) return reject(writeErr);
+
+      const cleanupAndReject = (err: Error) => {
+        sftp.unlink(tmp, () => reject(err));
+      };
+
+      // 优先 posix-rename（原子覆盖）
+      let posixTried = false;
+      try {
+        const anySftp = sftp as unknown as {
+          ext_openssh_rename?: (o: string, n: string, cb: (e?: Error | null) => void) => void;
+        };
+        if (typeof anySftp.ext_openssh_rename === "function") {
+          posixTried = true;
+          anySftp.ext_openssh_rename(tmp, path, (renameErr) => {
+            if (!renameErr) return resolve();
+            // 扩展存在但这次失败 → 退回 unlink + rename
+            sftp.unlink(path, () => {
+              sftp.rename(tmp, path, (err2) => (err2 ? cleanupAndReject(err2) : resolve()));
+            });
+          });
+        }
+      } catch {
+        // ext_openssh_rename 在服务器不声明该扩展时会直接 throw
+        posixTried = false;
+      }
+      if (posixTried) return;
+
+      sftp.unlink(path, () => {
+        sftp.rename(tmp, path, (err) => (err ? cleanupAndReject(err) : resolve()));
+      });
+    });
+  });
+}
+
+function sftpWriteJsGuarded(sftp: SFTPWrapper, path: string, content: string): Promise<void> {
+  if (!isJsDataFile(path)) {
+    return sftpWriteFile(sftp, path, content);
+  }
+  return writeJsDataFileGuarded(
+    {
+      write: (p, c) => sftpAtomicWrite(sftp, p, c),
+      read: (p) => sftpReadFile(sftp, p),
+    },
+    path,
+    content,
+  );
 }
 
 function sftpWriteBuffer(sftp: SFTPWrapper, path: string, data: Buffer): Promise<void> {
@@ -1066,6 +1144,18 @@ function buildA1IndexHtml(cacheVersion: string, domain = ""): string {
 `;
 }
 
+/**
+ * D-370：判断某个数据文件是否「数据 + 渲染器同体」的 A1 架构文件。
+ *
+ * A1 站的 assets/js/main.js 既是数据源又是渲染器；其余架构（articles-index.js、
+ * data.js、articles.js 等）是纯数据文件，首页另有自己的渲染脚本。
+ * 这个区分决定了「文件不存在时该生成什么」——A1 必须生成含渲染器的完整骨架。
+ */
+function isA1DataFile(dataJsPath: string, varName: string): boolean {
+  const p = (dataJsPath || "").replace(/^\.?\//, "");
+  return (p === "assets/js/main.js" || p === "assets/main.js") && varName === "posts";
+}
+
 function buildA1MainJs(postsJson: string): string {
   return `const posts = ${postsJson};
 
@@ -1461,6 +1551,10 @@ async function materializeLegacySlugPages(
  * 规则：保留现有首页/静态资源；写入 A1 数据层；将旧文章补齐为 slug 目录页 post-{slug}/index.html。
  */
 export async function applyA1SiteStandard(sitePath: string, domain = ""): Promise<A1StandardizationResult> {
+  return withSiteLock(sitePath, () => _applyA1SiteStandard(sitePath, domain));
+}
+
+async function _applyA1SiteStandard(sitePath: string, domain = ""): Promise<A1StandardizationResult> {
   let client: Client | null = null;
   try {
     client = await connectSSH();
@@ -1472,19 +1566,40 @@ export async function applyA1SiteStandard(sitePath: string, domain = ""): Promis
     let initial: Record<string, unknown>[] = [];
 
     if (detected.data_js_path && detected.article_var_name) {
+      const sourcePath = `${sitePath}/${detected.data_js_path}`;
+      let raw: string | null = null;
       try {
-        const sourcePath = `${sitePath}/${detected.data_js_path}`;
-        const raw = await sftpReadFile(sftp, sourcePath);
+        raw = await sftpReadFile(sftp, sourcePath);
+      } catch {
+        raw = null; // 文件不存在 —— 全新站点，空列表是对的
+      }
+
+      if (raw !== null) {
         const parsed = parseJsArrayLiteral(raw, detected.article_var_name);
-        if (parsed?.length) {
+        if (parsed === null || parsed === undefined) {
+          // D-368：解析不出来**不能**当成「这个站没有文章」。
+          // 本函数接下来会用 initial 整体重写 assets/js/main.js，空列表会把该站的
+          // 文章列表清成 0 —— 而最需要来做标准化的恰恰是那些数据文件已经语法损坏、
+          // 解析不出来的站（D-368 查到 6 个）。那种站必须先修数据文件再来标准化，
+          // 否则这一步就是数据丢失。宁可报错不动，也不要静默清空。
+          const existingArticleCount = (raw.match(/"(id|slug)"\s*:/g) || []).length;
+          return {
+            ok: false,
+            error:
+              `站点数据文件 ${detected.data_js_path} 存在但无法解析出 `
+              + `${detected.article_var_name} 数组（文件 ${raw.length} 字节，`
+              + `疑似含约 ${existingArticleCount} 条文章痕迹）。`
+              + `已中止标准化：继续执行会用空列表重写 main.js，清空该站文章列表。`
+              + `请先用 D-368 修复脚本按库里数据重建该文件，再执行标准化。`,
+          };
+        }
+        if (parsed.length) {
           initial = parsed.map(normalizeEntryForA1);
           const rewritten = replaceJsArrayLiteral(raw, detected.article_var_name, initial);
           if (rewritten && sourcePath !== `${sitePath}/assets/js/main.js`) {
-            await sftpWriteFile(sftp, sourcePath, rewritten);
+            await sftpWriteJsGuarded(sftp, sourcePath, rewritten);
           }
         }
-      } catch {
-        /* 无法解析则空列表 */
       }
     }
 
@@ -1492,7 +1607,7 @@ export async function applyA1SiteStandard(sitePath: string, domain = ""): Promis
 
     const postsJson = JSON.stringify(initial, null, 2);
     const mainJs = buildA1MainJs(postsJson);
-    await sftpWriteFile(sftp, `${sitePath}/assets/js/main.js`, mainJs);
+    await sftpWriteJsGuarded(sftp, `${sitePath}/assets/js/main.js`, mainJs);
 
     const indexInfo = await sftpStatInfo(sftp, `${sitePath}/index.html`);
     let shouldWriteIndex = !indexInfo.exists || indexInfo.size <= 0 || indexInfo.isDirectory;
@@ -2196,7 +2311,7 @@ async function syncToHomepageDataFile(
         const pos = (arrMatch.index || 0) + arrMatch[0].length;
         const entryStr = "\n  " + JSON.stringify(adaptedEntry) + ",";
         content = content.slice(0, pos) + entryStr + content.slice(pos);
-        await sftpWriteFile(sftp, fullPath, content);
+        await sftpWriteJsGuarded(sftp, fullPath, content);
       }
     }
   } catch (err) {
@@ -2245,7 +2360,7 @@ async function syncDateToHomepageFiles(
 
       const newContent = replaceJsArrayLiteral(content, hpVarName, entries);
       if (newContent) {
-        await sftpWriteFile(sftp, fullPath, newContent);
+        await sftpWriteJsGuarded(sftp, fullPath, newContent);
         console.log(`[Publisher] 首页数据文件日期已同步: ${relPath} (var=${hpVarName})`);
       }
     }
@@ -2620,7 +2735,23 @@ export async function verifyArticlePresenceOnSite(
   }
 }
 
+/**
+ * 发布文章到站点。
+ *
+ * D-368：整个函数在站点级互斥锁内执行。原因是它对站点的数据索引文件做的是
+ * 「读整个文件 → 字符串拼接改数组 → 整体写回」，两个并发请求打同一个站就会
+ * 互相覆盖到一半，把 main.js 写成语法损坏的文件 → 该站首页白屏。
+ * 调用方自己是 await 串行的，但它们是不同的 HTTP 入口，并发发生在请求之间。
+ */
 export async function publishArticleToSite(
+  article: ArticlePayload,
+  site: SiteConfig,
+  publishDate?: Date,
+): Promise<{ success: boolean; url?: string; error?: string; updatedContent?: string }> {
+  return withSiteLock(site.site_path, () => _publishArticleToSite(article, site, publishDate));
+}
+
+async function _publishArticleToSite(
   article: ArticlePayload,
   site: SiteConfig,
   publishDate?: Date,
@@ -2705,11 +2836,21 @@ export async function publishArticleToSite(
     await sftpWriteFile(sftp, `${articlesDir}/${article.id}.json`, articleJson);
 
     // 3. 更新数据索引文件（articles-index.js / main.js 等）
+    //
+    // D-370：A1 站的 assets/js/main.js 一个文件装两样东西 —— 前半截 `const posts = [...]`
+    // 是数据，后半截是渲染器（画列表/首图/分类/分页的那段 IIFE）。首页 HTML 里列表容器
+    // 是空的，全靠渲染器填。所以**绝不能**用 buildArrayAssignmentStatement 去生成 A1 站的
+    // 数据文件：那只产出裸数据，等于把渲染器删掉，首页直接白屏。
+    // parcelnplate.top 就是这么坏的（95 条紧凑条目、渲染器整段不存在）。
     let dataContent = "";
+    let dataFileExisted = true;
     try {
       dataContent = await sftpReadFile(sftp, fullDataPath);
     } catch {
-      dataContent = `${buildArrayAssignmentStatement(varName, [])}\n`;
+      dataFileExisted = false;
+      dataContent = isA1DataFile(dataJsPath, varName)
+        ? buildA1MainJs(JSON.stringify([], null, 2))          // 完整：数据 + 渲染器
+        : `${buildArrayAssignmentStatement(varName, [])}\n`;  // 非 A1：数据文件本就只有数据
     }
 
     // 构建索引条目 — 同时兼容两种字段名：
@@ -2748,13 +2889,44 @@ export async function publishArticleToSite(
         const entryStr = "\n  " + JSON.stringify(indexEntry) + ",";
         dataContent = dataContent.slice(0, insertPos) + entryStr + dataContent.slice(insertPos);
       } else {
-        dataContent = `${buildArrayAssignmentStatement(varName, [indexEntry])}\n`;
+        // D-370：走到这里说明 removeArticleEntriesByIdentity 把数组声明弄没了 ——
+        // 不可能在正常文件上发生。整体替换会抹掉渲染器，所以中止。
+        client.end();
+        return {
+          success: false,
+          error: `数据文件 ${dataJsPath} 在移除旧条目后找不到 ${varName} 数组声明，已中止发布以免抹掉首页渲染器。请用 D-368 修复脚本重建该文件。`,
+        };
       }
+    } else if (!dataFileExisted) {
+      // 文件本来不存在：上面已按架构生成了完整骨架（A1 含渲染器），这里正常插入
+      const freshMatch = findArrayAssignmentMatch(dataContent, varName);
+      if (!freshMatch) {
+        client.end();
+        return {
+          success: false,
+          error: `新建的数据文件骨架里找不到 ${varName} 数组声明（varName 与架构不匹配？），已中止发布。`,
+        };
+      }
+      const insertPos = (freshMatch.index || 0) + freshMatch[0].length;
+      dataContent = dataContent.slice(0, insertPos)
+        + "\n  " + JSON.stringify(indexEntry) + ","
+        + dataContent.slice(insertPos);
     } else {
-      dataContent = `${buildArrayAssignmentStatement(varName, [indexEntry])}\n`;
+      // D-370 核心修复：文件**已存在**但找不到数组声明 —— 这是文件已被截坏的信号
+      // （截断到连 `const posts = [` 都不完整时就会这样）。
+      // 原代码在这里把整个文件替换成 buildArrayAssignmentStatement(...)，即裸数据，
+      // **渲染器就此消失，且此后每次发布只是增量插入，渲染器永远不会回来**。
+      // parcelnplate.top 的 95 条紧凑条目就是这么攒出来的。改成报错中止。
+      client.end();
+      return {
+        success: false,
+        error: `数据文件 ${dataJsPath} 已存在（${dataContent.length} 字节）但找不到 ${varName} 数组声明，`
+          + `说明文件已损坏。已中止发布：整体重写会抹掉首页渲染器，导致该站首页白屏。`
+          + `请先用 D-368 修复脚本按库里数据重建该文件。`,
+      };
     }
 
-    await sftpWriteFile(sftp, fullDataPath, dataContent);
+    await sftpWriteJsGuarded(sftp, fullDataPath, dataContent);
 
     // 3b. 同步更新首页实际加载的数据文件（解决检测结果与首页引用不一致的问题）
     await syncToHomepageDataFile(sftp, siteRoot, dataJsPath, indexEntry, article.id);
@@ -2822,17 +2994,28 @@ export async function publishArticleToSite(
 }
 
 // ─── 撤回文章（从站点移除）───
+interface UnpublishSiteRef {
+  domain: string;
+  site_path: string;
+  site_type: string | null;
+  data_js_path: string | null;
+  article_var_name: string | null;
+  article_html_pattern: string | null;
+}
+
+/** 撤回文章。D-368：同 publishArticleToSite，走站点级互斥锁（它也是读改写同一批数据文件）。 */
 export async function unpublishArticleFromSite(
   articleId: string,
   slug: string,
-  site: {
-    domain: string;
-    site_path: string;
-    site_type: string | null;
-    data_js_path: string | null;
-    article_var_name: string | null;
-    article_html_pattern: string | null;
-  }
+  site: UnpublishSiteRef,
+): Promise<{ success: boolean; error?: string }> {
+  return withSiteLock(site.site_path, () => _unpublishArticleFromSite(articleId, slug, site));
+}
+
+async function _unpublishArticleFromSite(
+  articleId: string,
+  slug: string,
+  site: UnpublishSiteRef,
 ): Promise<{ success: boolean; error?: string }> {
   let client: Client | null = null;
   try {
@@ -2873,7 +3056,7 @@ export async function unpublishArticleFromSite(
         let cleaned = content.replace(entryRegex, "");
         // 正则未命中时（如条目 id 为数字或字段风格不同的双索引首页），解析数组按 id/slug 精确移除
         cleaned = removeArticleEntriesByIdentity(cleaned, { id: articleId, slug });
-        if (cleaned !== content) await sftpWriteFile(sftp, fp, cleaned);
+        if (cleaned !== content) await sftpWriteJsGuarded(sftp, fp, cleaned);
       } catch { /* 文件可能不存在 */ }
     }
 
@@ -2912,7 +3095,16 @@ export async function unpublishArticleFromSite(
  * 轻量更新已发布文章的显示日期（不重新发布全文内容）。
  * 仅修改 js/articles/{id}.json 的 date 字段 + articles-index.js 对应条目的 date 字段。
  */
+/** 改文章日期。D-368：同样读改写数据文件，走站点级互斥锁。 */
 export async function updateArticleDateOnSite(
+  articleId: string,
+  site: SiteConfig,
+  publishDate: Date,
+): Promise<{ success: boolean; error?: string }> {
+  return withSiteLock(site.site_path, () => _updateArticleDateOnSite(articleId, site, publishDate));
+}
+
+async function _updateArticleDateOnSite(
   articleId: string,
   site: SiteConfig,
   publishDate: Date,
@@ -2959,8 +3151,17 @@ export async function updateArticleDateOnSite(
             ? prev.detailUrl
             : (typeof prev.slug === "string" && prev.slug ? `post-${prev.slug}` : "");
           existing[idx] = { ...prev, date: dateLabel, dateISO: publishDate.toISOString().slice(0, 10), dateLabel };
-          const newContent = `${buildArrayAssignmentStatement(varName, existing)}\n`;
-          await sftpWriteFile(sftp, fullDataPath, newContent);
+          // D-370：原先这里是 buildArrayAssignmentStatement(varName, existing) ——
+          // 整体重写成**裸数据**，把 A1 站 main.js 后半截的渲染器整段抹掉，该站首页白屏。
+          // aura-bloom.top 就是这么坏的：缩进格式、结尾正常闭合、条目齐全、渲染器不存在
+          // （所以它不是截断，语法也完全合法，D-368 的护栏发现不了）。
+          // replaceJsArrayLiteral 只替换数组字面量本身、保留其后的全部内容（含渲染器）。
+          const newContent = replaceJsArrayLiteral(dataContent, varName, existing);
+          if (!newContent) {
+            console.warn(`[Publisher] D-370：${dataJsPath} 无法定位数组边界，跳过日期同步（不整体重写，避免抹掉渲染器）`);
+          } else {
+            await sftpWriteJsGuarded(sftp, fullDataPath, newContent);
+          }
         }
       }
     } catch {
@@ -2984,4 +3185,231 @@ export async function updateArticleDateOnSite(
     client?.end();
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
+}
+
+// ─── D-368 损坏数据文件修复 ─────────────────────────────────────────────────
+//
+// 用途：把语法损坏的站点数据文件（assets/js/main.js 等）按**数据库里的 articles**
+// 重建，而不是试图从损坏文件里抢救。
+//
+// 为什么不走 applyA1SiteStandard：那个函数是「读现有数据文件 → 解析出 posts → 写回」，
+// 而这里要修的恰恰是解析不出来的文件。它解析失败会落到空列表，把该站文章列表清成 0
+// （D-368 已给它加了拒绝执行的护栏，见该函数内注释）。库里的 articles 才是真值。
+
+export interface RepairSiteResult {
+  domain: string;
+  /** 修前文件状态 */
+  before: { bytes: number; syntax_ok: boolean; error?: string; parsed_entries: number | null };
+  /** 库里该站已发布文章数 */
+  db_articles: number;
+  /** 实际写入的条目数 */
+  written_entries?: number;
+  action: "repaired" | "skipped_healthy" | "skipped_no_articles" | "skipped_would_shrink" | "dry_run" | "failed";
+  error?: string;
+}
+
+/** 单篇文章 → A1 索引条目。字段与 publishArticleToSite 第 3 步写的保持一致。 */
+function buildIndexEntryFromDbArticle(a: {
+  id: bigint | string;
+  title: string | null;
+  slug: string | null;
+  content: string | null;
+  excerpt: string | null;
+  category: string | null;
+  images: unknown;
+  published_at: Date | null;
+  published_url: string | null;
+  created_at: Date;
+}): Record<string, unknown> {
+  const when = a.published_at || a.created_at;
+  const dateLabel = when.toLocaleDateString("en-US", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+  const dateISO = when.toISOString().slice(0, 10);
+
+  const content = a.content || "";
+  const plainText = content.replace(/<[^>]*>/g, "");
+  const wordCount = plainText.split(/\s+/).filter(Boolean).length;
+  const readTime = `${Math.max(1, Math.ceil(wordCount / 200))} min read`;
+
+  const slug = a.slug || slugify(a.title || String(a.id));
+  const heroImage = extractHeroImage(content, a.images) || "";
+  const excerpt = (a.excerpt && a.excerpt.trim())
+    ? a.excerpt.trim()
+    : plainText.slice(0, 160).trim() + "...";
+
+  // detailUrl 优先沿用库里记的 published_url（去掉域名前缀），保证既有外链不失效
+  let detailUrl = `post-${slug}`;
+  if (a.published_url) {
+    const m = a.published_url.match(/^https?:\/\/[^/]+\/(.*)$/);
+    if (m && m[1]) detailUrl = m[1].replace(/\/+$/, "");
+  }
+
+  const category = (a.category || "general").toLowerCase();
+  return {
+    id: String(a.id),
+    slug,
+    title: a.title || slug,
+    category,
+    date: dateISO,
+    dateISO,
+    dateLabel,
+    readTime,
+    excerpt,
+    image: heroImage,
+    heroImage,
+    detailUrl,
+    tags: [category],
+  };
+}
+
+/**
+ * 按库里的 articles 重建一个站点的数据文件。
+ *
+ * 安全约束（这是个会整体重写文件的操作，每条都是刻意的）：
+ *   - 只在文件**确实语法损坏**时动手；完好的文件直接跳过（除非 force）
+ *   - 库里该站 0 篇已发布文章时**拒绝**执行 —— 否则就是把站写空
+ *   - 写入走 sftpWriteJsGuarded：写前校验 + 写后回读，坏内容送不出去
+ *   - 全程持站点锁，避免跟正在跑的发布撞上
+ *   - dryRun 只报告不写
+ */
+export async function repairSiteDataFile(
+  site: SiteConfig,
+  dbArticles: Array<Parameters<typeof buildIndexEntryFromDbArticle>[0]>,
+  opts: { dryRun?: boolean; force?: boolean; allowShrink?: boolean } = {},
+): Promise<RepairSiteResult> {
+  return withSiteLock(site.site_path, async () => {
+    const result: RepairSiteResult = {
+      domain: site.domain,
+      before: { bytes: 0, syntax_ok: true, parsed_entries: null },
+      db_articles: dbArticles.length,
+      action: "failed",
+    };
+    let client: Client | null = null;
+    try {
+      client = await connectSSH();
+      const sftp = await getSFTP(client);
+
+      const dataJsPath = site.data_js_path || "assets/js/main.js";
+      const varName = site.article_var_name || "posts";
+      const fullPath = `${site.site_path}/${dataJsPath}`;
+
+      let raw = "";
+      try {
+        raw = await sftpReadFile(sftp, fullPath);
+      } catch (err) {
+        result.error = `读不到数据文件 ${dataJsPath}：${err instanceof Error ? err.message : String(err)}`;
+        client.end();
+        return result;
+      }
+
+      const syntax = checkJsSyntax(raw);
+      const parsed = parseJsArrayLiteral(raw, varName);
+
+      // D-370：两类损坏都要修
+      //   ① 截断/语法损坏（omniportal.shop 形态）
+      //   ② 语法合法但渲染器被抹掉（parcelnplate.top 形态）——只对 A1 文件适用，
+      //      非 A1 的纯数据文件本来就没有渲染器，不算损坏
+      const rendererGone = isA1DataFile(dataJsPath, varName) && isDataOnly(raw);
+      const broken = !syntax.ok || rendererGone;
+
+      result.before = {
+        bytes: raw.length,
+        syntax_ok: syntax.ok,
+        error: !syntax.ok
+          ? `截断/语法损坏：${syntax.line ? `第 ${syntax.line} 行：` : ""}${syntax.error}`
+          : rendererGone
+            ? "渲染器被抹掉：只有数据、无渲染器，语法合法但首页白屏"
+            : undefined,
+        parsed_entries: parsed ? parsed.length : null,
+      };
+
+      if (!broken && !opts.force) {
+        result.action = "skipped_healthy";
+        client.end();
+        return result;
+      }
+
+      if (dbArticles.length === 0) {
+        result.action = "skipped_no_articles";
+        result.error = "库里该站 0 篇已发布文章，重建会把站点写空，已拒绝执行";
+        client.end();
+        return result;
+      }
+
+      // D-370：库里比站上少太多 → 重建就是删文章，拒绝执行。
+      //
+      // 实测这个差距是真实存在的：线上 allurahub.top 文件里 566 条、bloomroots.top 686 条、
+      // aura-bloom.top 249 条，而库里（4 月快照）分别只有 8 / 26 / 40 篇。生产库会比快照多，
+      // 但只要生产库也少于站上，「按库重建」就会把站上多出来的那些文章从索引里抹掉 ——
+      // 文章详情页还在，但首页和列表再也找不到它们，等于静默下线。
+      //
+      // 这里按**坏文件里能数出来的条目数**估线上存量（截断文件也能数前半截），
+      // 库里少于它的 60% 就停手，要求人工确认。
+      const liveEntryHint = (raw.match(/"id"\s*:/g) || []).length
+        || (raw.match(/\bid\s*:/g) || []).length;
+      if (liveEntryHint > 0 && dbArticles.length < liveEntryHint * 0.6 && !opts.allowShrink) {
+        result.action = "skipped_would_shrink";
+        result.error =
+          `库里只有 ${dbArticles.length} 篇，但线上文件里能数出约 ${liveEntryHint} 条 ——`
+          + `按库重建会让该站少掉约 ${liveEntryHint - dbArticles.length} 条索引（文章页还在，但首页和列表找不到了）。`
+          + `已拒绝执行。确认过差额合理（例如那些条目本就是该下线的）再加 --allow-shrink 重跑。`;
+        client.end();
+        return result;
+      }
+
+      // 按发布时间倒序（模板自己也会排，这里先排好便于人工核对）
+      const entries = dbArticles
+        .map(buildIndexEntryFromDbArticle)
+        .sort((a, b) => String(b.dateISO).localeCompare(String(a.dateISO)));
+
+      // D-370：重建时必须保住渲染器。三种情形：
+      //   ① 原文件里还有可定位的数组 + 渲染器 → 只换数组，渲染器原样留下
+      //      （非 A1 站有自己的渲染器，用 buildA1MainJs 会把它换成 A1 的那套，是错的）
+      //   ② A1 架构 → 用 buildA1MainJs 生成完整的「数据 + 渲染器」
+      //   ③ 其余（非 A1 且原文件没有渲染器）→ 纯数据文件，本就只有数据
+      let mainJs: string | null = null;
+      if (hasRenderer(raw)) {
+        mainJs = replaceJsArrayLiteral(raw, varName, entries);
+        if (mainJs) {
+          console.log(`[D-370] ${site.domain}：原文件含渲染器，只替换数组、保留渲染器`);
+        }
+      }
+      if (!mainJs) {
+        mainJs = isA1DataFile(dataJsPath, varName)
+          ? buildA1MainJs(JSON.stringify(entries, null, 2))
+          : `${buildArrayAssignmentStatement(varName, entries)}\n`;
+      }
+
+      if (opts.dryRun) {
+        result.action = "dry_run";
+        result.written_entries = entries.length;
+        client.end();
+        return result;
+      }
+
+      // 备份原文件，便于回滚取证
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      try {
+        await sftpWriteFile(sftp, `${fullPath}.d368-broken-${stamp}.bak`, raw);
+      } catch (err) {
+        console.warn(`[D-368] 备份原文件失败（不阻塞修复）:`, err);
+      }
+
+      await sftpWriteJsGuarded(sftp, fullPath, mainJs);
+
+      result.action = "repaired";
+      result.written_entries = entries.length;
+      client.end();
+      return result;
+    } catch (err) {
+      client?.end();
+      result.action = "failed";
+      result.error = err instanceof Error ? err.message : String(err);
+      return result;
+    }
+  });
 }
