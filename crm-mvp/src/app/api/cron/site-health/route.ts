@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getSystemConfig, setSystemConfig } from "@/lib/system-config";
 import { sendAlert } from "@/lib/alert";
-import { checkJsSyntax } from "@/lib/site-write-guard";
+import { checkJsSyntax, isDataOnly, looksLikeRenderer } from "@/lib/site-write-guard";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 800;
@@ -99,6 +99,10 @@ async function probeRenderer(domain: string): Promise<{ checked: boolean; ok: bo
     }
     if (srcs.length === 0) return { checked: false, ok: true };
 
+    let anyDataOnly = false;
+    let anyRenderer = false;
+    let scanned = 0;
+
     for (const src of srcs) {
       const url = `https://${domain}/${src}`;
       let js = "";
@@ -119,6 +123,30 @@ async function probeRenderer(domain: string): Promise<{ checked: boolean; ok: bo
           detail: `${src}${syntax.line ? ` 第 ${syntax.line} 行` : ""}：${syntax.error}（${js.length} 字节）`,
         };
       }
+
+      // D-370：语法过了还不够。被抹掉渲染器的文件语法完全合法，但首页照样白屏
+      // （parcelnplate.top / aura-bloom.top 就是这个形态）。
+      //
+      // 判据必须是「首页加载的全部脚本里，没有任何一个含渲染器」——
+      // 不能只看单个文件。站群里的模板不止 A1 一套：kivanta.top 的容器是
+      // articlesGrid、渲染器写 products-container；aura-bloom.top 的容器是 postsGrid。
+      // 我第一版判据只认 A1 的特征串（FIXED_CATS / renderGrid / article-list），
+      // 把这两个站都报成了故障，核实后 kivanta 是误报（它的渲染器在、只是标识不同）。
+      // 所以这里改成：先收集所有脚本，全扫完再判，且用「有没有往某个容器写 HTML」
+      // 这种与模板无关的特征。
+      scanned++;
+      anyDataOnly = anyDataOnly || isDataOnly(js);
+      anyRenderer = anyRenderer || looksLikeRenderer(js);
+    }
+
+    // 有数据文件、但所有脚本里没有一个会往页面写 HTML → 列表容器没人填，首页白屏
+    if (scanned > 0 && anyDataOnly && !anyRenderer) {
+      return {
+        checked: true,
+        ok: false,
+        detail: `首页加载的 ${scanned} 个脚本里有数据、但没有任何渲染代码——`
+          + `列表容器空着没人填，语法合法但页面白屏。疑似渲染器被发布链路整体重写时抹掉。`,
+      };
     }
     return { checked: true, ok: true };
   } catch (e) {

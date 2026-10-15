@@ -138,11 +138,78 @@ export function isJsDataFile(path: string): boolean {
   return /\.js$/i.test(path.split("?")[0]);
 }
 
+// ─── 渲染器在位检查（D-370）────────────────────────────────────────────────
+
+/**
+ * A1 站数据文件里渲染器的特征串。任意一个都足以证明渲染器在位。
+ * 取的是模板里不会被数据内容偶然命中的标识（数据是 JSON，不含这些代码片段）。
+ */
+const RENDERER_MARKERS = ["FIXED_CATS", "renderGrid", "getElementById('article-list')"];
+
+/**
+ * D-370：判断一个 A1 数据文件里渲染器还在不在。
+ *
+ * 为什么语法校验不够：A1 站的 assets/js/main.js 一个文件装数据 + 渲染器。
+ * 发布链路的兜底分支曾把整个文件替换成裸数据（`const posts = [...]`），
+ * 渲染器就此消失 —— 而这种内容**语法完全合法**，checkJsSyntax 放行、
+ * D-368 给巡检加的 probeRenderer（只做语法编译）也放行，但首页照样白屏：
+ * 首页 HTML 里列表容器是空的，全靠渲染器填。
+ * parcelnplate.top 就是这个形态：95 条紧凑数据、渲染器整段不存在、语法无误。
+ */
+export function hasRenderer(source: string): boolean {
+  return RENDERER_MARKERS.some((m) => source.includes(m));
+}
+
+/**
+ * D-370：与模板无关的「这段 JS 会不会往页面写东西」判据。
+ *
+ * `hasRenderer` 认的是 A1 模板的特征串，用来保护写入（写入时我们知道目标架构）。
+ * 但巡检要面对站群里好几套模板：kivanta.top 的容器是 `articlesGrid`、渲染器写
+ * `products-container`；aura-bloom.top 的容器是 `postsGrid`。拿 A1 的特征串去判，
+ * 会把 kivanta 这种「渲染器在、只是标识不同」的站误报成故障（实测踩过）。
+ *
+ * 所以这里只看一件事：有没有操作 DOM / 写 innerHTML 的代码。
+ * 纯数据文件（`const posts = [...]` 后面什么都没有）一条都不会命中。
+ */
+const DOM_WRITE_MARKERS = [
+  "innerHTML",
+  "insertAdjacentHTML",
+  "createElement",
+  "appendChild",
+  "addEventListener",
+  "querySelector",
+  "getElementById",
+];
+
+export function looksLikeRenderer(source: string): boolean {
+  return DOM_WRITE_MARKERS.some((m) => source.includes(m));
+}
+
+/**
+ * 判断一段内容「看起来是不是只有数据、没有渲染器」。
+ * 有数组赋值但没有任何渲染器特征 → 典型的被抹掉渲染器的 A1 文件。
+ */
+export function isDataOnly(source: string): boolean {
+  const hasArray = /(?:const|var|let)\s+[A-Za-z_$][\w$]*\s*=\s*\[/.test(source)
+    || /\b[A-Za-z_$][\w$.]*\s*=\s*\[/.test(source);
+  return hasArray && !hasRenderer(source);
+}
+
 // ─── 带护栏的写入 ───────────────────────────────────────────────────────────
 
 export interface GuardedWriteIO {
   write: (path: string, content: string) => Promise<void>;
   read: (path: string) => Promise<string>;
+}
+
+/**
+ * D-370：写前比对「旧文件有渲染器、新内容没有」。
+ *
+ * 这是 D-368 语法护栏的缺口：抹掉渲染器的内容语法合法，三道校验全放行。
+ * 唯一能识别它的办法是跟**旧文件**比 —— 渲染器从有变没有，就是在删东西。
+ */
+export function wouldDropRenderer(oldContent: string, newContent: string): boolean {
+  return hasRenderer(oldContent) && !hasRenderer(newContent);
 }
 
 /**
@@ -166,6 +233,22 @@ export async function writeJsDataFileGuarded(
       `${pre.line ? ` 第 ${pre.line} 行` : ""}：${pre.error}。` +
       `已中止写入，服务器上的旧文件保持不变。`,
     );
+  }
+
+  // D-370：旧文件有渲染器、新内容没有 → 这一写会让该站首页白屏，拒绝。
+  // 读不到旧文件（新建）时跳过这一条。
+  try {
+    const old = await io.read(path);
+    if (wouldDropRenderer(old, content)) {
+      throw new Error(
+        `拒绝写入：该写入会抹掉首页渲染器（${path}）。`
+        + `旧文件 ${old.length} 字节含渲染器，新内容 ${content.length} 字节只有数据。`
+        + `A1 站的数据文件同时是渲染器，写成裸数据会导致首页白屏（内容语法是合法的，所以语法校验发现不了）。`,
+      );
+    }
+  } catch (err) {
+    // 只在「确实是渲染器丢失」时抛；读不到旧文件属正常（新建）
+    if (err instanceof Error && err.message.startsWith("拒绝写入：该写入会抹掉")) throw err;
   }
 
   await io.write(path, content);
