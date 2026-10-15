@@ -30,14 +30,14 @@ function matches(
 
 describe("D-367 平台筛选：系列名的平台段带账号位次，裸 `-PM-` 匹配不到", () => {
   it("wj04 报案的真实系列名：带位次的 PM1 / PM8 / PM3 必须命中", () => {
-    const cond = buildPlatformCondition("PM", [13n, 217n]);
+    const cond = buildPlatformCondition("PM", [BigInt(13), BigInt(217)]);
     for (const name of [
       "544-PM1-Club Med-GB-0724-83599",
       "760-PM8-Hamilton-FR-1013-73399",
       "589-PM3-Electronics Expo-US-0814-18645439",
     ]) {
       assert.equal(
-        matches(cond, { campaign_name: name, platform_connection_id: 13n }),
+        matches(cond, { campaign_name: name, platform_connection_id: BigInt(13) }),
         true,
         name,
       );
@@ -45,37 +45,37 @@ describe("D-367 平台筛选：系列名的平台段带账号位次，裸 `-PM-`
   });
 
   it("老式裸命名（2026-03 前）仍要命中，否则修一头坏一头", () => {
-    const cond = buildPlatformCondition("CG", [5n]);
+    const cond = buildPlatformCondition("CG", [BigInt(5)]);
     assert.equal(
       matches(cond, {
         campaign_name: "256-CG-CamplifySpain-ES-0403-10090233",
-        platform_connection_id: 5n,
+        platform_connection_id: BigInt(5),
       }),
       true,
     );
   });
 
   it("判据是连接而不是名字：名字里没有平台段，连接对了也命中", () => {
-    const cond = buildPlatformCondition("PM", [13n]);
+    const cond = buildPlatformCondition("PM", [BigInt(13)]);
     assert.equal(
-      matches(cond, { campaign_name: "Campaign #1", platform_connection_id: 13n }),
+      matches(cond, { campaign_name: "Campaign #1", platform_connection_id: BigInt(13) }),
       true,
     );
   });
 
   it("别人平台的广告不能混进来（连接不在列表、名字也不带 PM 段）", () => {
-    const cond = buildPlatformCondition("PM", [13n]);
+    const cond = buildPlatformCondition("PM", [BigInt(13)]);
     assert.equal(
       matches(cond, {
         campaign_name: "667-CG1-Bur Bur-US-0912-18648277",
-        platform_connection_id: 9n,
+        platform_connection_id: BigInt(9),
       }),
       false,
     );
   });
 
   it("无连接的行退回名字兜底：裸段与带位次两种写法都认", () => {
-    const cond = buildPlatformCondition("PM", [13n]);
+    const cond = buildPlatformCondition("PM", [BigInt(13)]);
     for (const name of ["544-PM1-Club Med-GB-0724-83599", "300-PM-Foo-US-0101-1"]) {
       assert.equal(
         matches(cond, { campaign_name: name, platform_connection_id: null }),
@@ -86,7 +86,7 @@ describe("D-367 平台筛选：系列名的平台段带账号位次，裸 `-PM-`
   });
 
   it("兜底不能放松成 `-PM` 前缀匹配：商家名里带 -PM 的不算", () => {
-    const cond = buildPlatformCondition("PM", [13n]);
+    const cond = buildPlatformCondition("PM", [BigInt(13)]);
     // 平台段是 CG，商家名里碰巧出现 -PMx；松口径会误命中
     assert.equal(
       matches(cond, {
