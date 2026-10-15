@@ -8,7 +8,7 @@ import { Client, SFTPWrapper } from "ssh2";
 import JSON5 from "json5";
 import { getBtSshConfig } from "@/lib/system-config";
 import { ARTICLE_HYPERLINK_STYLE_BLOCK, cleanArticleContent, emphasizeArticleHyperlinks } from "@/lib/sanitize";
-import { withSiteLock, writeJsDataFileGuarded, isJsDataFile, checkJsSyntax, isDataOnly, hasRenderer } from "@/lib/site-write-guard";
+import { withSiteLock, writeJsDataFileGuarded, isJsDataFile, checkJsSyntax, isDataOnly, hasRenderer, looksLikeRenderer } from "@/lib/site-write-guard";
 
 // ─── 网站架构类型常量（与 Python 后端一致）───
 export const SITE_TYPES = {
@@ -3204,8 +3204,84 @@ export interface RepairSiteResult {
   db_articles: number;
   /** 实际写入的条目数 */
   written_entries?: number;
+  /**
+   * D-370：本次实际处理的数据文件相对路径。
+   * 可能**不等于** publish_sites.data_js_path —— 以首页实际引用且确实损坏的那个为准。
+   */
+  repaired_path?: string;
   action: "repaired" | "skipped_healthy" | "skipped_no_articles" | "skipped_would_shrink" | "dry_run" | "failed";
   error?: string;
+}
+
+/**
+ * D-370：找出该站**真正需要修**的数据文件路径。
+ *
+ * 判据：在「首页 index.html 实际引用的本站脚本」里，挑第一个确实坏了的
+ * （语法编译不过，或有数据却没有任何渲染代码）。
+ * 找不到坏的就返回 null，让调用方退回库里登记的路径。
+ *
+ * 为什么不能只信 `publish_sites.data_js_path`：实测它和首页实际加载的会指向
+ * 不同文件（allurahub.top / vitahaven.click 都是），照它修等于重写一个本来好的
+ * 文件，坏文件原封不动、首页继续白屏。
+ */
+async function resolveBrokenDataPath(
+  sftp: SFTPWrapper,
+  site: SiteConfig,
+): Promise<string | null> {
+  let indexHtml = "";
+  try {
+    indexHtml = await sftpReadFile(sftp, `${site.site_path}/index.html`);
+  } catch {
+    return null;
+  }
+
+  const srcs: string[] = [];
+  const re = /<script[^>]+src=["']([^"']+)["']/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(indexHtml)) !== null) {
+    const raw = m[1];
+    if (/^https?:\/\//i.test(raw) || raw.startsWith("//")) continue;
+    srcs.push(raw.replace(/^\.?\//, "").split("?")[0]);
+  }
+  if (srcs.length === 0) return null;
+
+  // 先收齐每个脚本的内容，再判 —— 「渲染器被抹」要全部脚本都没有渲染代码才算
+  const loaded: Array<{ path: string; content: string }> = [];
+  for (const src of srcs) {
+    try {
+      const content = await sftpReadFile(sftp, `${site.site_path}/${src}`);
+      if (content.trim().length > 0) loaded.push({ path: src, content });
+    } catch { /* 取不到就跳过 */ }
+  }
+  if (loaded.length === 0) return null;
+
+  // ① 截断类：返回第一个语法不过的
+  for (const f of loaded) {
+    if (!checkJsSyntax(f.content).ok) return f.path;
+  }
+
+  // ② 渲染器被抹类：全部脚本都没有渲染代码，返回那个装数据的
+  const anyRenderer = loaded.some((f) => looksLikeRenderer(f.content));
+  if (!anyRenderer) {
+    const dataFile = loaded.find((f) => isDataOnly(f.content));
+    if (dataFile) return dataFile.path;
+  }
+  return null;
+}
+
+/** 读出该文件里实际使用的数组变量名（库里登记的可能和文件里的不一致） */
+async function detectVarNameForPath(
+  sftp: SFTPWrapper,
+  siteRoot: string,
+  dataJsPath: string,
+): Promise<string | null> {
+  try {
+    const content = await sftpReadFile(sftp, `${siteRoot}/${dataJsPath}`);
+    for (const name of HOMEPAGE_INDEX_VAR_NAMES) {
+      if (findArrayAssignmentMatch(content, name)) return name;
+    }
+  } catch { /* 读不到就让调用方退回库里登记的 */ }
+  return null;
 }
 
 /** 单篇文章 → A1 索引条目。字段与 publishArticleToSite 第 3 步写的保持一致。 */
@@ -3293,9 +3369,21 @@ export async function repairSiteDataFile(
       client = await connectSSH();
       const sftp = await getSFTP(client);
 
-      const dataJsPath = site.data_js_path || "assets/js/main.js";
-      const varName = site.article_var_name || "posts";
+      // D-370：修哪个文件必须由**首页实际引用**决定，不能只信库里登记的
+      // data_js_path —— 实测这两者会指向不同文件：
+      //   allurahub.top  库登记的那个 55,616B 语法完好，真正坏的是首页加载的
+      //                  js/articles-index.js（364KB 截断）
+      //   vitahaven.click 同样，库登记的 197,439B 完好，坏的是 articles-index.js
+      // 照库登记的修，等于重写一个本来好的文件：坏文件原封不动、首页继续白屏，
+      // 而且会把条目数写成库里的数量，顺手删掉线上多出来的那批。
+      const dataJsPath = await resolveBrokenDataPath(sftp, site)
+        || site.data_js_path
+        || "assets/js/main.js";
+      const varName = await detectVarNameForPath(sftp, site.site_path, dataJsPath)
+        || site.article_var_name
+        || "posts";
       const fullPath = `${site.site_path}/${dataJsPath}`;
+      result.repaired_path = dataJsPath;
 
       let raw = "";
       try {
