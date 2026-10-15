@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getSystemConfig, setSystemConfig } from "@/lib/system-config";
 import { sendAlert } from "@/lib/alert";
+import { checkJsSyntax } from "@/lib/site-write-guard";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 800;
@@ -17,9 +18,13 @@ export const maxDuration = 800;
  *
  * 触发：每日 09:20 CST（crontab `20 9 * * *`；本机时区是 CST，cron 按本地时间算）
  *
- * 判定：首页 200 **且** 随机取一篇已发布文章页 200，两者都通才算健康。
+ * 判定：首页 200 **且** 随机取一篇已发布文章页 200 **且** 首页引用的脚本语法可编译，
+ *   三者都通才算健康。站上一篇文章都没有时跳过文章页那一项。
  *   只看首页不够——事故中出现过「首页 200、文章全 404」（骨架在但内容丢了）。
- *   站上一篇文章都没有时只看首页。
+ *
+ *   D-368（2026-10-15）补第三项：omniportal.shop 首页白屏 40 天，但首页和文章页
+ *   全程 200，旧判据判它「健康」。真因是 assets/js/main.js 语法损坏导致脚本不执行，
+ *   而首页的文章列表全靠它渲染。详见 probeRenderer() 注释与 site-write-guard.ts。
  *
  * 连续失败计数存在 system_configs 的 `site_health_state`（JSON），避免为此加表字段。
  * 连续 2 天不通才置灰（verified=0，站点选择器里自动变灰不可选）+ 通知，
@@ -61,6 +66,67 @@ async function probe(url: string): Promise<{ ok: boolean; code: number; err?: st
   }
 }
 
+/**
+ * D-368 渲染器可执行性探测。
+ *
+ * 为什么首页 200 不够：站群的首页 HTML 只是个骨架，文章列表容器是空的
+ * （`<div id="article-list"></div>`），列表/首图/分类/分页全靠 `assets/js/main.js`
+ * 这类数据+渲染脚本跑出来。该文件一旦语法损坏（截断、并发写互相覆盖到一半），
+ * 脚本整体不执行，首页就是一片空白——连「Nothing here yet」兜底块都出不来，
+ * 因为那个块带 `hidden`、也得靠 JS 掀开。而 HTTP 层面首页和文章页**全是 200**，
+ * 旧判据完全看不见。omniportal.shop 就这样白屏了 40 天（员工 10-15 报障时才发现）。
+ *
+ * 判据：取首页引用的脚本，能取到就做一次语法编译（只编译不执行，浏览器 API
+ * 不存在也没关系）。编译不过即判故障。取不到脚本则不判——不是所有站都是这套架构。
+ */
+async function probeRenderer(domain: string): Promise<{ checked: boolean; ok: boolean; detail?: string }> {
+  try {
+    const homeRes = await fetch(`https://${domain}/`, {
+      redirect: "follow",
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    if (!homeRes.ok) return { checked: false, ok: true };
+    const html = await homeRes.text();
+
+    // 只查本站的相对路径脚本；CDN 上的第三方库不属于我们的发布链路
+    const srcs: string[] = [];
+    const re = /<script[^>]+src=["']([^"']+)["']/gi;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(html)) !== null) {
+      const raw = m[1];
+      if (/^https?:\/\//i.test(raw) || raw.startsWith("//")) continue;
+      srcs.push(raw.replace(/^\.?\//, ""));
+    }
+    if (srcs.length === 0) return { checked: false, ok: true };
+
+    for (const src of srcs) {
+      const url = `https://${domain}/${src}`;
+      let js = "";
+      try {
+        const res = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(TIMEOUT_MS) });
+        if (!res.ok) continue;
+        js = await res.text();
+      } catch {
+        continue;
+      }
+      if (js.trim().length === 0) continue;
+
+      const syntax = checkJsSyntax(js);
+      if (!syntax.ok) {
+        return {
+          checked: true,
+          ok: false,
+          detail: `${src}${syntax.line ? ` 第 ${syntax.line} 行` : ""}：${syntax.error}（${js.length} 字节）`,
+        };
+      }
+    }
+    return { checked: true, ok: true };
+  } catch (e) {
+    // 探测本身出错不算站点故障，避免误伤
+    return { checked: false, ok: true, detail: e instanceof Error ? e.message.slice(0, 120) : String(e) };
+  }
+}
+
 export async function GET(req: NextRequest) {
   if (!verifyCron(req)) {
     return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
@@ -86,7 +152,7 @@ export async function GET(req: NextRequest) {
     log("site_health_state 解析失败，按空状态重来");
   }
 
-  const results: Array<{ domain: string; ok: boolean; home: number; article: number | null; fails: number; action: string }> = [];
+  const results: Array<{ domain: string; ok: boolean; home: number; article: number | null; renderer: string; fails: number; action: string }> = [];
   const newlyDown: Array<{ id: bigint; domain: string; reason: string }> = [];
   const recovered: string[] = [];
 
@@ -107,12 +173,18 @@ export async function GET(req: NextRequest) {
       if (art?.published_url) article = await probe(art.published_url);
     }
 
-    const ok = home.ok && (article === null || article.ok);
+    // D-368：首页 200 只说明骨架在。再验渲染器脚本能不能编译——
+    // 它坏了首页就是白屏，但 HTTP 层全是 200。
+    const renderer = home.ok ? await probeRenderer(site.domain) : { checked: false, ok: true };
+
+    const ok = home.ok && (article === null || article.ok) && renderer.ok;
     const reason = !home.ok
       ? `首页不可访问（HTTP ${home.code}${home.err ? " " + home.err : ""}）`
       : article && !article.ok
         ? `文章页不可访问（HTTP ${article.code}${article.err ? " " + article.err : ""}）`
-        : "";
+        : !renderer.ok
+          ? `首页脚本语法损坏，页面无内容 — ${renderer.detail || "未知"}`
+          : "";
 
     let action = "正常";
     if (ok) {
@@ -151,6 +223,7 @@ export async function GET(req: NextRequest) {
       ok,
       home: home.code,
       article: article ? article.code : null,
+      renderer: renderer.checked ? (renderer.ok ? "ok" : "broken") : "skipped",
       fails: state[site.domain].fails,
       action,
     });
