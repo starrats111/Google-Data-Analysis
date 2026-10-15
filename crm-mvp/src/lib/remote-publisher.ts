@@ -3269,6 +3269,50 @@ async function resolveBrokenDataPath(
   return null;
 }
 
+/**
+ * D-370：该站首页加载的脚本里，除了待修的那个数据文件，还有没有**能用的渲染器**。
+ *
+ * 用于「把数据文件修成裸数据」之前的前提检查。allurahub.top / vitahaven.click
+ * 满足前提（渲染器在完好的 js/main.js 里），bloomroots.top 不满足
+ * （两个脚本都是纯数据，渲染器在被截断的尾部、源码已丢）。
+ *
+ * 「能用」= 语法可编译 **且** 含 DOM 写入代码。只看其中一条都不够：
+ * 坏的脚本即便含渲染代码也跑不起来；合法的纯数据文件不会渲染任何东西。
+ */
+async function siteHasWorkingRenderer(
+  sftp: SFTPWrapper,
+  site: SiteConfig,
+  excludePath: string,
+): Promise<boolean> {
+  let indexHtml = "";
+  try {
+    indexHtml = await sftpReadFile(sftp, `${site.site_path}/index.html`);
+  } catch {
+    return false;
+  }
+
+  // 首页内联脚本里也可能写着渲染器
+  const inlineRe = /<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi;
+  let im: RegExpExecArray | null;
+  while ((im = inlineRe.exec(indexHtml)) !== null) {
+    if (looksLikeRenderer(im[1]) && checkJsSyntax(im[1]).ok) return true;
+  }
+
+  const srcRe = /<script[^>]+src=["']([^"']+)["']/gi;
+  let m: RegExpExecArray | null;
+  while ((m = srcRe.exec(indexHtml)) !== null) {
+    const raw = m[1];
+    if (/^https?:\/\//i.test(raw) || raw.startsWith("//")) continue;
+    const rel = raw.replace(/^\.?\//, "").split("?")[0];
+    if (rel === excludePath) continue;
+    try {
+      const content = await sftpReadFile(sftp, `${site.site_path}/${rel}`);
+      if (looksLikeRenderer(content) && checkJsSyntax(content).ok) return true;
+    } catch { /* 取不到就当没有 */ }
+  }
+  return false;
+}
+
 /** 读出该文件里实际使用的数组变量名（库里登记的可能和文件里的不一致） */
 async function detectVarNameForPath(
   sftp: SFTPWrapper,
@@ -3505,9 +3549,28 @@ export async function repairSiteDataFile(
           client.end();
           return result;
         } else {
-          // 非 A1 且原文件本就只装数据（渲染器在别的脚本里，且那个脚本是好的）
-          // —— 重建成纯数据文件是正确的。allurahub.top / vitahaven.click 属此类：
-          // 坏的 articles-index.js 是纯数据，渲染器在完好的 js/main.js 里。
+          // 非 A1 且原文件本就只装数据 —— 重建成纯数据文件通常是正确的：
+          // allurahub.top / vitahaven.click 属此类，坏的 articles-index.js 是纯数据，
+          // 渲染器在完好的 js/main.js 里。
+          //
+          // 但有个前提必须查：**该站首页得确实还有一个带渲染器的好脚本**。
+          // bloomroots.top 的反例：它首页加载 articles-index.js + script.js，两个都是
+          // 纯数据（script.js 是 `const articlesData = [...]`，残存的 427KB 里一处
+          // 渲染代码都没有），渲染器整段在被截掉的尾部、源码已丢。
+          // 这种站把数据文件修成合法裸数据，首页依然白屏，而且连渲染器残骸都没了、
+          // 再也无从追溯 —— 等于把「坏」变成「坏且不可考」。
+          const hasLiveRenderer = await siteHasWorkingRenderer(sftp, site, dataJsPath);
+          if (!hasLiveRenderer) {
+            result.action = "failed";
+            result.error =
+              `该站首页加载的脚本里找不到任何可用的渲染器：${dataJsPath} 是纯数据，`
+              + `其余脚本也没有渲染代码（渲染器很可能在被截断的尾部、源码已丢）。`
+              + `已拒绝执行：把数据文件修成合法裸数据并不能让首页出内容，`
+              + `反而会抹掉现存的残骸、再也无从追溯。`
+              + `需人工决定：从备份或 git 找回该站渲染器，或整站改造为 A1 架构。`;
+            client.end();
+            return result;
+          }
           mainJs = `${buildArrayAssignmentStatement(varName, entries)}\n`;
         }
       }
