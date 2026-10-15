@@ -22,7 +22,7 @@
  * repairSiteDataFile()：文件完好则跳过、库里 0 篇则拒绝、写入走护栏、持站点锁。
  */
 import prisma from "../src/lib/prisma";
-import { checkJsSyntax } from "../src/lib/site-write-guard";
+import { checkJsSyntax, isDataOnly, looksLikeRenderer } from "../src/lib/site-write-guard";
 import { repairSiteDataFile } from "../src/lib/remote-publisher";
 
 const TIMEOUT_MS = 25_000;
@@ -71,8 +71,11 @@ async function scanSite(domain: string): Promise<{
       return { home, script: null, bytes: 0, syntaxOk: true, detail: "首页没有本站脚本引用" };
     }
 
-    let checkedBytes = 0;
-    let lastChecked: string | null = null;
+    let scanned = 0;
+    let anyDataOnly = false;
+    let anyRenderer = false;
+    let firstScript: string | null = null;
+    let totalBytes = 0;
 
     for (const src of srcs) {
       let js = "";
@@ -98,16 +101,36 @@ async function scanSite(domain: string): Promise<{
           script: src,
           bytes: js.length,
           syntaxOk: false,
-          detail: `${syntax.line ? `第 ${syntax.line} 行：` : ""}${syntax.error}`,
+          detail: `截断/语法损坏：${syntax.line ? `第 ${syntax.line} 行：` : ""}${syntax.error}`,
         };
       }
+
+      scanned++;
+      anyDataOnly = anyDataOnly || isDataOnly(js);
+      anyRenderer = anyRenderer || looksLikeRenderer(js);
+      firstScript = firstScript || src;
+      totalBytes += js.length;
+    }
+
+    // D-370 第二类损坏：语法合法但渲染器被抹掉（parcelnplate.top / aura-bloom.top 形态）
+    // 判据跟巡检一致：全部脚本扫完，有数据却没有任何 DOM 写入代码才算故障。
+    // 不能只看单个文件、也不能用 A1 的特征串 —— 站群里模板不止一套（kivanta.top
+    // 的渲染器写 products-container，用 A1 特征串会误报）。
+    if (scanned > 0 && anyDataOnly && !anyRenderer) {
+      return {
+        home,
+        script: firstScript,
+        bytes: totalBytes,
+        syntaxOk: false,
+        detail: `渲染器被抹掉：${scanned} 个脚本里有数据、无任何渲染代码，语法合法但首页白屏`,
+      };
     }
     return {
       home,
-      script: lastChecked,
-      bytes: checkedBytes,
+      script: firstScript,
+      bytes: totalBytes,
       syntaxOk: true,
-      detail: lastChecked ? undefined : "首页脚本都取不到或为空",
+      detail: firstScript ? undefined : "首页脚本都取不到或为空",
     };
   } catch (e) {
     return {
@@ -126,6 +149,7 @@ async function main() {
   const onlyIdx = args.indexOf("--only");
   const only = onlyIdx >= 0 ? (args[onlyIdx + 1] || "").toLowerCase() : "";
   const force = args.includes("--force");
+  const allowShrink = args.includes("--allow-shrink");
 
   let sites = await prisma.publish_sites.findMany({
     where: { is_deleted: 0, status: "active" },
@@ -203,7 +227,7 @@ async function main() {
         article_html_pattern: site.article_html_pattern,
       },
       articles.map((a) => ({ ...a, id: String(a.id) })),
-      { dryRun: mode === "dry-run", force },
+      { dryRun: mode === "dry-run", force, allowShrink },
     );
 
     console.log(

@@ -8,7 +8,7 @@ import { Client, SFTPWrapper } from "ssh2";
 import JSON5 from "json5";
 import { getBtSshConfig } from "@/lib/system-config";
 import { ARTICLE_HYPERLINK_STYLE_BLOCK, cleanArticleContent, emphasizeArticleHyperlinks } from "@/lib/sanitize";
-import { withSiteLock, writeJsDataFileGuarded, isJsDataFile, checkJsSyntax } from "@/lib/site-write-guard";
+import { withSiteLock, writeJsDataFileGuarded, isJsDataFile, checkJsSyntax, isDataOnly, hasRenderer } from "@/lib/site-write-guard";
 
 // ─── 网站架构类型常量（与 Python 后端一致）───
 export const SITE_TYPES = {
@@ -192,13 +192,68 @@ function sftpWriteFile(sftp: SFTPWrapper, path: string, content: string): Promis
  * 分类、分页全靠这个文件渲染，一旦语法错误整页就是空白。
  * 详见 site-write-guard.ts 顶部注释与 D-368。
  */
+/**
+ * D-370 原子写：先写 `<path>.tmp-<随机>`，再 rename 覆盖正式文件。
+ *
+ * 为什么必须这样：`sftp.writeFile` 用 `flag:'w'`，**先把目标文件截成 0 字节再逐块写**
+ * （ssh2 `writeAll`）。进程在这中间死掉——这台机 PM2 因内存被杀是常态，
+ * 设计方案里有单日 961 次、182 次的重启记录——callback 根本不会被调用，
+ * 文件就永久停在「写了一半」的状态，没有错误、没有日志。
+ * D-368 的写后回读校验发现不了它：进程已经没了，没人去读。
+ *
+ * rename 在同一文件系统上是原子的：最坏情况是留下一个 tmp 文件，
+ * 正式文件始终是完整的旧版本。这才是真正治住「写一半断」的办法。
+ *
+ * SFTP v3 的 `rename` 在目标已存在时报错，所以优先用 OpenSSH 的
+ * `posix-rename@openssh.com` 扩展（原子覆盖）；服务器不支持时退回
+ * 「unlink 正式文件 + rename」——那一瞬间有窗口，但比截零后逐块写的窗口小得多。
+ */
+function sftpAtomicWrite(sftp: SFTPWrapper, path: string, content: string): Promise<void> {
+  const tmp = `${path}.tmp-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  return new Promise((resolve, reject) => {
+    sftp.writeFile(tmp, content, "utf8", (writeErr) => {
+      if (writeErr) return reject(writeErr);
+
+      const cleanupAndReject = (err: Error) => {
+        sftp.unlink(tmp, () => reject(err));
+      };
+
+      // 优先 posix-rename（原子覆盖）
+      let posixTried = false;
+      try {
+        const anySftp = sftp as unknown as {
+          ext_openssh_rename?: (o: string, n: string, cb: (e?: Error | null) => void) => void;
+        };
+        if (typeof anySftp.ext_openssh_rename === "function") {
+          posixTried = true;
+          anySftp.ext_openssh_rename(tmp, path, (renameErr) => {
+            if (!renameErr) return resolve();
+            // 扩展存在但这次失败 → 退回 unlink + rename
+            sftp.unlink(path, () => {
+              sftp.rename(tmp, path, (err2) => (err2 ? cleanupAndReject(err2) : resolve()));
+            });
+          });
+        }
+      } catch {
+        // ext_openssh_rename 在服务器不声明该扩展时会直接 throw
+        posixTried = false;
+      }
+      if (posixTried) return;
+
+      sftp.unlink(path, () => {
+        sftp.rename(tmp, path, (err) => (err ? cleanupAndReject(err) : resolve()));
+      });
+    });
+  });
+}
+
 function sftpWriteJsGuarded(sftp: SFTPWrapper, path: string, content: string): Promise<void> {
   if (!isJsDataFile(path)) {
     return sftpWriteFile(sftp, path, content);
   }
   return writeJsDataFileGuarded(
     {
-      write: (p, c) => sftpWriteFile(sftp, p, c),
+      write: (p, c) => sftpAtomicWrite(sftp, p, c),
       read: (p) => sftpReadFile(sftp, p),
     },
     path,
@@ -1087,6 +1142,18 @@ function buildA1IndexHtml(cacheVersion: string, domain = ""): string {
 </body>
 </html>
 `;
+}
+
+/**
+ * D-370：判断某个数据文件是否「数据 + 渲染器同体」的 A1 架构文件。
+ *
+ * A1 站的 assets/js/main.js 既是数据源又是渲染器；其余架构（articles-index.js、
+ * data.js、articles.js 等）是纯数据文件，首页另有自己的渲染脚本。
+ * 这个区分决定了「文件不存在时该生成什么」——A1 必须生成含渲染器的完整骨架。
+ */
+function isA1DataFile(dataJsPath: string, varName: string): boolean {
+  const p = (dataJsPath || "").replace(/^\.?\//, "");
+  return (p === "assets/js/main.js" || p === "assets/main.js") && varName === "posts";
 }
 
 function buildA1MainJs(postsJson: string): string {
@@ -2769,11 +2836,21 @@ async function _publishArticleToSite(
     await sftpWriteFile(sftp, `${articlesDir}/${article.id}.json`, articleJson);
 
     // 3. 更新数据索引文件（articles-index.js / main.js 等）
+    //
+    // D-370：A1 站的 assets/js/main.js 一个文件装两样东西 —— 前半截 `const posts = [...]`
+    // 是数据，后半截是渲染器（画列表/首图/分类/分页的那段 IIFE）。首页 HTML 里列表容器
+    // 是空的，全靠渲染器填。所以**绝不能**用 buildArrayAssignmentStatement 去生成 A1 站的
+    // 数据文件：那只产出裸数据，等于把渲染器删掉，首页直接白屏。
+    // parcelnplate.top 就是这么坏的（95 条紧凑条目、渲染器整段不存在）。
     let dataContent = "";
+    let dataFileExisted = true;
     try {
       dataContent = await sftpReadFile(sftp, fullDataPath);
     } catch {
-      dataContent = `${buildArrayAssignmentStatement(varName, [])}\n`;
+      dataFileExisted = false;
+      dataContent = isA1DataFile(dataJsPath, varName)
+        ? buildA1MainJs(JSON.stringify([], null, 2))          // 完整：数据 + 渲染器
+        : `${buildArrayAssignmentStatement(varName, [])}\n`;  // 非 A1：数据文件本就只有数据
     }
 
     // 构建索引条目 — 同时兼容两种字段名：
@@ -2812,10 +2889,41 @@ async function _publishArticleToSite(
         const entryStr = "\n  " + JSON.stringify(indexEntry) + ",";
         dataContent = dataContent.slice(0, insertPos) + entryStr + dataContent.slice(insertPos);
       } else {
-        dataContent = `${buildArrayAssignmentStatement(varName, [indexEntry])}\n`;
+        // D-370：走到这里说明 removeArticleEntriesByIdentity 把数组声明弄没了 ——
+        // 不可能在正常文件上发生。整体替换会抹掉渲染器，所以中止。
+        client.end();
+        return {
+          success: false,
+          error: `数据文件 ${dataJsPath} 在移除旧条目后找不到 ${varName} 数组声明，已中止发布以免抹掉首页渲染器。请用 D-368 修复脚本重建该文件。`,
+        };
       }
+    } else if (!dataFileExisted) {
+      // 文件本来不存在：上面已按架构生成了完整骨架（A1 含渲染器），这里正常插入
+      const freshMatch = findArrayAssignmentMatch(dataContent, varName);
+      if (!freshMatch) {
+        client.end();
+        return {
+          success: false,
+          error: `新建的数据文件骨架里找不到 ${varName} 数组声明（varName 与架构不匹配？），已中止发布。`,
+        };
+      }
+      const insertPos = (freshMatch.index || 0) + freshMatch[0].length;
+      dataContent = dataContent.slice(0, insertPos)
+        + "\n  " + JSON.stringify(indexEntry) + ","
+        + dataContent.slice(insertPos);
     } else {
-      dataContent = `${buildArrayAssignmentStatement(varName, [indexEntry])}\n`;
+      // D-370 核心修复：文件**已存在**但找不到数组声明 —— 这是文件已被截坏的信号
+      // （截断到连 `const posts = [` 都不完整时就会这样）。
+      // 原代码在这里把整个文件替换成 buildArrayAssignmentStatement(...)，即裸数据，
+      // **渲染器就此消失，且此后每次发布只是增量插入，渲染器永远不会回来**。
+      // parcelnplate.top 的 95 条紧凑条目就是这么攒出来的。改成报错中止。
+      client.end();
+      return {
+        success: false,
+        error: `数据文件 ${dataJsPath} 已存在（${dataContent.length} 字节）但找不到 ${varName} 数组声明，`
+          + `说明文件已损坏。已中止发布：整体重写会抹掉首页渲染器，导致该站首页白屏。`
+          + `请先用 D-368 修复脚本按库里数据重建该文件。`,
+      };
     }
 
     await sftpWriteJsGuarded(sftp, fullDataPath, dataContent);
@@ -3043,8 +3151,17 @@ async function _updateArticleDateOnSite(
             ? prev.detailUrl
             : (typeof prev.slug === "string" && prev.slug ? `post-${prev.slug}` : "");
           existing[idx] = { ...prev, date: dateLabel, dateISO: publishDate.toISOString().slice(0, 10), dateLabel };
-          const newContent = `${buildArrayAssignmentStatement(varName, existing)}\n`;
-          await sftpWriteJsGuarded(sftp, fullDataPath, newContent);
+          // D-370：原先这里是 buildArrayAssignmentStatement(varName, existing) ——
+          // 整体重写成**裸数据**，把 A1 站 main.js 后半截的渲染器整段抹掉，该站首页白屏。
+          // aura-bloom.top 就是这么坏的：缩进格式、结尾正常闭合、条目齐全、渲染器不存在
+          // （所以它不是截断，语法也完全合法，D-368 的护栏发现不了）。
+          // replaceJsArrayLiteral 只替换数组字面量本身、保留其后的全部内容（含渲染器）。
+          const newContent = replaceJsArrayLiteral(dataContent, varName, existing);
+          if (!newContent) {
+            console.warn(`[Publisher] D-370：${dataJsPath} 无法定位数组边界，跳过日期同步（不整体重写，避免抹掉渲染器）`);
+          } else {
+            await sftpWriteJsGuarded(sftp, fullDataPath, newContent);
+          }
         }
       }
     } catch {
@@ -3087,7 +3204,7 @@ export interface RepairSiteResult {
   db_articles: number;
   /** 实际写入的条目数 */
   written_entries?: number;
-  action: "repaired" | "skipped_healthy" | "skipped_no_articles" | "dry_run" | "failed";
+  action: "repaired" | "skipped_healthy" | "skipped_no_articles" | "skipped_would_shrink" | "dry_run" | "failed";
   error?: string;
 }
 
@@ -3162,7 +3279,7 @@ function buildIndexEntryFromDbArticle(a: {
 export async function repairSiteDataFile(
   site: SiteConfig,
   dbArticles: Array<Parameters<typeof buildIndexEntryFromDbArticle>[0]>,
-  opts: { dryRun?: boolean; force?: boolean } = {},
+  opts: { dryRun?: boolean; force?: boolean; allowShrink?: boolean } = {},
 ): Promise<RepairSiteResult> {
   return withSiteLock(site.site_path, async () => {
     const result: RepairSiteResult = {
@@ -3191,14 +3308,26 @@ export async function repairSiteDataFile(
 
       const syntax = checkJsSyntax(raw);
       const parsed = parseJsArrayLiteral(raw, varName);
+
+      // D-370：两类损坏都要修
+      //   ① 截断/语法损坏（omniportal.shop 形态）
+      //   ② 语法合法但渲染器被抹掉（parcelnplate.top 形态）——只对 A1 文件适用，
+      //      非 A1 的纯数据文件本来就没有渲染器，不算损坏
+      const rendererGone = isA1DataFile(dataJsPath, varName) && isDataOnly(raw);
+      const broken = !syntax.ok || rendererGone;
+
       result.before = {
         bytes: raw.length,
         syntax_ok: syntax.ok,
-        error: syntax.ok ? undefined : `${syntax.line ? `第 ${syntax.line} 行：` : ""}${syntax.error}`,
+        error: !syntax.ok
+          ? `截断/语法损坏：${syntax.line ? `第 ${syntax.line} 行：` : ""}${syntax.error}`
+          : rendererGone
+            ? "渲染器被抹掉：只有数据、无渲染器，语法合法但首页白屏"
+            : undefined,
         parsed_entries: parsed ? parsed.length : null,
       };
 
-      if (syntax.ok && !opts.force) {
+      if (!broken && !opts.force) {
         result.action = "skipped_healthy";
         client.end();
         return result;
@@ -3211,14 +3340,49 @@ export async function repairSiteDataFile(
         return result;
       }
 
+      // D-370：库里比站上少太多 → 重建就是删文章，拒绝执行。
+      //
+      // 实测这个差距是真实存在的：线上 allurahub.top 文件里 566 条、bloomroots.top 686 条、
+      // aura-bloom.top 249 条，而库里（4 月快照）分别只有 8 / 26 / 40 篇。生产库会比快照多，
+      // 但只要生产库也少于站上，「按库重建」就会把站上多出来的那些文章从索引里抹掉 ——
+      // 文章详情页还在，但首页和列表再也找不到它们，等于静默下线。
+      //
+      // 这里按**坏文件里能数出来的条目数**估线上存量（截断文件也能数前半截），
+      // 库里少于它的 60% 就停手，要求人工确认。
+      const liveEntryHint = (raw.match(/"id"\s*:/g) || []).length
+        || (raw.match(/\bid\s*:/g) || []).length;
+      if (liveEntryHint > 0 && dbArticles.length < liveEntryHint * 0.6 && !opts.allowShrink) {
+        result.action = "skipped_would_shrink";
+        result.error =
+          `库里只有 ${dbArticles.length} 篇，但线上文件里能数出约 ${liveEntryHint} 条 ——`
+          + `按库重建会让该站少掉约 ${liveEntryHint - dbArticles.length} 条索引（文章页还在，但首页和列表找不到了）。`
+          + `已拒绝执行。确认过差额合理（例如那些条目本就是该下线的）再加 --allow-shrink 重跑。`;
+        client.end();
+        return result;
+      }
+
       // 按发布时间倒序（模板自己也会排，这里先排好便于人工核对）
       const entries = dbArticles
         .map(buildIndexEntryFromDbArticle)
         .sort((a, b) => String(b.dateISO).localeCompare(String(a.dateISO)));
 
-      const mainJs = dataJsPath.endsWith("assets/js/main.js")
-        ? buildA1MainJs(JSON.stringify(entries, null, 2))
-        : `${buildArrayAssignmentStatement(varName, entries)}\n`;
+      // D-370：重建时必须保住渲染器。三种情形：
+      //   ① 原文件里还有可定位的数组 + 渲染器 → 只换数组，渲染器原样留下
+      //      （非 A1 站有自己的渲染器，用 buildA1MainJs 会把它换成 A1 的那套，是错的）
+      //   ② A1 架构 → 用 buildA1MainJs 生成完整的「数据 + 渲染器」
+      //   ③ 其余（非 A1 且原文件没有渲染器）→ 纯数据文件，本就只有数据
+      let mainJs: string | null = null;
+      if (hasRenderer(raw)) {
+        mainJs = replaceJsArrayLiteral(raw, varName, entries);
+        if (mainJs) {
+          console.log(`[D-370] ${site.domain}：原文件含渲染器，只替换数组、保留渲染器`);
+        }
+      }
+      if (!mainJs) {
+        mainJs = isA1DataFile(dataJsPath, varName)
+          ? buildA1MainJs(JSON.stringify(entries, null, 2))
+          : `${buildArrayAssignmentStatement(varName, entries)}\n`;
+      }
 
       if (opts.dryRun) {
         result.action = "dry_run";
