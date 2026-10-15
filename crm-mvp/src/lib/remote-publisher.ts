@@ -3460,16 +3460,56 @@ export async function repairSiteDataFile(
       //   ② A1 架构 → 用 buildA1MainJs 生成完整的「数据 + 渲染器」
       //   ③ 其余（非 A1 且原文件没有渲染器）→ 纯数据文件，本就只有数据
       let mainJs: string | null = null;
-      if (hasRenderer(raw)) {
+      // 只有在**渲染器本身完好**时才走「保留渲染器」这条路。
+      //
+      // D-370 实测踩的坑：omniportal.shop 的文件截断在渲染器中段，`hasRenderer(raw)`
+      // 为真（前半截渲染器代码还在），于是走了 replaceJsArrayLiteral —— 它保留数组
+      // 之后的全部内容，而那正是**断掉的渲染器残骸**，生成结果照样语法不合法，
+      // 被写入护栏拦下（`第 897 行 Invalid or unexpected token`）。
+      // 判据必须是「整份文件语法可编译」，不是「看起来有渲染器代码」。
+      if (hasRenderer(raw) && checkJsSyntax(raw).ok) {
         mainJs = replaceJsArrayLiteral(raw, varName, entries);
         if (mainJs) {
-          console.log(`[D-370] ${site.domain}：原文件含渲染器，只替换数组、保留渲染器`);
+          console.log(`[D-370] ${site.domain}：原文件渲染器完好，只替换数组、保留渲染器`);
         }
       }
       if (!mainJs) {
-        mainJs = isA1DataFile(dataJsPath, varName)
-          ? buildA1MainJs(JSON.stringify(entries, null, 2))
-          : `${buildArrayAssignmentStatement(varName, entries)}\n`;
+        if (isA1DataFile(dataJsPath, varName)) {
+          // A1 架构：模板在代码里，能完整重建「数据 + 渲染器」
+          mainJs = buildA1MainJs(JSON.stringify(entries, null, 2));
+        } else if (looksLikeRenderer(raw)) {
+          // 这里必须用 looksLikeRenderer（与模板无关：看有没有 DOM 写入代码），
+          // **不能**用 hasRenderer —— 后者只认 A1 的特征串
+          // （FIXED_CATS / renderGrid / article-list）。novanest.one 的渲染器写的是
+          // getElementById('postList') 那套，hasRenderer 判它为假，就会落到下面的
+          // 「裸数据」分支、把它的渲染器整段删掉。这个洞是测试 ③ 抓出来的。
+          //
+          // D-370：非 A1 文件、自带渲染器、但整份文件语法不过（上面那个分支没进来）
+          // ⇒ 渲染器**自己被截断了**，而它是该站专有模板，库里没有源码，我重建不出来。
+          //
+          // 这种站只能修成裸数据，等于把渲染器删掉 —— 首页照样白屏，而且比现在更糟
+          // （现在至少文件里还留着渲染器前半截，有源码可考）。用 buildA1MainJs 也不对：
+          // 那会把该站的专有模板换成 A1 那套，页面结构、容器 id、配色全不匹配
+          // （novanest.one 用的是 POSTS + prevBtn/nextBtn 那套，容器也不叫 article-list）。
+          //
+          // 所以拒绝执行，交给人工：要么从备份/git 里找回该站模板，要么决定整站换成 A1。
+          const backupHint = `${fullPath}.d368-broken-*.bak`;
+          result.action = "failed";
+          result.error =
+            `该站的渲染器写在 ${dataJsPath} 里且自身被截断，而它是站点专有模板（非 A1），`
+            + `库里只有文章数据、没有渲染器源码，无法完整重建。`
+            + `已拒绝执行：修成裸数据会彻底删掉渲染器（首页仍白屏且丢失模板残骸），`
+            + `套用 A1 模板则会换掉该站的页面结构与配色。`
+            + `需人工决定：从备份或 git 找回该站模板后重修，或整站改造为 A1 架构。`
+            + `（现场文件可先备份留证：${backupHint}）`;
+          client.end();
+          return result;
+        } else {
+          // 非 A1 且原文件本就只装数据（渲染器在别的脚本里，且那个脚本是好的）
+          // —— 重建成纯数据文件是正确的。allurahub.top / vitahaven.click 属此类：
+          // 坏的 articles-index.js 是纯数据，渲染器在完好的 js/main.js 里。
+          mainJs = `${buildArrayAssignmentStatement(varName, entries)}\n`;
+        }
       }
 
       if (opts.dryRun) {
