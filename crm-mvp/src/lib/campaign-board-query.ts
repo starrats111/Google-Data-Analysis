@@ -142,6 +142,37 @@ function extractSeq(name: string | null): number {
 
 const STATUS_ORDER: Record<string, number> = { ENABLED: 0, PAUSED: 1, REMOVED: 2 };
 
+/**
+ * D-367 平台筛选的 where 片段。
+ *
+ * 旧口径按系列名里的 `-PM-` 匹配，但系列名的平台段自 2026-03 起普遍带账号位次
+ * （PM1 / PM8 / LH2），裸 `-PM-` 一条也命中不了——全库 13,370 条带序号的系列对平台
+ * 筛选是隐形的，只有 542 条老式裸命名能匹配上。wj04 选 PM 得到「暂无数据」就是这么来的。
+ *
+ * 正规判据是 `platform_connection_id` 指向的连接的 platform；全库 1,518 条没有连接
+ * （草稿、`Campaign #1` 这类占位名），这部分退回名字兜底。
+ *
+ * 兜底只认「平台段后面跟 `-` 或位次数字」，否则商家名里碰巧出现 `-PM` 会误命中。
+ * Prisma 没有正则，用「`-PM-` ∪ `-PM0`…`-PM9`」等价表达这个约束。
+ *
+ * @param platform 平台代码，如 PM
+ * @param connIds 该用户在该平台下的连接 id（调用方按 user_id 查，保证不跨人）
+ */
+export function buildPlatformCondition(platform: string, connIds: bigint[]): object {
+  const or: object[] = [];
+  if (connIds.length > 0) {
+    or.push({ platform_connection_id: { in: connIds } });
+  }
+  const segVariants = [`-${platform}-`].concat(
+    Array.from({ length: 10 }, (_, d) => `-${platform}${d}`),
+  );
+  or.push({
+    platform_connection_id: null,
+    OR: segVariants.map((v) => ({ campaign_name: { contains: v } })),
+  });
+  return { OR: or };
+}
+
 export async function queryCampaignBoard(
   userId: bigint,
   filters: CampaignBoardFilters = {},
@@ -241,8 +272,23 @@ export async function queryCampaignBoard(
   // 导致「平台 + MID」同时选时只有最后一个生效。
   const nameConditions: object[] = [];
   if (searchFilter) nameConditions.push({ campaign_name: { contains: searchFilter } });
-  if (platformFilter) nameConditions.push({ campaign_name: { contains: `-${platformFilter}-` } });
   if (midFilter) nameConditions.push({ campaign_name: { contains: midFilter } });
+
+  // D-367 平台筛选不能按名字里的 `-PM-` 匹配：系列名的平台段自 2026-03 起普遍带账号
+  // 位次（PM1 / PM8 / LH2），裸 `-PM-` 一条也命中不了——全库 13,370 条带序号的系列对
+  // 平台筛选是隐形的，只有 542 条老式裸命名能匹配上。正规判据是 platform_connection_id
+  // 指向的连接的 platform 字段；全库 1,518 条没有连接（草稿、`Campaign #1` 这类占位名），
+  // 这部分退回名字匹配兜底，裸段和带序号两种写法都认。
+  if (platformFilter) {
+    const conns = await prisma.platform_connections.findMany({
+      where: { user_id: userId, platform: platformFilter, is_deleted: 0 },
+      select: { id: true },
+    });
+    nameConditions.push(
+      buildPlatformCondition(platformFilter, conns.map((c) => c.id)),
+    );
+  }
+
   if (nameConditions.length > 0) campaignWhere.AND = nameConditions;
 
   // 行级筛选是否生效——决定总览佣金要不要跟着收窄
