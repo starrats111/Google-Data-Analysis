@@ -248,6 +248,8 @@ export async function GET(req: NextRequest) {
       repaired: repaired.map((r) => ({
         domain: r.domain,
         action: r.action,
+        // D-370：实际处理的文件，可能不等于库里登记的 data_js_path
+        repaired_path: r.repaired_path,
         before_bytes: r.before.bytes,
         before_syntax_ok: r.before.syntax_ok,
         db_articles: r.db_articles,
