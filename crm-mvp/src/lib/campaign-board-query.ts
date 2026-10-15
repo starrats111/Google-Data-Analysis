@@ -158,8 +158,11 @@ const STATUS_ORDER: Record<string, number> = { ENABLED: 0, PAUSED: 1, REMOVED: 2
  * @param platform 平台代码，如 PM
  * @param connIds 该用户在该平台下的连接 id（调用方按 user_id 查，保证不跨人）
  */
-export function buildPlatformCondition(platform: string, connIds: bigint[]): object {
-  const or: object[] = [];
+export function buildPlatformCondition(
+  platform: string,
+  connIds: bigint[],
+): Record<string, unknown> {
+  const or: Record<string, unknown>[] = [];
   if (connIds.length > 0) {
     or.push({ platform_connection_id: { in: connIds } });
   }
