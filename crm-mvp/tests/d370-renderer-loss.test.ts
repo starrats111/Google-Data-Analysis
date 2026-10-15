@@ -34,6 +34,7 @@ import {
   checkJsSyntax,
   hasRenderer,
   isDataOnly,
+  looksLikeRenderer,
   wouldDropRenderer,
   writeJsDataFileGuarded,
 } from "../src/lib/site-write-guard";
@@ -163,6 +164,67 @@ describe("D-370 写入护栏拦住「抹掉渲染器」的写入", () => {
  * 这里锁住 repairSiteDataFile 用的那个估算口径本身（条目计数正则），
  * 因为它决定闸门会不会漏放。
  */
+/**
+ * 重建一个损坏文件时，「渲染器怎么办」分三种情形，处理方式各不相同。
+ * 这三种都是在生产 11 个坏站上实测出来的，判错任何一种都会把站修得更糟。
+ */
+describe("D-370 重建时的渲染器归属判定", () => {
+  // 判据复刻 repairSiteDataFile 里的分支条件
+  // 判据复刻 repairSiteDataFile 里的分支条件。
+  // 注意第三个分支用的是 looksLikeRenderer 而非 hasRenderer —— 后者只认 A1 的
+  // 特征串，对 novanest.one 那种自有模板判为假，会误落到 bare_data 把渲染器删掉。
+  const decide = (raw: string, isA1: boolean) => {
+    if (hasRenderer(raw) && checkJsSyntax(raw).ok) return "keep_renderer";
+    if (isA1) return "rebuild_a1";
+    if (looksLikeRenderer(raw)) return "refuse";
+    return "bare_data";
+  };
+
+  it("① 渲染器完好 → 只换数组、保留渲染器", () => {
+    assert.equal(decide(FULL, true), "keep_renderer");
+  });
+
+  it("② A1 站、渲染器被截断 → 用模板完整重建（数据+渲染器）", () => {
+    // omniportal.shop 形态：数据数组完整，渲染器断在中段
+    const truncatedRenderer = 'const posts = [\n  {"id":"1"}\n];\n\n(function(){\n'
+      + "  var grid=document.getElementById('article-list');\n"
+      + "  var h='<button class=\"pg-btn'+(i===page?'";
+    assert.equal(checkJsSyntax(truncatedRenderer).ok, false, "前提：这文件语法不过");
+    assert.equal(hasRenderer(truncatedRenderer), true, "前提：看起来有渲染器代码");
+    assert.equal(decide(truncatedRenderer, true), "rebuild_a1");
+  });
+
+  it("③ 非 A1、渲染器在本文件里且被截断 → 拒绝执行，交人工", () => {
+    // novanest.one 形态：POSTS + 专有模板（prevBtn/nextBtn），渲染器断在尾部。
+    // 库里只有文章数据、没有该站渲染器源码，重建不出来。
+    const custom = 'const POSTS = [\n  {"id":"1"}\n];\n'
+      + "  var grid=document.getElementById('postList');\n"
+      + "  if (prevBtn && nextBtn) {\n    prevBtn.disabled = ";
+    assert.equal(decide(custom, false), "refuse");
+  });
+
+  it("④ 非 A1、本文件只装数据（渲染器在别的好脚本里）→ 重建成纯数据", () => {
+    // allurahub.top / vitahaven.click 形态：坏的 articles-index.js 是纯数据，
+    // 渲染器在完好的 js/main.js 里 —— 这时重建成裸数据是正确的。
+    const dataIndex = 'const articlesIndex = [\n  {"id":"1"},\n  {"id":"2","slug":"trunc';
+    assert.equal(hasRenderer(dataIndex), false);
+    assert.equal(decide(dataIndex, false), "bare_data");
+  });
+
+  it("关键反例：不能只看「有没有渲染器代码」就保留其后内容", () => {
+    // 这是实测踩到的坑：omniportal 截断在渲染器中段时 hasRenderer 为真，
+    // 若据此走 replaceJsArrayLiteral，保留下来的正是断掉的残骸，
+    // 生成结果照样语法不合法（被写入护栏拦下，报「第 897 行」）。
+    const truncInRenderer = 'const posts = [\n  {"id":"1"}\n];\n(function(){ var x="unclosed';
+    assert.equal(hasRenderer(truncInRenderer), false, "这个样本没有渲染器特征串");
+    // 换一个确实含特征串且截断的
+    const withMarker = 'const posts = [\n  {"id":"1"}\n];\n(function(){ var FIXED_CATS=[]; var s="unclosed';
+    assert.equal(hasRenderer(withMarker), true);
+    assert.equal(checkJsSyntax(withMarker).ok, false);
+    assert.notEqual(decide(withMarker, true), "keep_renderer", "必须不走保留分支");
+  });
+});
+
 describe("D-370 线上条目数估算（shrink 闸门的输入）", () => {
   const countEntries = (raw: string) =>
     (raw.match(/"id"\s*:/g) || []).length || (raw.match(/\bid\s*:/g) || []).length;
