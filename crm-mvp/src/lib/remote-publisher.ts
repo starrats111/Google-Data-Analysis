@@ -8,6 +8,7 @@ import { Client, SFTPWrapper } from "ssh2";
 import JSON5 from "json5";
 import { getBtSshConfig } from "@/lib/system-config";
 import { ARTICLE_HYPERLINK_STYLE_BLOCK, cleanArticleContent, emphasizeArticleHyperlinks } from "@/lib/sanitize";
+import { withSiteLock, writeJsDataFileGuarded, isJsDataFile, checkJsSyntax } from "@/lib/site-write-guard";
 
 // ─── 网站架构类型常量（与 Python 后端一致）───
 export const SITE_TYPES = {
@@ -181,6 +182,28 @@ function sftpWriteFile(sftp: SFTPWrapper, path: string, content: string): Promis
       else resolve();
     });
   });
+}
+
+/**
+ * D-368：写站点 JS 数据文件的唯一入口 —— 写前语法校验 + 写后回读比对。
+ *
+ * 不要再对 *.js 数据文件直接调 sftpWriteFile：那条路是静默的，文件写坏了
+ * （截断 / 并发互相覆盖到一半）发布接口照样报「成功」，而首页的文章列表、首图、
+ * 分类、分页全靠这个文件渲染，一旦语法错误整页就是空白。
+ * 详见 site-write-guard.ts 顶部注释与 D-368。
+ */
+function sftpWriteJsGuarded(sftp: SFTPWrapper, path: string, content: string): Promise<void> {
+  if (!isJsDataFile(path)) {
+    return sftpWriteFile(sftp, path, content);
+  }
+  return writeJsDataFileGuarded(
+    {
+      write: (p, c) => sftpWriteFile(sftp, p, c),
+      read: (p) => sftpReadFile(sftp, p),
+    },
+    path,
+    content,
+  );
 }
 
 function sftpWriteBuffer(sftp: SFTPWrapper, path: string, data: Buffer): Promise<void> {
@@ -1461,6 +1484,10 @@ async function materializeLegacySlugPages(
  * 规则：保留现有首页/静态资源；写入 A1 数据层；将旧文章补齐为 slug 目录页 post-{slug}/index.html。
  */
 export async function applyA1SiteStandard(sitePath: string, domain = ""): Promise<A1StandardizationResult> {
+  return withSiteLock(sitePath, () => _applyA1SiteStandard(sitePath, domain));
+}
+
+async function _applyA1SiteStandard(sitePath: string, domain = ""): Promise<A1StandardizationResult> {
   let client: Client | null = null;
   try {
     client = await connectSSH();
@@ -1472,19 +1499,40 @@ export async function applyA1SiteStandard(sitePath: string, domain = ""): Promis
     let initial: Record<string, unknown>[] = [];
 
     if (detected.data_js_path && detected.article_var_name) {
+      const sourcePath = `${sitePath}/${detected.data_js_path}`;
+      let raw: string | null = null;
       try {
-        const sourcePath = `${sitePath}/${detected.data_js_path}`;
-        const raw = await sftpReadFile(sftp, sourcePath);
+        raw = await sftpReadFile(sftp, sourcePath);
+      } catch {
+        raw = null; // 文件不存在 —— 全新站点，空列表是对的
+      }
+
+      if (raw !== null) {
         const parsed = parseJsArrayLiteral(raw, detected.article_var_name);
-        if (parsed?.length) {
+        if (parsed === null || parsed === undefined) {
+          // D-368：解析不出来**不能**当成「这个站没有文章」。
+          // 本函数接下来会用 initial 整体重写 assets/js/main.js，空列表会把该站的
+          // 文章列表清成 0 —— 而最需要来做标准化的恰恰是那些数据文件已经语法损坏、
+          // 解析不出来的站（D-368 查到 6 个）。那种站必须先修数据文件再来标准化，
+          // 否则这一步就是数据丢失。宁可报错不动，也不要静默清空。
+          const existingArticleCount = (raw.match(/"(id|slug)"\s*:/g) || []).length;
+          return {
+            ok: false,
+            error:
+              `站点数据文件 ${detected.data_js_path} 存在但无法解析出 `
+              + `${detected.article_var_name} 数组（文件 ${raw.length} 字节，`
+              + `疑似含约 ${existingArticleCount} 条文章痕迹）。`
+              + `已中止标准化：继续执行会用空列表重写 main.js，清空该站文章列表。`
+              + `请先用 D-368 修复脚本按库里数据重建该文件，再执行标准化。`,
+          };
+        }
+        if (parsed.length) {
           initial = parsed.map(normalizeEntryForA1);
           const rewritten = replaceJsArrayLiteral(raw, detected.article_var_name, initial);
           if (rewritten && sourcePath !== `${sitePath}/assets/js/main.js`) {
-            await sftpWriteFile(sftp, sourcePath, rewritten);
+            await sftpWriteJsGuarded(sftp, sourcePath, rewritten);
           }
         }
-      } catch {
-        /* 无法解析则空列表 */
       }
     }
 
@@ -1492,7 +1540,7 @@ export async function applyA1SiteStandard(sitePath: string, domain = ""): Promis
 
     const postsJson = JSON.stringify(initial, null, 2);
     const mainJs = buildA1MainJs(postsJson);
-    await sftpWriteFile(sftp, `${sitePath}/assets/js/main.js`, mainJs);
+    await sftpWriteJsGuarded(sftp, `${sitePath}/assets/js/main.js`, mainJs);
 
     const indexInfo = await sftpStatInfo(sftp, `${sitePath}/index.html`);
     let shouldWriteIndex = !indexInfo.exists || indexInfo.size <= 0 || indexInfo.isDirectory;
@@ -2196,7 +2244,7 @@ async function syncToHomepageDataFile(
         const pos = (arrMatch.index || 0) + arrMatch[0].length;
         const entryStr = "\n  " + JSON.stringify(adaptedEntry) + ",";
         content = content.slice(0, pos) + entryStr + content.slice(pos);
-        await sftpWriteFile(sftp, fullPath, content);
+        await sftpWriteJsGuarded(sftp, fullPath, content);
       }
     }
   } catch (err) {
@@ -2245,7 +2293,7 @@ async function syncDateToHomepageFiles(
 
       const newContent = replaceJsArrayLiteral(content, hpVarName, entries);
       if (newContent) {
-        await sftpWriteFile(sftp, fullPath, newContent);
+        await sftpWriteJsGuarded(sftp, fullPath, newContent);
         console.log(`[Publisher] 首页数据文件日期已同步: ${relPath} (var=${hpVarName})`);
       }
     }
@@ -2620,7 +2668,23 @@ export async function verifyArticlePresenceOnSite(
   }
 }
 
+/**
+ * 发布文章到站点。
+ *
+ * D-368：整个函数在站点级互斥锁内执行。原因是它对站点的数据索引文件做的是
+ * 「读整个文件 → 字符串拼接改数组 → 整体写回」，两个并发请求打同一个站就会
+ * 互相覆盖到一半，把 main.js 写成语法损坏的文件 → 该站首页白屏。
+ * 调用方自己是 await 串行的，但它们是不同的 HTTP 入口，并发发生在请求之间。
+ */
 export async function publishArticleToSite(
+  article: ArticlePayload,
+  site: SiteConfig,
+  publishDate?: Date,
+): Promise<{ success: boolean; url?: string; error?: string; updatedContent?: string }> {
+  return withSiteLock(site.site_path, () => _publishArticleToSite(article, site, publishDate));
+}
+
+async function _publishArticleToSite(
   article: ArticlePayload,
   site: SiteConfig,
   publishDate?: Date,
@@ -2754,7 +2818,7 @@ export async function publishArticleToSite(
       dataContent = `${buildArrayAssignmentStatement(varName, [indexEntry])}\n`;
     }
 
-    await sftpWriteFile(sftp, fullDataPath, dataContent);
+    await sftpWriteJsGuarded(sftp, fullDataPath, dataContent);
 
     // 3b. 同步更新首页实际加载的数据文件（解决检测结果与首页引用不一致的问题）
     await syncToHomepageDataFile(sftp, siteRoot, dataJsPath, indexEntry, article.id);
@@ -2822,17 +2886,28 @@ export async function publishArticleToSite(
 }
 
 // ─── 撤回文章（从站点移除）───
+interface UnpublishSiteRef {
+  domain: string;
+  site_path: string;
+  site_type: string | null;
+  data_js_path: string | null;
+  article_var_name: string | null;
+  article_html_pattern: string | null;
+}
+
+/** 撤回文章。D-368：同 publishArticleToSite，走站点级互斥锁（它也是读改写同一批数据文件）。 */
 export async function unpublishArticleFromSite(
   articleId: string,
   slug: string,
-  site: {
-    domain: string;
-    site_path: string;
-    site_type: string | null;
-    data_js_path: string | null;
-    article_var_name: string | null;
-    article_html_pattern: string | null;
-  }
+  site: UnpublishSiteRef,
+): Promise<{ success: boolean; error?: string }> {
+  return withSiteLock(site.site_path, () => _unpublishArticleFromSite(articleId, slug, site));
+}
+
+async function _unpublishArticleFromSite(
+  articleId: string,
+  slug: string,
+  site: UnpublishSiteRef,
 ): Promise<{ success: boolean; error?: string }> {
   let client: Client | null = null;
   try {
@@ -2873,7 +2948,7 @@ export async function unpublishArticleFromSite(
         let cleaned = content.replace(entryRegex, "");
         // 正则未命中时（如条目 id 为数字或字段风格不同的双索引首页），解析数组按 id/slug 精确移除
         cleaned = removeArticleEntriesByIdentity(cleaned, { id: articleId, slug });
-        if (cleaned !== content) await sftpWriteFile(sftp, fp, cleaned);
+        if (cleaned !== content) await sftpWriteJsGuarded(sftp, fp, cleaned);
       } catch { /* 文件可能不存在 */ }
     }
 
@@ -2912,7 +2987,16 @@ export async function unpublishArticleFromSite(
  * 轻量更新已发布文章的显示日期（不重新发布全文内容）。
  * 仅修改 js/articles/{id}.json 的 date 字段 + articles-index.js 对应条目的 date 字段。
  */
+/** 改文章日期。D-368：同样读改写数据文件，走站点级互斥锁。 */
 export async function updateArticleDateOnSite(
+  articleId: string,
+  site: SiteConfig,
+  publishDate: Date,
+): Promise<{ success: boolean; error?: string }> {
+  return withSiteLock(site.site_path, () => _updateArticleDateOnSite(articleId, site, publishDate));
+}
+
+async function _updateArticleDateOnSite(
   articleId: string,
   site: SiteConfig,
   publishDate: Date,
@@ -2960,7 +3044,7 @@ export async function updateArticleDateOnSite(
             : (typeof prev.slug === "string" && prev.slug ? `post-${prev.slug}` : "");
           existing[idx] = { ...prev, date: dateLabel, dateISO: publishDate.toISOString().slice(0, 10), dateLabel };
           const newContent = `${buildArrayAssignmentStatement(varName, existing)}\n`;
-          await sftpWriteFile(sftp, fullDataPath, newContent);
+          await sftpWriteJsGuarded(sftp, fullDataPath, newContent);
         }
       }
     } catch {
@@ -2984,4 +3068,184 @@ export async function updateArticleDateOnSite(
     client?.end();
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
+}
+
+// ─── D-368 损坏数据文件修复 ─────────────────────────────────────────────────
+//
+// 用途：把语法损坏的站点数据文件（assets/js/main.js 等）按**数据库里的 articles**
+// 重建，而不是试图从损坏文件里抢救。
+//
+// 为什么不走 applyA1SiteStandard：那个函数是「读现有数据文件 → 解析出 posts → 写回」，
+// 而这里要修的恰恰是解析不出来的文件。它解析失败会落到空列表，把该站文章列表清成 0
+// （D-368 已给它加了拒绝执行的护栏，见该函数内注释）。库里的 articles 才是真值。
+
+export interface RepairSiteResult {
+  domain: string;
+  /** 修前文件状态 */
+  before: { bytes: number; syntax_ok: boolean; error?: string; parsed_entries: number | null };
+  /** 库里该站已发布文章数 */
+  db_articles: number;
+  /** 实际写入的条目数 */
+  written_entries?: number;
+  action: "repaired" | "skipped_healthy" | "skipped_no_articles" | "dry_run" | "failed";
+  error?: string;
+}
+
+/** 单篇文章 → A1 索引条目。字段与 publishArticleToSite 第 3 步写的保持一致。 */
+function buildIndexEntryFromDbArticle(a: {
+  id: bigint | string;
+  title: string | null;
+  slug: string | null;
+  content: string | null;
+  excerpt: string | null;
+  category: string | null;
+  images: unknown;
+  published_at: Date | null;
+  published_url: string | null;
+  created_at: Date;
+}): Record<string, unknown> {
+  const when = a.published_at || a.created_at;
+  const dateLabel = when.toLocaleDateString("en-US", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+  const dateISO = when.toISOString().slice(0, 10);
+
+  const content = a.content || "";
+  const plainText = content.replace(/<[^>]*>/g, "");
+  const wordCount = plainText.split(/\s+/).filter(Boolean).length;
+  const readTime = `${Math.max(1, Math.ceil(wordCount / 200))} min read`;
+
+  const slug = a.slug || slugify(a.title || String(a.id));
+  const heroImage = extractHeroImage(content, a.images) || "";
+  const excerpt = (a.excerpt && a.excerpt.trim())
+    ? a.excerpt.trim()
+    : plainText.slice(0, 160).trim() + "...";
+
+  // detailUrl 优先沿用库里记的 published_url（去掉域名前缀），保证既有外链不失效
+  let detailUrl = `post-${slug}`;
+  if (a.published_url) {
+    const m = a.published_url.match(/^https?:\/\/[^/]+\/(.*)$/);
+    if (m && m[1]) detailUrl = m[1].replace(/\/+$/, "");
+  }
+
+  const category = (a.category || "general").toLowerCase();
+  return {
+    id: String(a.id),
+    slug,
+    title: a.title || slug,
+    category,
+    date: dateISO,
+    dateISO,
+    dateLabel,
+    readTime,
+    excerpt,
+    image: heroImage,
+    heroImage,
+    detailUrl,
+    tags: [category],
+  };
+}
+
+/**
+ * 按库里的 articles 重建一个站点的数据文件。
+ *
+ * 安全约束（这是个会整体重写文件的操作，每条都是刻意的）：
+ *   - 只在文件**确实语法损坏**时动手；完好的文件直接跳过（除非 force）
+ *   - 库里该站 0 篇已发布文章时**拒绝**执行 —— 否则就是把站写空
+ *   - 写入走 sftpWriteJsGuarded：写前校验 + 写后回读，坏内容送不出去
+ *   - 全程持站点锁，避免跟正在跑的发布撞上
+ *   - dryRun 只报告不写
+ */
+export async function repairSiteDataFile(
+  site: SiteConfig,
+  dbArticles: Array<Parameters<typeof buildIndexEntryFromDbArticle>[0]>,
+  opts: { dryRun?: boolean; force?: boolean } = {},
+): Promise<RepairSiteResult> {
+  return withSiteLock(site.site_path, async () => {
+    const result: RepairSiteResult = {
+      domain: site.domain,
+      before: { bytes: 0, syntax_ok: true, parsed_entries: null },
+      db_articles: dbArticles.length,
+      action: "failed",
+    };
+    let client: Client | null = null;
+    try {
+      client = await connectSSH();
+      const sftp = await getSFTP(client);
+
+      const dataJsPath = site.data_js_path || "assets/js/main.js";
+      const varName = site.article_var_name || "posts";
+      const fullPath = `${site.site_path}/${dataJsPath}`;
+
+      let raw = "";
+      try {
+        raw = await sftpReadFile(sftp, fullPath);
+      } catch (err) {
+        result.error = `读不到数据文件 ${dataJsPath}：${err instanceof Error ? err.message : String(err)}`;
+        client.end();
+        return result;
+      }
+
+      const syntax = checkJsSyntax(raw);
+      const parsed = parseJsArrayLiteral(raw, varName);
+      result.before = {
+        bytes: raw.length,
+        syntax_ok: syntax.ok,
+        error: syntax.ok ? undefined : `${syntax.line ? `第 ${syntax.line} 行：` : ""}${syntax.error}`,
+        parsed_entries: parsed ? parsed.length : null,
+      };
+
+      if (syntax.ok && !opts.force) {
+        result.action = "skipped_healthy";
+        client.end();
+        return result;
+      }
+
+      if (dbArticles.length === 0) {
+        result.action = "skipped_no_articles";
+        result.error = "库里该站 0 篇已发布文章，重建会把站点写空，已拒绝执行";
+        client.end();
+        return result;
+      }
+
+      // 按发布时间倒序（模板自己也会排，这里先排好便于人工核对）
+      const entries = dbArticles
+        .map(buildIndexEntryFromDbArticle)
+        .sort((a, b) => String(b.dateISO).localeCompare(String(a.dateISO)));
+
+      const mainJs = dataJsPath.endsWith("assets/js/main.js")
+        ? buildA1MainJs(JSON.stringify(entries, null, 2))
+        : `${buildArrayAssignmentStatement(varName, entries)}\n`;
+
+      if (opts.dryRun) {
+        result.action = "dry_run";
+        result.written_entries = entries.length;
+        client.end();
+        return result;
+      }
+
+      // 备份原文件，便于回滚取证
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      try {
+        await sftpWriteFile(sftp, `${fullPath}.d368-broken-${stamp}.bak`, raw);
+      } catch (err) {
+        console.warn(`[D-368] 备份原文件失败（不阻塞修复）:`, err);
+      }
+
+      await sftpWriteJsGuarded(sftp, fullPath, mainJs);
+
+      result.action = "repaired";
+      result.written_entries = entries.length;
+      client.end();
+      return result;
+    } catch (err) {
+      client?.end();
+      result.action = "failed";
+      result.error = err instanceof Error ? err.message : String(err);
+      return result;
+    }
+  });
 }
