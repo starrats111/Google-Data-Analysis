@@ -8,7 +8,7 @@ import { Client, SFTPWrapper } from "ssh2";
 import JSON5 from "json5";
 import { getBtSshConfig } from "@/lib/system-config";
 import { ARTICLE_HYPERLINK_STYLE_BLOCK, cleanArticleContent, emphasizeArticleHyperlinks } from "@/lib/sanitize";
-import { withSiteLock, writeJsDataFileGuarded, isJsDataFile, checkJsSyntax, isDataOnly, hasRenderer, looksLikeRenderer, findMissingGlobalsWithKind } from "@/lib/site-write-guard";
+import { withSiteLock, writeJsDataFileGuarded, isJsDataFile, checkJsSyntax, isDataOnly, hasRenderer, looksLikeRenderer, findMissingGlobalsWithKind, resolveBrokenDataPathFromLoaded } from "@/lib/site-write-guard";
 import { buildNovanestScriptsJs } from "@/lib/site-templates/novanest-renderer";
 import { probeRenderedContent } from "@/lib/site-render-probe";
 
@@ -3295,20 +3295,12 @@ async function resolveBrokenDataPath(
       if (content.trim().length > 0) loaded.push({ path: src, content });
     } catch { /* 取不到就跳过 */ }
   }
-  if (loaded.length === 0) return null;
 
-  // ① 截断类：返回第一个语法不过的
-  for (const f of loaded) {
-    if (!checkJsSyntax(f.content).ok) return f.path;
-  }
-
-  // ② 渲染器被抹类：全部脚本都没有渲染代码，返回那个装数据的
-  const anyRenderer = loaded.some((f) => looksLikeRenderer(f.content));
-  if (!anyRenderer) {
-    const dataFile = loaded.find((f) => isDataOnly(f.content));
-    if (dataFile) return dataFile.path;
-  }
-  return null;
+  // 判断逻辑是纯函数，拆到 site-write-guard.ts 里（resolveBrokenDataPathFromLoaded），
+  // 这样不用 mock SSH 就能单测三类判据，尤其是第③类（运行时缺失全局）——
+  // 实测 vitasphere.top 就是在这类上栽的：前两类规则查不到就返回 null，
+  // 调用方兜底落到一个孤儿同名文件，把没人加载的文件改了，真正在跑的文件原封不动。
+  return resolveBrokenDataPathFromLoaded(loaded);
 }
 
 /**
