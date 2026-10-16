@@ -31,6 +31,7 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { repairSiteDataFile, type RepairSiteResult } from "@/lib/remote-publisher";
 import { checkJsSyntax, isDataOnly, looksLikeRenderer } from "@/lib/site-write-guard";
+import { probeRenderedContent } from "@/lib/site-render-probe";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 800;
@@ -51,7 +52,7 @@ function log(msg: string) {
 
 interface ScanVerdict {
   home: number;
-  verdict: "ok" | "truncated" | "no_renderer" | "home_bad" | "no_script" | "unreachable";
+  verdict: "ok" | "truncated" | "no_renderer" | "blank_render" | "home_bad" | "no_script" | "unreachable";
   detail?: string;
   live_entries: number;
 }
@@ -102,6 +103,7 @@ async function scanSite(domain: string): Promise<ScanVerdict> {
   let anyDataOnly = false;
   let anyRenderer = false;
   let entries = 0;
+  const loadedScripts: string[] = [];
 
   for (const src of srcs) {
     let js = "";
@@ -130,6 +132,7 @@ async function scanSite(domain: string): Promise<ScanVerdict> {
       };
     }
     scanned++;
+    loadedScripts.push(js);
     anyDataOnly = anyDataOnly || isDataOnly(js);
     anyRenderer = anyRenderer || looksLikeRenderer(js);
   }
@@ -142,6 +145,29 @@ async function scanSite(domain: string): Promise<ScanVerdict> {
       live_entries: entries,
     };
   }
+
+  // D-370：最后一道、也是唯一靠得住的判据 —— 把脚本真的跑一遍，看列表容器有没有条目。
+  //
+  // 前面那几条（语法可编译 / 有没有渲染代码）都只能发现一部分。实测还有三类
+  // 它们全看不出来、而页面确实是白的：
+  //   变量名对不上（allurahub / vitahaven：ReferenceError: articles is not defined）
+  //   容器名不符（thegoodsandguard / everydaynes：首页是 articleGrid、脚本填 article-list）
+  //   渲染器缺它依赖的另一个文件（vitasphere：categoryNames 在未被引用的 js/data.js 里）
+  // 这个判据也顺带消除了误报：首页是 build.py 预渲染静态卡片的站
+  // （fernlight / haven-hearth / cavendishrow / kivanta / all-set-dining）
+  // 容器里本来就有内容，probeRenderedContent 认这份内联内容，不会判它们白屏。
+  const probe = probeRenderedContent(html, loadedScripts);
+  if (!probe.rendered) {
+    return {
+      home,
+      verdict: "blank_render",
+      detail: `首页脚本跑完列表容器没有条目`
+        + (probe.error ? `：${probe.error}` : "")
+        + (probe.empty.length ? `（空容器 #${probe.empty.join(", #")}）` : ""),
+      live_entries: entries,
+    };
+  }
+
   return { home, verdict: "ok", live_entries: entries };
 }
 
@@ -293,7 +319,7 @@ export async function GET(req: NextRequest) {
 
     for (const site of sites) {
       const v = await scanSite(site.domain);
-      const broken = v.verdict === "truncated" || v.verdict === "no_renderer";
+      const broken = v.verdict === "truncated" || v.verdict === "no_renderer" || v.verdict === "blank_render";
 
       const dbCount = await prisma.articles.count({
         where: { publish_site_id: site.id, is_deleted: 0, status: "published" },
@@ -341,7 +367,8 @@ export async function GET(req: NextRequest) {
       log(`${site.domain}: ${res.action} 写入=${res.written_entries ?? "-"}${res.error ? " — " + res.error : ""}`);
     }
 
-    const brokenList = scanned.filter((s) => s.verdict === "truncated" || s.verdict === "no_renderer");
+    const brokenList = scanned.filter((s) =>
+      s.verdict === "truncated" || s.verdict === "no_renderer" || s.verdict === "blank_render");
     return NextResponse.json({
       ok: true,
       mode,

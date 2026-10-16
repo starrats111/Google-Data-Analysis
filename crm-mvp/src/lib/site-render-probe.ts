@@ -90,6 +90,40 @@ function makeEl(id: string, tagName = "div"): StubEl {
   return el;
 }
 
+/**
+ * 取出 HTML 里某个 id 元素的内部内容（按同名标签配平，够用）。
+ * 用于识别「首页本来就是预渲染静态内容」的站 —— 它们的容器在 HTML 里就有卡片。
+ */
+function extractInnerHtml(html: string, id: string): string {
+  const openRe = new RegExp(`<([a-zA-Z][\\w-]*)([^>]*\\bid=["']${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}["'][^>]*)>`);
+  const m = openRe.exec(html);
+  if (!m || m.index === undefined) return "";
+  const tag = m[1];
+  const start = m.index + m[0].length;
+
+  // 同名标签配平，找到对应的闭合位置
+  let depth = 1;
+  let i = start;
+  const openTag = new RegExp(`<${tag}\\b`, "gi");
+  const closeTag = new RegExp(`</${tag}\\s*>`, "gi");
+  while (depth > 0 && i < html.length) {
+    openTag.lastIndex = i;
+    closeTag.lastIndex = i;
+    const o = openTag.exec(html);
+    const c = closeTag.exec(html);
+    if (!c) return html.slice(start).trim();
+    if (o && o.index < c.index) {
+      depth++;
+      i = o.index + o[0].length;
+    } else {
+      depth--;
+      i = c.index + c[0].length;
+      if (depth === 0) return html.slice(start, c.index).trim();
+    }
+  }
+  return "";
+}
+
 /** 从 HTML 里抓出所有 id，作为"可能是列表容器"的候选 */
 function extractIds(html: string): string[] {
   const ids: string[] = [];
@@ -125,6 +159,17 @@ export function probeRenderedContent(html: string, scripts: string[]): RenderPro
   for (const id of watch) store[id] = makeEl(id);
   // 渲染器还会取一些非容器元素（搜索框、分页按钮），缺了会 return 提前退出
   for (const id of ids) if (!store[id]) store[id] = makeEl(id);
+
+  // D-370：容器在 HTML 里**本来就有内容**时，要把那份内容当作初始值。
+  //
+  // 站群里有一类站（fernlight.top / haven-hearth.top / cavendishrow.sbs）首页是
+  // `_build/build.py` 预渲染的静态页 —— 文章卡片直接写在 HTML 里（实测 41 / 16 / 30 个），
+  // 根本不需要 JS 填。它们另有一个 crm-bridge.js 负责把 CRM 发的文章并进去。
+  // 不认这份内联内容的话，这类站会被判成白屏（我实测误报过这三个站）。
+  for (const id of Object.keys(store)) {
+    const inner = extractInnerHtml(html, id);
+    if (inner) store[id].innerHTML = inner;
+  }
 
   const readyHandlers: Array<() => void> = [];
   const document = {
@@ -244,5 +289,10 @@ export function probeRenderedContent(html: string, scripts: string[]): RenderPro
     }
   }
 
-  return { rendered: filled.length > 0, filled, empty, error, itemCount };
+  // D-370：「容器非空」还不够，得真有条目。
+  //
+  // allurahub.top 实测：容器里有内联占位内容（标题壳子），filled 非空但 itemCount=0 ——
+  // 01 的截图里就是这个样子：有「Featured Articles」标题、下面一片空白。
+  // 所以 rendered 必须同时要求 itemCount > 0。
+  return { rendered: filled.length > 0 && itemCount > 0, filled, empty, error, itemCount };
 }
