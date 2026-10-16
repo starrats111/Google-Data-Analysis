@@ -185,6 +185,57 @@ export function looksLikeRenderer(source: string): boolean {
   return DOM_WRITE_MARKERS.some((m) => source.includes(m));
 }
 
+/** 站点数据数组常见的变量名（与 remote-publisher 的候选表一致） */
+const ARRAY_VAR_CANDIDATES = [
+  "articlesIndex", "articles", "ARTICLES", "posts", "POSTS",
+  "blogPosts", "articlesData",
+];
+
+/**
+ * D-370：检查「渲染器读的数组变量名」和「数据文件声明的」是否对得上。
+ *
+ * 这是我漏掉的一类故障。allurahub.top / vitahaven.click 修完截断后 01 反馈
+ * 「网站还是没内容」—— 查下来是变量名不匹配：
+ *   数据文件 js/articles-index.js 声明 `const articlesIndex = [...]`
+ *   渲染器   js/main.js  第 70 行 `displayArticles(articles, 1)`
+ * 全局 `articles` 从未被定义 → ReferenceError → 初始化中断 → 首页空白。
+ * 这个不匹配是原有的，和截断无关，所以**修完截断页面照样是白的**。
+ *
+ * 旧判据（语法可编译 + 含 DOM 写入代码）对它完全失明：两个文件各自都合法、
+ * 渲染器也确实在，只是对不上。
+ *
+ * @param scripts 首页加载的全部本站脚本（路径 + 内容）
+ * @returns 对不上的变量名列表；空数组表示没问题
+ */
+export function findUnresolvedArrayVars(
+  scripts: Array<{ path: string; content: string }>,
+): string[] {
+  const declared = new Set<string>();
+  for (const s of scripts) {
+    for (const cand of ARRAY_VAR_CANDIDATES) {
+      const re = new RegExp(`(?:const|var|let)\\s+${cand}\\s*=`);
+      if (re.test(s.content)) declared.add(cand);
+    }
+    // window.__ARTICLES__ 这类赋值也算声明
+    for (const m of s.content.matchAll(/window\.(\w+)\s*=/g)) declared.add(m[1]);
+  }
+
+  const missing = new Set<string>();
+  for (const s of scripts) {
+    if (!looksLikeRenderer(s.content)) continue;
+    for (const cand of ARRAY_VAR_CANDIDATES) {
+      if (declared.has(cand)) continue;
+      // 必须是「当成数组用」才算：被索引、被 slice/filter/forEach/map、被当参数传
+      const usedAsArray = new RegExp(
+        `\\b${cand}\\s*(?:\\.(?:slice|filter|forEach|map|length|sort|find)\\b|\\[)`
+        + `|\\(\\s*${cand}\\s*[,)]`,
+      ).test(s.content);
+      if (usedAsArray) missing.add(cand);
+    }
+  }
+  return [...missing];
+}
+
 /**
  * 判断一段内容「看起来是不是只有数据、没有渲染器」。
  * 有数组赋值但没有任何渲染器特征 → 典型的被抹掉渲染器的 A1 文件。
