@@ -186,10 +186,6 @@ export function looksLikeRenderer(source: string): boolean {
 }
 
 /** 站点数据数组常见的变量名（与 remote-publisher 的候选表一致） */
-const ARRAY_VAR_CANDIDATES = [
-  "articlesIndex", "articles", "ARTICLES", "posts", "POSTS",
-  "blogPosts", "articlesData",
-];
 
 /**
  * D-370：检查「渲染器读的数组变量名」和「数据文件声明的」是否对得上。
@@ -210,31 +206,87 @@ const ARRAY_VAR_CANDIDATES = [
 export function findUnresolvedArrayVars(
   scripts: Array<{ path: string; content: string }>,
 ): string[] {
+  // ① 收集所有被声明过的标识符。
+  //    不只看数组声明 —— 任何 const/var/let/function/参数/类 都算「有定义」，
+  //    否则会把局部变量误报成缺失。
   const declared = new Set<string>();
   for (const s of scripts) {
-    for (const cand of ARRAY_VAR_CANDIDATES) {
-      const re = new RegExp(`(?:const|var|let)\\s+${cand}\\s*=`);
-      if (re.test(s.content)) declared.add(cand);
+    for (const m of s.content.matchAll(/(?:const|var|let)\s+([A-Za-z_$][\w$]*)/g)) declared.add(m[1]);
+    for (const m of s.content.matchAll(/function\s+([A-Za-z_$][\w$]*)/g)) declared.add(m[1]);
+    for (const m of s.content.matchAll(/window\.([A-Za-z_$][\w$]*)\s*=/g)) declared.add(m[1]);
+    for (const m of s.content.matchAll(/class\s+([A-Za-z_$][\w$]*)/g)) declared.add(m[1]);
+    // 函数形参：function f(a, b) / (a, b) =>
+    for (const m of s.content.matchAll(/function\s*[A-Za-z_$\w$]*\s*\(([^)]*)\)/g)) {
+      for (const p of m[1].split(",")) {
+        const name = p.trim().split(/[=\s]/)[0].replace(/^\.\.\./, "");
+        if (/^[A-Za-z_$][\w$]*$/.test(name)) declared.add(name);
+      }
     }
-    // window.__ARTICLES__ 这类赋值也算声明
-    for (const m of s.content.matchAll(/window\.(\w+)\s*=/g)) declared.add(m[1]);
+    for (const m of s.content.matchAll(/\(([^)]*)\)\s*=>/g)) {
+      for (const p of m[1].split(",")) {
+        const name = p.trim().split(/[=\s]/)[0].replace(/^\.\.\./, "");
+        if (/^[A-Za-z_$][\w$]*$/.test(name)) declared.add(name);
+      }
+    }
+    for (const m of s.content.matchAll(/([A-Za-z_$][\w$]*)\s*=>/g)) declared.add(m[1]);
+    // catch (e) / for (x of ...) / for (x in ...)
+    for (const m of s.content.matchAll(/catch\s*\(\s*([A-Za-z_$][\w$]*)/g)) declared.add(m[1]);
+    // 解构声明：const { entries, total } = ... / const [a, b] = ...
+    // 不认这个会把解构出来的名字误报成缺失（kivanta.top / vitahaven.click 的 `entries` 实测被误报过）
+    for (const m of s.content.matchAll(/(?:const|var|let)\s*\{([^}]*)\}\s*=/g)) {
+      for (const p of m[1].split(",")) {
+        const name = p.trim().split(/[:=\s]/)[0];
+        if (/^[A-Za-z_$][\w$]*$/.test(name)) declared.add(name);
+      }
+    }
+    for (const m of s.content.matchAll(/(?:const|var|let)\s*\[([^\]]*)\]\s*=/g)) {
+      for (const p of m[1].split(",")) {
+        const name = p.trim().split(/[=\s]/)[0];
+        if (/^[A-Za-z_$][\w$]*$/.test(name)) declared.add(name);
+      }
+    }
+    // 对象属性简写里的名字（{ entries } 作为字面量）也不该算缺失
+    for (const m of s.content.matchAll(/\{\s*([A-Za-z_$][\w$]*)\s*[,}]/g)) declared.add(m[1]);
+    for (const m of s.content.matchAll(/for\s*\(\s*(?:const|var|let)?\s*([A-Za-z_$][\w$]*)\s+(?:of|in)\b/g)) {
+      declared.add(m[1]);
+    }
   }
+
+  // ② 在渲染器里找「当数组用」的标识符，不依赖固定名单 ——
+  //    这是关键：vitasphere.top 的渲染器读 `blogArticles`，不在任何预设表里，
+  //    固定名单那版判据直接漏掉了它（01 发现该站首页仍然空白）。
+  const patterns = [
+    // 直接调数组方法：articles.filter(...)
+    /\b([A-Za-z_$][\w$]*)\s*\.(?:slice|filter|forEach|map|sort|find|concat|reduce)\s*\(/g,
+    // 先赋值再用：let filteredArticles = blogArticles;
+    // vitasphere.top 就是这个形态 —— 只认「直接调方法」会漏掉它（实测漏过）
+    /(?:const|var|let)\s+[A-Za-z_$][\w$]*\s*=\s*([A-Za-z_$][\w$]*)\s*;/g,
+    // 当实参传进渲染函数：displayArticles(articles, 1)
+    /\bdisplay[A-Za-z]*\s*\(\s*([A-Za-z_$][\w$]*)\s*[,)]/g,
+    /\brender[A-Za-z]*\s*\(\s*([A-Za-z_$][\w$]*)\s*[,)]/g,
+  ];
 
   const missing = new Set<string>();
   for (const s of scripts) {
     if (!looksLikeRenderer(s.content)) continue;
-    for (const cand of ARRAY_VAR_CANDIDATES) {
-      if (declared.has(cand)) continue;
-      // 必须是「当成数组用」才算：被索引、被 slice/filter/forEach/map、被当参数传
-      const usedAsArray = new RegExp(
-        `\\b${cand}\\s*(?:\\.(?:slice|filter|forEach|map|length|sort|find)\\b|\\[)`
-        + `|\\(\\s*${cand}\\s*[,)]`,
-      ).test(s.content);
-      if (usedAsArray) missing.add(cand);
+    for (const re of patterns) {
+      for (const m of s.content.matchAll(re)) {
+        const name = m[1];
+        if (!name || declared.has(name) || BUILTIN_GLOBALS.has(name)) continue;
+        missing.add(name);
+      }
     }
   }
   return [...missing];
 }
+
+/** 内置/宿主全局，用成数组方法的接收者也不算缺失 */
+const BUILTIN_GLOBALS = new Set([
+  "Array", "Object", "JSON", "Math", "String", "Number", "Boolean", "Date",
+  "RegExp", "Promise", "Map", "Set", "document", "window", "location",
+  "history", "navigator", "console", "localStorage", "sessionStorage",
+  "URLSearchParams", "URL", "Intl", "this", "arguments",
+]);
 
 /**
  * 判断一段内容「看起来是不是只有数据、没有渲染器」。

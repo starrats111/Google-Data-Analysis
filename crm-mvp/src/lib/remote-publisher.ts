@@ -10,6 +10,7 @@ import { getBtSshConfig } from "@/lib/system-config";
 import { ARTICLE_HYPERLINK_STYLE_BLOCK, cleanArticleContent, emphasizeArticleHyperlinks } from "@/lib/sanitize";
 import { withSiteLock, writeJsDataFileGuarded, isJsDataFile, checkJsSyntax, isDataOnly, hasRenderer, looksLikeRenderer } from "@/lib/site-write-guard";
 import { buildNovanestScriptsJs } from "@/lib/site-templates/novanest-renderer";
+import { probeRenderedContent } from "@/lib/site-render-probe";
 
 // ─── 网站架构类型常量（与 Python 后端一致）───
 export const SITE_TYPES = {
@@ -1157,7 +1158,42 @@ function isA1DataFile(dataJsPath: string, varName: string): boolean {
   return (p === "assets/js/main.js" || p === "assets/main.js") && varName === "posts";
 }
 
-function buildA1MainJs(postsJson: string): string {
+/**
+ * D-370：A1 渲染器写死了容器 id `article-list`，但站群里至少有六种命名 ——
+ * articleGrid、articlesGrid、postsGrid、postsContainer、featuredArticles、
+ * articles-container。容器名不符时脚本一切正常、就是不往页面写东西，首页白屏。
+ *
+ * thegoodsandguard.top / everydaynes.top 实测：首页只有 `articleGrid`，
+ * 而脚本（连修复前的 .bak 也一样）填的是 `article-list`。这个不符是**原有的**，
+ * 不是重建造成的，但重建时不修正就等于把故障原样抄一遍。
+ *
+ * 所以生成渲染器时要按站点首页实际存在的容器 id 来，而不是假定。
+ */
+function pickListContainerId(indexHtml: string): string {
+  const ids: string[] = [];
+  for (const m of indexHtml.matchAll(/\bid=["']([^"']+)["']/g)) ids.push(m[1]);
+
+  // A1 模板自己的名字优先 —— 它在就说明这个站本来就是 A1 布局
+  if (ids.includes("article-list")) return "article-list";
+
+  // 否则挑一个像「文章列表容器」的
+  const score = (id: string) => {
+    const s = id.toLowerCase();
+    const subject = /(article|post|blog|story|guide)/.test(s) ? 2 : 0;
+    const shape = /(list|grid|container|feed|wrap)/.test(s) ? 2 : 0;
+    // featured/home 这类前缀通常是首页的精选区，不是主列表，降一点权
+    const penalty = /(featured|hero|capsule|related|recent|popular)/.test(s) ? 1 : 0;
+    return subject + shape - penalty;
+  };
+  const best = ids
+    .map((id) => ({ id, s: score(id) }))
+    .filter((x) => x.s >= 3)
+    .sort((a, b) => b.s - a.s)[0];
+
+  return best ? best.id : "article-list";
+}
+
+function buildA1MainJs(postsJson: string, listContainerId = "article-list"): string {
   return `const posts = ${postsJson};
 
 (function () {
@@ -1186,7 +1222,8 @@ function buildA1MainJs(postsJson: string): string {
   if(st&&sb)st.addEventListener('click',function(){sb.classList.toggle('open');if(sb.classList.contains('open')&&si)si.focus();});
   var ft=document.getElementById('footTop');if(ft)ft.addEventListener('click',function(ev){ev.preventDefault();window.scrollTo({top:0,behavior:'smooth'});});
 
-  var grid=document.getElementById('article-list');
+  // D-370：容器 id 由 pickListContainerId() 按站点首页实际情况注入，不写死
+  var grid=document.getElementById('${listContainerId}');
   if(!grid)return;
 
   function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
@@ -3210,7 +3247,11 @@ export interface RepairSiteResult {
    * 可能**不等于** publish_sites.data_js_path —— 以首页实际引用且确实损坏的那个为准。
    */
   repaired_path?: string;
-  action: "repaired" | "skipped_healthy" | "skipped_no_articles" | "skipped_would_shrink" | "dry_run" | "failed";
+  /** D-370：写完后首页脚本在沙箱里跑一遍，列表容器有没有被填上内容 */
+  render_verified?: boolean;
+  render_detail?: string;
+  action: "repaired" | "repaired_but_blank" | "skipped_healthy" | "skipped_no_articles"
+    | "skipped_would_shrink" | "dry_run" | "failed";
   error?: string;
 }
 
@@ -3535,8 +3576,21 @@ export async function repairSiteDataFile(
       }
       if (!mainJs) {
         if (isA1DataFile(dataJsPath, varName)) {
-          // A1 架构：模板在代码里，能完整重建「数据 + 渲染器」
-          mainJs = buildA1MainJs(JSON.stringify(entries, null, 2));
+          // A1 架构：模板在代码里，能完整重建「数据 + 渲染器」。
+          // D-370：容器 id 要按该站首页实际的来 —— A1 模板写死 article-list，
+          // 而 thegoodsandguard.top / everydaynes.top 的首页只有 articleGrid，
+          // 不修正就是把原有的容器名不符故障原样抄一遍（它们修完仍白屏就是这个原因）。
+          let indexHtmlForRepair = "";
+          try {
+            indexHtmlForRepair = await sftpReadFile(sftp, `${site.site_path}/index.html`);
+          } catch { /* 读不到就退回默认容器名 */ }
+          const containerId = indexHtmlForRepair
+            ? pickListContainerId(indexHtmlForRepair)
+            : "article-list";
+          if (containerId !== "article-list") {
+            console.log(`[D-370] ${site.domain}：首页列表容器是 #${containerId}，渲染器按它生成`);
+          }
+          mainJs = buildA1MainJs(JSON.stringify(entries, null, 2), containerId);
         } else if (looksLikeRenderer(raw)) {
           // 这里必须用 looksLikeRenderer（与模板无关：看有没有 DOM 写入代码），
           // **不能**用 hasRenderer —— 后者只认 A1 的特征串
@@ -3617,6 +3671,28 @@ export async function repairSiteDataFile(
       }
 
       await sftpWriteJsGuarded(sftp, fullPath, mainJs);
+
+      // D-370：写完必须确认首页**真的渲染出内容**才算修好。
+      //
+      // 这是我三次误报「已修好」的根因：我验的是「数据文件语法 ok + 存在渲染器 +
+      // 文章页 200」，这三条全绿而页面照样白的 —— 容器名不符、变量名对不上、
+      // 渲染器缺函数，每一种都能让三条判据全过。01 两次打开页面才发现。
+      //
+      // 现在改成把首页脚本在沙箱里跑一遍、看列表容器有没有被填上东西，
+      // 这和浏览器做的事一致，也和「打开页面有没有内容」一致。
+      const verify = await verifyHomepageRenders(sftp, site);
+      result.render_verified = verify.rendered;
+      result.render_detail = verify.detail;
+      if (!verify.rendered) {
+        result.action = "repaired_but_blank";
+        result.written_entries = entries.length;
+        result.error = `文件已重建（${entries.length} 条，语法与回读校验都过），`
+          + `但首页脚本跑完列表容器仍为空：${verify.detail}。`
+          + `说明还有别的毛病（容器名不符 / 变量名对不上 / 渲染器缺函数 / 数据为空），`
+          + `需逐站查。文件本身没写坏，可安全重试。`;
+        client.end();
+        return result;
+      }
 
       result.action = "repaired";
       result.written_entries = entries.length;
@@ -3829,4 +3905,51 @@ async function buildRendererVarBridge(
   return `\n// D-370 自动补的变量桥接：首页的渲染脚本读下面这些名字，\n`
     + `// 而本文件声明的是 ${declaredVar}。不补的话渲染器会 ReferenceError、首页空白。\n`
     + lines.join("\n") + "\n";
+}
+
+/**
+ * D-370：把站点首页的脚本在沙箱里跑一遍，确认列表容器真被填上内容。
+ *
+ * 从站群机直接读文件（不走公网），所以不受 CDN 缓存影响 —— 刚写完就能验。
+ */
+async function verifyHomepageRenders(
+  sftp: SFTPWrapper,
+  site: SiteConfig,
+): Promise<{ rendered: boolean; detail: string }> {
+  let indexHtml = "";
+  try {
+    indexHtml = await sftpReadFile(sftp, `${site.site_path}/index.html`);
+  } catch {
+    return { rendered: false, detail: "读不到 index.html" };
+  }
+
+  // 按 <script> 出现顺序收集：外链（本站）取文件，内联直接用
+  const scripts: string[] = [];
+  const tagRe = /<script([^>]*)>([\s\S]*?)<\/script>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = tagRe.exec(indexHtml)) !== null) {
+    const srcM = /src=["']([^"']+)["']/i.exec(m[1]);
+    if (srcM) {
+      const raw = srcM[1];
+      if (/^https?:\/\//i.test(raw) || raw.startsWith("//")) continue;
+      const rel = raw.replace(/^\.?\//, "").split("?")[0];
+      try {
+        const content = await sftpReadFile(sftp, `${site.site_path}/${rel}`);
+        if (content.trim()) scripts.push(content);
+      } catch { /* 取不到就跳过，和浏览器 404 的效果一样 */ }
+    } else if (m[2].trim()) {
+      scripts.push(m[2]);
+    }
+  }
+  if (scripts.length === 0) return { rendered: false, detail: "首页没有可执行的本站脚本" };
+
+  const res = probeRenderedContent(indexHtml, scripts);
+  if (res.rendered) {
+    return { rendered: true, detail: `渲染出 ${res.itemCount} 项 → #${res.filled.join(", #")}` };
+  }
+  return {
+    rendered: false,
+    detail: (res.error ? `${res.error}；` : "")
+      + `空容器 ${res.empty.length ? "#" + res.empty.join(", #") : "（未识别到列表容器）"}`,
+  };
 }
