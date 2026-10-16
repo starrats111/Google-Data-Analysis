@@ -8,7 +8,7 @@ import { Client, SFTPWrapper } from "ssh2";
 import JSON5 from "json5";
 import { getBtSshConfig } from "@/lib/system-config";
 import { ARTICLE_HYPERLINK_STYLE_BLOCK, cleanArticleContent, emphasizeArticleHyperlinks } from "@/lib/sanitize";
-import { withSiteLock, writeJsDataFileGuarded, isJsDataFile, checkJsSyntax, isDataOnly, hasRenderer, looksLikeRenderer, findMissingGlobalsWithKind, resolveBrokenDataPathFromLoaded } from "@/lib/site-write-guard";
+import { withSiteLock, writeJsDataFileGuarded, isJsDataFile, checkJsSyntax, isDataOnly, hasRenderer, looksLikeRenderer, resolveBrokenDataPathFromLoaded, planRendererVarBridge } from "@/lib/site-write-guard";
 import { buildNovanestScriptsJs } from "@/lib/site-templates/novanest-renderer";
 import { probeRenderedContent } from "@/lib/site-render-probe";
 
@@ -3889,48 +3889,36 @@ async function buildRendererVarBridge(
     try {
       content = await sftpReadFile(sftp, `${site.site_path}/${rel}`);
     } catch { continue; }
-    if (rel !== dataJsPath) allScripts.push(content);
+    // D-370：数据文件被整体重建时(buildArrayAssignmentStatement)，只生成
+    // `const ${varName} = [...]` 这一句，丢掉了原文件数组声明后面可能手写的
+    // 桥接行（比如 `const blogArticles = articlesIndex;`）。这里特意**仍然**
+    // 把数据文件的旧内容纳入 allScripts/renderers 的判断依据——
+    // 不是为了判断「数据文件本身是不是渲染器」，是为了让 isDeclaredAnywhere /
+    // findMissingGlobalsWithKind 认得「这个全局原来就有人声明过」，不会把
+    // 本来正确的桥接关系误判成「全站缺失」再补一个空壳覆盖掉。
+    // 实测踩过：vitasphere.top 原文件末尾有 `const blogArticles = articlesIndex;`，
+    // 重建时如果看不到这行，blogArticles 就会被错误地补成 `[]`，
+    // 导致 blogArticles[0]/displayArticles 渲染出的是「空数据」而不是真实文章——
+    // 页面不报错，但内容是假的，比白屏更难发现。
+    allScripts.push(content);
     if (rel !== dataJsPath && looksLikeRenderer(content)) renderers.push(content);
   }
 
-  // D-370：这里曾写成 `\b...` —— 模板字符串会把 \b 当成**退格字符**（码 8），
-  // 不是正则的词边界，于是永远匹配不上、桥接一直没生效（实测字符码确认）。
-  // 模板串里要写正则转义必须双反斜杠。
-  const isDeclaredAnywhere = (name: string) =>
-    allScripts.some((c) => new RegExp(`(?:const|var|let)\\s+${escapeRegExp(name)}\\s*=`).test(c));
-
-  const needed = new Set<string>();
-  for (const content of renderers) {
-    // ① 固定候选名（数据条目数组本身，如 articles / posts）：补成 declaredVar 的别名
-    for (const cand of HOMEPAGE_INDEX_VAR_NAMES) {
-      if (cand === declaredVar || cand.includes(".")) continue;
-      const used = new RegExp(`\\b${escapeRegExp(cand)}\\b`).test(content);
-      if (used && !isDeclaredAnywhere(cand)) needed.add(cand);
-    }
-  }
-
-  // ② 渲染器依赖的**其它**全局（不是文章数组本身，比如分类名查表、商品列表）——
-  //    实测 vitasphere.top / quiblo.top：这些声明在站点另一个数据文件里
-  //    （js/data.js / data.js），但首页压根没引用那个文件。
-  //    01 的决定：不引入那份演示数据，渲染器缺的东西补成空壳就好——
-  //    两站的渲染代码对空数组/空对象都有专门的「没有内容」兜底文案，
-  //    不会崩、也不会把演示商品带上线。
-  //
-  //    用 findMissingGlobalsWithKind 而不是在这里现写一套：早期版本自己写过
-  //    一次，只认 const/var/let 声明，把函数参数（entries）、箭头函数参数（a）、
-  //    模板字符串里的英文单词（"reviews" 这种普通词被 `[...]` 索引正则误抓）
-  //    全部误判成缺失全局，拿线上真实文件跑才发现的。
-  const stubs = findMissingGlobalsWithKind(
+  // 判断逻辑是纯函数，拆到 site-write-guard.ts（planRendererVarBridge），这样
+  // 不用 mock SSH 就能单测——这次踩的坑就是出在给它的输入上（allScripts 原先
+  // 排除了数据文件自身，导致数据文件里手写的桥接行被误判成「全站缺失」）。
+  const plan = planRendererVarBridge(
     renderers.map((content) => ({ content })),
     allScripts.map((content) => ({ content })),
-    new Set([declaredVar, ...needed, ...HOMEPAGE_INDEX_VAR_NAMES.filter((n) => !n.includes("."))]),
+    declaredVar,
+    HOMEPAGE_INDEX_VAR_NAMES,
   );
 
-  if (needed.size === 0 && stubs.size === 0) return "";
-  const lines = [...needed].map(
+  if (plan.aliases.length === 0 && plan.stubs.size === 0) return "";
+  const lines = plan.aliases.map(
     (n) => `var ${n} = ${declaredVar};  // D-370：渲染器读的是 ${n}，数据声明的是 ${declaredVar}`,
   );
-  for (const [n, kind] of stubs) {
+  for (const [n, kind] of plan.stubs) {
     lines.push(
       `var ${n} = ${kind === "array" ? "[]" : "{}"};  `
       + `// D-370：渲染器用到 ${n} 但全站没有文件声明它（原本在未被首页引用的数据文件里）；`
@@ -3938,8 +3926,8 @@ async function buildRendererVarBridge(
     );
   }
   console.log(
-    `[D-370] ${site.domain}：补桥接 ${[...needed].join(", ") || "无"}`
-    + `${stubs.size ? `，补空壳 ${[...stubs.keys()].join(", ")}` : ""}`,
+    `[D-370] ${site.domain}：补桥接 ${plan.aliases.join(", ") || "无"}`
+    + `${plan.stubs.size ? `，补空壳 ${[...plan.stubs.keys()].join(", ")}` : ""}`,
   );
   return `\n// D-370 自动补的变量桥接：首页的渲染脚本读下面这些名字，\n`
     + `// 而本文件声明的是 ${declaredVar}。不补的话渲染器会 ReferenceError、首页空白。\n`
@@ -3986,9 +3974,18 @@ async function verifyHomepageRenders(
   if (res.rendered) {
     return { rendered: true, detail: `渲染出 ${res.itemCount} 项 → #${res.filled.join(", #")}` };
   }
+  // D-370：之前这里只看 res.empty 来拼错误文案，漏了一种真实情况——
+  // 容器被识别到、也被脚本填了内容，只是填的是空列表（itemCount=0），
+  // 不属于 empty（因为 filled.length>0），拼出来的提示却说「未识别到列表容器」，
+  // 跟事实不符，会误导排查方向（vitasphere.top 实测踩过：filled=["articlesGrid"]，
+  // 但渲染出的是「No articles found」，错误信息却说没找到容器）。
+  const containerNote = res.filled.length > 0
+    ? `容器 #${res.filled.join(", #")} 被填了内容但条目数为 0（渲染出的是空状态提示，不是真实数据）`
+    : res.empty.length > 0
+      ? `空容器 #${res.empty.join(", #")}`
+      : "未识别到列表容器";
   return {
     rendered: false,
-    detail: (res.error ? `${res.error}；` : "")
-      + `空容器 ${res.empty.length ? "#" + res.empty.join(", #") : "（未识别到列表容器）"}`,
+    detail: (res.error ? `${res.error}；` : "") + containerNote,
   };
 }
