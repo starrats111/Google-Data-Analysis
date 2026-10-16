@@ -3488,7 +3488,16 @@ export async function repairSiteDataFile(
       //   ② 语法合法但渲染器被抹掉（parcelnplate.top 形态）——只对 A1 文件适用，
       //      非 A1 的纯数据文件本来就没有渲染器，不算损坏
       const rendererGone = isA1DataFile(dataJsPath, varName) && isDataOnly(raw);
-      const broken = !syntax.ok || rendererGone;
+
+      // D-370 第三类：文件本身没问题，但首页渲染不出内容（变量名对不上 /
+      // 容器名不符 / 渲染器缺依赖）。前两类判据对它全是绿的，所以这里必须
+      // 把「首页到底渲不渲得出来」也作为「要不要修」的依据 ——
+      // 否则 vitahaven / aura-bloom / thegoodsandguard 这类站会被报 skipped_healthy，
+      // 修复请求直接跳过（实测踩过）。
+      const pre = await verifyHomepageRenders(sftp, site);
+      const blankHomepage = !pre.rendered;
+
+      const broken = !syntax.ok || rendererGone || blankHomepage;
 
       result.before = {
         bytes: raw.length,
@@ -3497,7 +3506,9 @@ export async function repairSiteDataFile(
           ? `截断/语法损坏：${syntax.line ? `第 ${syntax.line} 行：` : ""}${syntax.error}`
           : rendererGone
             ? "渲染器被抹掉：只有数据、无渲染器，语法合法但首页白屏"
-            : undefined,
+            : blankHomepage
+              ? `文件完好但首页渲染不出内容：${pre.detail}`
+              : undefined,
         parsed_entries: parsed ? parsed.length : null,
       };
 
@@ -3891,8 +3902,11 @@ async function buildRendererVarBridge(
     // 渲染器引用了候选名、而且自己没声明它 → 它指望别处提供这个全局
     for (const cand of HOMEPAGE_INDEX_VAR_NAMES) {
       if (cand === declaredVar || cand.includes(".")) continue;
-      const used = new RegExp(`\b${escapeRegExp(cand)}\b`).test(content);
-      const declared = new RegExp(`(?:const|var|let)\s+${escapeRegExp(cand)}\s*=`).test(content);
+      // D-370：这里曾写成 `\b...` —— 模板字符串会把 \b 当成**退格字符**（码 8），
+      // 不是正则的词边界，于是永远匹配不上、桥接一直没生效（实测字符码确认）。
+      // 模板串里要写正则转义必须双反斜杠。
+      const used = new RegExp(`\\b${escapeRegExp(cand)}\\b`).test(content);
+      const declared = new RegExp(`(?:const|var|let)\\s+${escapeRegExp(cand)}\\s*=`).test(content);
       if (used && !declared) needed.add(cand);
     }
   }
