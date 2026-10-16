@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getSystemConfig, setSystemConfig } from "@/lib/system-config";
 import { sendAlert } from "@/lib/alert";
-import { checkJsSyntax, isDataOnly, looksLikeRenderer } from "@/lib/site-write-guard";
+import { checkJsSyntax, isDataOnly, looksLikeRenderer, findUnresolvedArrayVars } from "@/lib/site-write-guard";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 800;
@@ -143,6 +143,7 @@ async function probeRenderer(domain: string): Promise<{ checked: boolean; ok: bo
 
     let anyDataOnly = false;
     let anyRenderer = false;
+    const loaded: Array<{ path: string; content: string }> = [];
     let scanned = 0;
 
     for (const src of srcs) {
@@ -180,6 +181,21 @@ async function probeRenderer(domain: string): Promise<{ checked: boolean; ok: bo
       scanned++;
       anyDataOnly = anyDataOnly || isDataOnly(js);
       anyRenderer = anyRenderer || looksLikeRenderer(js);
+      loaded.push({ path: src, content: js });
+    }
+
+    // D-370：语法过了、渲染器也在，还要看两者**对不对得上**。
+    // allurahub.top / vitahaven.click 的数据文件声明 articlesIndex，
+    // 而渲染器读全局 articles（从未被定义）→ ReferenceError → 首页空白。
+    // 这类站旧判据全绿，但页面是白的 —— 我就是在这里把它误判成「已修好」的。
+    const unresolved = findUnresolvedArrayVars(loaded);
+    if (unresolved.length > 0) {
+      return {
+        checked: true,
+        ok: false,
+        detail: `渲染器读的数组变量没人定义：${unresolved.join(", ")} —— `
+          + `数据文件声明的名字和渲染器读的对不上，脚本会 ReferenceError、首页空白`,
+      };
     }
 
     // 有数据文件、但所有脚本里没有一个会往页面写 HTML → 列表容器没人填，首页白屏

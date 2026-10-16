@@ -3596,7 +3596,8 @@ export async function repairSiteDataFile(
             client.end();
             return result;
           }
-          mainJs = `${buildArrayAssignmentStatement(varName, entries)}\n`;
+          mainJs = `${buildArrayAssignmentStatement(varName, entries)}\n`
+            + await buildRendererVarBridge(sftp, site, dataJsPath, varName);
         }
       }
 
@@ -3764,4 +3765,68 @@ function buildRescuedRenderer(
     return buildNovanestScriptsJs(JSON.stringify(entries, null, 2));
   }
   return null;
+}
+
+/**
+ * D-370：数据文件声明的变量名 ≠ 渲染器读的变量名时，补一行桥接别名。
+ *
+ * 实测（allurahub.top / vitahaven.click，01 报「修完还是没内容」）：
+ *   数据文件 js/articles-index.js  声明 `const articlesIndex = [...]`
+ *   渲染器   js/main.js            第 70 行 `displayArticles(articles, 1)`
+ * 全局 `articles` 从未被任何文件定义 → ReferenceError → 整个
+ * DOMContentLoaded 处理器中断 → 首页空白。
+ *
+ * 这个不匹配是**原有的**（修复前的 .bak 里也声明 articlesIndex），和截断无关 ——
+ * 也就是说这两个站同时坏在两处，只修截断不够。
+ *
+ * 修法不是去改渲染器（那是站点模板，风险大），而是在数据文件末尾补一行
+ * `var articles = articlesIndex;` —— 渲染器一个字不动就能读到数据。
+ *
+ * 只在「渲染器确实引用了某个本文件没声明的数组名」时才补，避免凭空造全局变量。
+ */
+async function buildRendererVarBridge(
+  sftp: SFTPWrapper,
+  site: SiteConfig,
+  dataJsPath: string,
+  declaredVar: string,
+): Promise<string> {
+  let indexHtml = "";
+  try {
+    indexHtml = await sftpReadFile(sftp, `${site.site_path}/index.html`);
+  } catch {
+    return "";
+  }
+
+  const srcRe = /<script[^>]+src=["']([^"']+)["']/gi;
+  const needed = new Set<string>();
+  let m: RegExpExecArray | null;
+  while ((m = srcRe.exec(indexHtml)) !== null) {
+    const raw = m[1];
+    if (/^https?:\/\//i.test(raw) || raw.startsWith("//")) continue;
+    const rel = raw.replace(/^\.?\//, "").split("?")[0];
+    if (rel === dataJsPath) continue;
+
+    let content = "";
+    try {
+      content = await sftpReadFile(sftp, `${site.site_path}/${rel}`);
+    } catch { continue; }
+    if (!looksLikeRenderer(content)) continue;
+
+    // 渲染器引用了候选名、而且自己没声明它 → 它指望别处提供这个全局
+    for (const cand of HOMEPAGE_INDEX_VAR_NAMES) {
+      if (cand === declaredVar || cand.includes(".")) continue;
+      const used = new RegExp(`\b${escapeRegExp(cand)}\b`).test(content);
+      const declared = new RegExp(`(?:const|var|let)\s+${escapeRegExp(cand)}\s*=`).test(content);
+      if (used && !declared) needed.add(cand);
+    }
+  }
+
+  if (needed.size === 0) return "";
+  const lines = [...needed].map(
+    (n) => `var ${n} = ${declaredVar};  // D-370：渲染器读的是 ${n}，数据声明的是 ${declaredVar}`,
+  );
+  console.log(`[D-370] ${site.domain}：补桥接别名 ${[...needed].join(", ")} → ${declaredVar}`);
+  return `\n// D-370 自动补的变量桥接：首页的渲染脚本读下面这些名字，\n`
+    + `// 而本文件声明的是 ${declaredVar}。不补的话渲染器会 ReferenceError、首页空白。\n`
+    + lines.join("\n") + "\n";
 }
