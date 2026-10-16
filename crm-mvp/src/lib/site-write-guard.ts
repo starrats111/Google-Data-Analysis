@@ -379,6 +379,25 @@ export function findMissingGlobalsWithKind(
   return stubs;
 }
 
+/**
+ * D-370：按首页加载的脚本，判断「哪个文件该被当成需要修的目标」，纯逻辑、不碰 IO
+ * （真正的文件读取在 remote-publisher.ts 的 resolveBrokenDataPath 里）。
+ *
+ * 三类损坏，按下列顺序判断：
+ *   ① 截断/语法损坏：返回第一个语法不过的文件
+ *   ② 渲染器被抹：全部脚本都没有渲染代码，返回那个装数据的文件
+ *   ③ 运行时缺失全局（vitasphere.top / quiblo.top 形态）：数据文件和渲染器
+ *      各自语法都合法、渲染器也确实存在，但渲染器引用的某个全局（products /
+ *      categoryNames 之类）全站没有任何文件声明过——跑起来会 ReferenceError，
+ *      首页白屏。前两类规则对它完全失明。
+ *
+ * 实测踩过的坑（vitasphere.top）：这三类之前只做了①②，③查不到就返回 null，
+ * 调用方会兜底落到 `site.data_js_path || "assets/js/main.js"`——如果这站
+ * 刚好还留着一个没人加载的孤儿同名文件（该站确实有，是旧版遗留），就会把
+ * 那个孤儿文件错当成目标去改，首页真正加载的 js/articles-index.js 原封不动，
+ * 页面依旧白屏，`apply` 却报 `repaired_but_blank`——文件是改了，改错了文件。
+ */
+
 /** 内置/宿主全局，用成数组方法的接收者也不算缺失 */
 const BUILTIN_GLOBALS = new Set([
   "Array", "Object", "JSON", "Math", "String", "Number", "Boolean", "Date",
@@ -395,6 +414,37 @@ export function isDataOnly(source: string): boolean {
   const hasArray = /(?:const|var|let)\s+[A-Za-z_$][\w$]*\s*=\s*\[/.test(source)
     || /\b[A-Za-z_$][\w$.]*\s*=\s*\[/.test(source);
   return hasArray && !hasRenderer(source);
+}
+
+export function resolveBrokenDataPathFromLoaded(
+  loaded: Array<{ path: string; content: string }>,
+): string | null {
+  if (loaded.length === 0) return null;
+
+  // ① 截断类：返回第一个语法不过的
+  for (const f of loaded) {
+    if (!checkJsSyntax(f.content).ok) return f.path;
+  }
+
+  // ② 渲染器被抹类：全部脚本都没有渲染代码，返回那个装数据的
+  const anyRenderer = loaded.some((f) => looksLikeRenderer(f.content));
+  if (!anyRenderer) {
+    const dataFile = loaded.find((f) => isDataOnly(f.content));
+    if (dataFile) return dataFile.path;
+  }
+
+  // ③ 运行时缺失全局类：数据文件末尾补空壳就能救，渲染器不用动，
+  // 所以返回数据文件的路径，不是渲染器文件本身。
+  const renderers = loaded.filter((f) => looksLikeRenderer(f.content));
+  if (renderers.length > 0) {
+    const dataFile = loaded.find((f) => isDataOnly(f.content)) ?? loaded.find((f) => !renderers.includes(f));
+    if (dataFile) {
+      const missing = findMissingGlobalsWithKind(renderers, loaded);
+      if (missing.size > 0) return dataFile.path;
+    }
+  }
+
+  return null;
 }
 
 // ─── 带护栏的写入 ───────────────────────────────────────────────────────────
