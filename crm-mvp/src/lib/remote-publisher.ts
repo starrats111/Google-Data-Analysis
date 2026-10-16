@@ -3481,8 +3481,23 @@ export async function repairSiteDataFile(
       //
       // 这里按**坏文件里能数出来的条目数**估线上存量（截断文件也能数前半截），
       // 库里少于它的 60% 就停手，要求人工确认。
-      const liveEntryHint = (raw.match(/"id"\s*:/g) || []).length
-        || (raw.match(/\bid\s*:/g) || []).length;
+      // 必须按 id **去重**后再数。
+      //
+      // 原先直接数 `"id":` 的出现次数，把 allurahub.top 和 everydaynes.top 误判成
+      // 「库里比站上少 40% 以上」拦下了，而实测：
+      //   allurahub   566 次出现 → 去重后 307 个唯一 id，库里正好 307 篇
+      //   everydaynes 304 次出现 → 去重后 169 个，库里 170 篇
+      // 那些"多出来"的条目是**同一篇被重复追加**（allurahub 231 篇各出现 2 次、
+      // 14 篇各 3 次；everydaynes 有 1 篇出现 6 次），不是额外文章。
+      //
+      // 重复本身就是 D-370 那条 bug 的产物：增量插入时先按 id/slug 移除旧条目再插新的，
+      // 而文件截断后 removeArticleEntriesByIdentity 解析失败、`|| content` 原样返回，
+      // 于是同一篇反复追加。所以按库重建顺带会把重复条目清掉，是好事，不该拦。
+      const liveIds = new Set(
+        [...raw.matchAll(/"id"\s*:\s*"?([^",}]+)"?/g)].map((m) => String(m[1]).trim()),
+      );
+      const liveEntryHint = liveIds.size
+        || new Set([...raw.matchAll(/\bid\s*:\s*"?([^",}\s]+)"?/g)].map((m) => String(m[1]).trim())).size;
       if (liveEntryHint > 0 && dbArticles.length < liveEntryHint * 0.6 && !opts.allowShrink) {
         result.action = "skipped_would_shrink";
         result.error =
@@ -3643,8 +3658,13 @@ export async function probeSiteBackups(sitePath: string, domain: string): Promis
     };
 
     // ① 本站目录下的备份副本
+    // 不用 find 的 \( ... \) 分组：这串经 TS 模板字符串 -> ssh exec -> 远端 bash
+    // 多层处理后括号的转义层数对不上，远端直接报 syntax error（实测踩过）。
+    // 改成每个模式各跑一条 find，稳过花哨写法。
     await run("local_backups",
-      `find "${sitePath}" -maxdepth 3 -type f \( -name "*.bak" -o -name "*.backup" -o -name "*.orig" -o -name "*~" \) -printf "%p\t%s\n" 2>/dev/null | head -40; true`);
+      ["*.bak", "*.backup", "*.orig", "*~"]
+        .map((pat) => `find "${sitePath}" -maxdepth 3 -type f -name "${pat}" -printf "%p\t%s\n" 2>/dev/null`)
+        .join("; ") + "; true");
 
     // ② 站群机上可能的备份目录（D-319 重建时提到过 _mv*_backup 这类）
     await run("backup_dirs",
