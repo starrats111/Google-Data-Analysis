@@ -447,6 +447,62 @@ export function resolveBrokenDataPathFromLoaded(
   return null;
 }
 
+export interface RendererBridgePlan {
+  /** 需要补成「别名」的候选数据数组名（如 articles → declaredVar） */
+  aliases: string[];
+  /** 需要补空壳的全局名及类型 */
+  stubs: Map<string, "array" | "object">;
+}
+
+/**
+ * D-370：算出重建数据文件时该补哪些全局桥接 / 空壳，纯逻辑、不碰 IO。
+ *
+ * 从 remote-publisher.ts 的 buildRendererVarBridge 拆出来，便于不 mock SSH
+ * 就能单测——这次踩的坑正是出在这个函数的输入上，不是算法本身：
+ *
+ * **`allScripts` 必须包含数据文件自身被重建前的旧内容**，否则会把「数据文件
+ * 原本就手写了的桥接」误判成「全站缺失」再补一个空壳覆盖掉。
+ * 实测：vitasphere.top 的 js/articles-index.js 原内容是
+ *   `const articlesIndex = [...]; const blogArticles = articlesIndex;`
+ * 数据文件被 buildArrayAssignmentStatement 整体重建时只保留了第一句，
+ * 丢了第二句。调用方如果没把这份旧内容纳入 allScripts，这里就会判定
+ * blogArticles 全站没人声明，补成 `var blogArticles = [];`——
+ * 页面不报错，但 blogArticles[0] 和 filteredArticles 全是假的空数据，
+ * 比白屏更难发现（渲染器确实跑完了，只是数据被静默清空）。
+ *
+ * @param renderers 真正的渲染器脚本内容（不含数据文件）
+ * @param allScripts 首页加载的全部脚本内容，**含数据文件重建前的旧内容**
+ * @param declaredVar 数据文件实际声明的数组变量名
+ * @param candidateNames 候选的「数据数组本身」变量名列表（如 articles/posts/...）
+ */
+export function planRendererVarBridge(
+  renderers: Array<{ content: string }>,
+  allScripts: Array<{ content: string }>,
+  declaredVar: string,
+  candidateNames: string[],
+): RendererBridgePlan {
+  const isDeclaredAnywhere = (name: string) =>
+    allScripts.some((s) => new RegExp(`(?:const|var|let)\\s+${escapeRegExp(name)}\\s*=`).test(s.content));
+
+  const aliases = new Set<string>();
+  for (const r of renderers) {
+    for (const cand of candidateNames) {
+      if (cand === declaredVar || cand.includes(".")) continue;
+      const used = new RegExp(`\\b${escapeRegExp(cand)}\\b`).test(r.content);
+      if (used && !isDeclaredAnywhere(cand)) aliases.add(cand);
+    }
+  }
+
+  const skip = new Set([declaredVar, ...aliases, ...candidateNames.filter((n) => !n.includes("."))]);
+  const stubs = findMissingGlobalsWithKind(renderers, allScripts, skip);
+
+  return { aliases: [...aliases], stubs };
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 // ─── 带护栏的写入 ───────────────────────────────────────────────────────────
 
 export interface GuardedWriteIO {
