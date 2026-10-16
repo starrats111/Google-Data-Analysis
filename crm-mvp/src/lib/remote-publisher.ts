@@ -3604,3 +3604,111 @@ export async function repairSiteDataFile(
     }
   });
 }
+
+// ─── D-370 只读：找站点渲染器的备份副本 ──────────────────────────────────────
+//
+// bloomroots.top / novanest.one 的渲染器随数据文件一起被截断丢掉了，库里没有源码。
+// 这个函数去站群机上找还有没有能捞回模板的副本：发布链路自己留的 .bak、
+// D-319 重建时留的备份目录、以及同模板的**别的站**（最有价值——同一套模板的站
+// 如果没坏，直接从它那里取渲染器就行）。
+//
+// 只读：只跑固定的 find / ls / head，不写不删。domain 已在路由层按域名字符校验过。
+
+export interface SiteBackupProbe {
+  /** 本站目录下的 .bak / .backup 等副本 */
+  local_backups: string[];
+  /** 站群机上常见的备份目录命中项 */
+  backup_dirs: string[];
+  /** 本站数据文件现状（路径 + 字节数 + 是否含渲染代码） */
+  data_files: Array<{ path: string; bytes: number; has_renderer: boolean }>;
+  /** 同模板的其它站（它们的同名文件若完好，可直接取渲染器） */
+  sibling_candidates: Array<{ site: string; path: string; bytes: number; has_renderer: boolean }>;
+  /** 原样保留的命令输出，便于人工判断 */
+  raw: Record<string, string>;
+}
+
+export async function probeSiteBackups(sitePath: string, domain: string): Promise<SiteBackupProbe> {
+  let client: Client | null = null;
+  try {
+    client = await connectSSH();
+    const sftp = await getSFTP(client);
+    const raw: Record<string, string> = {};
+
+    const run = async (key: string, cmd: string) => {
+      try {
+        raw[key] = (await execCommand(client as Client, cmd)).slice(0, 4000);
+      } catch (e) {
+        raw[key] = `ERR: ${e instanceof Error ? e.message.slice(0, 200) : String(e)}`;
+      }
+    };
+
+    // ① 本站目录下的备份副本
+    await run("local_backups",
+      `find "${sitePath}" -maxdepth 3 -type f \( -name "*.bak" -o -name "*.backup" -o -name "*.orig" -o -name "*~" \) -printf "%p\t%s\n" 2>/dev/null | head -40; true`);
+
+    // ② 站群机上可能的备份目录（D-319 重建时提到过 _mv*_backup 这类）
+    await run("backup_dirs",
+      `ls -d /home/ubuntu/*backup* /home/ubuntu/backup* /www/backup* /root/*backup* 2>/dev/null | head -20; `
+      + `find /home/ubuntu -maxdepth 2 -type d -name "*backup*" 2>/dev/null | head -20; true`);
+
+    // ③ 备份目录里有没有这个站
+    await run("backup_has_site",
+      `find /home/ubuntu /www/backup -maxdepth 4 -path "*${domain}*" 2>/dev/null | head -30; true`);
+
+    // ④ 本站现有的 js 文件清单
+    await run("site_js",
+      `find "${sitePath}" -maxdepth 3 -name "*.js" -printf "%p\t%s\n" 2>/dev/null | head -40; true`);
+
+    // ⑤ git 仓库（有的站是从 git 部署的，模板能从历史里取）
+    await run("git",
+      `ls -d "${sitePath}/.git" 2>/dev/null && git -C "${sitePath}" log --oneline -5 2>/dev/null; true`);
+
+    // 解析 ① ④
+    const parseFindLines = (s: string) => (s || "")
+      .split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("ERR:"))
+      .map((l) => { const [p, b] = l.split("\t"); return { path: p, bytes: Number(b || 0) }; })
+      .filter((x) => x.path);
+
+    const localBackups = parseFindLines(raw.local_backups).map((x) => `${x.path} (${x.bytes}B)`);
+
+    // 逐个读本站 js，看含不含渲染代码
+    const dataFiles: SiteBackupProbe["data_files"] = [];
+    for (const f of parseFindLines(raw.site_js).slice(0, 12)) {
+      try {
+        const content = await sftpReadFile(sftp, f.path);
+        dataFiles.push({ path: f.path, bytes: content.length, has_renderer: looksLikeRenderer(content) });
+      } catch { /* 读不到就跳过 */ }
+    }
+
+    // ⑥ 同模板的别的站：按「首页引用的脚本相对路径」去其它站找同名文件
+    const siblings: SiteBackupProbe["sibling_candidates"] = [];
+    try {
+      const siteRootParent = sitePath.replace(/\/[^/]+$/, "");
+      const relPaths = [...new Set(dataFiles.map((d) => d.path.replace(`${sitePath}/`, "")))];
+      const others = (await execCommand(client, `ls -1 "${siteRootParent}" 2>/dev/null | head -60; true`))
+        .split("\n").map((s) => s.trim()).filter((s) => s && s !== domain);
+      for (const other of others.slice(0, 50)) {
+        for (const rel of relPaths) {
+          try {
+            const content = await sftpReadFile(sftp, `${siteRootParent}/${other}/${rel}`);
+            if (looksLikeRenderer(content) && checkJsSyntax(content).ok) {
+              siblings.push({ site: other, path: rel, bytes: content.length, has_renderer: true });
+            }
+          } catch { /* 该站没有这个文件 */ }
+        }
+      }
+    } catch { /* 列不出兄弟站就算了 */ }
+
+    client.end();
+    return {
+      local_backups: localBackups,
+      backup_dirs: (raw.backup_dirs || "").split("\n").map((s) => s.trim()).filter(Boolean).slice(0, 20),
+      data_files: dataFiles,
+      sibling_candidates: siblings.slice(0, 20),
+      raw,
+    };
+  } catch (err) {
+    client?.end();
+    throw err;
+  }
+}
