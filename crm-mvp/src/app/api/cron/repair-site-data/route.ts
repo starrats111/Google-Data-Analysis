@@ -145,6 +145,66 @@ async function scanSite(domain: string): Promise<ScanVerdict> {
   return { home, verdict: "ok", live_entries: entries };
 }
 
+/**
+ * 从公网取该站首页加载的脚本，解析出条目（id / slug / 日期）。
+ *
+ * 截断的文件也要能解析出前半截 —— 差额比对正是在这种文件上做的，
+ * 所以不能靠 JSON.parse 整体解析，改成逐条正则抽取。
+ */
+async function fetchLiveEntries(
+  domain: string,
+): Promise<Array<{ id: string; slug: string; date: string }>> {
+  let html = "";
+  try {
+    const r = await fetch(`https://${domain}/`, {
+      redirect: "follow",
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    if (!r.ok) return [];
+    html = await r.text();
+  } catch {
+    return [];
+  }
+
+  const srcs: string[] = [];
+  const re = /<script[^>]+src=["']([^"']+)["']/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    const raw = m[1];
+    if (/^https?:\/\//i.test(raw) || raw.startsWith("//")) continue;
+    srcs.push(raw.replace(/^\.?\//, "").split("?")[0]);
+  }
+
+  const entries: Array<{ id: string; slug: string; date: string }> = [];
+  for (const src of srcs) {
+    let js = "";
+    try {
+      const r = await fetch(`https://${domain}/${src}`, {
+        redirect: "follow",
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      });
+      if (!r.ok) continue;
+      js = await r.text();
+    } catch {
+      continue;
+    }
+    // 逐条抽取：每个 {...} 片段里取 id / slug / dateISO|date
+    const objRe = /\{[^{}]*?"id"\s*:\s*"?([^",}]+)"?[^{}]*?\}/g;
+    let om: RegExpExecArray | null;
+    while ((om = objRe.exec(js)) !== null) {
+      const chunk = om[0];
+      const slug = /"slug"\s*:\s*"([^"]*)"/.exec(chunk)?.[1] || "";
+      const date = /"dateISO"\s*:\s*"([^"]*)"/.exec(chunk)?.[1]
+        || /"date"\s*:\s*"(\d{4}-\d{2}-\d{2})"/.exec(chunk)?.[1]
+        || "";
+      entries.push({ id: String(om[1]).trim(), slug, date });
+    }
+  }
+  // 同一条可能在多个脚本里都有，按 id 去重
+  const seen = new Set<string>();
+  return entries.filter((e) => (seen.has(e.id) ? false : (seen.add(e.id), true)));
+}
+
 export async function GET(req: NextRequest) {
   if (!verifyCron(req)) {
     return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
@@ -162,8 +222,58 @@ export async function GET(req: NextRequest) {
     const limit = Math.max(0, parseInt(url.searchParams.get("limit") || "0", 10) || 0);
     const allowShrink = url.searchParams.get("allow_shrink") === "1";
 
-    if (!["scan", "dry", "apply"].includes(mode)) {
-      return NextResponse.json({ ok: false, error: "mode 只能是 scan / dry / apply" }, { status: 400 });
+    if (!["scan", "dry", "apply", "diff"].includes(mode)) {
+      return NextResponse.json({ ok: false, error: "mode 只能是 scan / dry / apply / diff" }, { status: 400 });
+    }
+
+    // D-370 mode=diff：只读。把线上文件里的条目和库里的已发布文章逐条比，
+    // 列出「线上有、库里没有」的那批（= 按库重建会丢掉的），并按发布月份汇总。
+    // 这是回答「差额里有没有近一个月的文章」唯一可靠的办法 ——
+    // 看线上条目的月份分布不行，那是全部条目，不是差额那批。
+    if (mode === "diff") {
+      const out: unknown[] = [];
+      let sites2 = await prisma.publish_sites.findMany({
+        where: { is_deleted: 0, status: "active" },
+        select: { id: true, domain: true, site_path: true, data_js_path: true },
+        orderBy: { id: "asc" },
+      });
+      if (only) sites2 = sites2.filter((s) => s.domain.toLowerCase().includes(only));
+
+      for (const s of sites2) {
+        const live = await fetchLiveEntries(s.domain);
+        if (live.length === 0) {
+          out.push({ domain: s.domain, error: "线上取不到条目" });
+          continue;
+        }
+        const dbRows = await prisma.articles.findMany({
+          where: { publish_site_id: s.id, is_deleted: 0, status: "published" },
+          select: { id: true, slug: true, published_at: true },
+        });
+        const dbIds = new Set(dbRows.map((r) => String(r.id)));
+        const dbSlugs = new Set(dbRows.map((r) => (r.slug || "").toLowerCase()).filter(Boolean));
+
+        const surplus = live.filter((e) =>
+          !dbIds.has(String(e.id)) && !dbSlugs.has((e.slug || "").toLowerCase()));
+
+        const byMonth: Record<string, number> = {};
+        for (const e of surplus) {
+          const mm = (e.date || "").slice(0, 7) || "未知";
+          byMonth[mm] = (byMonth[mm] || 0) + 1;
+        }
+        const cutoff = new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10);
+        const recent = surplus.filter((e) => (e.date || "") >= cutoff);
+
+        out.push({
+          domain: s.domain,
+          live_entries: live.length,
+          db_articles: dbRows.length,
+          surplus_count: surplus.length,
+          surplus_by_month: byMonth,
+          surplus_recent_30d: recent.length,
+          recent_samples: recent.slice(0, 10).map((e) => ({ id: e.id, slug: e.slug, date: e.date })),
+        });
+      }
+      return NextResponse.json({ ok: true, mode, elapsed_ms: Date.now() - startedAt, results: out });
     }
 
     let sites = await prisma.publish_sites.findMany({

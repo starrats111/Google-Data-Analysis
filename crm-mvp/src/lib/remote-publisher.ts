@@ -3269,6 +3269,50 @@ async function resolveBrokenDataPath(
   return null;
 }
 
+/**
+ * D-370：该站首页加载的脚本里，除了待修的那个数据文件，还有没有**能用的渲染器**。
+ *
+ * 用于「把数据文件修成裸数据」之前的前提检查。allurahub.top / vitahaven.click
+ * 满足前提（渲染器在完好的 js/main.js 里），bloomroots.top 不满足
+ * （两个脚本都是纯数据，渲染器在被截断的尾部、源码已丢）。
+ *
+ * 「能用」= 语法可编译 **且** 含 DOM 写入代码。只看其中一条都不够：
+ * 坏的脚本即便含渲染代码也跑不起来；合法的纯数据文件不会渲染任何东西。
+ */
+async function siteHasWorkingRenderer(
+  sftp: SFTPWrapper,
+  site: SiteConfig,
+  excludePath: string,
+): Promise<boolean> {
+  let indexHtml = "";
+  try {
+    indexHtml = await sftpReadFile(sftp, `${site.site_path}/index.html`);
+  } catch {
+    return false;
+  }
+
+  // 首页内联脚本里也可能写着渲染器
+  const inlineRe = /<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi;
+  let im: RegExpExecArray | null;
+  while ((im = inlineRe.exec(indexHtml)) !== null) {
+    if (looksLikeRenderer(im[1]) && checkJsSyntax(im[1]).ok) return true;
+  }
+
+  const srcRe = /<script[^>]+src=["']([^"']+)["']/gi;
+  let m: RegExpExecArray | null;
+  while ((m = srcRe.exec(indexHtml)) !== null) {
+    const raw = m[1];
+    if (/^https?:\/\//i.test(raw) || raw.startsWith("//")) continue;
+    const rel = raw.replace(/^\.?\//, "").split("?")[0];
+    if (rel === excludePath) continue;
+    try {
+      const content = await sftpReadFile(sftp, `${site.site_path}/${rel}`);
+      if (looksLikeRenderer(content) && checkJsSyntax(content).ok) return true;
+    } catch { /* 取不到就当没有 */ }
+  }
+  return false;
+}
+
 /** 读出该文件里实际使用的数组变量名（库里登记的可能和文件里的不一致） */
 async function detectVarNameForPath(
   sftp: SFTPWrapper,
@@ -3505,9 +3549,28 @@ export async function repairSiteDataFile(
           client.end();
           return result;
         } else {
-          // 非 A1 且原文件本就只装数据（渲染器在别的脚本里，且那个脚本是好的）
-          // —— 重建成纯数据文件是正确的。allurahub.top / vitahaven.click 属此类：
-          // 坏的 articles-index.js 是纯数据，渲染器在完好的 js/main.js 里。
+          // 非 A1 且原文件本就只装数据 —— 重建成纯数据文件通常是正确的：
+          // allurahub.top / vitahaven.click 属此类，坏的 articles-index.js 是纯数据，
+          // 渲染器在完好的 js/main.js 里。
+          //
+          // 但有个前提必须查：**该站首页得确实还有一个带渲染器的好脚本**。
+          // bloomroots.top 的反例：它首页加载 articles-index.js + script.js，两个都是
+          // 纯数据（script.js 是 `const articlesData = [...]`，残存的 427KB 里一处
+          // 渲染代码都没有），渲染器整段在被截掉的尾部、源码已丢。
+          // 这种站把数据文件修成合法裸数据，首页依然白屏，而且连渲染器残骸都没了、
+          // 再也无从追溯 —— 等于把「坏」变成「坏且不可考」。
+          const hasLiveRenderer = await siteHasWorkingRenderer(sftp, site, dataJsPath);
+          if (!hasLiveRenderer) {
+            result.action = "failed";
+            result.error =
+              `该站首页加载的脚本里找不到任何可用的渲染器：${dataJsPath} 是纯数据，`
+              + `其余脚本也没有渲染代码（渲染器很可能在被截断的尾部、源码已丢）。`
+              + `已拒绝执行：把数据文件修成合法裸数据并不能让首页出内容，`
+              + `反而会抹掉现存的残骸、再也无从追溯。`
+              + `需人工决定：从备份或 git 找回该站渲染器，或整站改造为 A1 架构。`;
+            client.end();
+            return result;
+          }
           mainJs = `${buildArrayAssignmentStatement(varName, entries)}\n`;
         }
       }
@@ -3540,4 +3603,112 @@ export async function repairSiteDataFile(
       return result;
     }
   });
+}
+
+// ─── D-370 只读：找站点渲染器的备份副本 ──────────────────────────────────────
+//
+// bloomroots.top / novanest.one 的渲染器随数据文件一起被截断丢掉了，库里没有源码。
+// 这个函数去站群机上找还有没有能捞回模板的副本：发布链路自己留的 .bak、
+// D-319 重建时留的备份目录、以及同模板的**别的站**（最有价值——同一套模板的站
+// 如果没坏，直接从它那里取渲染器就行）。
+//
+// 只读：只跑固定的 find / ls / head，不写不删。domain 已在路由层按域名字符校验过。
+
+export interface SiteBackupProbe {
+  /** 本站目录下的 .bak / .backup 等副本 */
+  local_backups: string[];
+  /** 站群机上常见的备份目录命中项 */
+  backup_dirs: string[];
+  /** 本站数据文件现状（路径 + 字节数 + 是否含渲染代码） */
+  data_files: Array<{ path: string; bytes: number; has_renderer: boolean }>;
+  /** 同模板的其它站（它们的同名文件若完好，可直接取渲染器） */
+  sibling_candidates: Array<{ site: string; path: string; bytes: number; has_renderer: boolean }>;
+  /** 原样保留的命令输出，便于人工判断 */
+  raw: Record<string, string>;
+}
+
+export async function probeSiteBackups(sitePath: string, domain: string): Promise<SiteBackupProbe> {
+  let client: Client | null = null;
+  try {
+    client = await connectSSH();
+    const sftp = await getSFTP(client);
+    const raw: Record<string, string> = {};
+
+    const run = async (key: string, cmd: string) => {
+      try {
+        raw[key] = (await execCommand(client as Client, cmd)).slice(0, 4000);
+      } catch (e) {
+        raw[key] = `ERR: ${e instanceof Error ? e.message.slice(0, 200) : String(e)}`;
+      }
+    };
+
+    // ① 本站目录下的备份副本
+    await run("local_backups",
+      `find "${sitePath}" -maxdepth 3 -type f \( -name "*.bak" -o -name "*.backup" -o -name "*.orig" -o -name "*~" \) -printf "%p\t%s\n" 2>/dev/null | head -40; true`);
+
+    // ② 站群机上可能的备份目录（D-319 重建时提到过 _mv*_backup 这类）
+    await run("backup_dirs",
+      `ls -d /home/ubuntu/*backup* /home/ubuntu/backup* /www/backup* /root/*backup* 2>/dev/null | head -20; `
+      + `find /home/ubuntu -maxdepth 2 -type d -name "*backup*" 2>/dev/null | head -20; true`);
+
+    // ③ 备份目录里有没有这个站
+    await run("backup_has_site",
+      `find /home/ubuntu /www/backup -maxdepth 4 -path "*${domain}*" 2>/dev/null | head -30; true`);
+
+    // ④ 本站现有的 js 文件清单
+    await run("site_js",
+      `find "${sitePath}" -maxdepth 3 -name "*.js" -printf "%p\t%s\n" 2>/dev/null | head -40; true`);
+
+    // ⑤ git 仓库（有的站是从 git 部署的，模板能从历史里取）
+    await run("git",
+      `ls -d "${sitePath}/.git" 2>/dev/null && git -C "${sitePath}" log --oneline -5 2>/dev/null; true`);
+
+    // 解析 ① ④
+    const parseFindLines = (s: string) => (s || "")
+      .split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("ERR:"))
+      .map((l) => { const [p, b] = l.split("\t"); return { path: p, bytes: Number(b || 0) }; })
+      .filter((x) => x.path);
+
+    const localBackups = parseFindLines(raw.local_backups).map((x) => `${x.path} (${x.bytes}B)`);
+
+    // 逐个读本站 js，看含不含渲染代码
+    const dataFiles: SiteBackupProbe["data_files"] = [];
+    for (const f of parseFindLines(raw.site_js).slice(0, 12)) {
+      try {
+        const content = await sftpReadFile(sftp, f.path);
+        dataFiles.push({ path: f.path, bytes: content.length, has_renderer: looksLikeRenderer(content) });
+      } catch { /* 读不到就跳过 */ }
+    }
+
+    // ⑥ 同模板的别的站：按「首页引用的脚本相对路径」去其它站找同名文件
+    const siblings: SiteBackupProbe["sibling_candidates"] = [];
+    try {
+      const siteRootParent = sitePath.replace(/\/[^/]+$/, "");
+      const relPaths = [...new Set(dataFiles.map((d) => d.path.replace(`${sitePath}/`, "")))];
+      const others = (await execCommand(client, `ls -1 "${siteRootParent}" 2>/dev/null | head -60; true`))
+        .split("\n").map((s) => s.trim()).filter((s) => s && s !== domain);
+      for (const other of others.slice(0, 50)) {
+        for (const rel of relPaths) {
+          try {
+            const content = await sftpReadFile(sftp, `${siteRootParent}/${other}/${rel}`);
+            if (looksLikeRenderer(content) && checkJsSyntax(content).ok) {
+              siblings.push({ site: other, path: rel, bytes: content.length, has_renderer: true });
+            }
+          } catch { /* 该站没有这个文件 */ }
+        }
+      }
+    } catch { /* 列不出兄弟站就算了 */ }
+
+    client.end();
+    return {
+      local_backups: localBackups,
+      backup_dirs: (raw.backup_dirs || "").split("\n").map((s) => s.trim()).filter(Boolean).slice(0, 20),
+      data_files: dataFiles,
+      sibling_candidates: siblings.slice(0, 20),
+      raw,
+    };
+  } catch (err) {
+    client?.end();
+    throw err;
+  }
 }
