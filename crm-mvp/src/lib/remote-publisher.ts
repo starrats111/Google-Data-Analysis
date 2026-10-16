@@ -8,7 +8,7 @@ import { Client, SFTPWrapper } from "ssh2";
 import JSON5 from "json5";
 import { getBtSshConfig } from "@/lib/system-config";
 import { ARTICLE_HYPERLINK_STYLE_BLOCK, cleanArticleContent, emphasizeArticleHyperlinks } from "@/lib/sanitize";
-import { withSiteLock, writeJsDataFileGuarded, isJsDataFile, checkJsSyntax, isDataOnly, hasRenderer, looksLikeRenderer } from "@/lib/site-write-guard";
+import { withSiteLock, writeJsDataFileGuarded, isJsDataFile, checkJsSyntax, isDataOnly, hasRenderer, looksLikeRenderer, findMissingGlobalsWithKind } from "@/lib/site-write-guard";
 import { buildNovanestScriptsJs } from "@/lib/site-templates/novanest-renderer";
 import { probeRenderedContent } from "@/lib/site-render-probe";
 
@@ -3488,7 +3488,16 @@ export async function repairSiteDataFile(
       //   ② 语法合法但渲染器被抹掉（parcelnplate.top 形态）——只对 A1 文件适用，
       //      非 A1 的纯数据文件本来就没有渲染器，不算损坏
       const rendererGone = isA1DataFile(dataJsPath, varName) && isDataOnly(raw);
-      const broken = !syntax.ok || rendererGone;
+
+      // D-370 第三类：文件本身没问题，但首页渲染不出内容（变量名对不上 /
+      // 容器名不符 / 渲染器缺依赖）。前两类判据对它全是绿的，所以这里必须
+      // 把「首页到底渲不渲得出来」也作为「要不要修」的依据 ——
+      // 否则 vitahaven / aura-bloom / thegoodsandguard 这类站会被报 skipped_healthy，
+      // 修复请求直接跳过（实测踩过）。
+      const pre = await verifyHomepageRenders(sftp, site);
+      const blankHomepage = !pre.rendered;
+
+      const broken = !syntax.ok || rendererGone || blankHomepage;
 
       result.before = {
         bytes: raw.length,
@@ -3497,7 +3506,9 @@ export async function repairSiteDataFile(
           ? `截断/语法损坏：${syntax.line ? `第 ${syntax.line} 行：` : ""}${syntax.error}`
           : rendererGone
             ? "渲染器被抹掉：只有数据、无渲染器，语法合法但首页白屏"
-            : undefined,
+            : blankHomepage
+              ? `文件完好但首页渲染不出内容：${pre.detail}`
+              : undefined,
         parsed_entries: parsed ? parsed.length : null,
       };
 
@@ -3874,34 +3885,70 @@ async function buildRendererVarBridge(
   }
 
   const srcRe = /<script[^>]+src=["']([^"']+)["']/gi;
-  const needed = new Set<string>();
+  const renderers: string[] = [];
+  const allScripts: string[] = [];
   let m: RegExpExecArray | null;
   while ((m = srcRe.exec(indexHtml)) !== null) {
     const raw = m[1];
     if (/^https?:\/\//i.test(raw) || raw.startsWith("//")) continue;
     const rel = raw.replace(/^\.?\//, "").split("?")[0];
-    if (rel === dataJsPath) continue;
 
     let content = "";
     try {
       content = await sftpReadFile(sftp, `${site.site_path}/${rel}`);
     } catch { continue; }
-    if (!looksLikeRenderer(content)) continue;
+    if (rel !== dataJsPath) allScripts.push(content);
+    if (rel !== dataJsPath && looksLikeRenderer(content)) renderers.push(content);
+  }
 
-    // 渲染器引用了候选名、而且自己没声明它 → 它指望别处提供这个全局
+  // D-370：这里曾写成 `\b...` —— 模板字符串会把 \b 当成**退格字符**（码 8），
+  // 不是正则的词边界，于是永远匹配不上、桥接一直没生效（实测字符码确认）。
+  // 模板串里要写正则转义必须双反斜杠。
+  const isDeclaredAnywhere = (name: string) =>
+    allScripts.some((c) => new RegExp(`(?:const|var|let)\\s+${escapeRegExp(name)}\\s*=`).test(c));
+
+  const needed = new Set<string>();
+  for (const content of renderers) {
+    // ① 固定候选名（数据条目数组本身，如 articles / posts）：补成 declaredVar 的别名
     for (const cand of HOMEPAGE_INDEX_VAR_NAMES) {
       if (cand === declaredVar || cand.includes(".")) continue;
-      const used = new RegExp(`\b${escapeRegExp(cand)}\b`).test(content);
-      const declared = new RegExp(`(?:const|var|let)\s+${escapeRegExp(cand)}\s*=`).test(content);
-      if (used && !declared) needed.add(cand);
+      const used = new RegExp(`\\b${escapeRegExp(cand)}\\b`).test(content);
+      if (used && !isDeclaredAnywhere(cand)) needed.add(cand);
     }
   }
 
-  if (needed.size === 0) return "";
+  // ② 渲染器依赖的**其它**全局（不是文章数组本身，比如分类名查表、商品列表）——
+  //    实测 vitasphere.top / quiblo.top：这些声明在站点另一个数据文件里
+  //    （js/data.js / data.js），但首页压根没引用那个文件。
+  //    01 的决定：不引入那份演示数据，渲染器缺的东西补成空壳就好——
+  //    两站的渲染代码对空数组/空对象都有专门的「没有内容」兜底文案，
+  //    不会崩、也不会把演示商品带上线。
+  //
+  //    用 findMissingGlobalsWithKind 而不是在这里现写一套：早期版本自己写过
+  //    一次，只认 const/var/let 声明，把函数参数（entries）、箭头函数参数（a）、
+  //    模板字符串里的英文单词（"reviews" 这种普通词被 `[...]` 索引正则误抓）
+  //    全部误判成缺失全局，拿线上真实文件跑才发现的。
+  const stubs = findMissingGlobalsWithKind(
+    renderers.map((content) => ({ content })),
+    allScripts.map((content) => ({ content })),
+    new Set([declaredVar, ...needed, ...HOMEPAGE_INDEX_VAR_NAMES.filter((n) => !n.includes("."))]),
+  );
+
+  if (needed.size === 0 && stubs.size === 0) return "";
   const lines = [...needed].map(
     (n) => `var ${n} = ${declaredVar};  // D-370：渲染器读的是 ${n}，数据声明的是 ${declaredVar}`,
   );
-  console.log(`[D-370] ${site.domain}：补桥接别名 ${[...needed].join(", ")} → ${declaredVar}`);
+  for (const [n, kind] of stubs) {
+    lines.push(
+      `var ${n} = ${kind === "array" ? "[]" : "{}"};  `
+      + `// D-370：渲染器用到 ${n} 但全站没有文件声明它（原本在未被首页引用的数据文件里）；`
+      + `01 决定不引入那份数据，留空，渲染器对空值有兜底文案`,
+    );
+  }
+  console.log(
+    `[D-370] ${site.domain}：补桥接 ${[...needed].join(", ") || "无"}`
+    + `${stubs.size ? `，补空壳 ${[...stubs.keys()].join(", ")}` : ""}`,
+  );
   return `\n// D-370 自动补的变量桥接：首页的渲染脚本读下面这些名字，\n`
     + `// 而本文件声明的是 ${declaredVar}。不补的话渲染器会 ReferenceError、首页空白。\n`
     + lines.join("\n") + "\n";

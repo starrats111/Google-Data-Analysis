@@ -203,12 +203,45 @@ export function looksLikeRenderer(source: string): boolean {
  * @param scripts 首页加载的全部本站脚本（路径 + 内容）
  * @returns 对不上的变量名列表；空数组表示没问题
  */
-export function findUnresolvedArrayVars(
-  scripts: Array<{ path: string; content: string }>,
-): string[] {
-  // ① 收集所有被声明过的标识符。
-  //    不只看数组声明 —— 任何 const/var/let/function/参数/类 都算「有定义」，
-  //    否则会把局部变量误报成缺失。
+/**
+ * 收集一批脚本里所有被声明过的标识符（变量、函数、形参、解构、循环变量……）。
+ * 抽成独立函数是因为 `findUnresolvedArrayVars` 和 `findMissingGlobals` 都要用，
+ * 两处逻辑不一致的话一边漏报一边误报，之前就是分开写导致 vitasphere.top 的
+ * `blogPosts`/`featuredProducts` 之类真缺失和 `entries`/`a` 之类的箭头函数参数
+ * 分不清楚。
+ */
+/**
+ * 收集真正可能是「模块级全局」的赋值名：const/var/let 声明、window.X 赋值、
+ * 解构声明。不含函数形参、箭头函数参数、catch 变量、for...of/in 循环变量 ——
+ * 那些只在各自作用域内有效，不构成「别处引用这个名字也安全」的证据。
+ * 专供 findMissingGlobalsWithKind 使用；collectDeclaredIdentifiers 是给
+ * findUnresolvedArrayVars 用的更宽松版本（后者只要判断渲染器内部引用会不会
+ * ReferenceError，形参确实会遮蔽，纳入是对的）。
+ */
+function collectTopLevelAssignments(scripts: Array<{ content: string }>): Set<string> {
+  const declared = new Set<string>();
+  for (const s of scripts) {
+    for (const m of s.content.matchAll(/(?:const|var|let)\s+([A-Za-z_$][\w$]*)/g)) declared.add(m[1]);
+    for (const m of s.content.matchAll(/function\s+([A-Za-z_$][\w$]*)/g)) declared.add(m[1]);
+    for (const m of s.content.matchAll(/window\.([A-Za-z_$][\w$]*)\s*=/g)) declared.add(m[1]);
+    for (const m of s.content.matchAll(/class\s+([A-Za-z_$][\w$]*)/g)) declared.add(m[1]);
+    for (const m of s.content.matchAll(/(?:const|var|let)\s*\{([^}]*)\}\s*=/g)) {
+      for (const p of m[1].split(",")) {
+        const name = p.trim().split(/[:=\s]/)[0];
+        if (/^[A-Za-z_$][\w$]*$/.test(name)) declared.add(name);
+      }
+    }
+    for (const m of s.content.matchAll(/(?:const|var|let)\s*\[([^\]]*)\]\s*=/g)) {
+      for (const p of m[1].split(",")) {
+        const name = p.trim().split(/[=\s]/)[0];
+        if (/^[A-Za-z_$][\w$]*$/.test(name)) declared.add(name);
+      }
+    }
+  }
+  return declared;
+}
+
+export function collectDeclaredIdentifiers(scripts: Array<{ content: string }>): Set<string> {
   const declared = new Set<string>();
   for (const s of scripts) {
     for (const m of s.content.matchAll(/(?:const|var|let)\s+([A-Za-z_$][\w$]*)/g)) declared.add(m[1]);
@@ -216,16 +249,24 @@ export function findUnresolvedArrayVars(
     for (const m of s.content.matchAll(/window\.([A-Za-z_$][\w$]*)\s*=/g)) declared.add(m[1]);
     for (const m of s.content.matchAll(/class\s+([A-Za-z_$][\w$]*)/g)) declared.add(m[1]);
     // 函数形参：function f(a, b) / (a, b) =>
+    //
+    // 用「从每个参数片段里抠出第一个标识符」而不是要求整段匹配 ^标识符$ ——
+    // 嵌套括号的调用（比如 `new IntersectionObserver((entries) => {...})`）会让
+    // `\(([^)]*)\)\s*=>` 把外层的 `(` 也吞进捕获组，分到的第一段参数就变成
+    // `"(entries"`，整段匹配 /^[A-Za-z_$][\w$]*$/ 会判它不是合法标识符而丢弃，
+    // `entries` 就被误判成「全站没声明的全局」。实测 quiblo.top 的
+    // IntersectionObserver 回调就是这个形态。
+    const firstIdentifier = (s: string) => s.match(/[A-Za-z_$][\w$]*/)?.[0];
     for (const m of s.content.matchAll(/function\s*[A-Za-z_$\w$]*\s*\(([^)]*)\)/g)) {
       for (const p of m[1].split(",")) {
-        const name = p.trim().split(/[=\s]/)[0].replace(/^\.\.\./, "");
-        if (/^[A-Za-z_$][\w$]*$/.test(name)) declared.add(name);
+        const name = firstIdentifier(p.trim().split(/[=\s]/)[0].replace(/^\.\.\./, ""));
+        if (name) declared.add(name);
       }
     }
     for (const m of s.content.matchAll(/\(([^)]*)\)\s*=>/g)) {
       for (const p of m[1].split(",")) {
-        const name = p.trim().split(/[=\s]/)[0].replace(/^\.\.\./, "");
-        if (/^[A-Za-z_$][\w$]*$/.test(name)) declared.add(name);
+        const name = firstIdentifier(p.trim().split(/[=\s]/)[0].replace(/^\.\.\./, ""));
+        if (name) declared.add(name);
       }
     }
     for (const m of s.content.matchAll(/([A-Za-z_$][\w$]*)\s*=>/g)) declared.add(m[1]);
@@ -251,10 +292,17 @@ export function findUnresolvedArrayVars(
       declared.add(m[1]);
     }
   }
+  return declared;
+}
 
-  // ② 在渲染器里找「当数组用」的标识符，不依赖固定名单 ——
-  //    这是关键：vitasphere.top 的渲染器读 `blogArticles`，不在任何预设表里，
-  //    固定名单那版判据直接漏掉了它（01 发现该站首页仍然空白）。
+export function findUnresolvedArrayVars(
+  scripts: Array<{ path: string; content: string }>,
+): string[] {
+  const declared = collectDeclaredIdentifiers(scripts);
+
+  // 在渲染器里找「当数组用」的标识符，不依赖固定名单 ——
+  // 这是关键：vitasphere.top 的渲染器读 `blogArticles`，不在任何预设表里，
+  // 固定名单那版判据直接漏掉了它（01 发现该站首页仍然空白）。
   const patterns = [
     // 直接调数组方法：articles.filter(...)
     /\b([A-Za-z_$][\w$]*)\s*\.(?:slice|filter|forEach|map|sort|find|concat|reduce)\s*\(/g,
@@ -278,6 +326,57 @@ export function findUnresolvedArrayVars(
     }
   }
   return [...missing];
+}
+
+/**
+ * D-370：找出渲染器引用、但全部脚本（渲染器自身也算）都没声明的全局，
+ * 并推断该补成空数组还是空对象。
+ *
+ * 用于「渲染器依赖的另一个全局本该来自某个数据文件，但那个文件没被首页引用」
+ * 这一类（vitasphere.top 的 products/categoryNames、quiblo.top 的
+ * featuredProducts/blogPosts 都在未被引用的 data.js 里）。01 的决定是不引入
+ * 那份演示数据，渲染器缺的东西补成空壳 —— 两站的渲染代码对空数组/空对象都有
+ * 专门的「没有内容」兜底文案，不会崩、也不会把演示数据带上线。
+ *
+ * 复用 collectDeclaredIdentifiers 而不是另写一套判断：早期版本把这块逻辑
+ * 单独写过一次，没认函数参数/解构，把 `(entries) => {...}` 的形参、
+ * `.sort((a, b) => ...)` 的 a、以及模板字符串里 "reviews" 这种英文词，
+ * 全部误判成「缺失全局」（实测跑过线上文件才发现）。
+ */
+export function findMissingGlobalsWithKind(
+  renderers: Array<{ content: string }>,
+  allScripts: Array<{ content: string }>,
+  skip: Set<string> = new Set(),
+): Map<string, "array" | "object"> {
+  // 不用 collectDeclaredIdentifiers：它把函数/箭头函数的**形参**也算「已声明」，
+  // 这对 findUnresolvedArrayVars 是对的（形参在自己函数体内确实遮蔽了外部同名
+  // 全局，内部引用不会报错），但对这里要找的问题是错的 —— 这里要判断的是
+  // 「有没有任何地方真的给过这个全局赋值」，形参只在自己函数作用域内有效，
+  // 不能证明文件别处用到的同名全局已经存在。
+  //
+  // 实测踩过：vitasphere.top 的 `function renderProducts(products) {...}` 把
+  // products 声明成形参，于是误判「products 全文件已声明」，漏掉了另一个函数
+  // `let filteredProducts = products;` 里那处真正未定义的模块级 products。
+  const declared = collectTopLevelAssignments(allScripts);
+  const stubs = new Map<string, "array" | "object">();
+
+  for (const r of renderers) {
+    // 负向后顾 `(?<![.\w$])` 排除属性访问：`product.reviews.map(...)` 里 `reviews`
+    // 前面紧跟一个 `.`，它是 product 的属性，不是全局变量——没有这条会把
+    // `reviews`/`reviewCount` 这类属性名误判成「全站没声明的全局」
+    // （quiblo.top 的 `${product.reviews.map(...)}` 实测踩过）。
+    for (const m of r.content.matchAll(/(?<![.\w$])([A-Za-z_$][\w$]*)\s*\.(?:filter|forEach|map|length|slice|find|sort|concat|reduce)\b/g)) {
+      const n = m[1];
+      if (declared.has(n) || skip.has(n) || BUILTIN_GLOBALS.has(n)) continue;
+      stubs.set(n, "array");
+    }
+    for (const m of r.content.matchAll(/(?<![.\w$])([A-Za-z_$][\w$]*)\s*\[[A-Za-z_$][\w$.]*\]/g)) {
+      const n = m[1];
+      if (declared.has(n) || skip.has(n) || BUILTIN_GLOBALS.has(n) || stubs.has(n)) continue;
+      stubs.set(n, "object");
+    }
+  }
+  return stubs;
 }
 
 /** 内置/宿主全局，用成数组方法的接收者也不算缺失 */
