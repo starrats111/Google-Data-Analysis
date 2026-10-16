@@ -226,8 +226,16 @@ describe("D-370 重建时的渲染器归属判定", () => {
 });
 
 describe("D-370 线上条目数估算（shrink 闸门的输入）", () => {
+  // 朴素计数（闸门原先用的，会被重复条目骗到）
   const countEntries = (raw: string) =>
     (raw.match(/"id"\s*:/g) || []).length || (raw.match(/\bid\s*:/g) || []).length;
+
+  // 去重计数（闸门现在用的）
+  const countUniqueEntries = (raw: string) => {
+    const s = new Set([...raw.matchAll(/"id"\s*:\s*"?([^",}]+)"?/g)].map((m) => String(m[1]).trim()));
+    return s.size
+      || new Set([...raw.matchAll(/\bid\s*:\s*"?([^",}\s]+)"?/g)].map((m) => String(m[1]).trim())).size;
+  };
 
   it("数得出带引号的紧凑条目（增量插入产出的格式）", () => {
     const raw = 'const posts = [\n  {"id":"1"},\n  {"id":"2"},\n  {"id":"3"}\n];';
@@ -247,6 +255,28 @@ describe("D-370 线上条目数估算（shrink 闸门的输入）", () => {
   it("截断的文件也能数出前半截 —— 闸门正是要在这种文件上生效", () => {
     const raw = 'const posts = [\n  {"id":"1"},\n  {"id":"2"},\n  {"id":"3","slug":"trunc';
     assert.equal(countEntries(raw), 3);
+  });
+
+  it("重复条目必须去重后再数 —— 否则闸门误报", () => {
+    // 实测：allurahub.top 566 次 "id:" 出现、去重后只有 307 个唯一 id（库里正好 307 篇）；
+    // everydaynes.top 304 次 → 169 个（库里 170）。那些"多出来"的是同一篇被反复追加
+    // （D-370 那条 bug 的产物：截断后 removeArticleEntriesByIdentity 解析失败、
+    // `|| content` 原样返回，旧条目没被移除就又插了一条）。
+    // 不去重就会把这两个站误判成「库里比站上少 40% 以上」拦下来 —— 实际踩过。
+    // 用 allurahub.top 的真实比例做样本：3 篇文章，其中 2 篇各重复一次 → 5 次出现、3 个唯一
+    // （线上是 307 唯一 / 566 次出现，比例 0.54，正好跌破 0.6 阈值）
+    const dup = 'const posts = [\n  {"id":"1"},\n  {"id":"2"},\n  {"id":"1"},\n  {"id":"2"},\n  {"id":"3"}\n];';
+    assert.equal(countEntries(dup), 5, "朴素计数会数成 5");
+    assert.equal(countUniqueEntries(dup), 3, "去重后是 3");
+
+    // 闸门应当用去重后的数字。阈值是 db < live*0.6：
+    //   朴素 live=5 → 3 < 3.0 为假，这个小样本恰好擦边不触发；
+    //   放大到线上真实量级才看得出差别，所以直接用线上数字断言。
+    const shrinks = (db: number, live: number) => live > 0 && db < live * 0.6;
+    assert.equal(shrinks(307, 566), true, "allurahub 用朴素计数会被误拦");
+    assert.equal(shrinks(307, 307), false, "用去重计数不拦（正确）");
+    assert.equal(shrinks(170, 304), true, "everydaynes 用朴素计数会被误拦");
+    assert.equal(shrinks(170, 169), false, "用去重计数不拦（正确）");
   });
 
   it("空数组数出 0 —— 此时走 0 篇那条拒绝，不走 shrink 闸门", () => {
