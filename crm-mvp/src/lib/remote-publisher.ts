@@ -9,6 +9,7 @@ import JSON5 from "json5";
 import { getBtSshConfig } from "@/lib/system-config";
 import { ARTICLE_HYPERLINK_STYLE_BLOCK, cleanArticleContent, emphasizeArticleHyperlinks } from "@/lib/sanitize";
 import { withSiteLock, writeJsDataFileGuarded, isJsDataFile, checkJsSyntax, isDataOnly, hasRenderer, looksLikeRenderer } from "@/lib/site-write-guard";
+import { buildNovanestScriptsJs } from "@/lib/site-templates/novanest-renderer";
 
 // ─── 网站架构类型常量（与 Python 后端一致）───
 export const SITE_TYPES = {
@@ -3551,7 +3552,15 @@ export async function repairSiteDataFile(
           // 那会把该站的专有模板换成 A1 那套，页面结构、容器 id、配色全不匹配
           // （novanest.one 用的是 POSTS + prevBtn/nextBtn 那套，容器也不叫 article-list）。
           //
-          // 所以拒绝执行，交给人工：要么从备份/git 里找回该站模板，要么决定整站换成 A1。
+          // 例外：有些站的渲染器已被逐个抢救出来、补全并改读 CRM 的字段名，
+          // 放在 src/lib/site-templates/ 下。这类站能完整重建，不必拒绝。
+          const rescued = buildRescuedRenderer(site.domain, dataJsPath, entries);
+          if (rescued) {
+            console.log(`[D-370] ${site.domain}：用抢救出的专有渲染器重建 ${dataJsPath}`);
+            mainJs = rescued;
+          } else {
+
+          // 其余情况拒绝执行，交给人工：要么从备份/git 里找回该站模板，要么决定整站换成 A1。
           const backupHint = `${fullPath}.d368-broken-*.bak`;
           result.action = "failed";
           result.error =
@@ -3563,6 +3572,7 @@ export async function repairSiteDataFile(
             + `（现场文件可先备份留证：${backupHint}）`;
           client.end();
           return result;
+          }
         } else {
           // 非 A1 且原文件本就只装数据 —— 重建成纯数据文件通常是正确的：
           // allurahub.top / vitahaven.click 属此类，坏的 articles-index.js 是纯数据，
@@ -3731,4 +3741,27 @@ export async function probeSiteBackups(sitePath: string, domain: string): Promis
     client?.end();
     throw err;
   }
+}
+
+/**
+ * D-370：按域名取「已抢救出的专有渲染器」。
+ *
+ * 有些站的渲染器和数据同住一个文件，截断后渲染器源码丢了、也没有备份可捞，
+ * 但残存部分还够抄 —— 抄出来补全、改读 CRM 的字段名之后放在 site-templates/ 下。
+ * 这类站能完整重建（数据 + 渲染器），不必像其它同类那样拒绝执行。
+ *
+ * 注册表按「域名 + 数据文件相对路径」双重匹配：同一个站的别的 js 文件不该套用它。
+ */
+function buildRescuedRenderer(
+  domain: string,
+  dataJsPath: string,
+  entries: Record<string, unknown>[],
+): string | null {
+  const d = domain.toLowerCase();
+  const p = (dataJsPath || "").replace(/^\.?\//, "");
+
+  if (d === "novanest.one" && p === "scripts.js") {
+    return buildNovanestScriptsJs(JSON.stringify(entries, null, 2));
+  }
+  return null;
 }

@@ -57,13 +57,45 @@ function log(msg: string) {
   console.error(`[CRON site-health ${new Date().toISOString()}] ${msg}`);
 }
 
-async function probe(url: string): Promise<{ ok: boolean; code: number; err?: string }> {
+async function probeOnce(url: string): Promise<{ ok: boolean; code: number; err?: string }> {
   try {
     const res = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(TIMEOUT_MS) });
     return { ok: res.status === 200, code: res.status };
   } catch (e) {
     return { ok: false, code: 0, err: e instanceof Error ? e.message.slice(0, 120) : String(e) };
   }
+}
+
+/**
+ * 探一个 URL；裸域名不通时自动回退试一次 www。
+ *
+ * D-370：有些站只在 www 上提供服务，裸域名没证书或没解析。实测
+ *   https://webdatingtips.com/       → 000（连不上）
+ *   https://www.webdatingtips.com/   → 200
+ * 旧判据写死探裸域名，把这类好站报成故障（webdatingtips.com 就这样被误报）。
+ *
+ * 只在裸域名**确实不通**时才回退，不是无条件两个都探 —— 省一半请求，
+ * 也避免「裸域名好、www 坏」的站被回退掩盖。
+ */
+async function probe(url: string): Promise<{ ok: boolean; code: number; err?: string; via_www?: boolean }> {
+  const first = await probeOnce(url);
+  if (first.ok) return first;
+
+  // 只对「主机名不带 www 且像裸域名」的情况回退
+  let withWww = "";
+  try {
+    const u = new URL(url);
+    if (u.hostname.startsWith("www.")) return first;
+    u.hostname = `www.${u.hostname}`;
+    withWww = u.toString();
+  } catch {
+    return first;
+  }
+
+  const second = await probeOnce(withWww);
+  if (second.ok) return { ...second, via_www: true };
+  // 两个都不通时报裸域名那次的结果（它才是登记的地址）
+  return first;
 }
 
 /**
@@ -81,10 +113,20 @@ async function probe(url: string): Promise<{ ok: boolean; code: number; err?: st
  */
 async function probeRenderer(domain: string): Promise<{ checked: boolean; ok: boolean; detail?: string }> {
   try {
-    const homeRes = await fetch(`https://${domain}/`, {
+    // D-370：跟 probe() 一样支持 www 回退 —— 首页只在 www 上的站，
+    // 拿裸域名取不到 HTML，脚本也就无从检查（会误报成「跳过」）。
+    let base = `https://${domain}`;
+    let homeRes = await fetch(`${base}/`, {
       redirect: "follow",
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
+    if (!homeRes.ok && !domain.startsWith("www.")) {
+      base = `https://www.${domain}`;
+      homeRes = await fetch(`${base}/`, {
+        redirect: "follow",
+        signal: AbortSignal.timeout(TIMEOUT_MS),
+      });
+    }
     if (!homeRes.ok) return { checked: false, ok: true };
     const html = await homeRes.text();
 
@@ -104,7 +146,8 @@ async function probeRenderer(domain: string): Promise<{ checked: boolean; ok: bo
     let scanned = 0;
 
     for (const src of srcs) {
-      const url = `https://${domain}/${src}`;
+      // 用上面确定下来的 base（可能已回退到 www），不要再拼裸域名
+      const url = `${base}/${src}`;
       let js = "";
       try {
         const res = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(TIMEOUT_MS) });
@@ -180,7 +223,7 @@ export async function GET(req: NextRequest) {
     log("site_health_state 解析失败，按空状态重来");
   }
 
-  const results: Array<{ domain: string; ok: boolean; home: number; article: number | null; renderer: string; fails: number; action: string }> = [];
+  const results: Array<{ domain: string; ok: boolean; home: number; article: number | null; renderer: string; via_www?: boolean; fails: number; action: string }> = [];
   const newlyDown: Array<{ id: bigint; domain: string; reason: string }> = [];
   const recovered: string[] = [];
 
@@ -252,6 +295,9 @@ export async function GET(req: NextRequest) {
       home: home.code,
       article: article ? article.code : null,
       renderer: renderer.checked ? (renderer.ok ? "ok" : "broken") : "skipped",
+      // D-370：回退到 www 才通的站要显式记一笔 —— 它算健康，但 publish_sites 里
+      // 登记的裸域名其实访问不了，发布出去的链接也会是裸域名。属配置待修，别被回退掩盖。
+      via_www: home.via_www ? true : undefined,
       fails: state[site.domain].fails,
       action,
     });
