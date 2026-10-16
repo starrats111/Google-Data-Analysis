@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getSystemConfig, setSystemConfig } from "@/lib/system-config";
 import { sendAlert } from "@/lib/alert";
-import { checkJsSyntax, isDataOnly, looksLikeRenderer, findUnresolvedArrayVars } from "@/lib/site-write-guard";
+import { checkJsSyntax, isDataOnly, looksLikeRenderer } from "@/lib/site-write-guard";
+import { probeRenderedContent } from "@/lib/site-render-probe";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 800;
@@ -188,13 +189,31 @@ async function probeRenderer(domain: string): Promise<{ checked: boolean; ok: bo
     // allurahub.top / vitahaven.click 的数据文件声明 articlesIndex，
     // 而渲染器读全局 articles（从未被定义）→ ReferenceError → 首页空白。
     // 这类站旧判据全绿，但页面是白的 —— 我就是在这里把它误判成「已修好」的。
-    const unresolved = findUnresolvedArrayVars(loaded);
-    if (unresolved.length > 0) {
+    // D-370 终版判据：不再猜「什么情况会白屏」，直接把脚本跑一遍看容器有没有内容。
+    //
+    // 前面四版判据全都漏过（每一版都是在猜）：
+    //   ① 语法可编译               → 漏「渲染器被整段抹掉」
+    //   ② + 有没有 DOM 写入代码     → 漏「变量名对不上」
+    //   ③ + 固定名单比对变量名       → 漏 vitasphere.top（读 blogArticles，不在名单）
+    //   ④ + 正则推导未声明标识符     → 仍漏「先赋值再用」，且误报 null/false/解构名
+    // 而 01 的判据从头到尾只有一条：打开首页，有没有内容。所以照着做。
+    const probe = probeRenderedContent(html, loaded.map((l) => l.content));
+    if (!probe.rendered) {
       return {
         checked: true,
         ok: false,
-        detail: `渲染器读的数组变量没人定义：${unresolved.join(", ")} —— `
-          + `数据文件声明的名字和渲染器读的对不上，脚本会 ReferenceError、首页空白`,
+        detail: `首页脚本跑完列表容器仍为空`
+          + (probe.error ? `：${probe.error}` : "")
+          + (probe.empty.length ? `（空容器 #${probe.empty.join(", #")}）` : ""),
+      };
+    }
+    // 渲染出来了，但一条都没有 —— 也是「首页没内容」，只是原因是数据空
+    if (probe.itemCount === 0) {
+      return {
+        checked: true,
+        ok: false,
+        detail: `首页渲染器跑通了但一条也没画出来（容器 #${probe.filled.join(", #")} 被填了空内容）`
+          + ` —— 数据为空或全被过滤掉`,
       };
     }
 
