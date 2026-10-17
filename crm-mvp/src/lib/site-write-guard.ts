@@ -555,7 +555,13 @@ export interface GuardedWriteIO {
  * 唯一能识别它的办法是跟**旧文件**比 —— 渲染器从有变没有，就是在删东西。
  */
 export function wouldDropRenderer(oldContent: string, newContent: string): boolean {
-  return hasRenderer(oldContent) && !hasRenderer(newContent);
+  // D-370：hasRenderer 只认 A1 模板的固定标记串（FIXED_CATS/renderGrid/
+  // getElementById('article-list')），aura-bloom.top / thegoodsandguard.top
+  // 的专属渲染器用的是别的函数名和容器 id，不含这些标记——实测这里直接把
+  // 「专属渲染器重建」误判成「渲染器被抹掉」，拒绝写入。
+  // 这个护栏要判的是「有没有 DOM 写入代码」，不是「是不是 A1 那套特定实现」，
+  // 换成与模板无关的 looksLikeRenderer。
+  return looksLikeRenderer(oldContent) && !looksLikeRenderer(newContent);
 }
 
 /**
