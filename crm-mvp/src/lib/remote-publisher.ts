@@ -12,6 +12,8 @@ import { withSiteLock, writeJsDataFileGuarded, isJsDataFile, checkJsSyntax, isDa
 import { buildNovanestScriptsJs } from "@/lib/site-templates/novanest-renderer";
 import { buildBloomrootsRenderer } from "@/lib/site-templates/bloomroots-renderer";
 import { buildAuraBloomRenderer } from "@/lib/site-templates/aura-bloom-renderer";
+import { buildTheGoodsAndGuardRenderer } from "@/lib/site-templates/thegoodsandguard-renderer";
+import { buildEverydaynesRenderer } from "@/lib/site-templates/everydaynes-renderer";
 import { patchQuibloFeaturedFallback } from "@/lib/site-templates/quiblo-featured-fallback";
 import { fixOmniluxeFieldMismatch } from "@/lib/site-templates/omniluxe-field-fix";
 import { probeRenderedContent } from "@/lib/site-render-probe";
@@ -3948,6 +3950,16 @@ function buildRescuedRenderer(
   // 不像 bloomroots 那样独立成文件。
   if (d === "aura-bloom.top" && p === "assets/js/main.js") {
     return `${buildArrayAssignmentStatement("posts", entries)}\n\n${buildAuraBloomRenderer()}`;
+  }
+  // D-370：thegoodsandguard.top / everydaynes.top 是同一类坑的第二、第三例——
+  // 容器名改对了（article-list → articleGrid）但 A1 模板里一堆其它硬编码容器
+  // 这个站上不存在，一样会 TypeError 中断。两站首页布局互不相同（分类按钮/
+  // 搜索框/分页容器 id 全不一样），各自专属渲染器，详见各文件头注释。
+  if (d === "thegoodsandguard.top" && p === "assets/js/main.js") {
+    return `${buildArrayAssignmentStatement("posts", entries)}\n\n${buildTheGoodsAndGuardRenderer()}`;
+  }
+  if (d === "everydaynes.top" && p === "assets/main.js") {
+    return `${buildArrayAssignmentStatement("posts", entries)}\n\n${buildEverydaynesRenderer()}`;
   }
   return null;
 }
