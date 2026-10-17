@@ -11,6 +11,7 @@ import { ARTICLE_HYPERLINK_STYLE_BLOCK, cleanArticleContent, emphasizeArticleHyp
 import { withSiteLock, writeJsDataFileGuarded, isJsDataFile, checkJsSyntax, isDataOnly, hasRenderer, looksLikeRenderer, resolveBrokenDataPathFromLoaded, planRendererVarBridge } from "@/lib/site-write-guard";
 import { buildNovanestScriptsJs } from "@/lib/site-templates/novanest-renderer";
 import { buildBloomrootsRenderer } from "@/lib/site-templates/bloomroots-renderer";
+import { buildAuraBloomRenderer } from "@/lib/site-templates/aura-bloom-renderer";
 import { patchQuibloFeaturedFallback } from "@/lib/site-templates/quiblo-featured-fallback";
 import { fixOmniluxeFieldMismatch } from "@/lib/site-templates/omniluxe-field-fix";
 import { probeRenderedContent } from "@/lib/site-render-probe";
@@ -3937,6 +3938,16 @@ function buildRescuedRenderer(
   // 所以这里只负责重写 script.js 本身，调用方那边已经单独在修数据文件。
   if (d === "bloomroots.top" && p === "script.js") {
     return buildBloomrootsRenderer();
+  }
+  // D-370：aura-bloom.top 是 A1 架构（数据 + 渲染器同住 assets/js/main.js，
+  // 变量名 posts），但首页容器集合（categoryChips/searchInput/resultsCount/
+  // postsGrid/pagination）和 A1 模板假定的那套（secKicker/catbar/headerNav/
+  // mostRead/lead/empty）完全不是一回事——换容器名只解决了列表容器这一个 id，
+  // A1 模板里其它没有空值保护的 getElementById 调用照样会在这个站上炸
+  // （实测 `null.textContent=...` TypeError）。专属渲染器需要自带数据声明，
+  // 不像 bloomroots 那样独立成文件。
+  if (d === "aura-bloom.top" && p === "assets/js/main.js") {
+    return `${buildArrayAssignmentStatement("posts", entries)}\n\n${buildAuraBloomRenderer()}`;
   }
   return null;
 }
