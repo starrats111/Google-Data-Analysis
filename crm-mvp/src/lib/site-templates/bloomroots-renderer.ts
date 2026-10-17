@@ -74,10 +74,36 @@ export function buildBloomrootsRenderer(): string {
     return raw.replace(/[-_]+/g, " ").replace(/\\b\\w/g, function (m) { return m.toUpperCase(); });
   }
 
+  // D-370：script.js 不只被首页用，category.html?cat=xxx 也加载它
+  // （该站首页/分类页共用同一份脚本）。原渲染器丢的时候这段分类过滤
+  // 逻辑也一起丢了，没补上的话分类页会把全部分类混在一起展示，
+  // 标题也停在模板默认的占位字 "Category" / "Explore our articles" ——
+  // 实测现象正是这样。
+  function currentCategory() {
+    var qs = (window.location && window.location.search) || "";
+    var m = /[?&]cat=([^&]+)/.exec(qs);
+    return m ? decodeURIComponent(m[1]).trim().toLowerCase() : "";
+  }
+
   var ALL = resolveDataArray().slice();
+  var cat = currentCategory();
+  if (cat) {
+    ALL = ALL.filter(function (p) {
+      return String(p.category || "").trim().toLowerCase() === cat;
+    });
+  }
   ALL.sort(function (a, b) {
     return String(b.dateISO || b.date || "").localeCompare(String(a.dateISO || a.date || ""));
   });
+
+  if (cat) {
+    var titleEl = document.getElementById("categoryTitle");
+    var subEl = document.getElementById("categorySubtitle");
+    if (titleEl) titleEl.innerHTML = esc(labelOf({ category: cat }));
+    if (subEl) subEl.innerHTML = ALL.length
+      ? "Explore our " + esc(labelOf({ category: cat })) + " articles"
+      : "No articles in this category yet";
+  }
 
   var page = 1;
 
