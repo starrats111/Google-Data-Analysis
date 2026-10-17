@@ -12,6 +12,7 @@ import { withSiteLock, writeJsDataFileGuarded, isJsDataFile, checkJsSyntax, isDa
 import { buildNovanestScriptsJs } from "@/lib/site-templates/novanest-renderer";
 import { buildBloomrootsRenderer } from "@/lib/site-templates/bloomroots-renderer";
 import { patchQuibloFeaturedFallback } from "@/lib/site-templates/quiblo-featured-fallback";
+import { fixOmniluxeFieldMismatch } from "@/lib/site-templates/omniluxe-field-fix";
 import { probeRenderedContent } from "@/lib/site-render-probe";
 
 // ─── 网站架构类型常量（与 Python 后端一致）───
@@ -2121,13 +2122,43 @@ function formatHomepageLongDate(date: Date): string {
  * 若现有条目使用 url（而非 detailUrl）作为链接字段（如批量建站模板的 ARTICLES），
  * 则补齐 url/catKey/emoji/author 等首页模板实际渲染的字段，避免链接失效或显示 undefined。
  */
-function adaptEntryToHomepageSchema(
+export function adaptEntryToHomepageSchema(
   indexEntry: Record<string, unknown>,
   existingEntries: Record<string, unknown>[],
 ): Record<string, unknown> {
   const sample = existingEntries.find((e) => e && typeof e === "object");
+  if (!sample) return indexEntry;
+
+  // D-370：omniluxe.top 反例（01 报「首页又没内容了」，实测是 TypeError，不是白屏）。
+  // 该站原有模板的字段命名是 categories（数组）+ articleUrl + displayDate，
+  // CRM 写入新文章时只按标准字段（category 字符串 + detailUrl + dateLabel）生成，
+  // 两种条目混在同一个数组里 —— 旧条目渲染正常，新条目一进 renderPosts()
+  // 跑到 post.categories.join(...) 就因 categories 是 undefined 直接报错，
+  // 整个渲染函数中断，容器保持空（#postGrid 空容器，不是语法/截断问题）。
+  const usesCategoriesArraySchema = Boolean(
+    sample && Array.isArray(sample.categories) && typeof sample.articleUrl === "string",
+  );
+  if (usesCategoriesArraySchema) {
+    const catKey = String(indexEntry.category || "general").toLowerCase();
+    const categoryLabel = HOMEPAGE_CATEGORY_LABELS[catKey]
+      || (catKey.charAt(0).toUpperCase() + catKey.slice(1));
+    const detailUrl = String(indexEntry.detailUrl || "");
+    return {
+      slug: indexEntry.slug,
+      title: indexEntry.title,
+      categories: [categoryLabel],
+      date: indexEntry.dateISO,
+      displayDate: isLongMonthDate(sample.displayDate)
+        ? formatHomepageLongDate(parseDateValue(indexEntry.dateISO) || new Date())
+        : (indexEntry.dateLabel || indexEntry.date),
+      excerpt: indexEntry.excerpt,
+      image: indexEntry.image,
+      articleUrl: `/${detailUrl.replace(/^\/+|\/+$/g, "")}/`,
+    };
+  }
+
   const usesUrlSchema = Boolean(sample && typeof sample.url === "string" && typeof sample.detailUrl !== "string");
-  if (!usesUrlSchema || !sample) return indexEntry;
+  if (!usesUrlSchema) return indexEntry;
 
   const catKey = String(indexEntry.category || "general").toLowerCase();
   const detailUrl = String(indexEntry.detailUrl || "");
@@ -2926,6 +2957,14 @@ async function _publishArticleToSite(
     const existingMatch = findArrayAssignmentMatch(dataContent, varName);
 
     if (existingMatch) {
+      // D-370：omniluxe.top 反例 —— 这里才是新文章真正写进主数据文件的地方，
+      // 不是 syncToHomepageDataFile（那个同步的是候选的「次要首页索引文件」）。
+      // 该站原模板字段是 categories（数组）+ articleUrl + displayDate，之前
+      // 这里直接插 indexEntry（标准字段 category 字符串 + detailUrl），新旧
+      // 条目字段名对不上，渲染器对新条目跑 post.categories.join() 直接炸掉。
+      const existingEntriesForAdapt = parseJsArrayLiteral(dataContent, varName) || [];
+      const entryToInsert = adaptEntryToHomepageSchema(indexEntry, existingEntriesForAdapt);
+
       dataContent = removeArticleEntriesByIdentity(dataContent, {
         id: article.id,
         slug,
@@ -2936,7 +2975,7 @@ async function _publishArticleToSite(
       const updatedMatch = findArrayAssignmentMatch(dataContent, varName);
       if (updatedMatch) {
         const insertPos = (updatedMatch.index || 0) + updatedMatch[0].length;
-        const entryStr = "\n  " + JSON.stringify(indexEntry) + ",";
+        const entryStr = "\n  " + JSON.stringify(entryToInsert) + ",";
         dataContent = dataContent.slice(0, insertPos) + entryStr + dataContent.slice(insertPos);
       } else {
         // D-370：走到这里说明 removeArticleEntriesByIdentity 把数组声明弄没了 ——
@@ -4111,6 +4150,58 @@ export async function patchQuibloSiteFeaturedFallback(
     await sftpWriteFile(sftp, path, patched);
 
     return { ok: true, before_bytes: raw.length, after_bytes: patched.length };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  } finally {
+    client?.end();
+  }
+}
+
+export interface FixOmniluxeFieldMismatchSiteResult {
+  ok: boolean;
+  before_bytes?: number;
+  after_bytes?: number;
+  fixed_count?: number;
+  error?: string;
+}
+
+/**
+ * D-370：给 omniluxe.top 的 assets/app.js 打「新文章字段名对不上旧模板」的
+ * 一次性补丁。线上现存 7 条用 CRM 标准字段（category/detailUrl）写入的条目，
+ * 转换成该站原模板的 categories 数组形态（categories/articleUrl/displayDate）。
+ *
+ * publishArticleToSite 已经改用 adaptEntryToHomepageSchema 适配新插入的条目，
+ * 往后不会再混进这种脏数据——这个函数只处理线上已经存在的那批历史脏数据，
+ * 不接进日常巡检管线（这不是文件损坏，repairSiteDataFile 对这种语法完好、
+ * 渲染器完好的非 A1 文件本就不会碰）。
+ *
+ * 幂等：fixOmniluxeFieldMismatch 内部会跳过已经是原生 schema 的条目，
+ * fixedCount 为 0 时返回 ok:false 但不是异常，代表「没有需要修的条目」。
+ */
+export async function fixOmniluxeSiteFieldMismatch(
+  sitePath: string,
+): Promise<FixOmniluxeFieldMismatchSiteResult> {
+  let client: Client | null = null;
+  try {
+    client = await connectSSH();
+    const sftp = await getSFTP(client);
+    const path = `${sitePath}/assets/app.js`;
+    const raw = await sftpReadFile(sftp, path);
+
+    const { patched, fixedCount } = fixOmniluxeFieldMismatch(raw);
+    if (!patched) {
+      return { ok: false, before_bytes: raw.length, error: "没有找到需要转换的脏条目：补丁可能已经打过，或该站数据文件被换成了别的版本" };
+    }
+    const syntax = checkJsSyntax(patched);
+    if (!syntax.ok) {
+      return { ok: false, before_bytes: raw.length, error: `拒绝写入：补丁后语法不合法（${syntax.line ? `第 ${syntax.line} 行：` : ""}${syntax.error}）` };
+    }
+
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    await sftpWriteFile(sftp, `${path}.d368-broken-${stamp}.bak`, raw);
+    await sftpWriteFile(sftp, path, patched);
+
+    return { ok: true, before_bytes: raw.length, after_bytes: patched.length, fixed_count: fixedCount };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   } finally {
