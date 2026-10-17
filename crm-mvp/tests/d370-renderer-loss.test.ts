@@ -102,6 +102,22 @@ describe("D-370 wouldDropRenderer", () => {
   it("旧文件本来就没渲染器 → 判假（非 A1 站的正常写入）", () => {
     assert.equal(wouldDropRenderer(LEGIT_INDEX, LEGIT_INDEX), false);
   });
+
+  it("D-370：专属渲染器重建不该被误判成「渲染器被抹掉」", () => {
+    // aura-bloom.top / thegoodsandguard.top 实测踩的坑：hasRenderer 只认
+    // A1 的固定标记串（FIXED_CATS/renderGrid/getElementById('article-list')），
+    // 专属渲染器用的是别的函数名和容器 id，不含这些标记——旧实现会把
+    // 「专属渲染器重建」误判成「渲染器被抹掉」，拒绝写入。
+    const oldAuraBloom = 'const posts = [\n  {"id":"1"}\n];\n\n(function(){\n'
+      + "  var grid=document.getElementById('postsGrid');\n"
+      + "  function render(){ if(grid) grid.innerHTML=''; }\n"
+      + "  render();\n})();\n";
+    const newAuraBloom = 'const posts = [\n  {"id":"1"},\n  {"id":"2"}\n];\n\n(function(){\n'
+      + "  var grid=document.getElementById('postsGrid');\n"
+      + "  function render(){ if(grid) grid.innerHTML=''; }\n"
+      + "  render();\n})();\n";
+    assert.equal(wouldDropRenderer(oldAuraBloom, newAuraBloom), false);
+  });
 });
 
 function fakeIO(initial?: string) {
