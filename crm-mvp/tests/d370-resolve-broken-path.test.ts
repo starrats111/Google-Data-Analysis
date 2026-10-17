@@ -140,4 +140,21 @@ document.addEventListener('DOMContentLoaded', displayFeaturedProducts);
     };
     assert.equal(resolveBrokenDataPathFromLoaded([data, renderer]), "js/articles-index.js");
   });
+
+  it("everydaynes.top 形态：唯一一个脚本既是数据又是渲染器，不能返回 null", () => {
+    // 实测踩的坑：该站首页只加载 assets/main.js 一个脚本（A1 风格，数据+渲染器
+    // 同住一个文件），语法合法、含渲染器代码，①②③全部查不出代码层面的毛病。
+    // dataFile 判定逻辑假定「渲染器」和「数据」分开在不同文件，唯一一个文件
+    // 既在 renderers 列表里、又不满足 isDataOnly，两条 find 都落空——旧版本
+    // 继续返回 null，调用方兜底落到硬编码默认值 "assets/js/main.js"，而该站
+    // 实际文件名是 "assets/main.js"，两者不一致，专属渲染器因此从未写入
+    // 真正生效的那份文件。
+    const onlyScript = {
+      path: "assets/main.js",
+      content: 'const posts = [\n  {"id":"1","title":"T"}\n];\n'
+        + "(function(){ var grid=document.getElementById('articleGrid'); "
+        + "if(grid) grid.innerHTML = posts.map(p=>p.title).join(''); })();",
+    };
+    assert.equal(resolveBrokenDataPathFromLoaded([onlyScript]), "assets/main.js");
+  });
 });

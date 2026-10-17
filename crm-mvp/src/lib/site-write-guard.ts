@@ -461,6 +461,18 @@ export function resolveBrokenDataPathFromLoaded(
   const anyDataOnly = loaded.find((f) => isDataOnly(f.content));
   if (anyDataOnly) return anyDataOnly.path;
 
+  // D-370：everydaynes.top 的反例——该站首页只加载一个脚本 assets/main.js，
+  // 它既是数据又是渲染器（A1 风格），语法合法、含渲染器代码，①②③全部查不出
+  // 代码层面的毛病。上面的 dataFile 判定逻辑假定「渲染器」和「数据」是分开
+  // 的文件，唯一一个文件自己既是 renderers 的成员、又不满足 isDataOnly，两条
+  // find 都落空，走到这里仍是 undefined——于是继续返回 null，让调用方兜底落到
+  // 硬编码默认值 "assets/js/main.js"，而该站实际只有 assets/main.js 这一个
+  // 脚本，猜错路径等于去改一个首页根本不加载的文件，专属渲染器因此从未写入
+  // 真正生效的那份文件。
+  //
+  // 只有一个脚本时没有「别的候选」，有问题要修就只能是它，直接返回。
+  if (loaded.length === 1) return loaded[0].path;
+
   return null;
 }
 
