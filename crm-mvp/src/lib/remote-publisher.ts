@@ -3578,6 +3578,18 @@ export async function repairSiteDataFile(
       //   ② A1 架构 → 用 buildA1MainJs 生成完整的「数据 + 渲染器」
       //   ③ 其余（非 A1 且原文件没有渲染器）→ 纯数据文件，本就只有数据
       let mainJs: string | null = null;
+      // D-370：按域名查「已抢救渲染器」表要放在最前面、无条件先查，
+      // 不能依赖对原文件内容的误判（looksLikeRenderer 等）来决定要不要查这张表。
+      // bloomroots.top 的反例坑：script.js 本身就是纯数据文件
+      // （`const articlesData = [...]`），不满足 looksLikeRenderer，于是永远
+      // 走不到下面「looksLikeRenderer(raw)」分支里的 buildRescuedRenderer 调用——
+      // PR #26 接的渲染器被摆在一条死代码路径上，实际从未执行过，修复请求
+      // 因此落到「找不到可用渲染器」的拒绝分支。
+      const rescuedFirst = buildRescuedRenderer(site.domain, dataJsPath, entries);
+      if (rescuedFirst) {
+        console.log(`[D-370] ${site.domain}：用抢救出的专有渲染器重建 ${dataJsPath}`);
+        mainJs = rescuedFirst;
+      }
       // 只有在**渲染器本身完好**时才走「保留渲染器」这条路。
       //
       // D-370 实测踩的坑：omniportal.shop 的文件截断在渲染器中段，`hasRenderer(raw)`
@@ -3585,7 +3597,7 @@ export async function repairSiteDataFile(
       // 之后的全部内容，而那正是**断掉的渲染器残骸**，生成结果照样语法不合法，
       // 被写入护栏拦下（`第 897 行 Invalid or unexpected token`）。
       // 判据必须是「整份文件语法可编译」，不是「看起来有渲染器代码」。
-      if (hasRenderer(raw) && checkJsSyntax(raw).ok) {
+      if (!mainJs && hasRenderer(raw) && checkJsSyntax(raw).ok) {
         mainJs = replaceJsArrayLiteral(raw, varName, entries);
         if (mainJs) {
           console.log(`[D-370] ${site.domain}：原文件渲染器完好，只替换数组、保留渲染器`);
