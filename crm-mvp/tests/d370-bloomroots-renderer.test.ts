@@ -52,6 +52,8 @@ function makeDom() {
   const store: Record<string, Record<string, unknown>> = {
     articlesGrid: mk("articlesGrid"),
     pagination: mk("pagination"),
+    categoryTitle: mk("categoryTitle"),
+    categorySubtitle: mk("categorySubtitle"),
   };
   const document = {
     readyState: "complete",
@@ -63,10 +65,14 @@ function makeDom() {
 }
 
 /** 把「数据文件 + 渲染器」一起跑起来，模拟浏览器加载两个 script 的效果 */
-function run(entries: unknown[], varName = "articlesIndex") {
+function run(entries: unknown[], varName = "articlesIndex", search = "") {
   const { document, store } = makeDom();
   const data = `var ${varName} = ${JSON.stringify(entries)};`;
-  const sandbox = { document, window: { scrollTo: () => undefined }, console };
+  const sandbox = {
+    document,
+    window: { scrollTo: () => undefined, location: { search } },
+    console,
+  };
   runInNewContext(data + "\n" + buildBloomrootsRenderer(), sandbox);
   return store;
 }
@@ -146,5 +152,30 @@ describe("D-370 bloomroots.top 重写的渲染器", () => {
     const store = run(makeEntries(6));
     const html = String(store.articlesGrid.innerHTML);
     assert.ok(html.indexOf("Title 0") < html.indexOf("Title 1"), "Oct 28 应排在 Oct 27 前面");
+  });
+
+  it("category.html?cat=xxx 只展示该分类，不是全部混在一起", () => {
+    const store = run(makeEntries(14), "articlesIndex", "?cat=lifestyle");
+    const html = String(store.articlesGrid.innerHTML);
+    assert.ok(html.includes("Title 1"), "奇数下标是 lifestyle，应出现");
+    assert.ok(!html.includes("Title 0"), "偶数下标是 home-garden，不该出现");
+  });
+
+  it("分类页填 categoryTitle/categorySubtitle，不留模板占位字", () => {
+    const store = run(makeEntries(6), "articlesIndex", "?cat=lifestyle");
+    assert.ok(String(store.categoryTitle.innerHTML).toLowerCase().includes("lifestyle"));
+    assert.ok(String(store.categorySubtitle.innerHTML).toLowerCase().includes("lifestyle"));
+  });
+
+  it("分类下没有文章时提示而不是空白网格", () => {
+    const store = run(makeEntries(6), "articlesIndex", "?cat=finance");
+    assert.ok(String(store.articlesGrid.innerHTML).includes("No articles yet"));
+    assert.ok(String(store.categorySubtitle.innerHTML).includes("No articles"));
+  });
+
+  it("没有 cat 参数（首页）时不过滤，照常展示全部分类", () => {
+    const store = run(makeEntries(6));
+    const html = String(store.articlesGrid.innerHTML);
+    assert.ok(html.includes("Title 0") && html.includes("Title 1"), "首页两种分类都该出现");
   });
 });
