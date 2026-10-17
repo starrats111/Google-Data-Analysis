@@ -3958,7 +3958,12 @@ function buildRescuedRenderer(
   if (d === "thegoodsandguard.top" && p === "assets/js/main.js") {
     return `${buildArrayAssignmentStatement("posts", entries)}\n\n${buildTheGoodsAndGuardRenderer()}`;
   }
-  if (d === "everydaynes.top" && p === "assets/main.js") {
+  // D-370：首页 <script src> 标签写的是 assets/main.js，但
+  // resolveBrokenDataPath 实测修复时定位到的真实路径是 assets/js/main.js——
+  // 两者不一致（该站首页实际引用的候选文件和巡检认定的「主数据文件」是
+  // 两个不同路径），只认 assets/main.js 导致专属渲染器从未被命中，apply
+  // 走的还是旧的 A1 分支。两个路径都认，不管实际传进来的是哪个。
+  if (d === "everydaynes.top" && (p === "assets/main.js" || p === "assets/js/main.js")) {
     return `${buildArrayAssignmentStatement("posts", entries)}\n\n${buildEverydaynesRenderer()}`;
   }
   return null;
