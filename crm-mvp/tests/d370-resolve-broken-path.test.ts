@@ -75,13 +75,46 @@ describe("D-370 resolveBrokenDataPathFromLoaded", () => {
     assert.equal(result, "js/articles-index.js", "应该定位到真正在用的数据文件");
   });
 
-  it("一切正常时返回 null（不该乱动好站）", () => {
+  it("数据文件已被补过空壳（全局看起来都已声明），③不再触发时仍不能兜底到孤儿文件", () => {
+    // 这是实测连续踩过两次的坑：第一次孤儿文件 bug 修好、apply 命中了正确的
+    // js/articles-index.js 并补上了 categoryNames={}/products=[]/blogArticles=[]
+    // 这几行空壳；下一次再 apply（比如渲染出来还是假数据、需要重修）时，
+    // ③规则检查「有没有缺失全局」已经查不出问题了——所有全局都「已声明」，
+    // 哪怕声明成了错误的空值。这种情况下不能让函数退回 null，否则调用方会
+    // 兜底落到硬编码默认值 "assets/js/main.js"，又把孤儿文件改一遍（实测踩过）。
+    const stubbedData = {
+      path: "js/articles-index.js",
+      content: '// 文章索引\nconst articlesIndex = [\n  {"id":"1","title":"T"}\n];\n'
+        + "var blogArticles = [];\nvar products = [];\nvar categoryNames = {};\n",
+    };
+    const result = resolveBrokenDataPathFromLoaded([ORPHAN_RENDERER, stubbedData, VITASPHERE_RENDERER]);
+    assert.notEqual(result, "assets/js/main.js", "不能兜底到孤儿文件");
+    assert.equal(result, "js/articles-index.js", "该返回首页实际引用的数据文件");
+  });
+
+  it("一切正常时也会返回数据文件路径（这不代表会去改它——见下方说明）", () => {
+    // D-370 第④类判据（兜底）：函数现在总是倾向于返回「首页引用的数据文件」，
+    // 不再对健康站点返回 null。这不会导致健康站点被误改——
+    // 真正「要不要修」由调用方 repairSiteDataFile 里独立的 broken 标志决定
+    // （syntax.ok / rendererGone / blankHomepage 三者，不看这个函数的返回值），
+    // 这个函数只回答「如果要修，该修哪个文件」。
+    //
+    // 为什么要改成这样：①②③类规则查的是「代码层面有没有明显毛病」，但
+    // vitasphere.top 实测过一种更隐蔽的情况——数据文件已经被某次有缺陷的修复
+    // 补过空壳（categoryNames={}、products=[]），全局「看起来」都已声明，
+    // ③不再触发，可是首页渲染出来的仍是假数据。那种情况下 verifyHomepageRenders
+    // 另外验证会发现问题、判定 broken=true，但如果这个函数在查不出①②③时返回
+    // null，调用方就会兜底落到硬编码默认值 "assets/js/main.js"——
+    // 猜错了就去改一个首页根本不加载的孤儿文件（实测踩过两次）。
     const data = { path: "js/data.js", content: "const posts = [{\"id\":\"1\"}];" };
     const renderer = {
       path: "js/main.js",
       content: "var grid=document.getElementById('g'); grid.innerHTML = posts.map(p=>p.id).join('');",
     };
-    assert.equal(resolveBrokenDataPathFromLoaded([data, renderer]), null);
+    // 返回数据文件路径（证据支撑的猜测），不是 null——但这个健康站点不会被
+    // 实际修改：repairSiteDataFile 另外验证首页真的渲染出内容后，broken=false，
+    // 根本不会走到用这个路径写文件那一步。
+    assert.equal(resolveBrokenDataPathFromLoaded([data, renderer]), "js/data.js");
   });
 
   it("空列表返回 null", () => {
