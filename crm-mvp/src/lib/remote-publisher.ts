@@ -1165,7 +1165,7 @@ function buildA1IndexHtml(cacheVersion: string, domain = ""): string {
  * data.js、articles.js 等）是纯数据文件，首页另有自己的渲染脚本。
  * 这个区分决定了「文件不存在时该生成什么」——A1 必须生成含渲染器的完整骨架。
  */
-function isA1DataFile(dataJsPath: string, varName: string): boolean {
+export function isA1DataFile(dataJsPath: string, varName: string): boolean {
   const p = (dataJsPath || "").replace(/^\.?\//, "");
   return (p === "assets/js/main.js" || p === "assets/main.js") && varName === "posts";
 }
@@ -1181,7 +1181,7 @@ function isA1DataFile(dataJsPath: string, varName: string): boolean {
  *
  * 所以生成渲染器时要按站点首页实际存在的容器 id 来，而不是假定。
  */
-function pickListContainerId(indexHtml: string): string {
+export function pickListContainerId(indexHtml: string): string {
   const ids: string[] = [];
   for (const m of indexHtml.matchAll(/\bid=["']([^"']+)["']/g)) ids.push(m[1]);
 
@@ -3597,7 +3597,29 @@ export async function repairSiteDataFile(
       // 之后的全部内容，而那正是**断掉的渲染器残骸**，生成结果照样语法不合法，
       // 被写入护栏拦下（`第 897 行 Invalid or unexpected token`）。
       // 判据必须是「整份文件语法可编译」，不是「看起来有渲染器代码」。
-      if (!mainJs && hasRenderer(raw) && checkJsSyntax(raw).ok) {
+      //
+      // D-370 另一个坑（aura-bloom.top，01 报「修完还是没内容」）：
+      // hasRenderer 认的 RENDERER_MARKERS 里有 "getElementById('article-list')"——
+      // 这正是 A1 渲染器**硬编码**的容器名。aura-bloom.top 的 main.js 从未被截断，
+      // 语法一直合法，渲染器一直在，只是这个容器名本来就和该站首页实际的
+      // #postsGrid 不符（不是重建造成的，是原有的）。于是每次重建都在这条
+      // 「原样保留渲染器」分支里原样抄一遍这个不符，下面 isA1DataFile 分支里
+      // 专门修容器名的 pickListContainerId 永远排不上号——它只在文件被截断、
+      // hasRenderer 判假时才轮得到。
+      //
+      // 所以 A1 站要先核对首页实际容器名，不符就不能走「原样保留」，得改走
+      // buildA1MainJs 按实际容器名重新生成渲染器。
+      let containerMismatch = false;
+      if (isA1DataFile(dataJsPath, varName) && hasRenderer(raw)) {
+        let indexHtmlForCheck = "";
+        try {
+          indexHtmlForCheck = await sftpReadFile(sftp, `${site.site_path}/index.html`);
+        } catch { /* 读不到就假定没问题，走原逻辑 */ }
+        if (indexHtmlForCheck && pickListContainerId(indexHtmlForCheck) !== "article-list") {
+          containerMismatch = true;
+        }
+      }
+      if (!mainJs && !containerMismatch && hasRenderer(raw) && checkJsSyntax(raw).ok) {
         mainJs = replaceJsArrayLiteral(raw, varName, entries);
         if (mainJs) {
           console.log(`[D-370] ${site.domain}：原文件渲染器完好，只替换数组、保留渲染器`);
