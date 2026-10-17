@@ -436,13 +436,30 @@ export function resolveBrokenDataPathFromLoaded(
   // ③ 运行时缺失全局类：数据文件末尾补空壳就能救，渲染器不用动，
   // 所以返回数据文件的路径，不是渲染器文件本身。
   const renderers = loaded.filter((f) => looksLikeRenderer(f.content));
+  let dataFile: { path: string; content: string } | undefined;
   if (renderers.length > 0) {
-    const dataFile = loaded.find((f) => isDataOnly(f.content)) ?? loaded.find((f) => !renderers.includes(f));
+    dataFile = loaded.find((f) => isDataOnly(f.content)) ?? loaded.find((f) => !renderers.includes(f));
     if (dataFile) {
       const missing = findMissingGlobalsWithKind(renderers, loaded);
       if (missing.size > 0) return dataFile.path;
     }
   }
+
+  // ④ 兜底：①②③都查不出具体毛病，但调用方（repairSiteDataFile）会在这之后
+  // 用 verifyHomepageRenders 另外验一遍「首页真的渲染出内容了吗」—— 那个检查
+  // 看的是**结果**（容器里有没有真实条目），这里①②③看的是**代码层面的毛病**，
+  // 两者不是同一件事：数据文件可能已经被某次有缺陷的修复补过空壳
+  // （比如 categoryNames={}、products=[]），全局都「已声明」，③不再触发，
+  // 但首页渲染出来的仍是假数据/空状态，依然需要修。
+  //
+  // 这里**不能**返回 null 让调用方兜底落到硬编码默认值 "assets/js/main.js"——
+  // 那是猜的，猜错了就会去改一个首页根本不加载的孤儿文件（vitasphere.top
+  // 实测踩过两次：孤儿文件 bug 修好后，再出现这类「文件已被补过空壳但数据仍假」
+  // 的情况，又摔回同一个坑，因为 null 兜底路径完全没变）。
+  // 返回首页**实际引用**的数据文件路径，这是有证据支撑的猜测，远好于硬编码默认值。
+  if (dataFile) return dataFile.path;
+  const anyDataOnly = loaded.find((f) => isDataOnly(f.content));
+  if (anyDataOnly) return anyDataOnly.path;
 
   return null;
 }

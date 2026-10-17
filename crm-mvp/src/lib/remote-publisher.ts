@@ -177,6 +177,16 @@ function sftpReadFile(sftp: SFTPWrapper, path: string): Promise<string> {
   });
 }
 
+/** 列目录，只取文件名（不含路径），目录不存在/读不到时抛错，调用方自行捕获 */
+function sftpReadDir(sftp: SFTPWrapper, path: string): Promise<string[]> {
+  return new Promise((resolve, reject) => {
+    sftp.readdir(path, (err, list) => {
+      if (err) reject(err);
+      else resolve(list.map((e) => e.filename));
+    });
+  });
+}
+
 function sftpWriteFile(sftp: SFTPWrapper, path: string, content: string): Promise<void> {
   return new Promise((resolve, reject) => {
     sftp.writeFile(path, content, "utf8", (err) => {
@@ -3903,6 +3913,30 @@ async function buildRendererVarBridge(
     allScripts.push(content);
     if (rel !== dataJsPath && looksLikeRenderer(content)) renderers.push(content);
   }
+
+  // D-370：如果数据文件自己已经被「先前某次有缺陷的 apply」污染过
+  // （比如本该是 `const blogArticles = articlesIndex;` 的手写桥接行，
+  // 被更早一版的 bug 错误地覆盖成了 `var blogArticles = [];`），那么此刻
+  // 读到的 allScripts 里的数据文件内容已经是污染后的版本，看不出原本
+  // 声明过 blogArticles —— 等于白修。
+  // 唯一还留着「污染前原始内容」的地方是 D-368 写入护栏在每次改写前自动打的
+  // `.d368-broken-<时间戳>.bak` 备份。这里找该数据文件**最早**的一份备份
+  // （时间戳最小，最接近原始状态），把它的内容也纳入判断依据——
+  // 不是用它覆盖当前文件，只是多提供一条「这个全局原本有没有被声明过」的证据。
+  try {
+    const dir = dataJsPath.includes("/") ? dataJsPath.slice(0, dataJsPath.lastIndexOf("/")) : "";
+    const base = dataJsPath.includes("/") ? dataJsPath.slice(dataJsPath.lastIndexOf("/") + 1) : dataJsPath;
+    const list = await sftpReadDir(sftp, `${site.site_path}${dir ? "/" + dir : ""}`);
+    const baks = list
+      .filter((f) => f.startsWith(`${base}.d368-broken-`) && f.endsWith(".bak"))
+      .sort(); // 时间戳格式固定长度，字典序即时间序
+    if (baks.length > 0) {
+      const oldestBakPath = `${site.site_path}${dir ? "/" + dir : ""}/${baks[0]}`;
+      const bakContent = await sftpReadFile(sftp, oldestBakPath);
+      allScripts.push(bakContent);
+      console.log(`[D-370] ${site.domain}：把最早备份 ${baks[0]} 纳入已声明标识符的判断依据`);
+    }
+  } catch { /* 没有备份、或列目录/读取失败，就只用当前文件判断 */ }
 
   // 判断逻辑是纯函数，拆到 site-write-guard.ts（planRendererVarBridge），这样
   // 不用 mock SSH 就能单测——这次踩的坑就是出在给它的输入上（allScripts 原先
