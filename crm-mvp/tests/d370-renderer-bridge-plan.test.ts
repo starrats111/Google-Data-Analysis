@@ -66,6 +66,14 @@ describe("D-370 planRendererVarBridge：数据文件自身的旧内容必须纳�
 
     assert.equal(plan.stubs.has("blogArticles"), false,
       "blogArticles 原本就被数据文件声明过，不该再补空壳覆盖掉");
+    // 这条断言是这次真正要补的洞：光「不补空壳」不够，blogArticles 不在
+    // candidateNames（HOMEPAGE_INDEX_VAR_NAMES）里，旧版 planRendererVarBridge
+    // 不会把它当候选生成别名 —— 结果是「两边都不管」：新文件里这个变量彻底
+    // 没有任何声明，ReferenceError: blogArticles is not defined，比补错空壳更糟。
+    // 必须显式断言它出现在 aliases 里，才能保证重建时这行会被重新写回文件。
+    assert.ok(plan.aliases.includes("blogArticles"),
+      "blogArticles 原本是 articlesIndex 的重导出别名，重建时必须重新生成这行，" +
+      "否则两边都不补、新文件里这个变量彻底不存在");
     // categoryNames 确实全站都没声明过（声明在未被引用的 js/data.js 里），应该补
     assert.equal(plan.stubs.get("categoryNames"), "object");
   });

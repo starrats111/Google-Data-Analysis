@@ -510,6 +510,27 @@ export function planRendererVarBridge(
     }
   }
 
+  // D-370 第三类：旧内容（当前文件或备份）里如果已经手写了「对主数据数组的
+  // 重新导出别名」（形如 `const blogArticles = articlesIndex;`），这行必须被
+  // **重新生成**写进新文件，不能只用它去抑制下面的补空壳逻辑。
+  //
+  // 实测踩过的坑：vitasphere.top 原文件末尾有 `const blogArticles = articlesIndex;`，
+  // 但 blogArticles 不在 candidateNames（HOMEPAGE_INDEX_VAR_NAMES）里，上面那个
+  // 循环压根不会把它当候选 —— 加入「把旧内容纳入已声明判断」之后，
+  // isDeclaredAnywhere("blogArticles") 变成 true，下面的 findMissingGlobalsWithKind
+  // 判它「已经声明过」就不补空壳了；可是它既不在 aliases 里、也不在 stubs 里，
+  // 重建出的新文件里**完全没有这行**，比之前错误地补成 [] 还糟
+  // （从 ReferenceError 消失变成了另一个 ReferenceError：undefined → not defined）。
+  const reexportRe = /(?:const|var|let)\s+([A-Za-z_$][\w$]*)\s*=\s*([A-Za-z_$][\w$]*)\s*;/g;
+  for (const s of allScripts) {
+    for (const m of s.content.matchAll(reexportRe)) {
+      const [, name, source] = m;
+      if (source !== declaredVar || name === declaredVar) continue;
+      const usedByAnyRenderer = renderers.some((r) => new RegExp(`\\b${escapeRegExp(name)}\\b`).test(r.content));
+      if (usedByAnyRenderer) aliases.add(name);
+    }
+  }
+
   const skip = new Set([declaredVar, ...aliases, ...candidateNames.filter((n) => !n.includes("."))]);
   const stubs = findMissingGlobalsWithKind(renderers, allScripts, skip);
 
