@@ -11,6 +11,7 @@ import { ARTICLE_HYPERLINK_STYLE_BLOCK, cleanArticleContent, emphasizeArticleHyp
 import { withSiteLock, writeJsDataFileGuarded, isJsDataFile, checkJsSyntax, isDataOnly, hasRenderer, looksLikeRenderer, resolveBrokenDataPathFromLoaded, planRendererVarBridge } from "@/lib/site-write-guard";
 import { buildNovanestScriptsJs } from "@/lib/site-templates/novanest-renderer";
 import { buildBloomrootsRenderer } from "@/lib/site-templates/bloomroots-renderer";
+import { patchQuibloFeaturedFallback } from "@/lib/site-templates/quiblo-featured-fallback";
 import { probeRenderedContent } from "@/lib/site-render-probe";
 
 // ─── 网站架构类型常量（与 Python 后端一致）───
@@ -4033,4 +4034,52 @@ async function verifyHomepageRenders(
     rendered: false,
     detail: (res.error ? `${res.error}；` : "") + containerNote,
   };
+}
+
+export interface PatchQuibloFeaturedResult {
+  ok: boolean;
+  before_bytes?: number;
+  after_bytes?: number;
+  error?: string;
+}
+
+/**
+ * D-370：给 quiblo.top 的 script.js 打「精选文章筛不出来就退回最新几篇」的
+ * 补丁。script.js 是站点自带的渲染器文件，从未被 CRM 的发布流程写过——这里
+ * 第一次、也应该是唯一一次由 CRM 碰它。
+ *
+ * 幂等：如果 patchQuibloFeaturedFallback 发现锚点已经不在（说明补丁已经打过，
+ * 或者文件被换成了别的版本），返回 ok:false 但不是异常，调用方据此判断「已打过
+ * 还是真的打不进去」。
+ */
+export async function patchQuibloSiteFeaturedFallback(
+  sitePath: string,
+): Promise<PatchQuibloFeaturedResult> {
+  let client: Client | null = null;
+  try {
+    client = await connectSSH();
+    const sftp = await getSFTP(client);
+    const path = `${sitePath}/script.js`;
+    const raw = await sftpReadFile(sftp, path);
+
+    const patched = patchQuibloFeaturedFallback(raw);
+    if (!patched) {
+      return { ok: false, before_bytes: raw.length, error: "锚点文本没找到：补丁可能已经打过，或该站 script.js 被换成了别的版本" };
+    }
+    const syntax = checkJsSyntax(patched);
+    if (!syntax.ok) {
+      return { ok: false, before_bytes: raw.length, error: `拒绝写入：补丁后语法不合法（${syntax.line ? `第 ${syntax.line} 行：` : ""}${syntax.error}）` };
+    }
+
+    // 先备份原文件，和 D-368 的写入护栏保持同一套留证习惯
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    await sftpWriteFile(sftp, `${path}.d368-broken-${stamp}.bak`, raw);
+    await sftpWriteFile(sftp, path, patched);
+
+    return { ok: true, before_bytes: raw.length, after_bytes: patched.length };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  } finally {
+    client?.end();
+  }
 }
