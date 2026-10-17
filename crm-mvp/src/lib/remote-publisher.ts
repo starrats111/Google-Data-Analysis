@@ -10,6 +10,7 @@ import { getBtSshConfig } from "@/lib/system-config";
 import { ARTICLE_HYPERLINK_STYLE_BLOCK, cleanArticleContent, emphasizeArticleHyperlinks } from "@/lib/sanitize";
 import { withSiteLock, writeJsDataFileGuarded, isJsDataFile, checkJsSyntax, isDataOnly, hasRenderer, looksLikeRenderer, resolveBrokenDataPathFromLoaded, planRendererVarBridge } from "@/lib/site-write-guard";
 import { buildNovanestScriptsJs } from "@/lib/site-templates/novanest-renderer";
+import { buildBloomrootsRenderer } from "@/lib/site-templates/bloomroots-renderer";
 import { probeRenderedContent } from "@/lib/site-render-probe";
 
 // ─── 网站架构类型常量（与 Python 后端一致）───
@@ -3260,6 +3261,8 @@ export interface RepairSiteResult {
   /** D-370：写完后首页脚本在沙箱里跑一遍，列表容器有没有被填上内容 */
   render_verified?: boolean;
   render_detail?: string;
+  /** 临时诊断字段：排查 everydaynes.top / thegoodsandguard.top 容器名没生效的问题，用完即删 */
+  _debug_container?: { index_html_len: number; picked: string };
   action: "repaired" | "repaired_but_blank" | "skipped_healthy" | "skipped_no_articles"
     | "skipped_would_shrink" | "dry_run" | "failed";
   error?: string;
@@ -3600,6 +3603,7 @@ export async function repairSiteDataFile(
           const containerId = indexHtmlForRepair
             ? pickListContainerId(indexHtmlForRepair)
             : "article-list";
+          result._debug_container = { index_html_len: indexHtmlForRepair.length, picked: containerId };
           if (containerId !== "article-list") {
             console.log(`[D-370] ${site.domain}：首页列表容器是 #${containerId}，渲染器按它生成`);
           }
@@ -3852,6 +3856,13 @@ function buildRescuedRenderer(
 
   if (d === "novanest.one" && p === "scripts.js") {
     return buildNovanestScriptsJs(JSON.stringify(entries, null, 2));
+  }
+  // D-370：bloomroots.top 的渲染器是**独立文件**，不像 novanest 那样和数据同住
+  // 一个文件 —— 它运行时从 window 全局找 articlesIndex/articlesData（该站本就
+  // 有的两个数据文件各自声明的名字），不需要把数据内嵌进渲染器里。
+  // 所以这里只负责重写 script.js 本身，调用方那边已经单独在修数据文件。
+  if (d === "bloomroots.top" && p === "script.js") {
+    return buildBloomrootsRenderer();
   }
   return null;
 }

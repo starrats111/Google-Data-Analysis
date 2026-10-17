@@ -392,6 +392,7 @@ export async function GET(req: NextRequest) {
         db_articles: r.db_articles,
         written_entries: r.written_entries,
         error: r.error,
+        _debug_container: r._debug_container,
       })),
       results: scanned,
     });
