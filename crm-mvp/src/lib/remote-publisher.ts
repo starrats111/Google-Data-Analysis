@@ -3192,14 +3192,16 @@ export async function updateArticleDateOnSite(
   articleId: string,
   site: SiteConfig,
   publishDate: Date,
+  article?: { title: string; content: string },
 ): Promise<{ success: boolean; error?: string }> {
-  return withSiteLock(site.site_path, () => _updateArticleDateOnSite(articleId, site, publishDate));
+  return withSiteLock(site.site_path, () => _updateArticleDateOnSite(articleId, site, publishDate, article));
 }
 
 async function _updateArticleDateOnSite(
   articleId: string,
   site: SiteConfig,
   publishDate: Date,
+  article?: { title: string; content: string },
 ): Promise<{ success: boolean; error?: string }> {
   let client: import("ssh2").Client | null = null;
   try {
@@ -3269,6 +3271,21 @@ async function _updateArticleDateOnSite(
         sftp, siteRoot, site.domain, detailUrlForSitemap,
         publishDate.toISOString().slice(0, 10),
       );
+    }
+
+    // 5. 重新生成文章详情页静态 HTML —— createArticleHtmlPage 只在首次发布时跑一次，
+    // 日期是当时 escapeHtml(dateLabel) 写死进 HTML 文本的字面值，此后永不刷新。
+    // 改日期只改上面的列表/JSON/sitemap 的话，用户点进文章看到的还是发布那天的旧日期。
+    if (article && detailUrlForSitemap && !detailUrlForSitemap.includes("?")) {
+      try {
+        await createArticleHtmlPage(
+          sftp, client, siteRoot,
+          { title: article.title, content: article.content },
+          detailUrlForSitemap, site.domain, dateLabel,
+        );
+      } catch (err) {
+        console.warn(`[Publisher] 重新生成文章详情页 HTML 失败（不阻断其它日期同步）:`, err);
+      }
     }
 
     client.end();
