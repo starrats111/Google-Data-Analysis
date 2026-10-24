@@ -181,3 +181,124 @@ export async function reconcileOrphanCampaignsForSuspendedCids(
 
   return { paused: toPause.length, aligned: toAlign.length, ids: targetIds };
 }
+
+// ─────────────────────────────────────────────────────────────
+// D-372：单条系列从 CampaignInfo「凭空消失」的对账（不同于 D-330 的 CID 整体撤销）。
+//
+// 实证（07 2026-10-24 反馈：furla.com-US-1019-2 在 Google Ads 后台被直接删除，点启停报
+// 误导性「切换账户」提示）：生产库现场核实——该 gcid 所属 CID（889-724-9107）仍在正常投放
+// 其他系列，CID 本身没被撤销，命中不了 D-330 那条路；而统一脚本重写 CampaignInfo 时，
+// 对单条被删的系列就是整行不再写入（同一批核实：两条 10-13 已被 sync 写成 REMOVED 的系列，
+// 10 天后也从当前 Sheet 快照里彻底消失——证明 REMOVED 在表里只是过渡态，脚本后续清表时
+// 连 REMOVED 行一起扫掉了，不是只有"活着的"才会消失）。
+//
+// sheet-status-sync.ts 的主循环对「Sheet 里没有的系列」统一 continue 不动，这类单条消失的
+// 系列因此永久冻结在最后一次同步到的状态——跟 D-330 的病因同源，但触发条件不同（没有
+// CID 终态可以直接当依据），只能反查 Google 侧真实状态来确认。
+//
+// 为避免重新引入被 D-325/旧 fetchAllCampaignStatuses 打爆过的「逐条发 API」模式，
+// 候选集合用两层闸门收紧到最小：
+//   1) 本地仍标「在投」（active/ENABLED）且不是终态（非 REMOVED、remove_source 为空）；
+//   2) 本轮 Sheet 快照里确实没有这个 gcid；
+//   3) last_google_sync_at 已超过 STALE_HOURS——避免脚本单轮抖动/残表造成的瞬时缺行被误判。
+// 命中以上三条的系列在正常 MCC 里应该是个位数，才值得逐条反查。
+const MISSING_FROM_SHEET_STALE_HOURS = 24;
+
+/** 回停时写入 pause_source 的取值（对应 PAUSE_SOURCE_LABELS 需新增 vanished_from_sheet） */
+export const VANISHED_FROM_SHEET_PAUSE_SOURCE = "vanished_from_sheet";
+
+export interface VanishedReconcileResult {
+  /** 反查确认 Google 侧已 REMOVED，回停并标终态 */
+  removed: number;
+  /** 反查确认 Google 侧已 PAUSED，拉平内部状态 */
+  paused: number;
+  /** 反查仍是 ENABLED（脚本生成的偶发缺行，非真消失）或查询失败——只刷同步时间，不改状态 */
+  stillAlive: number;
+}
+
+interface VanishedCandidate {
+  id: bigint;
+  google_campaign_id: string;
+  customer_id: string;
+}
+
+/**
+ * 对单个 MCC 执行「Sheet 里凭空消失的在投系列」反查对账。
+ * 调用方需已拿到本轮 sheetMap（避免重复拉表）与该 MCC 的 Google Ads 凭据（反查要用）。
+ */
+export async function reconcileCampaignsVanishedFromSheet(
+  scope: {
+    userId: bigint;
+    mccId: bigint;
+    credentials: { mcc_id: string; developer_token: string; service_account_json: string };
+    sheetGcids: Set<string>;
+  },
+): Promise<VanishedReconcileResult> {
+  const staleCutoff = new Date(Date.now() - MISSING_FROM_SHEET_STALE_HOURS * 3600 * 1000);
+
+  const candidates = await prisma.campaigns.findMany({
+    where: {
+      user_id: scope.userId,
+      mcc_id: scope.mccId,
+      is_deleted: 0,
+      remove_source: null,
+      google_campaign_id: { not: null },
+      customer_id: { not: null },
+      OR: [{ status: "active" }, { google_status: "ENABLED" }],
+      NOT: { google_status: "REMOVED" },
+      last_google_sync_at: { lt: staleCutoff },
+    },
+    select: { id: true, google_campaign_id: true, customer_id: true },
+  });
+
+  const missing: VanishedCandidate[] = candidates
+    .filter((c) => c.google_campaign_id && !scope.sheetGcids.has(c.google_campaign_id))
+    .map((c) => ({ id: c.id, google_campaign_id: c.google_campaign_id!, customer_id: c.customer_id! }));
+
+  const result: VanishedReconcileResult = { removed: 0, paused: 0, stillAlive: 0 };
+  if (missing.length === 0) return result;
+
+  const { probeRealCampaignStatus } = await import("./mutate");
+  const now = new Date();
+
+  for (const c of missing) {
+    const real = await probeRealCampaignStatus(scope.credentials, c.customer_id, c.google_campaign_id);
+    if (real === "REMOVED") {
+      await prisma.campaigns.update({
+        where: { id: c.id },
+        data: {
+          status: "paused",
+          google_status: "REMOVED",
+          last_google_sync_at: now,
+          paused_at: now,
+          pause_source: VANISHED_FROM_SHEET_PAUSE_SOURCE,
+        },
+      });
+      result.removed++;
+      try {
+        await prisma.suffix_alerts.updateMany({
+          where: { campaign_id: c.id, status: "open", is_deleted: 0 },
+          data: { status: "resolved", resolved_at: now },
+        });
+      } catch (e) {
+        console.error("[VanishedReconcile] 收敛告警失败（不影响回停）:", e instanceof Error ? e.message : e);
+      }
+    } else if (real === "PAUSED") {
+      await prisma.campaigns.update({
+        where: { id: c.id },
+        data: { status: "paused", google_status: "PAUSED", last_google_sync_at: now },
+      });
+      result.paused++;
+    } else {
+      // real === "ENABLED"（脚本偶发缺行，不是真消失）或反查失败（权限/网络/配额）：
+      // 只刷同步时间避免本轮重复反查同一条，状态按兵不动，下次满足 staleness 再查一次
+      await prisma.campaigns.update({
+        where: { id: c.id },
+        data: { last_google_sync_at: now },
+      });
+      result.stillAlive++;
+    }
+  }
+
+  return result;
+}

@@ -31,6 +31,8 @@ interface SheetSyncResult {
   new_campaigns: number;
   /** D-330：本轮因所属 CID 已撤销/停用而被回停的「孤儿在投系列」数 */
   orphans_paused?: number;
+  /** D-372：本轮反查确认单条已在 Google 侧 REMOVED（Sheet 里凭空消失）的系列数 */
+  vanished_removed?: number;
   error?: string;
 }
 
@@ -112,7 +114,7 @@ export async function readCampaignInfoStatuses(
 export async function syncUserCampaignStatusesFromSheet(userId: bigint): Promise<SheetSyncResult[]> {
   const mccs = await prisma.google_mcc_accounts.findMany({
     where: { user_id: userId, is_deleted: 0, is_active: 1 },
-    select: { id: true, mcc_id: true, mcc_name: true, sheet_url: true },
+    select: { id: true, mcc_id: true, mcc_name: true, sheet_url: true, developer_token: true, service_account_json: true },
   });
 
   const results: SheetSyncResult[] = [];
@@ -159,8 +161,36 @@ export async function syncUserCampaignStatusesFromSheet(userId: bigint): Promise
         updated++;
       }
 
+      // D-372：Sheet 里确实收录到数据后，才有资格判定「某条本地在投的系列不在这份快照里」；
+      // 反查命中 REMOVED/PAUSED 都算这条系列的状态变化
+      let vanishedRemoved = 0;
+      try {
+        const { reconcileCampaignsVanishedFromSheet } = await import("@/lib/google-ads/orphan-campaign-reconcile");
+        const vanished = await reconcileCampaignsVanishedFromSheet({
+          userId,
+          mccId: mcc.id,
+          credentials: {
+            mcc_id: mcc.mcc_id,
+            developer_token: mcc.developer_token || "",
+            service_account_json: mcc.service_account_json || "",
+          },
+          sheetGcids: new Set(sheetMap.keys()),
+        });
+        vanishedRemoved = vanished.removed;
+        if (vanished.removed > 0 || vanished.paused > 0) {
+          anyChange = true;
+          console.log(
+            `[SheetStatusSync] D-372 MCC ${label} 单条系列从 CampaignInfo 消失，反查确认：` +
+            `REMOVED ${vanished.removed} 个，PAUSED ${vanished.paused} 个` +
+            `${vanished.stillAlive > 0 ? `，仍 ENABLED/反查失败按兵不动 ${vanished.stillAlive} 个` : ""}`,
+          );
+        }
+      } catch (e) {
+        console.error(`[SheetStatusSync] D-372 MCC ${label} 消失系列反查失败（不影响主流程）:`, e instanceof Error ? e.message : e);
+      }
+
       if (updated > 0) anyChange = true;
-      results.push({ mcc: label, campaigns: sheetMap.size, updated, new_campaigns: 0 });
+      results.push({ mcc: label, campaigns: sheetMap.size, updated, new_campaigns: 0, vanished_removed: vanishedRemoved || undefined });
     } catch (e) {
       results.push({
         mcc: label, campaigns: 0, updated: 0, new_campaigns: 0,

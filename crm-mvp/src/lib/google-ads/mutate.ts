@@ -1,7 +1,7 @@
 /**
  * Google Ads 修改服务 - 基于 Service Account REST API
  */
-import { MccCredentials, queryGoogleAds, mutateGoogleAds, dollarsToMicros } from "./client";
+import { MccCredentials, queryGoogleAds, mutateGoogleAds, dollarsToMicros, GoogleAdsViolation, isOperationNotPermittedError } from "./client";
 
 /**
  * 修改广告系列预算。
@@ -250,13 +250,20 @@ export async function updateCampaignFinalUrlSuffix(
 
 /**
  * 暂停/启用广告系列
+ *
+ * D-372（07 2026-10-24 反馈：furla.com-US-1019-2 在 Google Ads 后台已被直接移除，
+ * CRM 库内 google_status 仍停在 ENABLED，点启停命中 Google 的
+ * operationNotPermittedForContext——该错误码原本是「当前 CID 不支持这类广告」的创建场景错误，
+ * 被无差别套用到「系列已不存在」上，提示用户换账户，但换账户根本治不了这个问题）：
+ * 命中该错误码时反查一次 campaign 真实状态，若已是 REMOVED，直接回传明确结论，
+ * 让调用方据此纠正本地 google_status，而不是把创建场景的误导文案转述给用户。
  */
 export async function updateCampaignStatus(
   credentials: MccCredentials,
   customerId: string,
   campaignId: string,
   newStatus: "ENABLED" | "PAUSED",
-): Promise<{ success: boolean; message: string }> {
+): Promise<{ success: boolean; message: string; actualStatus?: string }> {
   try {
     const cid = customerId.replace(/-/g, "");
     const resourceName = `customers/${cid}/campaigns/${campaignId}`;
@@ -273,6 +280,43 @@ export async function updateCampaignStatus(
 
     return { success: true, message: `广告系列状态已更新为 ${newStatus}` };
   } catch (err) {
+    const violations = (err as { violations?: GoogleAdsViolation[] } | undefined)?.violations;
+    if (violations && violations.length > 0 && isOperationNotPermittedError(violations)) {
+      const real = await probeRealCampaignStatus(credentials, customerId, campaignId);
+      if (real === "REMOVED") {
+        return {
+          success: false,
+          actualStatus: "REMOVED",
+          message: "该广告系列在 Google Ads 端已被删除（REMOVED），无法启用或暂停。如需继续投放该商家，请重新提交广告。",
+        };
+      }
+    }
     return { success: false, message: `状态修改失败: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
+/**
+ * 反查 campaign 在 Google 侧的真实 status。查询本身失败（权限/网络）时返回 null，
+ * 调用方应按"查不到"处理，不得当作任何确定结论。
+ */
+export async function probeRealCampaignStatus(
+  credentials: MccCredentials,
+  customerId: string,
+  campaignId: string,
+): Promise<string | null> {
+  try {
+    // D-040 v3 已证：FROM campaign 对 REMOVED 有隐式过滤，必须显式写 status 条件才不会漏掉
+    const rows = await queryGoogleAds(credentials, customerId, `
+      SELECT campaign.status
+      FROM campaign
+      WHERE campaign.id = ${campaignId}
+        AND campaign.status IN ('ENABLED', 'PAUSED', 'REMOVED')
+    `);
+    const row = rows[0];
+    const campaign = row?.campaign as Record<string, unknown> | undefined;
+    const status = campaign?.status;
+    return typeof status === "string" ? status : null;
+  } catch {
+    return null;
   }
 }

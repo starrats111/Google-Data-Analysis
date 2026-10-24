@@ -43,6 +43,15 @@ export async function POST(req: NextRequest) {
   if (!list.length) return apiError("campaigns 不能为空", 400);
   if (list.length > 1000) return apiError("单次最多 1000 条", 400);
 
+  // D-362：这个请求到了，就说明 Hermes 的投放侧活着——打一次心跳。
+  // 只读汇报类接口（campaign-stats / policy-verdicts / merchant-intelligence）不打：
+  // 投放侧 2026-09-21 停摆后它们一次没断过，拿它们当心跳等于永远判活。
+  // 写在字段比对之前：有没有东西要更新是 Hermes 的事，它来过才是这里要记的事实。
+  {
+    const { recordHermesStatusHeartbeat } = await import("@/lib/hermes-liveness");
+    await recordHermesStatusHeartbeat();
+  }
+
   try {
     const gcids = list.map((c) => String(c.google_campaign_id)).filter(Boolean);
     const existing = await prisma.campaigns.findMany({

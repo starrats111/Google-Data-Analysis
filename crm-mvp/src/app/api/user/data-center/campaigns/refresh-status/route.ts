@@ -19,10 +19,14 @@ export async function POST(req: NextRequest) {
     // D-330：CID 已撤销导致的回停单独报数——这批系列不在 Sheet 里，不计入 updated，
     // 若只报 updated 用户会看到「已同步 0 条」，与他眼前状态确实变了矛盾。
     const orphansPaused = results.reduce((sum, r) => sum + (r.orphans_paused ?? 0), 0);
-    const msg = orphansPaused > 0
-      ? `已同步 ${totalUpdated} 条状态；另有 ${orphansPaused} 个系列因所属 CID 已撤销/停用被回停`
+    const vanishedRemoved = results.reduce((sum, r) => sum + (r.vanished_removed ?? 0), 0);
+    const extras: string[] = [];
+    if (orphansPaused > 0) extras.push(`${orphansPaused} 个系列因所属 CID 已撤销/停用被回停`);
+    if (vanishedRemoved > 0) extras.push(`${vanishedRemoved} 个系列反查确认已在 Google 端删除`);
+    const msg = extras.length > 0
+      ? `已同步 ${totalUpdated} 条状态；另有${extras.join("，")}`
       : `已同步 ${totalUpdated} 条状态`;
-    return apiSuccess({ results, totalUpdated, orphansPaused }, msg);
+    return apiSuccess({ results, totalUpdated, orphansPaused, vanishedRemoved }, msg);
   } catch (err) {
     return apiError(`同步失败: ${err instanceof Error ? err.message : String(err)}`);
   }
