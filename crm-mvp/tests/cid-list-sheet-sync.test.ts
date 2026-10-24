@@ -45,7 +45,7 @@ describe("parseCidListRows", () => {
     assert.equal(parseCidListRows([]), null);
   });
 
-  test("D-352 表头单元格被合并（列名后拼进了前几行值）仍能定位列", () => {
+  test("D-353 表头单元格被合并（列名后拼进了前几行值）仍能定位列", () => {
     // gviz 导出的真实形态：表头合并后，列名单元格里跟着被吞进来的前若干行值
     const rows = parseCidListRows([
       ["CustomerID 127-352-0631 130-586-4419", "AccountName ", "Status ENABLED CANCELED"],
@@ -58,7 +58,7 @@ describe("parseCidListRows", () => {
     ]);
   });
 
-  test("D-352 退化匹配只认首段，不把 StatusChangedAt 误当 Status 列", () => {
+  test("D-353 退化匹配只认首段，不把 StatusChangedAt 误当 Status 列", () => {
     const rows = parseCidListRows([
       ["CustomerID", "AccountName", "StatusChangedAt"],
       ["123-456-7890", "acc1", "2026-09-01"],

@@ -165,7 +165,7 @@ export default function DataCenterPage() {
   const [syncingFull, setSyncingFull] = useState(false);
   const [syncDialog, setSyncDialog] = useState<{ open: boolean; type: "transactions" | "mcc" | null }>({ open: false, type: null });
   const [syncForm] = Form.useForm<{ range: [Dayjs, Dayjs] }>();
-  const [editModal, setEditModal] = useState<{ open: boolean; campaign: CampaignRow | null; field: "budget" | "max_cpc" }>({ open: false, campaign: null, field: "budget" });
+  const [editModal, setEditModal] = useState<{ open: boolean; campaign: CampaignRow | null; field: "budget" | "max_cpc" | "name" }>({ open: false, campaign: null, field: "budget" });
   const [detailModal, setDetailModal] = useState(false);
   const [commissionModal, setCommissionModal] = useState(false);
   const [commissionByAccount, setCommissionByAccount] = useState<{
@@ -845,10 +845,23 @@ export default function DataCenterPage() {
         const seqB = parseInt(b.campaign_name?.split("-")[0] || "0", 10) || 0;
         return seqA - seqB;
       },
-      render: (v: string) => (
-        <Text style={{ fontSize: 12, wordBreak: "break-all", whiteSpace: "normal", lineHeight: "1.4" }}>
-          {v}
-        </Text>
+      render: (v: string, r: IndexedRow) => (
+        // D-339：名称可改。铅笔与预算/出价列同交互；改名会连带重排联盟归属，
+        // 所以同样受 D-248 中止 CID 拦截（那时一切写操作都禁）。
+        <Space size={4} align="start">
+          <Text style={{ fontSize: 12, wordBreak: "break-all", whiteSpace: "normal", lineHeight: "1.4" }}>
+            {v}
+          </Text>
+          {r.google_campaign_id && (
+            <Tooltip title={r.cid_suspended ? "所属 CID 已被 Google 中止，无法操作" : "修改名称（会同步到 Google 并按新名重排归属）"}>
+              <Button type="link" size="small" disabled={!!r.cid_suspended}
+                style={{ padding: 0, minWidth: 16 }}
+                icon={<EditOutlined style={{ fontSize: 10 }} />}
+                onClick={() => setEditModal({ open: true, campaign: r, field: "name" })}
+              />
+            </Tooltip>
+          )}
+        </Space>
       ),
     },
     status: {

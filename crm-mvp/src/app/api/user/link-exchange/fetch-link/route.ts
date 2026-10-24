@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getUserFromRequest } from '@/lib/auth'
 import { generateOneSuffix } from '@/lib/suffix-engine/suffix-generator'
+import { isSameUrl } from '@/lib/link-resolver/tracker'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -47,9 +48,22 @@ export async function POST(req: NextRequest) {
 
   // 跟到落地页但页面无追踪参数：仍返回最终 URL 供参考，前端提示「未检出追踪参数」。
   if (r.reason === 'no_tracking' && r.finalUrl) {
+    // D-337B：整条链一步没跳、终点就是输入本身 → 用户填的是商家官网，不是联盟追踪链接。
+    // 官网没有联盟跳板，点击压根不会登记，永远取不到参数，重试多少次都一样。
+    // 2026-09-15 yz08、09-14 wj10 两天内各犯一次（后者还入了库，导致该系列被误报链接失效），
+    // 而当时的提示只有笼统的「请确认链接是否正确」，看不出错在哪。故这种情形单列。
+    //
+    // 判定用「终点 === 输入」而不是数跳转次数：resolver 没把跳转数回传到这一层，
+    // 加字段要动 resolveAffiliateLink 的返回契约，而「原样返回」这个信号已经够准
+    // （真联盟链接必然至少跳一次到广告主域名）。
+    //
+    // 复用 tracker 的 isSameUrl：它只把「同一个 URL 的等价写法」算作相同
+    // （域名大小写、末尾斜杠、hash），而 http↔https、加 www、路径大小写变化、
+    // 多出查询串都算不同——这些差异意味着真发生过跳转，此时不该说「没有任何跳转」。
+    const looksLikeMerchantSite = isSameUrl(r.finalUrl, affiliateUrl.trim())
     return NextResponse.json({
       code: 0,
-      data: { finalUrl: r.finalUrl, suffix: null, exitIp: null, hasTracking: false },
+      data: { finalUrl: r.finalUrl, suffix: null, exitIp: null, hasTracking: false, looksLikeMerchantSite },
     })
   }
 

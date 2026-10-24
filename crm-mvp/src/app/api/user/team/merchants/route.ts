@@ -28,7 +28,8 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   // 查询组内所有成员 ID
   const members = await prisma.users.findMany({
     where: { team_id: teamId, is_deleted: 0, role: "user" },
-    select: { id: true },
+    // D-340：username/display_name 用于「待审核佣金」列的成员明细 Tooltip
+    select: { id: true, username: true, display_name: true },
   });
 
   if (members.length === 0) {
@@ -285,12 +286,115 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
     costByUm.set(umKey, (costByUm.get(umKey) || 0) + cost);
   }
 
+  // ─── D-340：本组「待审核佣金」（钱还压在平台，未确认／未拒付／未支付）───
+  // 口径与结算查询页「待审核($)」列逐字相同：status NOT IN ('approved','rejected','paid')。
+  // 生产实测 12 个平台的 status 去重后只有 approved/paid/pending/rejected 四值、无大小写
+  // 变体（normalizeTxnStatus 会把未识别状态一律落 pending），所以负向筛选 === pending 桶。
+  //
+  // 与结算查询页的两点差异（01 明确要求）：
+  //   1. **不限时间**——要的是「商家的所有待审核佣金」，结算页带时间窗所以偏小；
+  //      故这里刻意不加 transaction_time 条件，也不用上面的 txnMonthStart。
+  //   2. **本组全员**——按 umIds 聚合再合并，等于该商家下本组每个人结算页数字之和；
+  //      含已停投的成员（01 拍板：钱不能因为人停了广告就从列里消失）。
+  //      umIds 天然只含本组成员的行，无需再 join users。
+  // 只算当前页（约 50 个商家），不像月度佣金那样全量——本列不参与排序，没必要全算。
+  //
+  // 【为什么按 platform+merchant_id 聚合，而不是按 user_merchant_id】
+  // affiliate_transactions 上**没有** user_merchant_id 索引（idx_user_merchant_id 实际是
+  // [user_id, merchant_id]，名字有误导）。按 user_merchant_id IN (...) 聚合会全表扫 74 万行，
+  // 生产实测 1.45s；改成按 platform+merchant_id 走 idx_platform_merchant 区间扫描后
+  // 只扫 2.7 万行、0.09~0.15s。user_id IN (本组成员) 保证仍是「本组」口径。
+  // 另：MID 会跨平台撞号（实测 106880 同时存在于 PM 和 RW），所以聚合键**必须**带 platform，
+  // 否则会把不同平台的钱加到一起。
+  // D-340：额外按 user_id 分组，拿到「这笔钱是哪几个人的」明细（Tooltip 用）。
+  // 多加一个 GROUP BY 列不改变索引使用方式，仍走 idx_platform_merchant 区间扫描。
+  const pendingByMerchant = new Map<string, number>();
+  const pendingMembersByMerchant = new Map<
+    string,
+    { name: string; amount: number; state: "running" | "idle" | "released" }[]
+  >();
+  if (pagedEntries.length > 0) {
+    // 按平台归并当前页 MID 并去重，每个平台一个 OR 分组 —— 这样每组都能走索引区间扫描
+    const byPlatform = new Map<string, Set<string>>();
+    for (const e of pagedEntries) {
+      let set = byPlatform.get(e.platform);
+      if (!set) byPlatform.set(e.platform, (set = new Set<string>()));
+      set.add(e.merchant_id);
+    }
+    const groups: string[] = [];
+    const params: (string | bigint)[] = [];
+    for (const [plat, mids] of byPlatform) {
+      groups.push(`(platform = ? AND merchant_id IN (${[...mids].map(() => "?").join(",")}))`);
+      params.push(plat, ...mids);
+    }
+
+    const pendingAgg = await prisma.$queryRawUnsafe<
+      { platform: string; merchant_id: string; user_id: bigint; pending: number | string | null }[]
+    >(`
+      SELECT
+        platform,
+        merchant_id,
+        user_id,
+        ROUND(SUM(CASE WHEN status NOT IN ('approved','rejected','paid')
+                       THEN CAST(commission_amount AS DECIMAL(14,4)) ELSE 0 END), 2) AS pending
+      FROM affiliate_transactions
+      WHERE is_deleted = 0
+        AND user_id IN (${memberIds.map(() => "?").join(",")})
+        AND (${groups.join(" OR ")})
+      GROUP BY platform, merchant_id, user_id
+    `, ...memberIds, ...params);
+
+    // 成员名映射 + 该成员在该商家上的状态判定。
+    // 三态区分很重要：「在投人数」只数有 ENABLED 广告的人，而待审核佣金含全部认领过的人，
+    // 所以「1 人」旁边可能挂着好几个人的钱。生产实测：真退掉商家的只有 154 行/$8.6k，
+    // 而「还持有但当前没在投」多达 922 行/$146.9k —— 后者才是两列对不上的主因，必须标出来。
+    const nameByUid = new Map<string, string>();
+    for (const m of members) {
+      nameByUid.set(m.id.toString(), m.display_name || m.username);
+    }
+    const holderKeys = new Set<string>();
+    const runningKeys = new Set<string>();
+    for (const um of allUserMerchants) {
+      const mKey = `${um.merchant_id}:${um.platform}`;
+      const uid = um.user_id.toString();
+      holderKeys.add(`${mKey}:${uid}`);
+      // 与「在投人数」同源：该 um 行下有 ENABLED 广告且归属这个人
+      if (activeUsersByUmGlobal.get(um.id.toString())?.has(uid)) {
+        runningKeys.add(`${mKey}:${uid}`);
+      }
+    }
+
+    for (const r of pendingAgg) {
+      const amount = Number(r.pending || 0);
+      if (amount === 0) continue;
+      const key = `${r.merchant_id}:${r.platform}`;
+      pendingByMerchant.set(key, (pendingByMerchant.get(key) || 0) + amount);
+      const uid = r.user_id.toString();
+      const list = pendingMembersByMerchant.get(key) || [];
+      const held = holderKeys.has(`${key}:${uid}`);
+      const running = runningKeys.has(`${key}:${uid}`);
+      list.push({
+        name: nameByUid.get(uid) || `#${uid}`,
+        amount: Math.round(amount * 100) / 100,
+        // running=在投（计入「在投人数」）；held 但非 running=持有未在投；都不是=已退商家
+        state: running ? "running" : held ? "idle" : "released",
+      });
+      pendingMembersByMerchant.set(key, list);
+    }
+    // 金额降序，让 Tooltip 里大额在前
+    for (const list of pendingMembersByMerchant.values()) {
+      list.sort((a, b) => b.amount - a.amount);
+    }
+  }
+
   // ─── 组装结果 ───
   const merchants = pagedEntries.map((entry) => {
     let totalCost = 0;
     for (const umId of entry.umIds) {
       totalCost += costByUm.get(umId.toString()) || 0;
     }
+    // D-340：该商家下本组全员的待审核佣金（SQL 已按 platform+merchant_id 聚合完，直接取）
+    const pendingCommission = pendingByMerchant.get(`${entry.merchant_id}:${entry.platform}`) || 0;
     // 毛口径 ROI（07 拍板 2026-08-04）：不扣拒付佣金，倍数口径（0.52 而非 52%），与数据中心一致
     const roi = totalCost > 0 ? (entry.monthly_commission - totalCost) / totalCost : 0;
     return {
@@ -302,6 +406,9 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
       category: entry.category,
       active_advertisers: entry.active_advertisers,
       monthly_commission: entry.monthly_commission,
+      // D-340：本组全员、全时间的待审核佣金 + 成员明细（Tooltip 用）
+      pending_commission: Math.round(pendingCommission * 100) / 100,
+      pending_members: pendingMembersByMerchant.get(`${entry.merchant_id}:${entry.platform}`) || [],
       roi: Math.round(roi * 100) / 100,
       total_cost: Math.round(totalCost * 100) / 100,
     };

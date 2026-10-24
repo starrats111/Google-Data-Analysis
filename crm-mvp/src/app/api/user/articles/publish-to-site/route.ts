@@ -198,7 +198,7 @@ export async function PATCH(req: NextRequest) {
 
     const article = await prisma.articles.findFirst({
       where: { id: BigInt(article_id), user_id: BigInt(user.userId), is_deleted: 0 },
-      select: { id: true, publish_site_id: true, slug: true, status: true },
+      select: { id: true, publish_site_id: true, slug: true, status: true, title: true, content: true },
     });
     if (!article) return apiError("文章不存在", 404);
 
@@ -225,6 +225,7 @@ export async function PATCH(req: NextRequest) {
             domain: site.domain,
           },
           resolvedDate,
+          article.title && article.content ? { title: article.title, content: article.content } : undefined,
         ).catch((e) => console.warn("[PublishToSite] PATCH 站点日期更新失败（不阻断）:", e));
       }
     }

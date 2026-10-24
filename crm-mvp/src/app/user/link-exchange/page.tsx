@@ -366,6 +366,19 @@ export default function LinkExchangePage() {
       if (res.code === 0 && res.data?.finalUrl) {
         setFetchLinkResult({ finalUrl: res.data.finalUrl, hasTracking: !!res.data.hasTracking });
         if (res.data.hasTracking) message.success("取链接成功，已跟到带追踪参数的最终链接");
+        // D-337B：填成商家官网时把原因说透。原文案「请确认链接是否正确」看不出错在哪，
+        // 两天内 yz08、wj10 各栽一次，其中一条还入了库导致系列被误报链接失效。
+        // 举例域名按 user_merchants.tracking_link 实际用量前 5 取（2026-09-15 实测：
+        // linkbux 71万 / partnermatic 63万 / rewardoo 29万 / linkhaitao 6.5万 / ultrainfluence 2万），
+        // 这样大多数人一眼能认出自己该用哪个，而不是看到几个冷门域名。
+        else if (res.data.looksLikeMerchantSite)
+          message.warning(
+            "这条链接没有发生任何跳转，终点就是你填的地址本身，看起来是商家官网、不是联盟追踪链接。" +
+              "官网上没有联盟跳板，点击不会被登记，再取多少次都取不到追踪参数。" +
+              "请到联盟后台复制「追踪链接 / Tracking Link」，它通常以跳板域名开头，如 " +
+              "www.linkbux.com、app.partnermatic.com、admin.rewardoo.com、www.linkhaitao.com、go.ultrainfluence.com",
+            14,
+          );
         else message.warning("已跟到最终页面，但未检出追踪参数，请确认链接是否正确");
       } else message.error(res.message ?? "取链接失败");
     } catch {

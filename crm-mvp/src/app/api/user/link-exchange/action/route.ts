@@ -140,7 +140,16 @@ export async function POST(req: NextRequest) {
       advice = '本次跟链超时（55 秒内没跟完），多为跟链通道排队或目标站慢，未能验证链接好坏。系统会自动重试；若连续多次都超时，再考虑到联盟后台换链接。'
     } else if (r.reason === 'probe_failed') {
       verdict = 'dead'
-      advice = `重验仍失败：${r.probeError ?? '未跟到商家落地页'}${r.probeFinalUrl ? `（实际落到 ${r.probeFinalUrl.slice(0, 120)}）` : ''}。请到联盟平台后台重新生成该商家的追踪链接，然后点告警行的「换链接」按钮替换，保存后会自动验证。`
+      // D-363：「停在第三方中转域名」不能与真死链共用一句话。那句「请到联盟平台后台重新生成」
+      // 对 token 失效是对的，对这一类却是把人往联盟后台白跑一趟 —— 2026-09-28 齐满艳就是被它
+      // 骗去 BA 后台的，而 BA 那条链接本来就是好的（换多少次都还是同一条中转栈，每轮再撞同一道闸）。
+      // 判据用 probeError 的前缀，与 affiliate-link-resolver 里 failAtNonLanding 的措辞对齐。
+      const stuckOnRelay = /^停在(第三方中转域名|联盟点击中转域名|跳板域名)/.test(r.probeError ?? '')
+      advice = stuckOnRelay
+        ? `重验仍失败：${r.probeError}${r.probeFinalUrl ? `（实际落到 ${r.probeFinalUrl.slice(0, 120)}）` : ''}。` +
+          `这一类多半不是链接坏了，而是我方巡航没跟动该中转页的 JS 跳转 —— 到联盟后台重新生成链接通常没用，` +
+          `换出来还是同一条中转链路。请把本条告警连同链接一起报给管理员排查跟链通道，不要反复点重验（每次都会让失败次数继续累加）。`
+        : `重验仍失败：${r.probeError ?? '未跟到商家落地页'}${r.probeFinalUrl ? `（实际落到 ${r.probeFinalUrl.slice(0, 120)}）` : ''}。请到联盟平台后台重新生成该商家的追踪链接，然后点告警行的「换链接」按钮替换，保存后会自动验证。`
     } else if (r.reason === 'tracker_forbidden') {
       verdict = 'dead'
       advice = `联盟跳板明确拒绝该追踪链接（${r.probeError ?? 'HTTP 4xx'}）——token 已失效/被联盟停用，等系统自愈无用。请到联盟平台后台重新生成该商家的追踪链接，然后点告警行的「换链接」按钮替换，保存后会自动验证。`

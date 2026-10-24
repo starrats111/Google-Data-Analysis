@@ -72,11 +72,70 @@ async function expectRejected(p: Promise<SlotRelease>, msg: string) {
 }
 
 describe("高峰档（工作日白天）：广告 2 / 换链接 1", () => {
-  test("换链接并发封顶 1，第 2 个被拒（哪怕池子还有空槽）", async () => {
+  // D-337 修订：本用例原先断言「第 2 个换链接必须被拒，哪怕池子还有空槽」，用于锁死 D-298 的
+  // 硬分区。2026-09-15 实测该断言正是 525 次抢槽失败的成因（439 次快照 active=1/3，2 槽空转），
+  // 故意图改为：广告侧**整体闲置**时借 1 个空槽；广告侧一有动静立刻缩回配额。
+  test("广告侧闲置时，第 2 个换链接借空槽（D-337）", async () => {
     peakAlways();
     await expectImmediate(acquireExchangeSlot(50), "第 1 个换链接应拿到专属槽");
-    assert.equal(puppeteerSemaphoreStats().active, 1, "池子明明还有 2 个空槽");
-    await expectRejected(acquireExchangeSlot(50), "第 2 个换链接必须被拒——不得再借弹性/预留");
+    assert.equal(puppeteerSemaphoreStats().active, 1);
+    await expectImmediate(acquireExchangeSlot(50), "广告侧全闲，第 2 个应借到空槽而非干等 30s");
+    assert.equal(puppeteerSemaphoreStats().active, 2, "借 1 个后应为 2");
+    assert.equal(puppeteerSemaphoreStats().activeExchangeTotal, 2);
+  });
+
+  test("借用必须留 1 个空槽给广告：第 3 个换链接仍被拒（D-337）", async () => {
+    peakAlways();
+    await expectImmediate(acquireExchangeSlot(50), "第 1 个：专属槽");
+    await expectImmediate(acquireExchangeSlot(50), "第 2 个：借 1 个");
+    await expectRejected(acquireExchangeSlot(50), "第 3 个必须被拒——最后一个空槽留给广告");
+    assert.equal(puppeteerSemaphoreStats().active, 2, "池子必须留 1 个空槽");
+  });
+
+  test("广告侧一占槽就不再借，换链接缩回配额 1（D-337）", async () => {
+    peakAlways();
+    await expectImmediate(acquireExchangeSlot(50), "换链接占专属槽");
+    await expectImmediate(acquirePuppeteerSlot(50), "广告侧（normal）占一槽");
+    await expectRejected(acquireExchangeSlot(50), "广告侧在用 → 不得借，让路语义不变");
+  });
+
+  test("广告侧在排队时不借（D-337）", async () => {
+    peakAlways();
+    // 先让换链接用掉自己的配额槽（1），后续任何 exchange 申请只能靠借用 —— 这样才测得到借用门禁。
+    await expectImmediate(acquireExchangeSlot(50), "换链接先占掉配额槽");
+    // 广告侧占 1 槽，池子到 2/3；再来一个广告请求会排队（normalCap=1 已被占）
+    await expectImmediate(acquirePuppeteerSlot(50), "广告侧占一槽");
+    let queuedResolved = false;
+    const waiting = acquirePuppeteerSlot(400).then(
+      (r) => { queuedResolved = true; return track(r); },
+      () => { queuedResolved = true; },
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(queuedResolved, false, "该广告请求应在排队");
+    // 广告侧既在用又在等 → 借用门禁两条都不满足
+    await expectRejected(acquireExchangeSlot(50), "广告侧有等待者 → 不得借");
+    await waiting.catch(() => {});
+  });
+
+  // 这条是 D-337 的要害：仅改「到达即判定」只能救新来的请求，已经排在队里的（生产快照
+  // exchangeQ 深到 10）仍会干等到 30s 超时。故释放侧的唤醒也必须能走借用路径。
+  test("广告槽释放后，排队中的换链接被唤醒（D-337 唤醒侧）", async () => {
+    peakAlways();
+    await expectImmediate(acquireExchangeSlot(50), "换链接占配额槽");
+    // 广告侧占 2 槽（normal + 主爬预留）→ 池子 3/3 满，换链接既超配额又无空槽可借
+    const adsNormal = await expectImmediate(acquirePuppeteerSlot(50), "广告侧 normal 占一槽");
+    const adsMain = await expectImmediate(acquireMainCrawlSlot(50), "主爬占预留槽，池子打满");
+    let got = false;
+    const queued = acquireExchangeSlot(2000).then((r) => { got = true; return track(r); });
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(got, false, "池满时换链接应在排队");
+    // 广告侧全部释放 → adsActive() 归 0、两队列皆空 → 排队中的换链接应被唤醒，而不是干等到超时。
+    // 只放一个不够（借用门禁要求 adsActive()===0），这正是「广告侧整体闲置才借」的语义。
+    adsNormal();
+    adsMain();
+    await queued;
+    assert.equal(got, true, "广告槽释放后应唤醒排队中的换链接");
+    assert.equal(puppeteerSemaphoreStats().activeExchangeTotal, 2);
   });
 
   test("换链接占着专属槽时，广告链路（normal+主爬）仍能拿满自己的 2 槽", async () => {
@@ -107,6 +166,9 @@ describe("高峰档（工作日白天）：广告 2 / 换链接 1", () => {
   test("换链接释放专属槽后，排队中的换链接被唤醒接棒", async () => {
     peakAlways();
     const first = await expectImmediate(acquireExchangeSlot(200), "第 1 个换链接");
+    // D-337：广告侧必须先占住槽，否则第 2 个换链接会直接借空槽而不排队，本用例就测不到
+    // 「释放→接棒」这条唤醒路径了。占 1 个即可让借用门禁（adsActive()===0）不成立。
+    await expectImmediate(acquirePuppeteerSlot(50), "广告侧占一槽，堵住借用路径");
     let secondGot = false;
     const secondP = acquireExchangeSlot(2000).then((rel) => {
       secondGot = true;

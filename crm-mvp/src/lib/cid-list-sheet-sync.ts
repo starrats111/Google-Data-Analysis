@@ -59,7 +59,7 @@ export interface ExistingCidRow {
 /**
  * 表头列定位。
  *
- * D-352（2026-09-23 实测）：部分 MCC 的 CID_List 表头单元格被合并，gviz 导出的第一行
+ * D-353（2026-09-23 实测）：部分 MCC 的 CID_List 表头单元格被合并，gviz 导出的第一行
  * 变成「列名 + 被吞进来的前若干行值」，例：
  *   "CustomerID 127-352-0631 130-586-4419 …","AccountName ","Status ENABLED CANCELED …"
  * 精确 indexOf 匹配不上 → parseCidListRows 整表判 null → 两条 Sheet 同步路径静默跳过
@@ -498,7 +498,7 @@ export async function syncCidListFromSheets(log: (msg: string) => void): Promise
     if (!sheetRows || sheetRows.length === 0) {
       // 无 tab / 老格式 / 空表（可能是脚本中断残表）——一律不动库
       stats.skipped++;
-      // D-352：这里原来静默 continue，是最贵的一条。CID 状态同步整轮不跑却零日志，
+      // D-353：这里原来静默 continue，是最贵的一条。CID 状态同步整轮不跑却零日志，
       // 只能靠「某个 CID 状态为什么几个月不动」反查才发现（wj11 那次冻了三个月）。
       // 打上表头首段，好判是老格式（无 CustomerID 列）还是表头被合并/残表。
       log(`  [CID_List] ${label}: CID_List 解析不出有效行，跳过（raw=${rows.length} 行，表头=${JSON.stringify(rows[0]?.slice(0, 4).map((c) => c.split(/[\s\r\n]+/)[0]) ?? [])}）`);
@@ -628,7 +628,7 @@ export async function syncCidStatusesFromSheets(log: (msg: string) => void): Pro
   withStatusCol: number;
   updated: number;
   recovered: number;
-  /** D-352：CID_List 解析不出有效行的 MCC 数（表头合并/老格式/残表）——这些 MCC 本轮状态同步等于没跑 */
+  /** D-353：CID_List 解析不出有效行的 MCC 数（表头合并/老格式/残表）——这些 MCC 本轮状态同步等于没跑 */
   unparsable: number;
   /** D-359：表头吞掉开头若干行的 MCC 数——这些 MCC 的状态同步漏掉了被吞那几十个 CID */
   headerGap: number;
@@ -652,7 +652,7 @@ export async function syncCidStatusesFromSheets(log: (msg: string) => void): Pro
       if (!sid) { out.unparsable++; continue; } // D-360：链接坏了也是「本轮没跑」，一并计数
       const rows = await readSheetCsv(sid, "CID_List");
       const sheetRows = parseCidListRows(rows);
-      // D-352：只计数不逐 MCC 打日志——这条半小时跑一轮 × 60 个 MCC，逐条会把日志冲掉；
+      // D-353：只计数不逐 MCC 打日志——这条半小时跑一轮 × 60 个 MCC，逐条会把日志冲掉；
       // 汇总数字由调用方打一行，异常值（如 25/60）就是「大批 MCC 状态同步实际没跑」的信号。
       if (!sheetRows || sheetRows.length === 0) { out.unparsable++; continue; }
       // D-359：吞行只会让这几十个 CID 本轮没被核对（状态停在旧值），不会写错——

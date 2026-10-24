@@ -87,7 +87,11 @@ export async function applyAffiliateCommissionToDailyStats(
         ? { OR: [{ mcc_id: null }, { mcc_id: { notIn: deletedMccIds } }] }
         : {}),
     },
-    select: { id: true, user_merchant_id: true, google_status: true, updated_at: true, platform_connection_id: true },
+    // D-346：campaign_name + created_at 供「重投放按系列名日期接管」解析投放日期
+    select: {
+      id: true, user_merchant_id: true, google_status: true, updated_at: true,
+      platform_connection_id: true, campaign_name: true, created_at: true,
+    },
   });
 
   const STATUS_PRIORITY: Record<string, number> = { ENABLED: 0, PAUSED: 1, REMOVED: 2 };
@@ -132,6 +136,8 @@ export async function applyAffiliateCommissionToDailyStats(
       id: String(c.id),
       userMerchantId: c.user_merchant_id ? String(c.user_merchant_id) : null,
       platformConnectionId: c.platform_connection_id ? String(c.platform_connection_id) : null,
+      campaignName: c.campaign_name,
+      createdAt: c.created_at,
     })),
     spendCalendar,
   );

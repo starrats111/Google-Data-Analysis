@@ -207,8 +207,23 @@ function isTrackerHost(host: string): boolean {
 // 纯 HTTP 巡航跟不动其 JS 跳转、会停在中转域名上 → 必须靠真实浏览器跟随才能拿到「完整」落地页；
 // 浏览器不可用时退而解其 url=/destination= 参数里的静态广告主 URL（至少拿回正确的广告主域名）。
 // ⚠️ 仅匹配「主机名」：绝不误伤把 engagevantage/ultrainfluence 写进 utm_campaign 等参数值的正常落地页。
+// D-363（BA/BonusArrive 报障，Contiki GB）：FatCoupon 那一串中转域名也属于这一类，必须进这张名单。
+//   BA 的链接 → `redirect.partner.fatcoupon.com/go` → `fatcoupon.com/redirect.html`（内联 JS
+//   读 store_url 后 location.assign） → `r.v2i8b.com/api/v1/bid/redirect`（**外链** JS
+//   `/assets/bid_redirect-*.js` 读 data-web-redirect-url 后 location.replace） → 广告主。
+//   这三个 host 原先一张名单都不命中，于是 resolveViaBrowser 里出两处错：
+//     ① `reachedLanding` 只要 host≠startHost 且三张名单全不命中就 latch 成 true → 在
+//        fatcoupon.com 这一跳就误判「已到广告主落地页」，此后所有非导航请求一律 abort。
+//        r.v2i8b.com 的跳转脚本是外链 script，正好被这个 abort 掐死 → 链条停在 r.v2i8b.com。
+//     ② `onJumpHost()` 同样不认这三个 host → 不进「主动轮询等 JS 跳离」那 18s，
+//        page.url() 直接快照在中转域名上。
+//   两处合起来的结果就是告警里那句「停在第三方中转域名 r.v2i8b.com」（D-316 硬层降级），
+//   而链接本身是好的：手工把 store_url 解一层码后直连 r.v2i8b.com 能正常落到 www.contiki.com。
+//   所以这类链接换多少次都一样 —— 每轮重巡都再撞同一道闸（与 D-328 记录的 Tapo 误杀同型）。
 const NETWORK_CLICK_HOST_PATTERNS: RegExp[] = [
   /(^|\.)engagevantage\.com$/i, /(^|\.)ultrainfluence\.com$/i,
+  // D-363 FatCoupon 中转栈（BA/PartnerMatic 的上级发布商）
+  /(^|\.)fatcoupon\.com$/i, /(^|\.)v2i8b\.com$/i,
 ];
 
 function isNetworkClickHost(host: string): boolean {
@@ -285,6 +300,33 @@ export function sanitizeTrackingQuery(search: string | null | undefined): string
 }
 
 /**
+ * D-354：判断「用户填进 final_url_suffix 的值是不是整条跟踪链接」。
+ *
+ * 旧口径是 `includes("://")` —— 只要串里任何位置出现协议头就判为整条链接。这会误杀
+ * 合法后缀：联盟把落地页/中转页当成**某个参数的值**是常见写法
+ * （实测 Rewardoo：`utm_source=soicos&utm_term=26008&utm_campaign=https://www.rewardoo.com/_tnd-26008`），
+ * 此时 `://` 出现在 `=` 右边，是参数值的一部分，拼到 final_url 后面完全合法。
+ *
+ * 正确口径：只看**串的开头**是不是一个 URL。整条链接被误贴时长相必然是
+ * `https://…` / `http://…` / `%2F%2F…`（编码后），即第一段不是 `key=value`。
+ * 判为整条链接的条件：
+ *   1. 以协议头开头（含百分号编码形态）；或
+ *   2. 第一个 `&` 之前那段里，`://` 出现在第一个 `=` 之前（没有前导 key 的形态）。
+ */
+export function looksLikeWholeTrackingLink(suffix: string | null | undefined): boolean {
+  const raw = (suffix || "").trim().replace(/^[?&\s]+/, "");
+  if (!raw) return false;
+  // 1. 协议头开头：https:// http:// 以及 %3A%2F%2F / %2F%2F / // 等编码与省略形态
+  if (/^(https?(:|%3a)|%2f%2f|\/\/)/i.test(raw)) return true;
+  // 2. 第一段里协议头出现在 '=' 之前 → 这段不是 key=value，而是链接本体
+  const firstSeg = raw.split("&")[0] || "";
+  const eq = firstSeg.indexOf("=");
+  const proto = firstSeg.search(/:\/\/|%3a%2f%2f/i);
+  if (proto !== -1 && (eq === -1 || proto < eq)) return true;
+  return false;
+}
+
+/**
  * 落地页无 query 时的兜底取参：在跳转链里回溯与最终落地页「同根域名」且带联盟追踪参数的那一跳，
  * 返回该跳的 query 串（不含前导 ?）；未找到返回 null。
  */
@@ -342,6 +384,9 @@ const DEEPLINK_FALLBACK_PARAMS = [
   "adjust_redirect", "redirect", "fallback", // Adjust
   "af_web_dp", "af_r", // AppsFlyer
   "$desktop_url", "$fallback_url", "$web_only_url", // Branch
+  // D-363：FatCoupon 的 redirect.html 把下一跳放在 store_url 里（值是 r.v2i8b.com 的 bid/redirect，
+  // 后者的 url= 才是广告主）。放在通用兜底之前，配合下面的一层递归即可一路解到广告主域名。
+  "store_url",
   "url", "destination", // 通用兜底
 ];
 
@@ -350,7 +395,7 @@ const DEEPLINK_FALLBACK_PARAMS = [
  * 参数值可能被多层 URL-encode，做有限次解码后取首个合法 http(s) 且非深链/跳板的域名。
  * 解不出返回 null（交由调用方判 resolve_failed）。
  */
-function unwrapDeeplink(deeplinkUrl: string): string | null {
+export function unwrapDeeplink(deeplinkUrl: string, depth = 0): string | null {
   let parsed: URL;
   try {
     parsed = new URL(decodeJsUnicode(deeplinkUrl));
@@ -380,6 +425,14 @@ function unwrapDeeplink(deeplinkUrl: string): string | null {
     }
     // 真实落地不应仍是深链 / 跳板域名
     if (isDeeplinkHost(cand.hostname) || isTrackerHost(cand.hostname)) continue;
+    // D-363：解出来的下一跳本身还是中转域名（FatCoupon 的 store_url → r.v2i8b.com/bid/redirect）
+    // → 再解一层，把它 url= 里的广告主 URL 取出来。限一层递归，够用且不会打转。
+    if (isNetworkClickHost(cand.hostname)) {
+      if (depth >= 1) continue;
+      const inner = unwrapDeeplink(cand.toString(), depth + 1);
+      if (inner) return inner;
+      continue;
+    }
     return cand.toString();
   }
   return null;
@@ -1149,15 +1202,25 @@ async function resolveViaBrowser(
       }
       // 落地判定：主框架 host 已离开入口/跳板/中转/深链域名 → 视为已抵达广告主落地页（latch，不回退）。
       // about:blank / chrome-error 等 hostname 为空，视为未落地；与 startHost 相同也视为未落地（还在入口页）。
+      // D-363：这个 latch 的原判据是「不在三张名单里 ⇒ 就是广告主落地页」。名单永远追不上新中转栈
+      // （FatCoupon → r.v2i8b.com 即是，且 Adtraction 那类还在轮换编号域，见 D-316 注释），
+      // 一旦 latch 在中转壳上误开，此后**所有非导航请求都被 abort**，而中转壳靠外链 script 跳转 —— 等于
+      // 我方亲手掐死了它的跳转，把「能跟到」的链接变成「停在中转域名」。
+      // 改成：知道商家域名（targetHost）时，只认「落到商家域名」才算落地；不认名单这条反向推断。
+      // 拿不到 targetHost 时（没传商家域、链接也解不出）才退回旧判据 —— 那种情况没有更好的依据，
+      // 且早停本身也没开，代价只是多下一个页面。
       if (!reachedLanding) {
         try {
           const mfHost = new URL(page.mainFrame().url()).hostname;
-          if (
+          const offEntryAndKnownRelays =
             mfHost &&
             mfHost !== startHost &&
             !isTrackerHost(mfHost) &&
             !isNetworkClickHost(mfHost) &&
-            !isDeeplinkHost(mfHost)
+            !isDeeplinkHost(mfHost);
+          if (
+            offEntryAndKnownRelays &&
+            (!targetHost || landingMatchesTarget(mfHost, targetHost))
           ) {
             reachedLanding = true;
           }
@@ -1212,11 +1275,17 @@ async function resolveViaBrowser(
         /* 超时无妨 */
       }
     }
+    // D-363：同一个「名单追不上新中转栈」的病在这里的第二个形态 —— 名单不认 r.v2i8b.com，
+    // 于是根本不进下面那 18s 轮询，page.url() 直接快照在中转域名上（外链跳转脚本还没跑完）。
+    // 同样改成以商家域名为准：知道 targetHost 且还没落到它上面，就当「仍在跳转中」继续等。
     const onJumpHost = (): boolean => {
       if (earlyStopUrl) return false;
       try {
         const h = new URL(page.url()).hostname;
-        return isTrackerHost(h) || isNetworkClickHost(h);
+        if (isTrackerHost(h) || isNetworkClickHost(h)) return true;
+        // 还在入口域名上也算没跳走（入口页的 JS 点击注册尚未把人带走）
+        if (targetHost && !landingMatchesTarget(h, targetHost)) return true;
+        return false;
       } catch {
         return false;
       }
