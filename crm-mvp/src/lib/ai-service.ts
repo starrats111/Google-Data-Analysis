@@ -668,12 +668,19 @@ async function getSceneModels(scene: string): Promise<AiModelConfig[]> {
   return result;
 }
 
-/** 判断是否为连接超时/网络错误（值得立即重试） */
+/**
+ * 判断是否为连接超时/网络错误（值得立即重试）。
+ * D-373：AbortSignal.timeout 触发的 TimeoutError 也归入此类——文章场景
+ * 16384 max_tokens 的长文生成偶发慢响应不该和真正挂死的 provider 一样
+ * 直接判死（article 场景当时只有一个有效 fallback 候选，单次慢响应
+ * 就导致整个场景失败，用户看到「请检查 AI 配置」实为误导）。
+ */
 function isConnectError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   const msg = err.message || "";
   const cause = (err as { cause?: { code?: string; message?: string } }).cause;
   return (
+    err.name === "TimeoutError" ||
     msg.includes("fetch failed") ||
     msg.includes("ConnectTimeoutError") ||
     msg.includes("ECONNRESET") ||
@@ -879,6 +886,11 @@ async function callAi(
         "Content-Type": "application/json",
       };
 
+  // D-373：按 max_tokens 等比放宽超时，45s 起步（ad_copy 等小请求的挂死检测窗口
+  // 不变），每 1000 token 加 5s，上限 150s（article 场景 16384 token ≈ 127s）。
+  const effectiveMaxTokens = maxTokens || config.maxTokens;
+  const requestTimeoutMs = Math.min(150000, Math.max(45000, 45000 + (effectiveMaxTokens / 1000) * 5000));
+
   const MAX_RETRIES = 2;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     let res: Response;
@@ -890,7 +902,11 @@ async function callAi(
         // 2026-08-10 事故：hajimi 的 claude 通道挂死（零字节响应），120s 超时导致
         // 每个 AI 步骤空等 2 分钟才切下一模型/兜底，广告生成整体拖慢数倍。
         // 降到 45s：正常推理足够（实测秒级返回），通道挂死时快速切换备选模型。
-        signal: AbortSignal.timeout(45000),
+        // D-373：45s 是按 ad_copy 等小 max_tokens 调用校准的。article 场景单次
+        // 请求 16384 max_tokens（含长文 + img 标签），真实长文生成偶发超过 45s
+        // 属正常慢响应而非挂死，仍按 45s 判死会把"没写完"误判成"通道挂了"。
+        // 按请求的 max_tokens 等比放宽超时，小请求保留 45s 快速挂死检测。
+        signal: AbortSignal.timeout(requestTimeoutMs),
       });
     } catch (err) {
       if (isConnectError(err) && attempt < MAX_RETRIES) {
