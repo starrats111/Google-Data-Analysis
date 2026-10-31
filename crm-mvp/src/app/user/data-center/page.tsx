@@ -207,7 +207,13 @@ export default function DataCenterPage() {
   const { data: campaignData, isLoading } = useApiWithParams<{
     rows: CampaignRow[]; summary: Summary; costByMcc?: CostByMcc[];
     rowMeta?: { displayedCount: number; totalCount: number; isLimited: boolean };
-  }>("/api/user/data-center/campaigns", queryParams);
+  }>("/api/user/data-center/campaigns", queryParams, {
+    // wj04 反馈：页面开着不动时，联盟交易在后台持续同步进账，表格佣金却停在打开那一刻的
+    // 旧值（眼睛弹窗走独立请求，每次都是新拉的，于是弹窗数字比表格新，像是「只算了一天」）。
+    // 默认关闭 revalidateOnFocus 是为了避免普通页面来回切换造成多余请求，但这张表恰恰是
+    // 需要「切回来就看到最新佣金」的场景，单独放开。
+    revalidateOnFocus: true,
+  });
 
   // 本地状态覆盖（toggle 后立即更新，不等 API 刷新）
   const [statusOverrides, setStatusOverrides] = useState<Record<string, string>>({});
