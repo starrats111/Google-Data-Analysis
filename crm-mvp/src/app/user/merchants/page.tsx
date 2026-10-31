@@ -108,6 +108,13 @@ interface NodeMerchantItem {
   my_merchant_id: string | null; my_status: string | null; my_platform: string | null;
   my_category: string | null; my_violation: boolean; my_policy_status: string | null;
 }
+// D-374 商家结算率表类型
+interface SettlementItem {
+  id: string; platform: string; merchant_name: string; mid: string | null;
+  order_count: number | null; total_commission: number | null;
+  settlement_rate: number; chargeback_rate: number | null;
+  my_status: string | null; my_platform: string | null; can_run: boolean;
+}
 // __TYPES__
 interface Merchant {
   id: string; merchant_name: string; platform: string; merchant_id: string;
@@ -235,6 +242,12 @@ export default function MerchantsPage() {
   }), [ndCatSel, ndCategories, ndExpPage, ndExpPageSize]);
   const { data: ndExpData, isLoading: ndExpLoading } = useApiWithParams<MerchantResponse>(
     tab === "nodes" && ndCode && ndCategories.length > 0 ? "/api/user/merchants" : null, ndExpParams);
+  // D-374 商家结算率表：仅在 Tab 激活时拉取
+  const [stlSearch, setStlSearch] = useState(""); const [stlPlatform, setStlPlatform] = useState("");
+  const [stlPage, setStlPage] = useState(1); const [stlPageSize, setStlPageSize] = useState(50);
+  const { data: stlData, isLoading: stlLoading } = useApiWithParams<{ items: SettlementItem[]; total: number }>(
+    tab === "settlement" ? "/api/user/merchant-settlement" : null,
+    { page: stlPage, pageSize: stlPageSize, ...(stlSearch ? { search: stlSearch } : {}), ...(stlPlatform ? { platform: stlPlatform } : {}) });
   // 提醒窗口内的节点 → 顶部横幅（优先有清单的）
   const bannerNode = useMemo(() => holidayNodes.find((n) => n.in_window && n.list_count > 0) || holidayNodes.find((n) => n.in_window) || null, [holidayNodes]);
   // 从节点清单跳去"选取商家"Tab 走既有认领流程
@@ -1291,6 +1304,30 @@ export default function MerchantsPage() {
       render: (_: unknown, m: NodeExpRow) => <Button type="link" size="small" onClick={() => ndGoPick(m.merchant_name)}>去选品</Button>,
     },
   ], [ndGoPick]);
+  // D-374 商家结算率表列
+  const settlementCols = useMemo(() => [
+    { title: "平台", dataIndex: "platform", width: 70, render: (v: string) => <Tag color={PC[v] || "default"}>{v}</Tag> },
+    { title: "商家名称", dataIndex: "merchant_name", width: 220, ellipsis: true, render: (v: string) => <span style={{ fontWeight: 600 }}>{v}</span> },
+    { title: "MID", dataIndex: "mid", width: 100, ellipsis: true, render: (v: string | null) => v || "-" },
+    { title: "结算率", dataIndex: "settlement_rate", width: 90, align: "right" as const,
+      render: (v: number) => `${(Number(v) * 100).toFixed(1)}%`,
+    },
+    { title: "拒付率", dataIndex: "chargeback_rate", width: 90, align: "right" as const,
+      render: (v: number | null) => v != null ? `${(Number(v) * 100).toFixed(1)}%` : "-",
+    },
+    { title: "订单数", dataIndex: "order_count", width: 90, align: "right" as const, render: (v: number | null) => v ?? "-" },
+    { title: "总佣金", dataIndex: "total_commission", width: 100, align: "right" as const,
+      render: (v: number | null) => v != null ? `$${Number(v).toFixed(2)}` : "-",
+    },
+    { title: "是否可直接跑", dataIndex: "can_run", width: 130,
+      render: (can_run: boolean, rec: SettlementItem) =>
+        can_run ? <Tag color="green">可直接跑（{rec.my_platform}）</Tag> : (rec.my_status === "available" ? <Tag color="blue">可认领</Tag> : <Tag>未入库</Tag>),
+    },
+    { title: "操作", key: "action", width: 90,
+      render: (_: unknown, rec: SettlementItem) =>
+        rec.my_status === "available" ? <Button type="link" size="small" onClick={() => ndGoPick(rec.merchant_name)}>去选品</Button> : "-",
+    },
+  ], [ndGoPick]);
   return (<div style={{ maxWidth: 1600, margin: "0 auto" }}>
     <AppPageHeader icon={<ShopOutlined />} title="我的商家" subtitle="关注、领取、配置广告投放，所有商家运营围绕这一页" />
     {bannerNode && tab !== "nodes" && (
@@ -1387,6 +1424,7 @@ export default function MerchantsPage() {
           { key: "violations", label: <span><WarningOutlined style={{ color: "#ff4d4f", marginRight: 4 }} />违规商家</span> },
           { key: "recommendations", label: <span><StarOutlined style={{ color: "#52c41a", marginRight: 4 }} />推荐商家</span> },
           { key: "nodes", label: <span><CalendarOutlined style={{ color: "#fa541c", marginRight: 4 }} />节点推荐{bannerNode ? <Tag color="volcano" style={{ marginLeft: 4, padding: "0 4px", fontSize: 11 }}>{bannerNode.days_until}天</Tag> : null}</span> },
+          { key: "settlement", label: <span><DollarOutlined style={{ color: "#fa8c16", marginRight: 4 }} />结算率</span> },
           { key: "chargebacks", label: <span><CloseCircleOutlined style={{ color: "#ff4d4f", marginRight: 4 }} />拒付商家</span> },
         ]} />
       {(tab === "claimed" || tab === "available") && (
@@ -1539,6 +1577,19 @@ export default function MerchantsPage() {
           <Table rowKey="id" loading={ndExpLoading} dataSource={ndExpData?.merchants || []} columns={nodeL2Cols as never} size="small" scroll={{ x: 1000 }}
             pagination={{ current: ndExpPage, pageSize: ndExpPageSize, total: ndExpData?.total || 0, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"], showTotal: (t: number) => `共 ${t} 条`, onChange: (p, ps) => { if (ps !== ndExpPageSize) { setNdExpPageSize(ps); setNdExpPage(1); } else setNdExpPage(p); } }} />
         </>)}
+      </div>)}
+      {tab === "settlement" && (<div>
+        <div style={{ marginBottom: 12, padding: "8px 12px", background: "#fff7e6", border: "1px solid #ffd591", borderRadius: 6, fontSize: 12, color: "#666" }}>
+          <DollarOutlined style={{ color: "#fa8c16", marginRight: 6 }} />
+          丰度/邮政群里定期分享的商家结算率统计，按结算率从高到低排列。「可直接跑」指该商家已被我们任意账号认领，不限联盟平台。
+        </div>
+        <div className="filter-bar">
+          <Input allowClear placeholder="搜索商家名" style={{ width: 240 }} prefix={<SearchOutlined />} size="small" value={stlSearch} onChange={(e) => setStlSearch(e.target.value)} onPressEnter={() => setStlPage(1)} />
+          <Select placeholder="平台" allowClear style={{ width: 120 }} size="small" value={stlPlatform || undefined} onChange={(v) => { setStlPlatform(v || ""); setStlPage(1); }} options={PLATFORMS.map((p) => ({ value: p.code, label: p.code }))} />
+          <Button type="primary" size="small" icon={<SearchOutlined />} onClick={() => setStlPage(1)}>查询</Button>
+        </div>
+        <Table rowKey="id" loading={stlLoading} dataSource={stlData?.items || []} columns={settlementCols} size="small" scroll={{ x: 1000 }}
+          pagination={{ current: stlPage, pageSize: stlPageSize, total: stlData?.total || 0, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"], showTotal: (t: number) => `共 ${t} 条`, onChange: (p, ps) => { if (ps !== stlPageSize) { setStlPageSize(ps); setStlPage(1); } else setStlPage(p); } }} />
       </div>)}
       {tab === "chargebacks" && (<div>
         <div style={{ marginBottom: 12, padding: "8px 12px", background: "#fffbe6", border: "1px solid #ffe58f", borderRadius: 6, fontSize: 12, color: "#666" }}>
