@@ -34,6 +34,10 @@ const PARSE_ERROR_SIGNALS = [
   "Invalid header value char",
   "Invalid header token",
   "Parse Error",
+  // 2026-11-xx（wj11 反馈）：响应头堆得比 undici 默认上限（16KB）还大就报
+  // UND_ERR_HEADERS_OVERFLOW——同属「响应头不合规」，之前没收录，于是走不到
+  // 下面的降级重放，直接把这句没信息量的 undici 代码甩给用户。
+  "HEADERS_OVERFLOW",
 ];
 
 /** 只认「链不完整/签发者未知」这一种。CERT_HAS_EXPIRED、ALTNAME_INVALID、
@@ -152,6 +156,9 @@ function requestOnce(
         method,
         headers: { ...headers, Host: parsed.host },
         insecureHTTPParser: relax.insecureHTTPParser === true,
+        // insecureHTTPParser 只放宽格式校验，不提高 16KB 的默认头部上限；
+        // HEADERS_OVERFLOW 正是撞这个上限，所以降级重放时一并调高，否则原样复现。
+        ...(relax.insecureHTTPParser ? { maxHeaderSize: 256 * 1024 } : {}),
         ...(relax.acceptIncompleteChain && isHttps ? { rejectUnauthorized: false } : {}),
         timeout: timeoutMs,
       },
