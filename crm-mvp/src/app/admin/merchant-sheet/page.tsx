@@ -43,6 +43,11 @@ export default function MerchantSheetPage() {
   const [excelUploading, setExcelUploading] = useState(false);
   const [excelResult, setExcelResult] = useState<any>(null);
 
+  // D-374 结算率表上传
+  const [settlementFiles, setSettlementFiles] = useState<UploadFile[]>([]);
+  const [settlementUploading, setSettlementUploading] = useState(false);
+  const [settlementResult, setSettlementResult] = useState<any>(null);
+
   // 详情弹窗
   const [detailModal, setDetailModal] = useState(false);
   const [detailTitle, setDetailTitle] = useState("");
@@ -244,6 +249,30 @@ export default function MerchantSheetPage() {
     }
   };
 
+  const handleSettlementUpload = async () => {
+    if (settlementFiles.length === 0) { message.warning("请先选择 Excel 文件"); return; }
+    setSettlementUploading(true);
+    setSettlementResult(null);
+    try {
+      const fd = new FormData();
+      for (const f of settlementFiles) {
+        if (f.originFileObj) fd.append("files", f.originFileObj);
+      }
+      const res = await fetch("/api/admin/merchant-settlement-upload", { method: "POST", body: fd }).then((r) => r.json());
+      if (res.code === 0) {
+        message.success(res.message);
+        setSettlementResult(res.data);
+        setSettlementFiles([]);
+      } else {
+        message.error(res.message);
+      }
+    } catch (e: any) {
+      message.error("上传失败: " + e.message);
+    } finally {
+      setSettlementUploading(false);
+    }
+  };
+
   return (
     <div>
       <AppPageHeader icon={<SafetyCertificateOutlined />} title="商家黑名单与推荐" />
@@ -321,6 +350,44 @@ export default function MerchantSheetPage() {
             message={`导入完成：解析 ${excelResult.parsed} 条，去重后写入 ${excelResult.inserted} 条（原有 ${excelResult.deleted} 条已替换），匹配标记 ${excelResult.marked} 个商家`}
             description={excelResult.parseErrors ? `部分文件解析警告: ${excelResult.parseErrors.join("; ")}` : undefined}
             onClose={() => setExcelResult(null)}
+          />
+        )}
+      </Card>
+
+      {/* D-374 商家结算率表导入区 */}
+      <Card size="small" style={{ marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+          <UploadOutlined style={{ fontSize: 16, color: "#fa8c16" }} />
+          <span style={{ fontWeight: 600 }}>商家结算率表导入</span>
+          <span style={{ fontSize: 12, color: "#999" }}>丰度/邮政群里定期分享的结算率统计表，导入后全量替换现有数据，供选品页「结算率」专区比对展示</span>
+        </div>
+        <div style={{ display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+          <Upload
+            multiple
+            accept=".xlsx,.xls"
+            fileList={settlementFiles}
+            beforeUpload={() => false}
+            onChange={({ fileList }) => setSettlementFiles(fileList)}
+            onRemove={(f) => setSettlementFiles((prev) => prev.filter((x) => x.uid !== f.uid))}
+          >
+            <Button icon={<UploadOutlined />}>选择 Excel 文件</Button>
+          </Upload>
+          <Button
+            type="primary"
+            icon={<InboxOutlined />}
+            loading={settlementUploading}
+            disabled={settlementFiles.length === 0}
+            onClick={handleSettlementUpload}
+          >
+            {settlementUploading ? "导入中…" : `导入（${settlementFiles.length} 个文件）`}
+          </Button>
+        </div>
+        {settlementResult && (
+          <Alert
+            type="success" showIcon closable style={{ marginTop: 12 }}
+            message={`导入完成：解析 ${settlementResult.parsed} 条，去重后写入 ${settlementResult.inserted} 条（原有 ${settlementResult.deleted} 条已替换，结算率=0 的行已自动跳过）`}
+            description={settlementResult.parseErrors ? `部分文件解析警告: ${settlementResult.parseErrors.join("; ")}` : undefined}
+            onClose={() => setSettlementResult(null)}
           />
         )}
       </Card>

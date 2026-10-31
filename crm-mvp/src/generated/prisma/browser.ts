@@ -73,6 +73,11 @@ export type ad_rejection_feedback = Prisma.ad_rejection_feedbackModel
  */
 export type merchant_violations = Prisma.merchant_violationsModel
 /**
+ * Model merchant_settlement_rates
+ * 
+ */
+export type merchant_settlement_rates = Prisma.merchant_settlement_ratesModel
+/**
  * Model merchant_recommendations
  * 
  */

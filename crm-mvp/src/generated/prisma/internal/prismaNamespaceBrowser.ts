@@ -62,6 +62,7 @@ export const ModelName = {
   platform_blacklist: 'platform_blacklist',
   ad_rejection_feedback: 'ad_rejection_feedback',
   merchant_violations: 'merchant_violations',
+  merchant_settlement_rates: 'merchant_settlement_rates',
   merchant_recommendations: 'merchant_recommendations',
   holiday_nodes: 'holiday_nodes',
   sheet_configs: 'sheet_configs',
@@ -372,6 +373,29 @@ export const Merchant_violationsScalarFieldEnum = {
 } as const
 
 export type Merchant_violationsScalarFieldEnum = (typeof Merchant_violationsScalarFieldEnum)[keyof typeof Merchant_violationsScalarFieldEnum]
+
+
+export const Merchant_settlement_ratesScalarFieldEnum = {
+  id: 'id',
+  platform: 'platform',
+  merchant_name: 'merchant_name',
+  mid: 'mid',
+  order_count: 'order_count',
+  total_commission: 'total_commission',
+  settlement_rate: 'settlement_rate',
+  chargeback_rate: 'chargeback_rate',
+  chargeback_amount: 'chargeback_amount',
+  confirmed_amount: 'confirmed_amount',
+  paid_amount: 'paid_amount',
+  pending_amount: 'pending_amount',
+  order_amount: 'order_amount',
+  remark: 'remark',
+  upload_batch: 'upload_batch',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at'
+} as const
+
+export type Merchant_settlement_ratesScalarFieldEnum = (typeof Merchant_settlement_ratesScalarFieldEnum)[keyof typeof Merchant_settlement_ratesScalarFieldEnum]
 
 
 export const Merchant_recommendationsScalarFieldEnum = {
@@ -1837,6 +1861,17 @@ export const merchant_violationsOrderByRelevanceFieldEnum = {
 } as const
 
 export type merchant_violationsOrderByRelevanceFieldEnum = (typeof merchant_violationsOrderByRelevanceFieldEnum)[keyof typeof merchant_violationsOrderByRelevanceFieldEnum]
+
+
+export const merchant_settlement_ratesOrderByRelevanceFieldEnum = {
+  platform: 'platform',
+  merchant_name: 'merchant_name',
+  mid: 'mid',
+  remark: 'remark',
+  upload_batch: 'upload_batch'
+} as const
+
+export type merchant_settlement_ratesOrderByRelevanceFieldEnum = (typeof merchant_settlement_ratesOrderByRelevanceFieldEnum)[keyof typeof merchant_settlement_ratesOrderByRelevanceFieldEnum]
 
 
 export const merchant_recommendationsOrderByRelevanceFieldEnum = {

@@ -301,6 +301,35 @@ model merchant_violations {
 }
 
 // -----------------------------------------------------------
+// 6b2. 商家结算率表（D-374，管理后台 Excel 上传，定期全量替换）
+// 来源：丰度/邮政群里定期分享的结算率统计表，记录各联盟平台商家的真实结算表现。
+// 用户端与 user_merchants 按商家名比对（不限平台），标记"可直接跑"。
+// -----------------------------------------------------------
+model merchant_settlement_rates {
+  id                BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  platform          String   @db.VarChar(8) // LH/PM/CG/...
+  merchant_name     String   @db.VarChar(255)
+  mid               String?  @db.VarChar(64)
+  order_count       Int?     @db.UnsignedInt
+  total_commission  Decimal? @db.Decimal(14, 2)
+  settlement_rate   Decimal? @db.Decimal(8, 6) // 0-1 小数
+  chargeback_rate   Decimal? @db.Decimal(8, 6)
+  chargeback_amount Decimal? @db.Decimal(14, 2)
+  confirmed_amount  Decimal? @db.Decimal(14, 2) // 已确认($)
+  paid_amount       Decimal? @db.Decimal(14, 2) // 已支付($)
+  pending_amount    Decimal? @db.Decimal(14, 2) // 待审核($)
+  order_amount      Decimal? @db.Decimal(14, 2) // 订单金额($)
+  remark            String?  @db.VarChar(512) // 原表「备注」列
+  upload_batch      String   @db.VarChar(64) // SETTLE-YYYYMM
+  is_deleted        Int      @default(0) @db.TinyInt
+  created_at        DateTime @default(now()) @db.DateTime(0)
+
+  @@index([merchant_name], map: "idx_settle_name")
+  @@index([platform], map: "idx_settle_platform")
+  @@index([settlement_rate], map: "idx_settle_rate")
+}
+
+// -----------------------------------------------------------
 // 6c. 推荐商家记录表（从 Google Sheets 同步 或 Excel 上传）
 // -----------------------------------------------------------
 model merchant_recommendations {

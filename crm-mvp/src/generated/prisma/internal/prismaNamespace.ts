@@ -395,6 +395,7 @@ export const ModelName = {
   platform_blacklist: 'platform_blacklist',
   ad_rejection_feedback: 'ad_rejection_feedback',
   merchant_violations: 'merchant_violations',
+  merchant_settlement_rates: 'merchant_settlement_rates',
   merchant_recommendations: 'merchant_recommendations',
   holiday_nodes: 'holiday_nodes',
   sheet_configs: 'sheet_configs',
@@ -475,7 +476,7 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
     omit: GlobalOmitOptions
   }
   meta: {
-    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "parent_networks" | "platform_blacklist" | "ad_rejection_feedback" | "merchant_violations" | "merchant_recommendations" | "holiday_nodes" | "sheet_configs" | "ad_default_settings" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "ad_generation_jobs" | "ad_submit_jobs" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "ai_recommendations" | "spend_guard_actions" | "google_mcc_accounts" | "affiliate_transactions" | "affiliate_click_daily" | "affiliate_payments" | "affiliate_paid_signids" | "notifications" | "notification_preferences" | "user_table_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "kyads_click_task_items" | "proxy_exit_ip_usage" | "suffix_alerts" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "ad_creative_copy_cache" | "user_serpapi_keys" | "user_semrush_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log" | "semrush_keyword_cache" | "semrush_health_logs" | "payment_methods" | "report_overrides" | "payment_binding_snapshots" | "bank_flow_entries" | "policy_violations" | "team_developer_tokens" | "token_usage_daily" | "google_ads_api_usage" | "ad_decision_journal" | "ad_creation_drafts" | "brand_assessment_jobs" | "brand_assessment_results" | "brand_intel_cost_ledger" | "dataforseo_brand_keyword_cache"
+    modelProps: "teams" | "users" | "ai_providers" | "ai_model_configs" | "system_configs" | "platform_connections" | "user_merchants" | "parent_networks" | "platform_blacklist" | "ad_rejection_feedback" | "merchant_violations" | "merchant_settlement_rates" | "merchant_recommendations" | "holiday_nodes" | "sheet_configs" | "ad_default_settings" | "campaigns" | "ad_groups" | "keywords" | "ad_creatives" | "ad_generation_jobs" | "ad_submit_jobs" | "publish_sites" | "site_migrations" | "articles" | "ads_daily_stats" | "ai_recommendations" | "spend_guard_actions" | "google_mcc_accounts" | "affiliate_transactions" | "affiliate_click_daily" | "affiliate_payments" | "affiliate_paid_signids" | "notifications" | "notification_preferences" | "user_table_preferences" | "ai_insights" | "operation_logs" | "exchange_rate_snapshots" | "mcc_cid_accounts" | "ad_policy_categories" | "merchant_policy_reviews" | "mcc_cost_adjustments" | "monthly_settlement_status" | "kyads_proxies" | "kyads_proxy_users" | "suffix_pool" | "suffix_assignments" | "kyads_click_tasks" | "kyads_click_task_items" | "proxy_exit_ip_usage" | "suffix_alerts" | "merchant_atc_snapshots" | "atc_advertiser_domain_snapshot" | "ad_image_ocr_cache" | "ad_creative_copy_cache" | "user_serpapi_keys" | "user_semrush_keys" | "merchant_monitor_rules" | "user_atc_watchlist" | "user_atc_alert_log" | "semrush_keyword_cache" | "semrush_health_logs" | "payment_methods" | "report_overrides" | "payment_binding_snapshots" | "bank_flow_entries" | "policy_violations" | "team_developer_tokens" | "token_usage_daily" | "google_ads_api_usage" | "ad_decision_journal" | "ad_creation_drafts" | "brand_assessment_jobs" | "brand_assessment_results" | "brand_intel_cost_ledger" | "dataforseo_brand_keyword_cache"
     txIsolationLevel: TransactionIsolationLevel
   }
   model: {
@@ -1202,6 +1203,72 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         count: {
           args: Prisma.merchant_violationsCountArgs<ExtArgs>
           result: runtime.Types.Utils.Optional<Prisma.Merchant_violationsCountAggregateOutputType> | number
+        }
+      }
+    }
+    merchant_settlement_rates: {
+      payload: Prisma.$merchant_settlement_ratesPayload<ExtArgs>
+      fields: Prisma.merchant_settlement_ratesFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.merchant_settlement_ratesFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$merchant_settlement_ratesPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.merchant_settlement_ratesFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$merchant_settlement_ratesPayload>
+        }
+        findFirst: {
+          args: Prisma.merchant_settlement_ratesFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$merchant_settlement_ratesPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.merchant_settlement_ratesFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$merchant_settlement_ratesPayload>
+        }
+        findMany: {
+          args: Prisma.merchant_settlement_ratesFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$merchant_settlement_ratesPayload>[]
+        }
+        create: {
+          args: Prisma.merchant_settlement_ratesCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$merchant_settlement_ratesPayload>
+        }
+        createMany: {
+          args: Prisma.merchant_settlement_ratesCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        delete: {
+          args: Prisma.merchant_settlement_ratesDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$merchant_settlement_ratesPayload>
+        }
+        update: {
+          args: Prisma.merchant_settlement_ratesUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$merchant_settlement_ratesPayload>
+        }
+        deleteMany: {
+          args: Prisma.merchant_settlement_ratesDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.merchant_settlement_ratesUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        upsert: {
+          args: Prisma.merchant_settlement_ratesUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$merchant_settlement_ratesPayload>
+        }
+        aggregate: {
+          args: Prisma.Merchant_settlement_ratesAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateMerchant_settlement_rates>
+        }
+        groupBy: {
+          args: Prisma.merchant_settlement_ratesGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Merchant_settlement_ratesGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.merchant_settlement_ratesCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.Merchant_settlement_ratesCountAggregateOutputType> | number
         }
       }
     }
@@ -5763,6 +5830,29 @@ export const Merchant_violationsScalarFieldEnum = {
 export type Merchant_violationsScalarFieldEnum = (typeof Merchant_violationsScalarFieldEnum)[keyof typeof Merchant_violationsScalarFieldEnum]
 
 
+export const Merchant_settlement_ratesScalarFieldEnum = {
+  id: 'id',
+  platform: 'platform',
+  merchant_name: 'merchant_name',
+  mid: 'mid',
+  order_count: 'order_count',
+  total_commission: 'total_commission',
+  settlement_rate: 'settlement_rate',
+  chargeback_rate: 'chargeback_rate',
+  chargeback_amount: 'chargeback_amount',
+  confirmed_amount: 'confirmed_amount',
+  paid_amount: 'paid_amount',
+  pending_amount: 'pending_amount',
+  order_amount: 'order_amount',
+  remark: 'remark',
+  upload_batch: 'upload_batch',
+  is_deleted: 'is_deleted',
+  created_at: 'created_at'
+} as const
+
+export type Merchant_settlement_ratesScalarFieldEnum = (typeof Merchant_settlement_ratesScalarFieldEnum)[keyof typeof Merchant_settlement_ratesScalarFieldEnum]
+
+
 export const Merchant_recommendationsScalarFieldEnum = {
   id: 'id',
   merchant_name: 'merchant_name',
@@ -7228,6 +7318,17 @@ export const merchant_violationsOrderByRelevanceFieldEnum = {
 export type merchant_violationsOrderByRelevanceFieldEnum = (typeof merchant_violationsOrderByRelevanceFieldEnum)[keyof typeof merchant_violationsOrderByRelevanceFieldEnum]
 
 
+export const merchant_settlement_ratesOrderByRelevanceFieldEnum = {
+  platform: 'platform',
+  merchant_name: 'merchant_name',
+  mid: 'mid',
+  remark: 'remark',
+  upload_batch: 'upload_batch'
+} as const
+
+export type merchant_settlement_ratesOrderByRelevanceFieldEnum = (typeof merchant_settlement_ratesOrderByRelevanceFieldEnum)[keyof typeof merchant_settlement_ratesOrderByRelevanceFieldEnum]
+
+
 export const merchant_recommendationsOrderByRelevanceFieldEnum = {
   merchant_name: 'merchant_name',
   roi_reference: 'roi_reference',
@@ -8085,6 +8186,7 @@ export type GlobalOmitConfig = {
   platform_blacklist?: Prisma.platform_blacklistOmit
   ad_rejection_feedback?: Prisma.ad_rejection_feedbackOmit
   merchant_violations?: Prisma.merchant_violationsOmit
+  merchant_settlement_rates?: Prisma.merchant_settlement_ratesOmit
   merchant_recommendations?: Prisma.merchant_recommendationsOmit
   holiday_nodes?: Prisma.holiday_nodesOmit
   sheet_configs?: Prisma.sheet_configsOmit
