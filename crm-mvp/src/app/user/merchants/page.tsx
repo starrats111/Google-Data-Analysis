@@ -1319,9 +1319,13 @@ export default function MerchantsPage() {
     { title: "总佣金", dataIndex: "total_commission", width: 100, align: "right" as const,
       render: (v: number | null) => v != null ? `$${Number(v).toFixed(2)}` : "-",
     },
-    { title: "是否可直接跑", dataIndex: "can_run", width: 130,
-      render: (can_run: boolean, rec: SettlementItem) =>
-        can_run ? <Tag color="green">可直接跑（{rec.my_platform}）</Tag> : (rec.my_status === "available" ? <Tag color="blue">可认领</Tag> : <Tag>未入库</Tag>),
+    { title: "是否可直接跑", dataIndex: "can_run", width: 150,
+      render: (can_run: boolean, rec: SettlementItem) => {
+        if (can_run) return <Tag color="green">可直接跑（{rec.my_platform}）</Tag>;
+        if (rec.my_status == null) return <Tag>未入库</Tag>;
+        if (rec.my_status === "available") return <Tag color="blue">可认领</Tag>;
+        return <Tooltip title="该商家已被认领，但广告当前未在投放（已暂停/下架），需重新建广告才能跑"><Tag color="orange">已认领未投放</Tag></Tooltip>;
+      },
     },
     { title: "操作", key: "action", width: 90,
       render: (_: unknown, rec: SettlementItem) =>
@@ -1581,7 +1585,7 @@ export default function MerchantsPage() {
       {tab === "settlement" && (<div>
         <div style={{ marginBottom: 12, padding: "8px 12px", background: "#fff7e6", border: "1px solid #ffd591", borderRadius: 6, fontSize: 12, color: "#666" }}>
           <DollarOutlined style={{ color: "#fa8c16", marginRight: 6 }} />
-          丰度/邮政群里定期分享的商家结算率统计，按结算率从高到低排列。「可直接跑」指该商家已被我们任意账号认领，不限联盟平台。
+          丰度/邮政群里定期分享的商家结算率统计，按结算率从高到低排列。「可直接跑」指该商家在我们任意账号下有广告正在投放（不限联盟平台）；「已认领未投放」指曾经建过广告但已暂停/下架，需重新建广告才能跑。
         </div>
         <div className="filter-bar">
           <Input allowClear placeholder="搜索商家名" style={{ width: 240 }} prefix={<SearchOutlined />} size="small" value={stlSearch} onChange={(e) => setStlSearch(e.target.value)} onPressEnter={() => setStlPage(1)} />
