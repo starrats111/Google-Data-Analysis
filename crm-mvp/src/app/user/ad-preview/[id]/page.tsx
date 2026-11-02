@@ -8,7 +8,7 @@ import {
 } from "antd";
 import {
   ThunderboltOutlined, LoadingOutlined,
-  DeleteOutlined, PlusOutlined, EditOutlined, RocketOutlined,
+  DeleteOutlined, CopyOutlined, PlusOutlined, EditOutlined, RocketOutlined,
   ArrowLeftOutlined, ReloadOutlined, LinkOutlined, PictureOutlined,
   SoundOutlined, CheckCircleOutlined, ExclamationCircleOutlined,
   InboxOutlined, WarningOutlined, TranslationOutlined,
@@ -769,12 +769,20 @@ export default function AdPreviewPage() {
   };
   const removeHeadline = (idx: number) => setHeadlines((prev) => prev.filter((_, i) => i !== idx));
   const addHeadline = () => { if (headlines.length < 15) setHeadlines((prev) => [...prev, ""]); };
+  const copyHeadline = (idx: number) => {
+    navigator.clipboard.writeText(headlines[idx]);
+    message.success("已复制");
+  };
   const updateDescription = (idx: number, val: string) => {
     userEditedTextsRef.current.add(val.trim());
     setDescriptions((prev) => { const n = [...prev]; n[idx] = val; return n; });
   };
   const removeDescription = (idx: number) => setDescriptions((prev) => prev.filter((_, i) => i !== idx));
   const addDescription = () => { if (descriptions.length < 4) setDescriptions((prev) => [...prev, ""]); };
+  const copyDescription = (idx: number) => {
+    navigator.clipboard.writeText(descriptions[idx]);
+    message.success("已复制");
+  };
 
   // ─── AI 生成更多标题 ───
   const aiGenerateHeadlines = useCallback(async () => {
@@ -2579,6 +2587,7 @@ export default function AdPreviewPage() {
                     status={h.length > HEADLINE_MAX ? "error" : lintWarnings[`headline#${i}`] ? "warning" : undefined}
                     suffix={<Text type={h.length > HEADLINE_MAX ? "danger" : "secondary"} style={{ fontSize: 12 }}>{h.length}/{HEADLINE_MAX}</Text>}
                   />
+                  <Button size="small" type="text" icon={<CopyOutlined />} onClick={() => copyHeadline(i)} />
                   {headlines.length > 3 && (
                     <Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={() => removeHeadline(i)} />
                   )}
@@ -2624,6 +2633,7 @@ export default function AdPreviewPage() {
                     status={d.length > DESC_MAX ? "error" : lintWarnings[`description#${i}`] ? "warning" : undefined}
                   />
                   <Text type={d.length > DESC_MAX ? "danger" : "secondary"} style={{ fontSize: 12, whiteSpace: "nowrap" }}>{d.length}/{DESC_MAX}</Text>
+                  <Button size="small" type="text" icon={<CopyOutlined />} onClick={() => copyDescription(i)} />
                   {descriptions.length > 2 && (
                     <Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={() => removeDescription(i)} />
                   )}
