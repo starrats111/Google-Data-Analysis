@@ -251,9 +251,9 @@ export default function MerchantsPage() {
   // 提醒窗口内的节点 → 顶部横幅（优先有清单的）
   const bannerNode = useMemo(() => holidayNodes.find((n) => n.in_window && n.list_count > 0) || holidayNodes.find((n) => n.in_window) || null, [holidayNodes]);
   // 从节点清单跳去"选取商家"Tab 走既有认领流程
-  const ndGoPick = useCallback((name: string) => {
+  const ndGoPick = useCallback((name: string, plat?: string) => {
     setTab("available"); setSearchInput(name); setSearch(name);
-    setPlatform(""); setLabelFilter(""); setPage(1);
+    setPlatform(plat || ""); setLabelFilter(""); setPage(1);
   }, []);
   // C-019 拒付商家 Tab 状态（见 §19.6）
   const [cbDateRange, setCbDateRange] = useState<[Dayjs, Dayjs]>(() => [dayjs("2025-11-01"), dayjs()]);
@@ -1329,7 +1329,7 @@ export default function MerchantsPage() {
     },
     { title: "操作", key: "action", width: 90,
       render: (_: unknown, rec: SettlementItem) =>
-        rec.my_status === "available" ? <Button type="link" size="small" onClick={() => ndGoPick(rec.merchant_name)}>去选品</Button> : "-",
+        rec.my_status === "available" ? <Button type="link" size="small" onClick={() => ndGoPick(rec.merchant_name, rec.platform)}>去选品</Button> : "-",
     },
   ], [ndGoPick]);
   return (<div style={{ maxWidth: 1600, margin: "0 auto" }}>
@@ -1585,7 +1585,7 @@ export default function MerchantsPage() {
       {tab === "settlement" && (<div>
         <div style={{ marginBottom: 12, padding: "8px 12px", background: "#fff7e6", border: "1px solid #ffd591", borderRadius: 6, fontSize: 12, color: "#666" }}>
           <DollarOutlined style={{ color: "#fa8c16", marginRight: 6 }} />
-          丰度/邮政群里定期分享的商家结算率统计，按结算率从高到低排列。「可直接跑」指该商家在我们任意账号下有广告正在投放（不限联盟平台）；「已认领未投放」指曾经建过广告但已暂停/下架，需重新建广告才能跑。
+          丰度/邮政群里定期分享的商家结算率统计，按结算率从高到低排列。同名商家在不同联盟平台是不同商家（独立 MID、独立结算率），下表按「平台+MID」精确比对。「可直接跑」指该行对应的平台+商家在我们账号下有广告正在投放；「已认领未投放」指曾经建过广告但已暂停/下架，需重新建广告才能跑。
         </div>
         <div className="filter-bar">
           <Input allowClear placeholder="搜索商家名" style={{ width: 240 }} prefix={<SearchOutlined />} size="small" value={stlSearch} onChange={(e) => setStlSearch(e.target.value)} onPressEnter={() => setStlPage(1)} />
