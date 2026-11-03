@@ -173,8 +173,14 @@ export function buildFengduMonthSheet(
   // D-327：组长导出的「实收佣金（人民币）」改成页面同款「实际佣金」口径——
   // 每平台每半月取 组长手填 ?? 银行流水登记 ?? 成员默认CNY 累计。
   // 只有组长导出传 platforms；组员单表没有团队级流水，仍走成员块 SUMIF。
+  // D-377：是否启用「实际佣金」口径，须与页面 anyPlatformManual 判据一致——
+  // 只有真的存在组长手填或银行流水登记时才启用，否则 ?? 兜底永远落回成员默认估算，
+  // 会让 useActual 恒为 true，导出合计退化成「默认实收」却标成「实际佣金」行。
   const actualCny = new Map<string, { H1: number; H2: number }>();
-  if (paidInCny && opts.platforms) {
+  const anyPlatformManual = (opts.platforms || []).some(
+    (p) => p.paidCnyH1 != null || p.paidCnyH2 != null || p.bankCnyH1 != null || p.bankCnyH2 != null,
+  );
+  if (paidInCny && opts.platforms && anyPlatformManual) {
     for (const p of opts.platforms) {
       actualCny.set(p.platform, {
         H1: p.paidCnyH1 ?? p.bankCnyH1 ?? p.memberCnyH1,
