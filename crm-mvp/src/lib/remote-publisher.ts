@@ -11,6 +11,7 @@ import { ARTICLE_HYPERLINK_STYLE_BLOCK, cleanArticleContent, emphasizeArticleHyp
 import { withSiteLock, writeJsDataFileGuarded, isJsDataFile, checkJsSyntax, isDataOnly, hasRenderer, looksLikeRenderer, resolveBrokenDataPathFromLoaded, planRendererVarBridge } from "@/lib/site-write-guard";
 import { buildNovanestScriptsJs } from "@/lib/site-templates/novanest-renderer";
 import { buildBloomrootsRenderer } from "@/lib/site-templates/bloomroots-renderer";
+import { buildBloomrootsDetailRenderer } from "@/lib/site-templates/bloomroots-detail-renderer";
 import { buildAuraBloomRenderer } from "@/lib/site-templates/aura-bloom-renderer";
 import { buildTheGoodsAndGuardRenderer } from "@/lib/site-templates/thegoodsandguard-renderer";
 import { buildEverydaynesRenderer } from "@/lib/site-templates/everydaynes-renderer";
@@ -4247,6 +4248,70 @@ export async function fixOmniluxeSiteFieldMismatch(
     await sftpWriteFile(sftp, path, patched);
 
     return { ok: true, before_bytes: raw.length, after_bytes: patched.length, fixed_count: fixedCount };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  } finally {
+    client?.end();
+  }
+}
+
+export interface InstallBloomrootsDetailRendererResult {
+  ok: boolean;
+  wrote_renderer?: boolean;
+  patched_html?: boolean;
+  error?: string;
+}
+
+/**
+ * D-378：给 bloomroots.top 补上详情页渲染器。
+ *
+ * D-370 重写时只补了首页渲染器（script.js 填 #articlesGrid），没人写过
+ * "按 article.html?title={slug} 的参数查内容、填 #articleContent" 这段代码，
+ * 详情页从此一直是空的（数据没丢，纯粹没人渲染）。
+ *
+ * 独立成新文件 js/detail-renderer.js，不改 script.js —— 延续 D-370 教训：
+ * 数据/渲染器拆开，别再把多个职责塞进一个文件。幂等：article.html 已经
+ * 引用过该脚本就跳过插入。
+ */
+export async function installBloomrootsDetailRenderer(
+  sitePath: string,
+): Promise<InstallBloomrootsDetailRendererResult> {
+  let client: Client | null = null;
+  try {
+    client = await connectSSH();
+    const sftp = await getSFTP(client);
+
+    const rendererJs = buildBloomrootsDetailRenderer();
+    const syntax = checkJsSyntax(rendererJs);
+    if (!syntax.ok) {
+      return { ok: false, error: `拒绝写入：生成的渲染器语法不合法（${syntax.line ? `第 ${syntax.line} 行：` : ""}${syntax.error}）` };
+    }
+
+    const rendererPath = `${sitePath}/js/detail-renderer.js`;
+    await sftpWriteFile(sftp, rendererPath, rendererJs);
+
+    const htmlPath = `${sitePath}/article.html`;
+    const html = await sftpReadFile(sftp, htmlPath);
+
+    if (html.includes("js/detail-renderer.js")) {
+      return { ok: true, wrote_renderer: true, patched_html: false };
+    }
+
+    if (!html.includes('id="articleContent"')) {
+      return { ok: false, wrote_renderer: true, error: "article.html 里找不到 #articleContent 容器，拒绝继续改 HTML（渲染器文件已写入，可手动核对）" };
+    }
+
+    const scriptTag = `<script src="js/detail-renderer.js?v=${Math.floor(Date.now() / 1000)}"></script>\n</body>`;
+    if (!html.includes("</body>")) {
+      return { ok: false, wrote_renderer: true, error: "article.html 里找不到 </body>，拒绝继续改 HTML（渲染器文件已写入，可手动核对）" };
+    }
+    const patchedHtml = html.replace(/<\/body>/i, scriptTag);
+
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    await sftpWriteFile(sftp, `${htmlPath}.d378-${stamp}.bak`, html);
+    await sftpWriteFile(sftp, htmlPath, patchedHtml);
+
+    return { ok: true, wrote_renderer: true, patched_html: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   } finally {
