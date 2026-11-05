@@ -1357,9 +1357,11 @@ export async function buildTeamMonthlySummary(
   // 默认实收(CNY) = 成员实收CNY生效值累计（逐笔打款日汇率 + 组员手填）
   const estimatedPaidCny = totals.paidCnyTotal;
 
-  // 实际佣金(CNY)：Σ每平台每半月(组长手填 ?? 银行流水登记 ?? 该平台成员默认CNY)；
+  // 实际佣金(CNY)：Σ每平台每半月(组长手填 ?? 银行流水登记 ?? 0)；
   // 旧版总额 actual_cny 若存在则整体覆盖（兼容）。
-  // R-07 起银行流水登记即自动同步进报表，只有手填/流水都为空时才回落成员默认估算。
+  // D-378（01 2026-11-05 拍板）：不再回落成员默认估算——「实际佣金」必须等于「银行流水」页面
+  // 的真实到账口径，没有流水登记/没手填的平台记 0，而不是拿成员估算值掺进来，
+  // 否则这格会跟银行流水页对不上（旧口径曾把两者混在一起，差出几千到几万不等）。
   const anyPlatformManual = platforms.some(
     (p) => p.paidCnyH1 != null || p.paidCnyH2 != null || p.bankCnyH1 != null || p.bankCnyH2 != null,
   );
@@ -1368,7 +1370,7 @@ export async function buildTeamMonthlySummary(
     : anyPlatformManual
       ? r2(platforms.reduce(
           (s, p) =>
-            s + (p.paidCnyH1 ?? p.bankCnyH1 ?? p.memberCnyH1) + (p.paidCnyH2 ?? p.bankCnyH2 ?? p.memberCnyH2),
+            s + (p.paidCnyH1 ?? p.bankCnyH1 ?? 0) + (p.paidCnyH2 ?? p.bankCnyH2 ?? 0),
           0,
         ))
       : null;
@@ -1507,8 +1509,6 @@ export async function buildTeamAnnualReport(
   const acc = new Map<string, MonthAcc>(
     monthsList.map((m) => [m, { adUsd: 0, adCny: 0, book: 0, rejected: 0, recvTotal: 0, paidTotal: 0, paidCnyTotal: 0 }]),
   );
-  /** 每平台×月×半月的默认实收(CNY)（逐笔打款日汇率 + 组员手填），组长手填为空时的兜底 */
-  const paidCnyPlatHalf = new Map<string, number>(); // `${month}|${platform}|${H1|H2}`
 
   // ── 银行流水登记（R-07）：整年一次拉取。归半月同月度口径：source_date 反查批次
   // request_date 判批，兜底按日期就近。用于：
@@ -1729,12 +1729,9 @@ export async function buildTeamAnnualReport(
       if (a) a.paidTotal += val;
     }
     for (const [key, val] of paidCnyCells) {
-      const [, m, platform, , half] = key.split("|");
+      const m = key.split("|")[1];
       const a = acc.get(m);
-      if (!a) continue;
-      a.paidCnyTotal += val;
-      const phKey = `${m}|${platform}|${half}`;
-      paidCnyPlatHalf.set(phKey, (paidCnyPlatHalf.get(phKey) || 0) + val);
+      if (a) a.paidCnyTotal += val;
     }
 
     // ── 3. 广告费（MCC×月，含补差额与组员覆盖） ──
@@ -1918,20 +1915,15 @@ export async function buildTeamAnnualReport(
     const bankByPlat = bankCnyMonthPlat.get(m);
     let actualPaidCny: number | null = legacyByMonth.get(m) ?? null;
     if (actualPaidCny == null && ((byPlat && byPlat.size > 0) || (bankByPlat && bankByPlat.size > 0))) {
-      // 参与平台 = 有实收的平台 ∪ 有手填的平台 ∪ 有银行流水登记的平台
+      // D-378：参与平台 = 有手填的平台 ∪ 有银行流水登记的平台（不再并入「有实收估算」的平台——
+      // 那些平台没手填没流水，只有成员估算，现在一律记 0，不需要出现在参与集合里）
       const plats = new Set<string>([...(byPlat?.keys() || []), ...(bankByPlat?.keys() || [])]);
-      for (const key of paidCnyPlatHalf.keys()) {
-        const [pm, plat] = key.split("|");
-        if (pm === m) plats.add(plat);
-      }
       let sum = 0;
       for (const plat of plats) {
         const manual = byPlat?.get(plat) || {};
         const bank = bankByPlat?.get(plat) || {};
-        const estH1 = paidCnyPlatHalf.get(`${m}|${plat}|H1`) || 0;
-        const estH2 = paidCnyPlatHalf.get(`${m}|${plat}|H2`) || 0;
-        // 优先级：组长手填 > 银行流水登记 > 成员默认估算
-        sum += (manual.H1 ?? bank.H1 ?? estH1) + (manual.H2 ?? bank.H2 ?? estH2);
+        // D-378：优先级 组长手填 > 银行流水登记 > 0（不回落成员估算，口径须与银行流水页一致）
+        sum += (manual.H1 ?? bank.H1 ?? 0) + (manual.H2 ?? bank.H2 ?? 0);
       }
       actualPaidCny = r2(sum);
     }
