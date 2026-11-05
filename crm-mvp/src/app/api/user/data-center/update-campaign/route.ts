@@ -93,7 +93,7 @@ export async function POST(req: NextRequest) {
 }
 
 type RenameArgs = {
-  campaign: { id: bigint; campaign_name: string | null; customer_id: string | null; google_campaign_id: string | null };
+  campaign: { id: bigint; campaign_name: string | null; customer_id: string | null; google_campaign_id: string | null; user_merchant_id: bigint | null };
   credentials: { mcc_id: string; developer_token: string; service_account_json: string };
   userId: bigint;
   newName: string;
@@ -145,7 +145,7 @@ async function handleRename(a: RenameArgs) {
 
 async function renameStep2(
   a: RenameArgs & {
-    parsed: { platform: string; accountIndex: number | null };
+    parsed: { platform: string; accountIndex: number | null; mid: string };
     target: { id: bigint; platform: string; account_index: number | null; account_name: string };
   },
 ) {
@@ -174,6 +174,28 @@ async function renameStep2(
     data: { campaign_name: newName, last_google_sync_at: new Date() },
   });
 
+  // D-379：跨平台改名时，所属商家行（user_merchants）必须跟着换，否则 platform_connection_id
+  // 指向新平台账号、但 user_merchant_id 仍挂旧平台商家行 —— 佣金归因引擎按商家维度找该系列的
+  // 候选集时找不到它，佣金判成「无主」。只认已同步存在的商家行，不自建（同 D-223 的 fixConnection）。
+  let merchantSwitchNote = "";
+  try {
+    const myMidRows = await prisma.user_merchants.findMany({
+      where: { user_id: userId, merchant_id: parsed.mid, is_deleted: 0 },
+      select: { id: true, platform: true },
+    });
+    const { normalizePlatformCode } = await import("@/lib/constants");
+    const targetMerchant = myMidRows.find((m) => normalizePlatformCode(m.platform) === parsed.platform) ?? null;
+    if (targetMerchant && targetMerchant.id !== campaign.user_merchant_id) {
+      await prisma.campaigns.update({
+        where: { id: campaign.id },
+        data: { user_merchant_id: targetMerchant.id },
+      });
+      merchantSwitchNote = "，所属商家已同步切换";
+    }
+  } catch (e) {
+    merchantSwitchNote = `，但商家归属切换失败（${e instanceof Error ? e.message.slice(0, 80) : String(e)}），请到「换链接」页点「按系列名纠正归属」重试`;
+  }
+
   // 按新名重排归属 + 迁移链接键（D-180）。这一步失败不回滚谷歌改名：
   // 名字已经是新的，回滚反而更乱；如实告知并留告警让人重试（换链接页有纠正按钮）。
   let reassignNote = "";
@@ -188,6 +210,7 @@ async function renameStep2(
   } catch (e) {
     reassignNote = `，但归属重排失败（${e instanceof Error ? e.message.slice(0, 80) : String(e)}），请到「换链接」页点「按系列名纠正归属」重试`;
   }
+  reassignNote += merchantSwitchNote;
 
   const { logOperation } = await import("@/lib/operation-log");
   await logOperation({

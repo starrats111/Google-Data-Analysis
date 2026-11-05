@@ -33,6 +33,7 @@ export const GET = withLeader(async (req: NextRequest, { user }) => {
   buildFengduMonthSheet(wb, summary.memberReports, `${parseInt(month.slice(5), 10)}月份`, avgUsdToCny, {
     paidInCny: true,
     platforms: summary.platforms,
+    actualPaidCnyTotal: summary.actualPaidCny,
   });
 
   const buffer = await wb.xlsx.writeBuffer();

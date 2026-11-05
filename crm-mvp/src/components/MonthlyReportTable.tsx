@@ -654,7 +654,8 @@ export function TeamSummaryTable({
     getCnyDefault: (p: TeamPlatformAgg) => number,
     totalUsd: number,
   ) => {
-    const totalCny = plats.reduce((s, p) => s + (getCnyManual(p) ?? getCnyBank(p) ?? getCnyDefault(p)), 0);
+    // D-378：右侧「合计」列用真实到账口径（没流水/没手填记 0），单格展示仍用 getCnyDefault 兜底
+    const totalCny = plats.reduce((s, p) => s + (getCnyManual(p) ?? getCnyBank(p) ?? 0), 0);
     return (
       <>
         {plats.map((p, i) => {
@@ -686,10 +687,12 @@ export function TeamSummaryTable({
     );
   };
 
+  // D-378：右侧「佣金合计」列的实收¥，必须等于银行流水页真实到账口径——没流水/没手填的平台记 0，
+  // 不回落成员估算（否则这个总数跟银行流水页对不上）。单格展示仍保留估算值，见下方 paidRow。
   const cnyTotal = (half: "H1" | "H2") =>
     plats.reduce((s, p) => s + ((half === "H1"
-      ? p.paidCnyH1 ?? p.bankCnyH1 ?? p.memberCnyH1
-      : p.paidCnyH2 ?? p.bankCnyH2 ?? p.memberCnyH2)), 0);
+      ? p.paidCnyH1 ?? p.bankCnyH1 ?? 0
+      : p.paidCnyH2 ?? p.bankCnyH2 ?? 0)), 0);
 
   return (
     <div>
@@ -762,7 +765,8 @@ export function TeamSummaryTable({
               <td className={FX1} style={{ ...subLabelCell, fontWeight: 600 }}>合计</td>
               {plats.map((p, i) => {
                 const usd = p.paidH1 + p.paidH2;
-                const cny = (p.paidCnyH1 ?? p.bankCnyH1 ?? p.memberCnyH1) + (p.paidCnyH2 ?? p.bankCnyH2 ?? p.memberCnyH2);
+                // D-378：该平台「合计」¥ 走真实到账口径（没流水/没手填记 0），跟右侧总计列/卡片口径一致
+                const cny = (p.paidCnyH1 ?? p.bankCnyH1 ?? 0) + (p.paidCnyH2 ?? p.bankCnyH2 ?? 0);
                 const hasManual = p.paidCnyH1 != null || p.paidCnyH2 != null || p.bankCnyH1 != null || p.bankCnyH2 != null;
                 return (
                   <React.Fragment key={`paid-sum-${p.platform}`}>
@@ -773,7 +777,9 @@ export function TeamSummaryTable({
               })}
               <td className={FXR} style={totalCell}>
                 <div>{fmt(totals.paidTotal)}</div>
-                <div style={{ color: "#d46b08", fontWeight: 500 }}>¥{fmt(cnyTotal("H1") + cnyTotal("H2"))}</div>
+                {/* D-378：右下角「实际佣金」总数直接读 summary.actualPaidCny（与银行流水页同一份
+                    原始流水、同一次性折算），不用 cnyTotal 逐平台相加——避免逐笔四舍五入尾差 */}
+                <div style={{ color: "#d46b08", fontWeight: 500 }}>¥{fmt(summary.actualPaidCny ?? (cnyTotal("H1") + cnyTotal("H2")))}</div>
               </td>
             </tr>
             {/* 收款人 / 收款卡号 */}
