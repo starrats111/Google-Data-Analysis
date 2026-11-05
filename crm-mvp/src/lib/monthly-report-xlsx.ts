@@ -167,7 +167,7 @@ export function buildFengduMonthSheet(
   reports: MemberMonthlyReport[],
   sheetName?: string,
   avgUsdToCny?: number,
-  opts: { paidInCny?: boolean; platforms?: TeamPlatformAgg[] } = {},
+  opts: { paidInCny?: boolean; platforms?: TeamPlatformAgg[]; actualPaidCnyTotal?: number | null } = {},
 ) {
   const paidInCny = opts.paidInCny === true;
   // D-327：组长导出的「实收佣金（人民币）」改成页面同款「实际佣金」口径——
@@ -351,7 +351,14 @@ export function buildFengduMonthSheet(
     const cL = fdColL(3 + i);
     fdCell(ws, 14, 3 + i, { formula: `SUM(${cL}12:${cL}13)` }, { fill: FD.GREEN });
   }
-  fdCell(ws, 14, 13, { formula: "SUM(C14:L14)" }, { fill: FD.GREEN, bold: true });
+  // D-378：实际佣金模式下，总合计直接写 actualPaidCnyTotal 实数（跟页面/银行流水页同一次性
+  // 折算结果），不用 SUM 公式对各平台格子相加——各平台格子是分别折算再四舍五入的，横加会比
+  // 整体一次性折算多出 1 分钱量级的尾差。
+  if (useActual && opts.actualPaidCnyTotal != null) {
+    fdCell(ws, 14, 13, opts.actualPaidCnyTotal, { fill: FD.GREEN, bold: true, numFmt: TOTAL_FMT });
+  } else {
+    fdCell(ws, 14, 13, { formula: "SUM(C14:L14)" }, { fill: FD.GREEN, bold: true });
+  }
 
   for (let c = 3; c <= 13; c++) {
     fdCell(ws, 15, c, "", {});

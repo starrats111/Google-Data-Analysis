@@ -777,7 +777,9 @@ export function TeamSummaryTable({
               })}
               <td className={FXR} style={totalCell}>
                 <div>{fmt(totals.paidTotal)}</div>
-                <div style={{ color: "#d46b08", fontWeight: 500 }}>¥{fmt(cnyTotal("H1") + cnyTotal("H2"))}</div>
+                {/* D-378：右下角「实际佣金」总数直接读 summary.actualPaidCny（与银行流水页同一份
+                    原始流水、同一次性折算），不用 cnyTotal 逐平台相加——避免逐笔四舍五入尾差 */}
+                <div style={{ color: "#d46b08", fontWeight: 500 }}>¥{fmt(summary.actualPaidCny ?? (cnyTotal("H1") + cnyTotal("H2")))}</div>
               </td>
             </tr>
             {/* 收款人 / 收款卡号 */}

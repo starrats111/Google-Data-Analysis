@@ -1238,6 +1238,11 @@ export async function buildTeamMonthlySummary(
     where: { team_id: teamId, month, is_deleted: 0 },
     select: { platform: true, txn_at: true, amount: true, currency: true, source_date: true, breakdown: true },
   });
+  // D-378（01 2026-11-05 二次拍板）：「实际佣金」必须和「银行流水」页卡片完全一致——
+  // 用同一批原始流水，按币种原值求和（不逐笔折算再加总，避免逐笔四舍五入尾差），
+  // CNY 原值 + USD 原值 × 当月系统汇率，一次性折算。
+  const bankRawCnyTotal = bankRaw.reduce((s, e) => s + (e.currency === "CNY" ? Number(e.amount || 0) : 0), 0);
+  const bankRawUsdTotal = bankRaw.reduce((s, e) => s + (e.currency === "USD" ? Number(e.amount || 0) : 0), 0);
   // D-314.1：美金条目按到账日汇率折成人民币再聚合（同 3b，理由见 bankRowToCny）
   const bankConverted = bankRowsToCny(bankRaw, await buildDailyUsdToCnyLookup(nextMonthStart(month)));
   const bankEntries = bankConverted.rows;
@@ -1357,22 +1362,15 @@ export async function buildTeamMonthlySummary(
   // 默认实收(CNY) = 成员实收CNY生效值累计（逐笔打款日汇率 + 组员手填）
   const estimatedPaidCny = totals.paidCnyTotal;
 
-  // 实际佣金(CNY)：Σ每平台每半月(组长手填 ?? 银行流水登记 ?? 0)；
-  // 旧版总额 actual_cny 若存在则整体覆盖（兼容）。
-  // D-378（01 2026-11-05 拍板）：不再回落成员默认估算——「实际佣金」必须等于「银行流水」页面
-  // 的真实到账口径，没有流水登记/没手填的平台记 0，而不是拿成员估算值掺进来，
-  // 否则这格会跟银行流水页对不上（旧口径曾把两者混在一起，差出几千到几万不等）。
-  const anyPlatformManual = platforms.some(
-    (p) => p.paidCnyH1 != null || p.paidCnyH2 != null || p.bankCnyH1 != null || p.bankCnyH2 != null,
-  );
+  // 实际佣金(CNY)：D-378（01 2026-11-05 二次拍板）必须和「银行流水」页卡片分毫不差——
+  // CNY原值合计 + USD原值合计×当月系统汇率，一次性折算（不逐平台/逐笔折算再加总，
+  // 避免尾差；也不再回落成员估算或按平台拆手填——组长手填不影响这个总数，
+  // 手填只影响总计表单个平台格子的展示）。
+  // 旧版总额 actual_cny 若存在则整体覆盖（兼容老数据）。
   const actualPaidCny = legacyActualCny != null
     ? legacyActualCny
-    : anyPlatformManual
-      ? r2(platforms.reduce(
-          (s, p) =>
-            s + (p.paidCnyH1 ?? p.bankCnyH1 ?? 0) + (p.paidCnyH2 ?? p.bankCnyH2 ?? 0),
-          0,
-        ))
+    : bankRaw.length > 0
+      ? r2(bankRawCnyTotal + bankRawUsdTotal * rate.usdToCny)
       : null;
 
   const profitCny = r2((actualPaidCny ?? estimatedPaidCny) - profitAdCostCny);
@@ -1518,6 +1516,15 @@ export async function buildTeamAnnualReport(
     where: { team_id: teamId, is_deleted: 0, month: { startsWith: `${year}-` } },
     select: { month: true, platform: true, txn_at: true, amount: true, currency: true, fee: true, source_date: true, breakdown: true },
   });
+  // D-378：实际佣金必须跟银行流水页同一份原始币种合计、一次性折算——按月记原值（CNY/USD 分开），
+  // 不走逐平台/逐笔折算再加总那条路径（避免尾差，也避免手填影响这个总数）。
+  const bankRawTotalByMonth = new Map<string, { cny: number; usd: number }>();
+  for (const e of bankRawRows) {
+    let t = bankRawTotalByMonth.get(e.month);
+    if (!t) { t = { cny: 0, usd: 0 }; bankRawTotalByMonth.set(e.month, t); }
+    if (e.currency === "USD") t.usd += Number(e.amount || 0);
+    else t.cny += Number(e.amount || 0);
+  }
   // D-314.1：美金条目按到账日汇率折成人民币再聚合（同月度 3b）；take 覆盖整年 + 前月回溯
   const bankYearConverted = bankRowsToCny(bankRawRows, await buildDailyUsdToCnyLookup(`${Number(year) + 1}-01-01`, 400));
   const bankRows = bankYearConverted.rows;
@@ -1525,15 +1532,6 @@ export async function buildTeamAnnualReport(
     warnings.push(`${e.month} ${e.platform} 美金到账 $${r2(Number(e.amount || 0))} 查不到当日汇率快照，未计入实际入账(CNY)`);
   }
   const resolveAnnualBankHalf = await buildBankHalfResolver(bankRows, memberIds);
-  const bankCnyMonthPlat = new Map<string, Map<string, { H1?: number; H2?: number }>>();
-  for (const e of bankRows) {
-    const half = resolveAnnualBankHalf(e);
-    let byPlat = bankCnyMonthPlat.get(e.month);
-    if (!byPlat) { byPlat = new Map(); bankCnyMonthPlat.set(e.month, byPlat); }
-    const entry = byPlat.get(e.platform) || {};
-    entry[half] = (entry[half] || 0) + Number(e.amount || 0);
-    byPlat.set(e.platform, entry);
-  }
 
   if (memberIds.length > 0) {
     const uidIn = memberIds.map(() => "?").join(",");
@@ -1887,17 +1885,10 @@ export async function buildTeamAnnualReport(
       OR: [{ scope_key: "actual_cny" }, { scope_key: { startsWith: "team_paid_cny:" } }],
     },
   });
+  // D-378：实际佣金不再按平台拆手填/流水，只保留旧版「整月总额」兼容分支
   const legacyByMonth = new Map<string, number>();
-  const platManualByMonth = new Map<string, Map<string, { H1?: number; H2?: number }>>();
   for (const o of leadOv) {
-    if (o.scope_key === "actual_cny") { legacyByMonth.set(o.month, Number(o.value)); continue; }
-    const mch = o.scope_key.match(/^team_paid_cny:([^:]+):(H1|H2)$/);
-    if (!mch) continue;
-    let byPlat = platManualByMonth.get(o.month);
-    if (!byPlat) { byPlat = new Map(); platManualByMonth.set(o.month, byPlat); }
-    const entry = byPlat.get(mch[1]) || {};
-    entry[mch[2] as "H1" | "H2"] = Number(o.value);
-    byPlat.set(mch[1], entry);
+    if (o.scope_key === "actual_cny") legacyByMonth.set(o.month, Number(o.value));
   }
 
   // ── 5. 汇总每月 ──
@@ -1911,22 +1902,13 @@ export async function buildTeamAnnualReport(
     // 默认实收(CNY)：逐笔按打款日汇率折算（含组员手填 CNY）
     const estPaidCny = r2(a.paidCnyTotal);
 
-    const byPlat = platManualByMonth.get(m);
-    const bankByPlat = bankCnyMonthPlat.get(m);
-    let actualPaidCny: number | null = legacyByMonth.get(m) ?? null;
-    if (actualPaidCny == null && ((byPlat && byPlat.size > 0) || (bankByPlat && bankByPlat.size > 0))) {
-      // D-378：参与平台 = 有手填的平台 ∪ 有银行流水登记的平台（不再并入「有实收估算」的平台——
-      // 那些平台没手填没流水，只有成员估算，现在一律记 0，不需要出现在参与集合里）
-      const plats = new Set<string>([...(byPlat?.keys() || []), ...(bankByPlat?.keys() || [])]);
-      let sum = 0;
-      for (const plat of plats) {
-        const manual = byPlat?.get(plat) || {};
-        const bank = bankByPlat?.get(plat) || {};
-        // D-378：优先级 组长手填 > 银行流水登记 > 0（不回落成员估算，口径须与银行流水页一致）
-        sum += (manual.H1 ?? bank.H1 ?? 0) + (manual.H2 ?? bank.H2 ?? 0);
-      }
-      actualPaidCny = r2(sum);
-    }
+    // D-378（01 2026-11-05 二次拍板）：实际佣金必须和银行流水页同一份原始币种合计、
+    // 一次性折算，跟月度 buildTeamMonthlySummary 同一算法——不再按平台拆手填/流水再加总
+    // （避免逐笔四舍五入尾差，组长手填也不再影响这个总数，只影响总计表单个平台格展示）。
+    const bankTotal = bankRawTotalByMonth.get(m);
+    const actualPaidCny: number | null = legacyByMonth.get(m) ?? (bankTotal
+      ? r2(bankTotal.cny + bankTotal.usd * rate.usdToCny)
+      : null);
 
     const profitCny = r2((actualPaidCny ?? estPaidCny) - profitAdCostCny);
     return {
