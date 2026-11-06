@@ -1966,6 +1966,37 @@ const ARTICLE_LAYOUT_STYLE_BLOCK = `
 @media(max-width:600px){.article-wrap{margin:32px auto 48px;}.article-content{font-size:1.02rem;}.article-content>p:first-of-type::first-letter{font-size:2.8rem;}}
 `;
 
+/**
+ * D-380：ARTICLE_LAYOUT_STYLE_BLOCK 的兜底色（--ink/--navy/--muted/--border 等）
+ * 是按浅色主题设计的（深灰字/白底）。everydaynes.top 自己的站点配色是深色主题
+ * （body 背景 #0c0c0f 近黑），且它的 CSS 里压根没定义这些变量名——于是详情页
+ * 正文/标题全部落到兜底的深色文字，叠在深色背景上几乎看不清。
+ *
+ * 按域名覆盖，不改通用兜底值：其余站用的是浅色主题，兜底色对它们是对的。
+ */
+function articleLayoutDomainOverride(domain: string): string {
+  const d = (domain || "").toLowerCase();
+  if (d === "everydaynes.top") {
+    return `
+.article-wrap{color:#f5f5f8;}
+.article-back{color:#9a9aa8;}
+.article-back:hover{color:#d9b36c;}
+.article-head{border-bottom-color:rgba(255,255,255,.12);}
+.article-cat{color:#d9b36c;}
+.article-title{color:#f5f5f8;}
+.article-meta{color:#9a9aa8;}
+.article-content{color:#d7d7e0;}
+.article-content>p:first-of-type{color:#e6e6ee;}
+.article-content>p:first-of-type::first-letter{color:#d9b36c;}
+.article-content h2,.article-content h3{color:#f5f5f8;}
+.article-content blockquote{color:#e6e6ee;border-left-color:#d9b36c;}
+.article-content a{color:#7fd1c3;}
+.article-content figcaption{color:#9a9aa8;}
+`;
+  }
+  return "";
+}
+
 async function createArticleHtmlPage(
   sftp: SFTPWrapper,
   client: Client,
@@ -2018,10 +2049,10 @@ async function createArticleHtmlPage(
       // Remove main.js to avoid loading article listing code on detail page
       headSection = headSection.replace(/<script[^>]*main\.js[^>]*><\/script>\s*/gi, "");
       if (!headSection.includes("crm-article-layout")) {
-        headSection = headSection.replace(/<\/head>/i, `  <style>${ARTICLE_LAYOUT_STYLE_BLOCK}${ARTICLE_HYPERLINK_STYLE_BLOCK}</style>\n</head>`);
+        headSection = headSection.replace(/<\/head>/i, `  <style>${ARTICLE_LAYOUT_STYLE_BLOCK}${ARTICLE_HYPERLINK_STYLE_BLOCK}${articleLayoutDomainOverride(domain)}</style>\n</head>`);
       }
     } else {
-      headSection = `<head>\n<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n<title>${escapeHtml(article.title)}</title>\n<style>${ARTICLE_LAYOUT_STYLE_BLOCK}${ARTICLE_HYPERLINK_STYLE_BLOCK}</style>\n</head>`;
+      headSection = `<head>\n<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n<title>${escapeHtml(article.title)}</title>\n<style>${ARTICLE_LAYOUT_STYLE_BLOCK}${ARTICLE_HYPERLINK_STYLE_BLOCK}${articleLayoutDomainOverride(domain)}</style>\n</head>`;
     }
 
     let headerNav = "";
@@ -4250,6 +4281,69 @@ export async function fixOmniluxeSiteFieldMismatch(
     return { ok: true, before_bytes: raw.length, after_bytes: patched.length, fixed_count: fixedCount };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  } finally {
+    client?.end();
+  }
+}
+
+export interface PatchEverydaynesArticleTextColorResult {
+  ok: boolean;
+  patched?: string[];
+  skipped?: string[];
+  error?: string;
+}
+
+/**
+ * D-380：给 everydaynes.top 已发布的详情页补上深色主题文字覆盖。
+ *
+ * 根因见 articleLayoutDomainOverride 注释——新发布的文章已经会带上这段覆盖，
+ * 但这几篇是在修复前发布的，HTML 已经落盘，补丁直接改已部署的文件，
+ * 不重新跑一遍发布流程（避免触碰图片本地化等其它副作用）。
+ * 幂等：已经打过补丁（能找到覆盖标记）的文件会跳过。
+ */
+export async function patchEverydaynesArticleTextColor(
+  sitePath: string,
+  detailDirs: string[],
+): Promise<PatchEverydaynesArticleTextColorResult> {
+  let client: Client | null = null;
+  const patched: string[] = [];
+  const skipped: string[] = [];
+  try {
+    client = await connectSSH();
+    const sftp = await getSFTP(client);
+
+    const override = articleLayoutDomainOverride("everydaynes.top");
+    const marker = "d379-dark-theme-override";
+
+    for (const dir of detailDirs) {
+      const htmlPath = `${sitePath}/${dir}/index.html`;
+      let html: string;
+      try {
+        html = await sftpReadFile(sftp, htmlPath);
+      } catch {
+        skipped.push(`${dir} (读取失败)`);
+        continue;
+      }
+
+      if (html.includes(marker) || !html.includes("crm-article-layout")) {
+        skipped.push(dir);
+        continue;
+      }
+
+      const patchedHtml = html.replace(
+        /<\/style>/i,
+        `/* ${marker} */${override}</style>`,
+      );
+
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      await sftpWriteFile(sftp, `${htmlPath}.d379-${stamp}.bak`, html);
+      await sftpWriteFile(sftp, htmlPath, patchedHtml);
+      patched.push(dir);
+    }
+
+    return { ok: true, patched, skipped };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err), patched, skipped };
   } finally {
     client?.end();
   }
