@@ -1968,30 +1968,21 @@ const ARTICLE_LAYOUT_STYLE_BLOCK = `
 
 /**
  * D-380：ARTICLE_LAYOUT_STYLE_BLOCK 的兜底色（--ink/--navy/--muted/--border 等）
- * 是按浅色主题设计的（深灰字/白底）。everydaynes.top 自己的站点配色是深色主题
- * （body 背景 #0c0c0f 近黑），且它的 CSS 里压根没定义这些变量名——于是详情页
- * 正文/标题全部落到兜底的深色文字，叠在深色背景上几乎看不清。
+ * 是按浅色主题设计的（深灰字/深蓝标题/暗红链接，配浅色底）。everydaynes.top
+ * 自己的站点配色是深色主题（body 背景 #0c0c0f 近黑），且它的 CSS 里压根没
+ * 定义这些变量名——于是详情页沿用深色文字兜底色，但背景跟着全站继承成深色，
+ * 深色字叠深色底看不清。
  *
- * 按域名覆盖，不改通用兜底值：其余站用的是浅色主题，兜底色对它们是对的。
+ * 01 确认：不改文字颜色（兜底色本身没问题），只给文章卡片区域换一块浅色
+ * 背底，这样通用兜底的深灰正文/深蓝标题/暗红链接天然就能看清，不用照着
+ * 深色主题重新配一套文字色。按域名覆盖，不改通用兜底值：其余站都是浅色
+ * 主题，背景本来就是浅色，不需要这条规则。
  */
 function articleLayoutDomainOverride(domain: string): string {
   const d = (domain || "").toLowerCase();
   if (d === "everydaynes.top") {
     return `
-.article-wrap{color:#f5f5f8;}
-.article-back{color:#9a9aa8;}
-.article-back:hover{color:#d9b36c;}
-.article-head{border-bottom-color:rgba(255,255,255,.12);}
-.article-cat{color:#d9b36c;}
-.article-title{color:#f5f5f8;}
-.article-meta{color:#9a9aa8;}
-.article-content{color:#d7d7e0;}
-.article-content>p:first-of-type{color:#e6e6ee;}
-.article-content>p:first-of-type::first-letter{color:#d9b36c;}
-.article-content h2,.article-content h3{color:#f5f5f8;}
-.article-content blockquote{color:#e6e6ee;border-left-color:#d9b36c;}
-.article-content a{color:#7fd1c3;}
-.article-content figcaption{color:#9a9aa8;}
+.article-wrap{background:#F5F0E8;padding:40px 32px;border-radius:14px;}
 `;
   }
   return "";
@@ -4294,12 +4285,18 @@ export interface PatchEverydaynesArticleTextColorResult {
 }
 
 /**
- * D-380：给 everydaynes.top 已发布的详情页补上深色主题文字覆盖。
+ * D-380：给 everydaynes.top 已发布的详情页补上浅色卡片背底。
  *
  * 根因见 articleLayoutDomainOverride 注释——新发布的文章已经会带上这段覆盖，
  * 但这几篇是在修复前发布的，HTML 已经落盘，补丁直接改已部署的文件，
  * 不重新跑一遍发布流程（避免触碰图片本地化等其它副作用）。
- * 幂等：已经打过补丁（能找到覆盖标记）的文件会跳过。
+ *
+ * 01 定的方案是「换背景」不是「按深色主题逐条配文字色」——第一版
+ * （逐条覆盖 .article-content/.article-title 等文字颜色，标记
+ * d379-dark-theme-override）线上验证字体仍然看不清，改成直接给
+ * .article-wrap 换一块浅色卡片背底，让通用兜底的深灰/深蓝/暗红文字
+ * 天然能看清。旧标记的文件需要先把旧覆盖块整段换成新的，不能只看
+ * 「有没有标记」就跳过，否则旧版本的坑会留在线上。
  */
 export async function patchEverydaynesArticleTextColor(
   sitePath: string,
@@ -4313,7 +4310,8 @@ export async function patchEverydaynesArticleTextColor(
     const sftp = await getSFTP(client);
 
     const override = articleLayoutDomainOverride("everydaynes.top");
-    const marker = "d379-dark-theme-override";
+    const marker = "d380-light-card-override";
+    const legacyMarkerRe = /\/\* d379-dark-theme-override \*\/[\s\S]*?(?=<\/style>)/;
 
     for (const dir of detailDirs) {
       const htmlPath = `${sitePath}/${dir}/index.html`;
@@ -4325,18 +4323,24 @@ export async function patchEverydaynesArticleTextColor(
         continue;
       }
 
-      if (html.includes(marker) || !html.includes("crm-article-layout")) {
+      if (html.includes(marker)) {
         skipped.push(dir);
         continue;
       }
+      if (!html.includes("crm-article-layout")) {
+        skipped.push(`${dir} (无 crm-article-layout 标记)`);
+        continue;
+      }
 
-      const patchedHtml = html.replace(
-        /<\/style>/i,
-        `/* ${marker} */${override}</style>`,
-      );
+      let patchedHtml: string;
+      if (legacyMarkerRe.test(html)) {
+        patchedHtml = html.replace(legacyMarkerRe, `/* ${marker} */${override}\n`);
+      } else {
+        patchedHtml = html.replace(/<\/style>/i, `/* ${marker} */${override}</style>`);
+      }
 
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-      await sftpWriteFile(sftp, `${htmlPath}.d379-${stamp}.bak`, html);
+      await sftpWriteFile(sftp, `${htmlPath}.d380-${stamp}.bak`, html);
       await sftpWriteFile(sftp, htmlPath, patchedHtml);
       patched.push(dir);
     }
