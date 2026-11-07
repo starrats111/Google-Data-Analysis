@@ -1973,15 +1973,18 @@ const ARTICLE_LAYOUT_STYLE_BLOCK = `
  * 定义这些变量名——于是详情页沿用深色文字兜底色，但背景跟着全站继承成深色，
  * 深色字叠深色底看不清。
  *
- * 01 确认：不改文字颜色（兜底色本身没问题），只给文章卡片区域换一块浅色
- * 背底，这样通用兜底的深灰正文/深蓝标题/暗红链接天然就能看清，不用照着
- * 深色主题重新配一套文字色。按域名覆盖，不改通用兜底值：其余站都是浅色
- * 主题，背景本来就是浅色，不需要这条规则。
+ * 01 确认：不改文字颜色（兜底色本身没问题），给文章卡片和它外层的 body 都
+ * 换成浅色（两层有色差，保留卡片轮廓感），这样通用兜底的深灰正文/深蓝标题/
+ * 暗红链接天然就能看清。只影响详情页自己生成的这个静态 HTML 文件的 body
+ * 背景，不碰首页 index.html（导航栏/首页背景不变，01 确认过范围仅限详情页）。
+ * 按域名覆盖，不改通用兜底值：其余站都是浅色主题，背景本来就是浅色，不需要
+ * 这条规则。
  */
 function articleLayoutDomainOverride(domain: string): string {
   const d = (domain || "").toLowerCase();
   if (d === "everydaynes.top") {
     return `
+body{background:#EDE7DA !important;}
 .article-wrap{background:#F5F0E8;padding:40px 32px;border-radius:14px;}
 `;
   }
@@ -4285,17 +4288,16 @@ export interface PatchEverydaynesArticleTextColorResult {
 }
 
 /**
- * D-380：给 everydaynes.top 已发布的详情页补上浅色卡片背底。
+ * D-380：给 everydaynes.top 已发布的详情页补上浅色背景（body + 卡片两层）。
  *
  * 根因见 articleLayoutDomainOverride 注释——新发布的文章已经会带上这段覆盖，
  * 但这几篇是在修复前发布的，HTML 已经落盘，补丁直接改已部署的文件，
  * 不重新跑一遍发布流程（避免触碰图片本地化等其它副作用）。
  *
- * 01 定的方案是「换背景」不是「按深色主题逐条配文字色」——第一版
- * （逐条覆盖 .article-content/.article-title 等文字颜色，标记
- * d379-dark-theme-override）线上验证字体仍然看不清，改成直接给
- * .article-wrap 换一块浅色卡片背底，让通用兜底的深灰/深蓝/暗红文字
- * 天然能看清。旧标记的文件需要先把旧覆盖块整段换成新的，不能只看
+ * 历史版本：①逐条覆盖文字颜色（标记 d379-dark-theme-override）线上验证字体
+ * 仍看不清；②只换卡片背底、body 仍是深色（标记 d380-light-card-override）
+ * 01 反馈卡片外层还是黑的；③现在 body 和卡片都换成浅色（有色差）。
+ * 每次改版都用新标记，旧标记的文件要把旧覆盖块整段替换成最新版，不能只看
  * 「有没有标记」就跳过，否则旧版本的坑会留在线上。
  */
 export async function patchEverydaynesArticleTextColor(
@@ -4310,8 +4312,11 @@ export async function patchEverydaynesArticleTextColor(
     const sftp = await getSFTP(client);
 
     const override = articleLayoutDomainOverride("everydaynes.top");
-    const marker = "d380-light-card-override";
-    const legacyMarkerRe = /\/\* d379-dark-theme-override \*\/[\s\S]*?(?=<\/style>)/;
+    const marker = "d381-body-and-card-bg-override";
+    const legacyMarkerRes = [
+      /\/\* d379-dark-theme-override \*\/[\s\S]*?(?=<\/style>)/,
+      /\/\* d380-light-card-override \*\/[\s\S]*?(?=<\/style>)/,
+    ];
 
     for (const dir of detailDirs) {
       const htmlPath = `${sitePath}/${dir}/index.html`;
@@ -4332,15 +4337,13 @@ export async function patchEverydaynesArticleTextColor(
         continue;
       }
 
-      let patchedHtml: string;
-      if (legacyMarkerRe.test(html)) {
-        patchedHtml = html.replace(legacyMarkerRe, `/* ${marker} */${override}\n`);
-      } else {
-        patchedHtml = html.replace(/<\/style>/i, `/* ${marker} */${override}</style>`);
-      }
+      const legacyRe = legacyMarkerRes.find((re) => re.test(html));
+      const patchedHtml = legacyRe
+        ? html.replace(legacyRe, `/* ${marker} */${override}\n`)
+        : html.replace(/<\/style>/i, `/* ${marker} */${override}</style>`);
 
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-      await sftpWriteFile(sftp, `${htmlPath}.d380-${stamp}.bak`, html);
+      await sftpWriteFile(sftp, `${htmlPath}.d381-${stamp}.bak`, html);
       await sftpWriteFile(sftp, htmlPath, patchedHtml);
       patched.push(dir);
     }
