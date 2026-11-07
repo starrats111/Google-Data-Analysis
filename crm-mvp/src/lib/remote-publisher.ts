@@ -1991,6 +1991,101 @@ body{background:#EDE7DA !important;}
   return "";
 }
 
+const LIGHT_FALLBACK_BG_OVERRIDE = `
+body{background:#F5F0E8 !important;}
+.article-wrap{background:#FFFDF8;padding:40px 32px;border-radius:14px;}
+`;
+
+/** 粗略估算十六进制颜色的相对亮度（0~255，仿 YIQ 加权），用于判断深浅 */
+function hexColorLuma(hex: string): number | null {
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return null;
+  let h = m[1];
+  if (h.length === 3) h = h.split("").map((c) => c + c).join("");
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return (r * 299 + g * 587 + b * 114) / 1000;
+}
+
+/**
+ * D-382：D-380/381 是手动给 everydaynes.top 一个站打的补丁，治标不治本——
+ * 下次再接一个深色主题的站，同样的「字体看不清」会重演一遍，又要等用户反馈
+ * 才发现。01 要求定成规则：发布详情页时自动判断站点背景深浅，深色就强制套
+ * 浅色覆盖，不再靠人工逐个发现、逐个加域名分支。
+ *
+ * 判法：读首页模板 `<body...>` 标签上的 `style="background:..."`（内联），
+ * 以及首页引用的本站 CSS 文件（同域相对路径，跳过第三方 CDN）里第一条
+ * `body{...background...}` 规则。值如果是 `var(--xxx)`（everydaynes.top
+ * 这类站很常见）会去同文件的 `:root` 块里解析该变量的真实值；如果是渐变
+ * （linear-gradient 等），取里面全部十六进制色标求平均亮度——深色主题的
+ * 渐变几乎总是各色标都偏暗，平均值足够判断，不需要精确还原渐变方向/位置。
+ * 亮度判定阈值 < 90（仿 YIQ，能准确分开 #0c0c0f 这类近黑和 #F5F0E8 这类
+ * 米白，常见深色主题背景如 #1a1a1a/#121212 同样 < 90，常见浅色背景都在
+ * 200+）。判不出颜色（没有可解析的十六进制值、读取失败等）时保守地不
+ * 介入，不强加覆盖。
+ *
+ * 命中深色就返回通用浅色覆盖（不按站定制配色，跟 D-381 的「文字色不用动，
+ * 换背景就够」结论一致）；domain 专属覆盖（如 everydaynes.top 的两层色差版）
+ * 优先于这条通用兜底，不重复覆盖。
+ */
+async function detectDarkBodyBackground(
+  sftp: SFTPWrapper,
+  siteRoot: string,
+  domain: string,
+  templateHtml: string,
+): Promise<boolean> {
+  const bodyTagMatch = templateHtml.match(/<body\b[^>]*>/i)?.[0] || "";
+  const inlineBgMatch = /style=["'][^"']*background(?:-color)?\s*:\s*(#[0-9a-f]{3,6})/i.exec(bodyTagMatch);
+  if (inlineBgMatch) {
+    const luma = hexColorLuma(inlineBgMatch[1]);
+    if (luma !== null) return luma < 90;
+  }
+
+  const cssLinks = Array.from(
+    templateHtml.matchAll(/<link[^>]+rel=["']stylesheet["'][^>]*href=["']([^"']+)["']/gi),
+  ).map((m) => m[1]);
+
+  for (const href of cssLinks) {
+    if (/^https?:\/\//i.test(href) && !href.includes(domain)) continue; // 跳过第三方 CDN（Google Fonts / Font Awesome 等）
+    const relPath = href.replace(/^https?:\/\/[^/]+\//i, "").replace(/^\/+/, "").replace(/\?.*$/, "");
+    if (!relPath) continue;
+    try {
+      const css = await sftpReadFile(sftp, `${siteRoot}/${relPath}`);
+      const bodyRuleMatch = /\bbody\s*\{[^}]*\}/i.exec(css);
+      if (!bodyRuleMatch) continue;
+      const bgMatch = /background(?:-color)?\s*:\s*([^;]+);/i.exec(bodyRuleMatch[0]);
+      if (!bgMatch) continue;
+
+      let bgValue = bgMatch[1].trim();
+      // body 背景常年间接引用变量（everydaynes.top 的 var(--bg-soft) 就是这样），
+      // 不解析 var() 会永远判不出颜色——这条规则就形同虚设。
+      const varMatch = /var\(\s*(--[\w-]+)/i.exec(bgValue);
+      if (varMatch) {
+        const rootMatch = /:root\s*\{[^}]*\}/i.exec(css);
+        if (!rootMatch) continue;
+        const varName = varMatch[1].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const varDefMatch = new RegExp(`${varName}\\s*:\\s*([^;]+);`, "i").exec(rootMatch[0]);
+        if (!varDefMatch) continue;
+        bgValue = varDefMatch[1].trim();
+      }
+
+      // 深色渐变（linear-gradient 等）每个色标通常都是暗色，取出全部十六进制色标
+      // 求平均亮度就够判断了，不需要精确还原渐变方向/位置。
+      const hexStops = Array.from(bgValue.matchAll(/#[0-9a-f]{3,6}/gi)).map((m) => m[0]);
+      if (hexStops.length === 0) continue;
+      const lumas = hexStops.map(hexColorLuma).filter((n): n is number => n !== null);
+      if (lumas.length === 0) continue;
+      const avgLuma = lumas.reduce((sum, n) => sum + n, 0) / lumas.length;
+      return avgLuma < 90;
+    } catch {
+      /* 文件读不到就跳过，不影响其它候选 */
+    }
+  }
+
+  return false;
+}
+
 async function createArticleHtmlPage(
   sftp: SFTPWrapper,
   client: Client,
@@ -2043,7 +2138,14 @@ async function createArticleHtmlPage(
       // Remove main.js to avoid loading article listing code on detail page
       headSection = headSection.replace(/<script[^>]*main\.js[^>]*><\/script>\s*/gi, "");
       if (!headSection.includes("crm-article-layout")) {
-        headSection = headSection.replace(/<\/head>/i, `  <style>${ARTICLE_LAYOUT_STYLE_BLOCK}${ARTICLE_HYPERLINK_STYLE_BLOCK}${articleLayoutDomainOverride(domain)}</style>\n</head>`);
+        // D-382：域名专属覆盖优先；没有专属覆盖时，自动判断站点背景是否深色，
+        // 深色就套通用浅色兜底——不再靠人工逐个发现、逐个加域名分支（见
+        // detectDarkBodyBackground 注释）。
+        let bgOverride = articleLayoutDomainOverride(domain);
+        if (!bgOverride && await detectDarkBodyBackground(sftp, siteRoot, domain, templateHtml)) {
+          bgOverride = LIGHT_FALLBACK_BG_OVERRIDE;
+        }
+        headSection = headSection.replace(/<\/head>/i, `  <style>${ARTICLE_LAYOUT_STYLE_BLOCK}${ARTICLE_HYPERLINK_STYLE_BLOCK}${bgOverride}</style>\n</head>`);
       }
     } else {
       headSection = `<head>\n<meta charset="UTF-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n<title>${escapeHtml(article.title)}</title>\n<style>${ARTICLE_LAYOUT_STYLE_BLOCK}${ARTICLE_HYPERLINK_STYLE_BLOCK}${articleLayoutDomainOverride(domain)}</style>\n</head>`;
