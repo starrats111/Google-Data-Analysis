@@ -6,8 +6,10 @@ import prisma from "@/lib/prisma";
 // C-020 R1.1：按 URL 创建商家（见设计方案 §20.5.3 / §20.5.7）
 // 步骤：
 //   1. 规范化 URL，提取 domain
-//   2. step 2：本用户 source=url_direct 同 URL → 复用
-//   3. step 3：本用户任何 source 同 domain → 复用（不改 status/source）
+//   2. step 2：本用户同平台 + source=url_direct 同 URL → 复用
+//   3. step 3：本用户同平台下任何 source 同 domain → 复用（不改 status/source）
+//   注：step2/3 必须按 platform 过滤，同一域名常在多个联盟平台下各建一条记录
+//   （如 CG/LB），不过滤会无视表单选的平台账号，跨平台复用到错的那条，链接串掉
 //   4. step 4：campaigns JOIN user_merchants(source=platform) 是否历史有 → offline，否则 url_only
 //   5. step 5：新建 user_merchants（source=url_direct, status=claimed, claimed_at=now）
 
@@ -75,6 +77,7 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
       user_id: userId,
       is_deleted: 0,
       source: "url_direct",
+      platform,
       OR: [
         { merchant_url: normalized },
         { merchant_url: { contains: hostname } },
@@ -93,11 +96,12 @@ export const POST = withUser(async (req: NextRequest, { user }) => {
     });
   }
 
-  // step 3：本用户任何 source 同 domain 复用（不改 status/source）
+  // step 3：本用户同平台下任何 source 同 domain 复用（不改 status/source）
   const reuseAny = await prisma.user_merchants.findFirst({
     where: {
       user_id: userId,
       is_deleted: 0,
+      platform,
       OR: [
         { merchant_url: { contains: hostname } },
         { merchant_name: { contains: hostname } },
