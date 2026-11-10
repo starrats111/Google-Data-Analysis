@@ -114,6 +114,7 @@ interface SettlementItem {
   order_count: number | null; total_commission: number | null;
   settlement_rate: number; chargeback_rate: number | null;
   my_status: string | null; my_platform: string | null; can_run: boolean;
+  run_status: "not_in_db" | "claimable" | "can_run" | "claimed_not_running";
 }
 // __TYPES__
 interface Merchant {
@@ -245,9 +246,42 @@ export default function MerchantsPage() {
   // D-374 商家结算率表：仅在 Tab 激活时拉取
   const [stlSearch, setStlSearch] = useState(""); const [stlPlatform, setStlPlatform] = useState("");
   const [stlPage, setStlPage] = useState(1); const [stlPageSize, setStlPageSize] = useState(50);
+  const [stlSortField, setStlSortField] = useState("settlement_rate");
+  const [stlSortOrder, setStlSortOrder] = useState<"asc" | "desc">("desc");
+  const [stlRunStatus, setStlRunStatus] = useState("");
+  const [stlSettlementRange, setStlSettlementRange] = useState<[number | null, number | null]>([null, null]);
+  const [stlChargebackRange, setStlChargebackRange] = useState<[number | null, number | null]>([null, null]);
+  const [stlCommissionRange, setStlCommissionRange] = useState<[number | null, number | null]>([null, null]);
+  const stlColSortOrder = (field: string) => stlSortField === field ? (stlSortOrder === "asc" ? "ascend" as const : "descend" as const) : null;
+  const handleStlTableChange = useCallback((_p: any, _f: any, sorter: any, extra: any) => {
+    if (extra.action === "sort") {
+      if (sorter.field && sorter.order) {
+        setStlSortField(sorter.field as string);
+ setStlSortOrder(sorter.order === "ascend" ? "asc" : "desc");
+      } else {
+ setStlSortField("settlement_rate");
+        setStlSortOrder("desc");
+      }
+      setStlPage(1);
+    }
+  }, []);
+  const stlParams = useMemo(() => {
+    const p: Record<string, string | number> = {
+      page: stlPage, pageSize: stlPageSize, sortField: stlSortField, sortOrder: stlSortOrder,
+    };
+    if (stlSearch) p.search = stlSearch;
+    if (stlPlatform) p.platform = stlPlatform;
+    if (stlRunStatus) p.run_status = stlRunStatus;
+    if (stlSettlementRange[0] != null) p.settlement_min = stlSettlementRange[0];
+    if (stlSettlementRange[1] != null) p.settlement_max = stlSettlementRange[1];
+    if (stlChargebackRange[0] != null) p.chargeback_min = stlChargebackRange[0];
+    if (stlChargebackRange[1] != null) p.chargeback_max = stlChargebackRange[1];
+    if (stlCommissionRange[0] != null) p.commission_min = stlCommissionRange[0];
+    if (stlCommissionRange[1] != null) p.commission_max = stlCommissionRange[1];
+    return p;
+  }, [stlPage, stlPageSize, stlSortField, stlSortOrder, stlSearch, stlPlatform, stlRunStatus, stlSettlementRange, stlChargebackRange, stlCommissionRange]);
   const { data: stlData, isLoading: stlLoading } = useApiWithParams<{ items: SettlementItem[]; total: number }>(
-    tab === "settlement" ? "/api/user/merchant-settlement" : null,
-    { page: stlPage, pageSize: stlPageSize, ...(stlSearch ? { search: stlSearch } : {}), ...(stlPlatform ? { platform: stlPlatform } : {}) });
+    tab === "settlement" ? "/api/user/merchant-settlement" : null, stlParams);
   // 提醒窗口内的节点 → 顶部横幅（优先有清单的）
   const bannerNode = useMemo(() => holidayNodes.find((n) => n.in_window && n.list_count > 0) || holidayNodes.find((n) => n.in_window) || null, [holidayNodes]);
   // 从节点清单跳去"选取商家"Tab 走既有认领流程
@@ -1304,25 +1338,27 @@ export default function MerchantsPage() {
       render: (_: unknown, m: NodeExpRow) => <Button type="link" size="small" onClick={() => ndGoPick(m.merchant_name)}>去选品</Button>,
     },
   ], [ndGoPick]);
-  // D-374 商家结算率表列
+  // D-374 商家结算率表列（D-383：结算率/拒付率/总佣金实时聚合，商家名/这三列支持排序）
   const settlementCols = useMemo(() => [
     { title: "平台", dataIndex: "platform", width: 70, render: (v: string) => <Tag color={PC[v] || "default"}>{v}</Tag> },
-    { title: "商家名称", dataIndex: "merchant_name", width: 220, ellipsis: true, render: (v: string) => <span style={{ fontWeight: 600 }}>{v}</span> },
+    { title: "商家名称", dataIndex: "merchant_name", width: 220, ellipsis: true, sorter: true, sortOrder: stlColSortOrder("merchant_name"),
+      render: (v: string) => <span style={{ fontWeight: 600 }}>{v}</span>,
+    },
     { title: "MID", dataIndex: "mid", width: 100, ellipsis: true, render: (v: string | null) => v || "-" },
-    { title: "结算率", dataIndex: "settlement_rate", width: 90, align: "right" as const,
+    { title: "结算率", dataIndex: "settlement_rate", width: 90, align: "right" as const, sorter: true, sortOrder: stlColSortOrder("settlement_rate"),
       render: (v: number) => `${(Number(v) * 100).toFixed(1)}%`,
     },
-    { title: "拒付率", dataIndex: "chargeback_rate", width: 90, align: "right" as const,
+    { title: "拒付率", dataIndex: "chargeback_rate", width: 90, align: "right" as const, sorter: true, sortOrder: stlColSortOrder("chargeback_rate"),
       render: (v: number | null) => v != null ? `${(Number(v) * 100).toFixed(1)}%` : "-",
     },
     { title: "订单数", dataIndex: "order_count", width: 90, align: "right" as const, render: (v: number | null) => v ?? "-" },
-    { title: "总佣金", dataIndex: "total_commission", width: 100, align: "right" as const,
+    { title: "总佣金", dataIndex: "total_commission", width: 100, align: "right" as const, sorter: true, sortOrder: stlColSortOrder("total_commission"),
       render: (v: number | null) => v != null ? `$${Number(v).toFixed(2)}` : "-",
     },
     { title: "是否可直接跑", dataIndex: "can_run", width: 150,
       render: (can_run: boolean, rec: SettlementItem) => {
         if (can_run) return <Tag color="green">可直接跑（{rec.my_platform}）</Tag>;
-        if (rec.my_status == null) return <Tag>未入库</Tag>;
+ if (rec.my_status == null) return <Tag>未入库</Tag>;
         if (rec.my_status === "available") return <Tag color="blue">可认领</Tag>;
         return <Tooltip title="该商家已被认领，但广告当前未在投放（已暂停/下架），需重新建广告才能跑"><Tag color="orange">已认领未投放</Tag></Tooltip>;
       },
@@ -1331,7 +1367,7 @@ export default function MerchantsPage() {
       render: (_: unknown, rec: SettlementItem) =>
         rec.my_status === "available" ? <Button type="link" size="small" onClick={() => ndGoPick(rec.merchant_name, rec.platform)}>去选品</Button> : "-",
     },
-  ], [ndGoPick]);
+  ], [ndGoPick, stlSortField, stlSortOrder]);
   return (<div style={{ maxWidth: 1600, margin: "0 auto" }}>
     <AppPageHeader icon={<ShopOutlined />} title="我的商家" subtitle="关注、领取、配置广告投放，所有商家运营围绕这一页" />
     {bannerNode && tab !== "nodes" && (
@@ -1585,15 +1621,34 @@ export default function MerchantsPage() {
       {tab === "settlement" && (<div>
         <div style={{ marginBottom: 12, padding: "8px 12px", background: "#fff7e6", border: "1px solid #ffd591", borderRadius: 6, fontSize: 12, color: "#666" }}>
           <DollarOutlined style={{ color: "#fa8c16", marginRight: 6 }} />
-          丰度/邮政群里定期分享的商家结算率统计，按结算率从高到低排列。同名商家在不同联盟平台是不同商家（独立 MID、独立结算率），下表按「平台+MID」精确比对。「可直接跑」指该行对应的平台+商家在我们账号下有广告正在投放；「已认领未投放」指曾经建过广告但已暂停/下架，需重新建广告才能跑。
+          丰度/邮政群里定期分享的商家结算率清单（商家与平台由管理员维护），结算率/拒付率/订单数/总佣金按全系统实时交易数据计算（口径同「数据中心-结算查询」）。同名商家在不同联盟平台是不同商家（独立 MID、独立结算率），下表按「平台+MID」精确比对。「可直接跑」指该行对应的平台+商家在我们账号下有广告正在投放；「已认领未投放」指曾经建过广告但已暂停/下架，需重新建广告才能跑。
         </div>
-        <div className="filter-bar">
-          <Input allowClear placeholder="搜索商家名" style={{ width: 240 }} prefix={<SearchOutlined />} size="small" value={stlSearch} onChange={(e) => setStlSearch(e.target.value)} onPressEnter={() => setStlPage(1)} />
-          <Select placeholder="平台" allowClear style={{ width: 120 }} size="small" value={stlPlatform || undefined} onChange={(v) => { setStlPlatform(v || ""); setStlPage(1); }} options={PLATFORMS.map((p) => ({ value: p.code, label: p.code }))} />
-          <Button type="primary" size="small" icon={<SearchOutlined />} onClick={() => setStlPage(1)}>查询</Button>
+ <div className="filter-bar" style={{ flexWrap: "wrap", gap: 8 }}>
+          <Input allowClear placeholder="搜索商家名" style={{ width: 200 }} prefix={<SearchOutlined />} size="small" value={stlSearch} onChange={(e) => setStlSearch(e.target.value)} onPressEnter={() => setStlPage(1)} />
+   <Select placeholder="平台" allowClear style={{ width: 100 }} size="small" value={stlPlatform || undefined} onChange={(v) => { setStlPlatform(v || ""); setStlPage(1); }} options={PLATFORMS.map((p) => ({ value: p.code, label: p.code }))} />
+   <Select placeholder="是否可直接跑" allowClear style={{ width: 140 }} size="small" value={stlRunStatus || undefined} onChange={(v) => { setStlRunStatus(v || ""); setStlPage(1); }} options={[{ value: "can_run", label: "可直接跑" }, { value: "claimable", label: "可认领" }, { value: "claimed_not_running", label: "已认领未投放" }, { value: "not_in_db", label: "未入库" }]} />
+   <Space size={4}>
+     <Text type="secondary" style={{ fontSize: 12 }}>结算率</Text>
+     <InputNumber size="small" style={{ width: 80 }} placeholder="最小" suffix="%" min={0} max={100} value={stlSettlementRange[0] ?? undefined} onChange={(v) => { setStlSettlementRange([v ?? null, stlSettlementRange[1]]); setStlPage(1); }} />
+     <Text type="secondary" style={{ fontSize: 12 }}>~</Text>
+     <InputNumber size="small" style={{ width: 80 }} placeholder="最大" suffix="%" min={0} max={100} value={stlSettlementRange[1] ?? undefined} onChange={(v) => { setStlSettlementRange([stlSettlementRange[0], v ?? null]); setStlPage(1); }} />
+          </Space>
+          <Space size={4}>
+     <Text type="secondary" style={{ fontSize: 12 }}>拒付率</Text>
+     <InputNumber size="small" style={{ width: 80 }} placeholder="最小" suffix="%" min={0} max={100} value={stlChargebackRange[0] ?? undefined} onChange={(v) => { setStlChargebackRange([v ?? null, stlChargebackRange[1]]); setStlPage(1); }} />
+     <Text type="secondary" style={{ fontSize: 12 }}>~</Text>
+     <InputNumber size="small" style={{ width: 80 }} placeholder="最大" suffix="%" min={0} max={100} value={stlChargebackRange[1] ?? undefined} onChange={(v) => { setStlChargebackRange([stlChargebackRange[0], v ?? null]); setStlPage(1); }} />
+   </Space>
+   <Space size={4}>
+     <Text type="secondary" style={{ fontSize: 12 }}>总佣金</Text>
+     <InputNumber size="small" style={{ width: 90 }} placeholder="最小" prefix="$" min={0} value={stlCommissionRange[0] ?? undefined} onChange={(v) => { setStlCommissionRange([v ?? null, stlCommissionRange[1]]); setStlPage(1); }} />
+     <Text type="secondary" style={{ fontSize: 12 }}>~</Text>
+     <InputNumber size="small" style={{ width: 90 }} placeholder="最大" prefix="$" min={0} value={stlCommissionRange[1] ?? undefined} onChange={(v) => { setStlCommissionRange([stlCommissionRange[0], v ?? null]); setStlPage(1); }} />
+   </Space>
+   <Button size="small" onClick={() => { setStlSearch(""); setStlPlatform(""); setStlRunStatus(""); setStlSettlementRange([null, null]); setStlChargebackRange([null, null]); setStlCommissionRange([null, null]); setStlPage(1); }}>重置</Button>
         </div>
-        <Table rowKey="id" loading={stlLoading} dataSource={stlData?.items || []} columns={settlementCols} size="small" scroll={{ x: 1000 }}
-          pagination={{ current: stlPage, pageSize: stlPageSize, total: stlData?.total || 0, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"], showTotal: (t: number) => `共 ${t} 条`, onChange: (p, ps) => { if (ps !== stlPageSize) { setStlPageSize(ps); setStlPage(1); } else setStlPage(p); } }} />
+        <Table rowKey="id" loading={stlLoading} dataSource={stlData?.items || []} columns={settlementCols} size="small" scroll={{ x: 1100 }} onChange={handleStlTableChange}
+   pagination={{ current: stlPage, pageSize: stlPageSize, total: stlData?.total || 0, showSizeChanger: true, pageSizeOptions: ["10", "20", "50", "100"], showTotal: (t: number) => `共 ${t} 条`, onChange: (p, ps) => { if (ps !== stlPageSize) { setStlPageSize(ps); setStlPage(1); } else setStlPage(p); } }} />
       </div>)}
       {tab === "chargebacks" && (<div>
         <div style={{ marginBottom: 12, padding: "8px 12px", background: "#fffbe6", border: "1px solid #ffe58f", borderRadius: 6, fontSize: 12, color: "#666" }}>
