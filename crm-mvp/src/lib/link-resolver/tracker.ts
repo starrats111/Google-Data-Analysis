@@ -1117,6 +1117,25 @@ export function computeHopReferer(previousUrl: string | null, targetUrl: string)
 }
 
 /**
+ * D-385：按跳数决定本跳该发哪个 Referer。
+ *
+ * 第 1、2 跳：强制用调用方指定的来路（initialReferer，模拟「真人从某来源页点进联盟链接」），
+ * 不走 computeHopReferer 的同源/跨源判断——initialReferer 是文章/站点首页等干净 URL，
+ * 不含任何追踪 token，与 D-234 要规避的「把上一跳自身追踪链接当 Referer 发出去」性质不同，
+ * 强制发它不会重犯 D-234 的合规/反爬事故。
+ * 第 3 跳起：维持 D-234 原逻辑，按浏览器 strict-origin-when-cross-origin 口径现算。
+ */
+export function resolveHopReferer(
+  stepNumber: number,
+  initialReferer: string | undefined,
+  previousUrl: string | null,
+  currentUrl: string,
+): string | undefined {
+  if (stepNumber <= 2) return initialReferer
+  return computeHopReferer(previousUrl, currentUrl)
+}
+
+/**
  * 将 Location 头解析为绝对 http(s) URL
  * 
  * @param location Location 头的值
@@ -1993,10 +2012,8 @@ export async function trackRedirects(options: TrackRedirectsOptions): Promise<Tr
     const stepStartTime = Date.now()
     const stepNumber = i + 1
     
-    // 确定本次请求的 Referer
-    // 第 1 跳：使用 initialReferer（调用方给的真实来路，模拟从文章/站点点进来）
-    // 第 2 跳开始：D-234 按浏览器 strict-origin-when-cross-origin 口径算，不再发完整上一跳 URL
-    const referer = stepNumber === 1 ? initialReferer : computeHopReferer(previousUrl, currentUrl)
+    // 确定本次请求的 Referer，规则见 resolveHopReferer 注释（D-385：第 1、2 跳强制用 initialReferer）
+    const referer = resolveHopReferer(stepNumber, initialReferer, previousUrl, currentUrl)
 
     // 早停检查：如果目标域名存在，检查当前 URL 是否已匹配
     // ⚠️ 关键改动：匹配后仍然先访问该 URL（完成点击注册），然后再停止
