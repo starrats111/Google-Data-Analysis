@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { sanitizeTrackingQuery } from "../src/lib/affiliate-link-resolver";
-import { computeHopReferer } from "../src/lib/link-resolver/tracker";
+import { computeHopReferer, resolveHopReferer } from "../src/lib/link-resolver/tracker";
 
 describe("D-234 后缀清洗：referer= / url= 不得进 final_url_suffix", () => {
   it("07 报案的真实后缀：剔掉 referer= 与 url=，追踪参数一个不少", () => {
@@ -96,5 +96,46 @@ describe("D-234 跟链 Referer：按浏览器 strict-origin-when-cross-origin �
     assert.equal(computeHopReferer(null, "https://a.com/"), undefined);
     assert.equal(computeHopReferer("not-a-url", "https://a.com/"), undefined);
     assert.equal(computeHopReferer("https://a.com/", "not-a-url"), undefined);
+  });
+});
+
+describe("D-385 第 1、2 跳强制用指定来路，第 3 跳起维持原策略", () => {
+  const initialReferer = "https://my-article-site.com/review/widget";
+
+  it("第 1 跳用指定来路", () => {
+    assert.equal(resolveHopReferer(1, initialReferer, null, "https://clk.tradedoubler.com/click?a=1"), initialReferer);
+  });
+
+  it("第 2 跳也无条件用指定来路，即使跨源", () => {
+    assert.equal(
+      resolveHopReferer(2, initialReferer, "https://clk.tradedoubler.com/click?a=1", "https://merchant.example.com/landing"),
+      initialReferer,
+    );
+  });
+
+  it("第 2 跳即使 https → http 降级也仍发指定来路（不走 computeHopReferer 的降级不发规则）", () => {
+    assert.equal(
+      resolveHopReferer(2, initialReferer, "https://clk.tradedoubler.com/click?a=1", "http://merchant.example.com/landing"),
+      initialReferer,
+    );
+  });
+
+  it("第 3 跳起维持 D-234 原逻辑：跨源只发 origin", () => {
+    assert.equal(
+      resolveHopReferer(3, initialReferer, "https://app.partnermatic.com/track/secret", "https://clk.tradedoubler.com/click?a=1"),
+      "https://app.partnermatic.com/",
+    );
+  });
+
+  it("第 3 跳起维持 D-234 原逻辑：https → http 降级不发", () => {
+    assert.equal(
+      resolveHopReferer(3, initialReferer, "https://a.com/x", "http://b.com/y"),
+      undefined,
+    );
+  });
+
+  it("initialReferer 为空时，第 1、2 跳返回 undefined（不是空字符串，不是报错）", () => {
+    assert.equal(resolveHopReferer(1, undefined, null, "https://a.com/"), undefined);
+    assert.equal(resolveHopReferer(2, undefined, "https://a.com/", "https://b.com/"), undefined);
   });
 });
