@@ -250,6 +250,25 @@ export async function GET(req: NextRequest) {
     return { url: null, source: 'none' }
   }
 
+  // 「来路」手动编辑面板的候选值：不管当前实际生效的是哪一档，都把文章/网站各自的 URL 亮出来，
+  // 这样前端能提供「设为网站」「设为文章」一键按钮，不用让用户自己去联盟账号里抄网址
+  const resolveRefererCandidates = (
+    m: { id: bigint; platform_connection_id: bigint | null } | null,
+  ): { article: string | null; website: string | null } => {
+    if (!m) return { article: null, website: null }
+    const article = latestArticleByMerchant.get(m.id.toString()) ?? null
+    let website: string | null = null
+    if (m.platform_connection_id) {
+      const siteId = siteIdByConn.get(m.platform_connection_id.toString())
+      const domain = siteId ? domainBySite.get(siteId.toString())?.trim() : undefined
+      if (domain) {
+        const d = domain.replace(/\/+$/, '')
+        website = /^https?:\/\//i.test(d) ? d : `https://${d}`
+      }
+    }
+    return { article, website }
+  }
+
   // 按 campaign_id + status 统计库存
   const campaignIds = campaigns.map((c) => c.id)
   const stockRows =
@@ -375,6 +394,7 @@ export async function GET(req: NextRequest) {
       conversion,
       refererUrl: referer.url,
       refererSource: referer.source,
+      refererCandidates: resolveRefererCandidates(merchant),
       lastApplyAt: c.suffix_last_apply_at,
       lastSuffix: c.suffix_last_content,
       stock,

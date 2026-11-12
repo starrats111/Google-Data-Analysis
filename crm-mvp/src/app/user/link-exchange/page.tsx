@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Table, Tag, Button, Input, InputNumber, Space, Typography, Card, Row, Col,
   Tooltip, App, Statistic, Switch, Tabs, Popconfirm, Badge, Alert, Segmented, AutoComplete,
+  Popover,
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import {
@@ -49,6 +50,8 @@ interface CampaignRow {
   conversion: number | null;
   refererUrl: string | null;
   refererSource: "manual" | "article" | "website" | "none";
+  /** 候选值：不管当前生效的是哪一档，文章/网站各自的 URL 都亮出来，供编辑面板一键填入 */
+  refererCandidates: { article: string | null; website: string | null };
   lastApplyAt: string | null;
   lastSuffix: string | null;
   stock: StockInfo;
@@ -160,6 +163,9 @@ export default function LinkExchangePage() {
   const [editingLinkId, setEditingLinkId] = useState<string | null>(null);
   const [linkDraft, setLinkDraft] = useState("");
   const [savingLink, setSavingLink] = useState(false);
+  const [editingRefererId, setEditingRefererId] = useState<string | null>(null);
+  const [refererDraft, setRefererDraft] = useState("");
+  const [savingReferer, setSavingReferer] = useState(false);
   // D-178 告警处理通道：重验中的告警 id
   const [recheckingAlert, setRecheckingAlert] = useState<string | null>(null);
   // D-223 正在纠正归属的告警 id
@@ -349,6 +355,24 @@ export default function LinkExchangePage() {
       } else message.error(res.message ?? "保存失败");
     } finally {
       setSavingLink(false);
+    }
+  };
+
+  const handleSaveReferer = async (merchantId: string, url: string | null) => {
+    if (url && !/^https?:\/\//i.test(url)) { message.error("请填写有效的 http(s) 链接"); return; }
+    setSavingReferer(true);
+    try {
+      const res = await fetch("/api/user/settings/merchant-referer", {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ merchantId, refererUrl: url }),
+      }).then((r) => r.json());
+      if (res.code === 0) {
+        message.success(url ? "来路已保存" : "已清除手动来路，恢复自动匹配");
+        setEditingRefererId(null);
+        fetchData();
+      } else message.error(res.message ?? "保存失败");
+    } finally {
+      setSavingReferer(false);
     }
   };
 
@@ -588,7 +612,7 @@ export default function LinkExchangePage() {
     {
       title: "来路", width: 90, align: "center",
       render: (_: unknown, row) => {
-        if (!row.matched) return <Text type="secondary">—</Text>;
+        if (!row.matched || !row.merchantId) return <Text type="secondary">—</Text>;
         const meta: Record<CampaignRow["refererSource"], { t: string; c: string; tip: string }> = {
           manual: { t: "手动", c: "blue", tip: "商家手动配置的来路" },
           article: { t: "文章", c: "green", tip: "该商家最新已发布文章链接" },
@@ -596,16 +620,59 @@ export default function LinkExchangePage() {
           none: { t: "随机", c: "default", tip: "未配置来路，刷点击/补货时从随机来路池选取" },
         };
         const m = meta[row.refererSource] ?? meta.none;
-        if (row.refererSource === "none" || !row.refererUrl) {
-          return <Tooltip title={m.tip}><Tag style={{ margin: 0 }}>{m.t}</Tag></Tooltip>;
-        }
+        const merchantId = row.merchantId;
+        const open = editingRefererId === row.campaignId;
+        const tagEl =
+          row.refererSource === "none" || !row.refererUrl ? (
+            <Tag style={{ margin: 0, cursor: "pointer" }}>{m.t}</Tag>
+          ) : (
+            <Tooltip title={`${m.tip}：${row.refererUrl}`}>
+              <Tag color={m.c} style={{ margin: 0, cursor: "pointer" }}>{m.t}</Tag>
+            </Tooltip>
+          );
         return (
-          <Tooltip title={`${m.tip}：${row.refererUrl}（点击复制）`}>
-            <Tag color={m.c} style={{ margin: 0, cursor: "pointer" }}
-              onClick={() => { navigator.clipboard.writeText(row.refererUrl!); message.success("已复制来路"); }}>
-              {m.t}
-            </Tag>
-          </Tooltip>
+          <Popover
+            trigger="click"
+            open={open}
+            onOpenChange={(v) => {
+              if (v) {
+                setEditingRefererId(row.campaignId);
+                setRefererDraft(row.refererSource === "manual" ? (row.refererUrl ?? "") : "");
+              } else if (!savingReferer) setEditingRefererId(null);
+            }}
+            title="设置来路"
+            content={
+              <Space direction="vertical" style={{ width: 280 }}>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  当前生效：{m.t}{row.refererUrl ? `（${row.refererUrl}）` : ""}
+                </Text>
+                <Space.Compact style={{ width: "100%" }}>
+                  <Input size="small" value={refererDraft} placeholder="https://手动指定的来路地址"
+                    disabled={savingReferer}
+                    onChange={(e) => setRefererDraft(e.target.value)}
+                    onPressEnter={() => handleSaveReferer(merchantId, refererDraft.trim() || null)} />
+                  <Button size="small" type="primary" loading={savingReferer}
+                    onClick={() => handleSaveReferer(merchantId, refererDraft.trim() || null)}>保存</Button>
+                </Space.Compact>
+                <Space size={4} wrap>
+                  {row.refererCandidates.website && (
+                    <Button size="small" disabled={savingReferer}
+                      onClick={() => handleSaveReferer(merchantId, row.refererCandidates.website)}>设为网站</Button>
+                  )}
+                  {row.refererCandidates.article && (
+                    <Button size="small" disabled={savingReferer}
+                      onClick={() => handleSaveReferer(merchantId, row.refererCandidates.article)}>设为文章</Button>
+                  )}
+                  {row.refererSource === "manual" && (
+                    <Button size="small" disabled={savingReferer}
+                      onClick={() => handleSaveReferer(merchantId, null)}>清除手动来路</Button>
+                  )}
+                </Space>
+              </Space>
+            }
+          >
+            {tagEl}
+          </Popover>
         );
       },
     },
