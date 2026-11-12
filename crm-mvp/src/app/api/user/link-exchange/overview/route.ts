@@ -23,13 +23,13 @@ export async function GET(req: NextRequest) {
   const search = (req.nextUrl.searchParams.get('search') ?? '').trim()
   const matchedMerchantsForSearch = search
     ? await prisma.user_merchants.findMany({
-      where: {
-        user_id: userId,
-        is_deleted: 0,
-        OR: [{ merchant_name: { contains: search } }, { merchant_id: { contains: search } }],
-      },
-      select: { id: true },
-    })
+        where: {
+          user_id: userId,
+          is_deleted: 0,
+          OR: [{ merchant_name: { contains: search } }, { merchant_id: { contains: search } }],
+        },
+        select: { id: true },
+      })
     : []
 
   const campaigns = await prisma.campaigns.findMany({
@@ -40,19 +40,23 @@ export async function GET(req: NextRequest) {
       google_campaign_id: { not: null },
       ...(search
         ? {
-          OR: [
-            { status: 'active' },
-            {
-              status: 'paused',
-              OR: [
-                { campaign_name: { contains: search } },
-                ...(matchedMerchantsForSearch.length
-                  ? [{ user_merchant_id: { in: matchedMerchantsForSearch.map((m) => m.id) } }]
-                  : []),
-              ],
-            },
-          ],
-        }
+            OR: [
+              { status: 'active' },
+              {
+                status: 'paused',
+                OR: [
+                  { campaign_name: { contains: search } },
+                  ...(matchedMerchantsForSearch.length
+                    ? [
+                        {
+                          user_merchant_id: { in: matchedMerchantsForSearch.map((m) => m.id) },
+                        },
+                      ]
+                    : []),
+                ],
+              },
+            ],
+          }
         : { status: 'active' }),
     },
     select: {
@@ -142,35 +146,35 @@ export async function GET(req: NextRequest) {
     effectiveLink: string,
   ): string => {
     switch (m.tracking_status) {
-    case 'ok':
-      return 'valid'
-    case 'forbidden_network':
-      return 'invalid'
+      case 'ok':
+        return 'valid'
+      case 'forbidden_network':
+        return 'invalid'
       // tracker_forbidden：联盟跳板 4xx 明确拒绝该 token（非代理/基础设施波动），确定性无效，需人工换链接
-    case 'tracker_forbidden':
-      return 'invalid'
-    case 'no_tracking':
-    case 'resolve_failed':
-      return m.link_status === 'invalid' ? 'invalid' : 'recheck'
-    default:
-      if (!effectiveLink) return 'no_link'
-      return m.link_status ?? 'unchecked'
+      case 'tracker_forbidden':
+        return 'invalid'
+      case 'no_tracking':
+      case 'resolve_failed':
+        return m.link_status === 'invalid' ? 'invalid' : 'recheck'
+      default:
+        if (!effectiveLink) return 'no_link'
+        return m.link_status ?? 'unchecked'
     }
   }
 
   const merchants =
     umIds.length > 0 || mids.length > 0
       ? await prisma.user_merchants.findMany({
-        where: {
-          user_id: userId,
-          is_deleted: 0,
-          OR: [
-            ...(umIds.length > 0 ? [{ id: { in: umIds } }] : []),
-            ...(mids.length > 0 ? [{ merchant_id: { in: mids }, platform: { in: platforms } }] : []),
-          ],
-        },
-        select: merchantSelect,
-      })
+          where: {
+            user_id: userId,
+            is_deleted: 0,
+            OR: [
+              ...(umIds.length > 0 ? [{ id: { in: umIds } }] : []),
+              ...(mids.length > 0 ? [{ merchant_id: { in: mids }, platform: { in: platforms } }] : []),
+            ],
+          },
+          select: merchantSelect,
+        })
       : []
   const merchantById = new Map(merchants.map((m) => [m.id.toString(), m]))
   const merchantByKey = new Map(merchants.map((m) => [`${normalizePlatformCode(m.platform)}:${m.merchant_id}`, m]))
@@ -308,10 +312,10 @@ export async function GET(req: NextRequest) {
   const stockRows =
     campaignIds.length > 0
       ? await prisma.suffix_pool.groupBy({
-        by: ['campaign_id', 'status'],
-        where: { campaign_id: { in: campaignIds }, is_deleted: 0 },
-        _count: { _all: true },
-      })
+          by: ['campaign_id', 'status'],
+          where: { campaign_id: { in: campaignIds }, is_deleted: 0 },
+          _count: { _all: true },
+        })
       : []
   const stockMap = new Map<string, { available: number; leased: number; consumed: number }>()
   for (const r of stockRows) {
@@ -356,10 +360,10 @@ export async function GET(req: NextRequest) {
   const allClickTasks =
     campaignIds.length > 0
       ? await prisma.kyads_click_tasks.findMany({
-        where: { campaign_id: { in: campaignIds }, is_deleted: 0 },
-        orderBy: { created_at: 'desc' },
-        select: { campaign_id: true, status: true, target_count: true, done_count: true, finished_at: true },
-      })
+          where: { campaign_id: { in: campaignIds }, is_deleted: 0 },
+          orderBy: { created_at: 'desc' },
+          select: { campaign_id: true, status: true, target_count: true, done_count: true, finished_at: true },
+        })
       : []
   const clickTaskMap = new Map<string, (typeof allClickTasks)[0]>()
   for (const t of allClickTasks) {
@@ -440,11 +444,11 @@ export async function GET(req: NextRequest) {
       lowStock: c.suffix_is_static !== 1 && stock.available < target && stock.available <= watermark,
       clickTask: clickTask
         ? {
-          status: clickTask.status,
-          target: clickTask.target_count,
-          done: clickTask.done_count,
-          finishedAt: clickTask.finished_at,
-        }
+            status: clickTask.status,
+            target: clickTask.target_count,
+            done: clickTask.done_count,
+            finishedAt: clickTask.finished_at,
+          }
         : null,
     }
   })
@@ -476,10 +480,10 @@ export async function GET(req: NextRequest) {
   const kkActive = kk?.ok ? kk.subAccounts.filter((s) => s.status === 1) : []
   const proxyStatus = kk?.ok
     ? {
-      kookeeyLow: kk.low.length > 0,
-      kookeeyLeftGB: kkActive.length > 0 ? Math.min(...kkActive.map((s) => s.trafficLeftGB)) : null,
-      thresholdGB: kk.thresholdGB,
-    }
+        kookeeyLow: kk.low.length > 0,
+        kookeeyLeftGB: kkActive.length > 0 ? Math.min(...kkActive.map((s) => s.trafficLeftGB)) : null,
+        thresholdGB: kk.thresholdGB,
+      }
     : null
 
   // 顶部统计与「链接管理 / 库存管理」列表口径保持一致：只统计已启用
