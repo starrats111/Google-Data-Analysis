@@ -18,9 +18,47 @@ export async function GET(req: NextRequest) {
 
   const userId = BigInt(user.userId)
 
+  // 「搜暂停商家」：默认只看 active 系列（下面 7 万行 paused 全量参与匹配/库存计算会拖垮这个接口），
+  // 只有带 search 关键词时才按需放行 paused 系列进来——放行范围收在 SQL WHERE 里，不是先取全量再过滤。
+  const search = (req.nextUrl.searchParams.get('search') ?? '').trim()
+  const matchedMerchantsForSearch = search
+    ? await prisma.user_merchants.findMany({
+        where: {
+          user_id: userId,
+          is_deleted: 0,
+          OR: [{ merchant_name: { contains: search } }, { merchant_id: { contains: search } }],
+        },
+        select: { id: true },
+      })
+    : []
+
   const campaigns = await prisma.campaigns.findMany({
     // 仅真正投放到 Google 的广告系列（有 google_campaign_id）；排除未发布的草稿（DRAFT-...）
-    where: { user_id: userId, status: 'active', is_deleted: 0, google_campaign_id: { not: null } },
+    where: {
+      user_id: userId,
+      is_deleted: 0,
+      google_campaign_id: { not: null },
+      ...(search
+        ? {
+            OR: [
+              { status: 'active' },
+              {
+                status: 'paused',
+                OR: [
+                  { campaign_name: { contains: search } },
+                  ...(matchedMerchantsForSearch.length
+                    ? [
+                        {
+                          user_merchant_id: { in: matchedMerchantsForSearch.map((m) => m.id) },
+                        },
+                      ]
+                    : []),
+                ],
+              },
+            ],
+          }
+        : { status: 'active' }),
+    },
     select: {
       id: true,
       google_campaign_id: true,
