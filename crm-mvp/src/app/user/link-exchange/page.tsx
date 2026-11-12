@@ -166,6 +166,10 @@ export default function LinkExchangePage() {
   const [editingRefererId, setEditingRefererId] = useState<string | null>(null);
   const [refererDraft, setRefererDraft] = useState("");
   const [savingReferer, setSavingReferer] = useState(false);
+  // 暂停的广告系列默认不进主列表（量太大），这里按关键词搜到后单独补进表格
+  const [pausedKeyword, setPausedKeyword] = useState("");
+  const [pausedSearching, setPausedSearching] = useState(false);
+  const [pausedExtraRows, setPausedExtraRows] = useState<CampaignRow[]>([]);
   // D-178 告警处理通道：重验中的告警 id
   const [recheckingAlert, setRecheckingAlert] = useState<string | null>(null);
   // D-223 正在纠正归属的告警 id
@@ -373,6 +377,25 @@ export default function LinkExchangePage() {
       } else message.error(res.message ?? "保存失败");
     } finally {
       setSavingReferer(false);
+    }
+  };
+
+  const handleSearchPaused = async () => {
+    const keyword = pausedKeyword.trim();
+    if (!keyword) { setPausedExtraRows([]); return; }
+    setPausedSearching(true);
+    try {
+      const res = await fetch(`/api/user/link-exchange/overview?search=${encodeURIComponent(keyword)}`)
+        .then((r) => r.json());
+      if (res.code === 0) {
+        const knownIds = new Set(rows.map((r) => r.campaignId));
+        const extra = (res.data.rows as CampaignRow[]).filter((r) => !knownIds.has(r.campaignId));
+        setPausedExtraRows(extra);
+        if (extra.length === 0) message.warning("没找到匹配的暂停商家");
+        else message.success(`找到 ${extra.length} 条暂停的广告系列`);
+      } else message.error(res.message ?? "搜索失败");
+    } finally {
+      setPausedSearching(false);
     }
   };
 
@@ -1243,6 +1266,19 @@ export default function LinkExchangePage() {
               children: (
                 <>
                   <Space style={{ marginBottom: 12 }} wrap>
+                    <Input size="small" style={{ width: 240 }} allowClear
+                      placeholder="搜暂停商家：商家名 / MID / 平台账号，如 LH1"
+                      value={pausedKeyword}
+                      onChange={(e) => setPausedKeyword(e.target.value)}
+                      onPressEnter={handleSearchPaused} />
+                    <Button size="small" loading={pausedSearching} onClick={handleSearchPaused}>搜暂停商家</Button>
+                    {pausedExtraRows.length > 0 && (
+                      <Button size="small" onClick={() => { setPausedKeyword(""); setPausedExtraRows([]); }}>
+                        清除（{pausedExtraRows.length} 条）
+                      </Button>
+                    )}
+                  </Space>
+                  <Space style={{ marginBottom: 12 }} wrap>
                     <Text type="secondary" style={{ fontSize: 12 }}>每个系列刷</Text>
                     <InputNumber size="small" min={1} max={1000} value={brushAllCount} controls={false}
                       style={{ width: 72 }}
@@ -1258,7 +1294,7 @@ export default function LinkExchangePage() {
                     <Text type="secondary" style={{ fontSize: 12 }}>仅对已开换链开关、已匹配商家的系列生效</Text>
                   </Space>
                   <Table<CampaignRow>
-                    columns={linkColumns} dataSource={enabledRows} rowKey="campaignId" size="small" loading={loading}
+                    columns={linkColumns} dataSource={[...enabledRows, ...pausedExtraRows]} rowKey="campaignId" size="small" loading={loading}
                     pagination={{ defaultPageSize: 50, showTotal: (t) => `共 ${t} 条`, showSizeChanger: true }}
                     rowClassName={(row) => row.matched && row.linkStatus === "invalid" ? "row-invalid-link" : (!row.matched ? "row-unmatched" : "")}
                     scroll={{ x: 1320 }}
