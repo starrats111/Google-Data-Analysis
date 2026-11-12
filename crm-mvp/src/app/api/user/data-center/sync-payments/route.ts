@@ -41,12 +41,12 @@ export async function POST(req: NextRequest) {
     const connections = ownerIds.length === 0
       ? []
       : await prisma.platform_connections.findMany({
-          where: { user_id: { in: ownerIds }, is_deleted: 0, status: "connected" },
-          select: { id: true, user_id: true, platform: true, account_name: true, api_key: true, channel_id: true, created_at: true },
-        });
+        where: { user_id: { in: ownerIds }, is_deleted: 0, status: "connected" },
+        select: { id: true, user_id: true, platform: true, account_name: true, api_key: true, channel_id: true, created_at: true },
+      });
 
     const { fetchPlatformPayments, platformSupportsPayments } = await import("@/lib/payment-api");
-    const { resolveMainConnectionMap } = await import("@/lib/payment-main-connection");
+    const { resolveMainConnectionMap, resolvePaymentOwnerMap } = await import("@/lib/payment-main-connection");
     // 同主账号(同 user+平台+账号名)多连接 → 打款统一写主连接，避免账户级打款单按 api_key 重复入库
     const mainConnMap = await resolveMainConnectionMap(connections);
 
@@ -79,6 +79,13 @@ export async function POST(req: NextRequest) {
     let totalSynced = 0;
     let totalPaidAmount = 0;
 
+    type FetchedConn = {
+      conn: (typeof validConns)[number];
+      payments: Awaited<ReturnType<typeof fetchPlatformPayments>>["payments"];
+      error?: string;
+    };
+    const fetchedList: FetchedConn[] = [];
+
     for (const conn of validConns) {
       const platform = normalizePlatformCode(conn.platform);
       const label = conn.account_name || platform;
@@ -103,8 +110,19 @@ export async function POST(req: NextRequest) {
         continue;
       }
       await markConnectionSuccess(conn.id);
+      fetchedList.push({ conn, payments, error });
+    }
 
-      const mainConnId = mainConnMap.get(String(conn.id)) ?? conn.id;
+    // D-386：按实际拉到的 payment_no 事后归一——同一真实 payee 配成多条连接（媒体/子ID
+    // 命名各异，resolveMainConnectionMap 按账号名分组识别不到）时，联盟接口会对每条连接
+    // 各自返回同一张打款单，逐条写入会把佣金写成多份。归到最早建立的连接，其余不再入库。
+    const paymentOwnerMap = resolvePaymentOwnerMap(
+      fetchedList.map((f) => ({ conn: f.conn, paymentNos: f.payments.map((p) => p.payment_no) })),
+    );
+
+    for (const { conn, payments, error } of fetchedList) {
+      const platform = normalizePlatformCode(conn.platform);
+      const label = conn.account_name || platform;
       let synced = 0;
       let paidAmount = 0;
       for (let i = 0; i < payments.length; i += 50) {
@@ -112,18 +130,20 @@ export async function POST(req: NextRequest) {
         await Promise.all(
           batch.map((p) => {
             if (p.status === "paid") paidAmount += p.amount;
+            const ownerConnId = paymentOwnerMap.get(`${conn.user_id}|${platform}|${p.payment_no}`) ?? conn.id;
+            const targetConnId = mainConnMap.get(String(ownerConnId)) ?? ownerConnId;
             return prisma.affiliate_payments.upsert({
               where: {
                 platform_platform_connection_id_payment_no: {
                   platform,
-                  platform_connection_id: mainConnId,
+                  platform_connection_id: targetConnId,
                   payment_no: p.payment_no,
                 },
               },
               create: {
                 user_id: conn.user_id,
                 platform,
-                platform_connection_id: mainConnId,
+                platform_connection_id: targetConnId,
                 payment_no: p.payment_no,
                 source_kind: p.source_kind,
                 paid_date: p.paid_date ? new Date(p.paid_date) : null,

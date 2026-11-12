@@ -60,3 +60,46 @@ export async function resolveMainConnectionMap(conns: ConnLite[]): Promise<Map<s
   }
   return map;
 }
+
+/**
+ * D-386：同一真实 payee 配成多条连接，但 account_name 因媒体/子ID 命名各不相同
+ * （如 weilixia / weilixia-2 / weilixia-3…），resolveMainConnectionMap 按「账号名」
+ * 分组识别不到——联盟支付接口仍是账户级返回，这些子ID连接各自拉取时会拿到同一张
+ * 打款单（同 payment_no、同金额），按连接各写一行，佣金在结算报表里被成倍虚增
+ * （wj04 案例：PM2 的打款单被 PM3～PM9 各复制一份，应收/实收翻 8 倍）。
+ *
+ * 用「打款接口实际返回了什么」事后归一，而不是靠账号名猜测：同一 (user, platform,
+ * payment_no) 若在本轮被该用户名下多条连接各自拉到，判定为同一笔打款，只认其中
+ * **最早建立**的连接（并列取最小 id）为归属连接。不用存活交易数排序——子ID连接的
+ * 转化量完全可能反超主账号（wj04 的 weilixia-8 比 weilixia 多得多），按交易数判归属
+ * 会选错；而最早建立的连接就是账号被登记时的那条，后添加的多半是同账号下新增的
+ * 媒体/子ID追踪连接。
+ */
+export function resolvePaymentOwnerMap(
+  fetched: { conn: ConnLite; paymentNos: string[] }[],
+): Map<string, bigint> {
+  const groups = new Map<string, ConnLite[]>();
+  for (const { conn, paymentNos } of fetched) {
+    const platform = normalizePlatformCode(conn.platform);
+    const seen = new Set<string>();
+    for (const no of paymentNos) {
+      if (!no || seen.has(no)) continue;
+      seen.add(no);
+      const key = `${conn.user_id}|${platform}|${no}`;
+      const arr = groups.get(key);
+      if (arr) arr.push(conn);
+      else groups.set(key, [conn]);
+    }
+  }
+  const owner = new Map<string, bigint>();
+  for (const [key, conns] of groups) {
+    const main = [...conns].sort((a, b) => {
+      const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
+      if (ta !== tb) return ta - tb; // 最早建立优先
+      return Number(a.id) - Number(b.id);
+    })[0];
+    owner.set(key, main.id);
+  }
+  return owner;
+}
