@@ -1190,7 +1190,17 @@ async function resolveViaBrowser(
           // 与入口同根域名的一跳绝不早停：联盟入口常和广告主同根（go.merchant.com → www.merchant.com），
           // 掐在这里等于把整条跟链在第一跳就切断，拿回一个没有追踪参数的入口 URL。
           // 这种情况退回常规全程跟随即可——只是多下一个页面，不会出错。
-          if (navHost && !sameRootDomain(navHost, startHost) && sameRootDomain(navHost, targetHost)) {
+          // D-380（ATG Tickets 报障，PM1/Partnerize）：Partnerize 把自己的点击中转站也托管在
+          // 商家域名的子域下（如 shop.atgtickets.com），命中 sameRootDomain 却不是真落地页——
+          // 这一跳自己还会再 302 一次，才到带 clickref 的真正内容页
+          // （www.atgtickets.com/whats-on/...?clickref=...）。原逻辑在这一跳就 abort，拿到的
+          // finalUrl 是中转页裸路径（无 query），于是被 D-201 误判成「域名匹配但零追踪参数」连续
+          // 卡死，而链接本身是好的（人工 curl -L 跟到底能拿到 clickref）。识别特征：无 query
+          // string + 路径里嵌着被编码的下一跳目标（"://" 的 URL 编码形式）——这是「还在转发」的
+          // 强信号，不是「已经落地」。命中时放行这一跳，交给循环在下一跳（通常才是真正落地页）
+          // 再判是否早停；真跟不到底也有 D-203 V2 复验兜底，不会无限跟。
+          const looksLikePassthroughHop = !!navHost && !navUrl.includes("?") && /%3a%2f%2f/i.test(navUrl);
+          if (navHost && !looksLikePassthroughHop && !sameRootDomain(navHost, startHost) && sameRootDomain(navHost, targetHost)) {
             earlyStopUrl = navUrl;
             reachedLanding = true;
             r.abort().catch(() => {});
