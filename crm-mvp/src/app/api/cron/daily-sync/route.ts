@@ -9,7 +9,7 @@ import { autoRepairPublishedArticles } from "@/lib/article-auto-repair";
 import { getRedirectedMerchantKeys } from "@/lib/merchant-ownership-rules";
 import { aggregateRawTransactions } from "@/lib/affiliate-txn-aggregate";
 import { markConnectionSuccess, markConnectionReachable, markConnectionFailure } from "@/lib/connection-health";
-import { resolveMainConnectionMap } from "@/lib/payment-main-connection";
+import { resolveMainConnectionMap, resolvePaymentOwnerMap } from "@/lib/payment-main-connection";
 
 function verifyCron(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
@@ -1404,6 +1404,8 @@ async function syncAllUsersPayments(): Promise<unknown> {
 
       let synced = 0;
       let paidAmount = 0;
+      type FetchedConn = { conn: (typeof validConns)[number]; payments: Awaited<ReturnType<typeof fetchPlatformPayments>>["payments"] };
+      const fetchedList: FetchedConn[] = [];
       for (const conn of validConns) {
         const platform = normalizePlatformCode(conn.platform);
         try {
@@ -1412,19 +1414,36 @@ async function syncAllUsersPayments(): Promise<unknown> {
             log(`    [pay] ${user.username} ${platform} ERROR: ${error}`);
             continue;
           }
-          const mainConnId = mainConnMap.get(String(conn.id)) ?? conn.id;
+          fetchedList.push({ conn, payments });
+        } catch (e) {
+          log(`    [pay] ${user.username} ${platform} error: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+
+      // D-386：按实际拉到的 payment_no 事后归一——同一真实 payee 配成多条连接（媒体/子ID
+      // 命名各异，resolveMainConnectionMap 按账号名分组识别不到）时，联盟接口会对每条连接
+      // 各自返回同一张打款单，逐条写入会把佣金写成多份。归到最早建立的连接，其余不再入库。
+      const paymentOwnerMap = resolvePaymentOwnerMap(
+        fetchedList.map((f) => ({ conn: f.conn, paymentNos: f.payments.map((p) => p.payment_no) })),
+      );
+
+      for (const { conn, payments } of fetchedList) {
+        const platform = normalizePlatformCode(conn.platform);
+        try {
           for (const p of payments) {
             if (p.status === "paid") paidAmount += p.amount;
+            const ownerConnId = paymentOwnerMap.get(`${conn.user_id}|${platform}|${p.payment_no}`) ?? conn.id;
+            const targetConnId = mainConnMap.get(String(ownerConnId)) ?? ownerConnId;
             await prisma.affiliate_payments.upsert({
               where: {
                 platform_platform_connection_id_payment_no: {
                   platform,
-                  platform_connection_id: mainConnId,
+                  platform_connection_id: targetConnId,
                   payment_no: p.payment_no,
                 },
               },
               create: {
-                user_id: user.id, platform, platform_connection_id: mainConnId, payment_no: p.payment_no,
+                user_id: user.id, platform, platform_connection_id: targetConnId, payment_no: p.payment_no,
                 source_kind: p.source_kind,
                 paid_date: p.paid_date ? new Date(p.paid_date) : null,
                 request_date: p.request_date ? new Date(p.request_date) : null,
