@@ -218,13 +218,47 @@ async function fetchLbDetail(token: string, paymentId: string): Promise<PaymentD
   return out;
 }
 
+// ── SL: linkpayment&op=detail (by payment_sn, GET) ─────────────
+// D-387：与 LH 的 detail2 同构，用 payment_sn（对应 fetchShoplooksPayments 聚合用的
+// payment_sn，即 affiliate_payments.payment_no），而非 withdrawal_id（SL 示例值恒为 null）。
+async function fetchSlDetail(token: string, paymentSn: string): Promise<PaymentDetailItem[]> {
+  const out: PaymentDetailItem[] = [];
+  let page = 1;
+  const perPage = 2000;
+  while (page <= 100) {
+    const url = `https://link.shoplooks.com/api.php?mod=linkpayment&op=detail&token=${encodeURIComponent(
+      token,
+    )}&payment_sn=${encodeURIComponent(paymentSn)}&per_page=${perPage}&page=${page}`;
+    const data = await fetchJson(url, { method: "GET" }, `SL detail sn=${paymentSn}`);
+    const list = ((data.list ?? data.data) || []) as Record<string, unknown>[];
+    if (!Array.isArray(list) || list.length === 0) break;
+    for (const it of list) {
+      const signId = String(it.sign_id ?? "").trim();
+      if (!signId) continue;
+      out.push({
+        signId,
+        orderId: it.order_id != null ? String(it.order_id) : null,
+        merchantId: it.m_id != null ? String(it.m_id) : null,
+        cashback: parseAmount(it.cashback),
+        paymentNo: paymentSn,
+        paidDate: toISO(it.report_time),
+        rawStatus: String(it.status ?? ""),
+      });
+    }
+    if (list.length < perPage) break;
+    page++;
+    await sleep(1500);
+  }
+  return out;
+}
+
 export function platformSupportsPaymentDetail(platform: string): boolean {
-  return platform === "LH" || platform === "RW" || platform === "LB";
+  return platform === "LH" || platform === "RW" || platform === "LB" || platform === "SL";
 }
 
 /**
  * 拉取单笔打款/结算单的行级明细。
- * @param paymentNo LH/RW = withdrawal_id；LB = payment_id
+ * @param paymentNo LH/RW = withdrawal_id；LB/SL = payment_id/payment_sn
  */
 export async function fetchPaymentDetail(
   platform: string,
@@ -235,6 +269,7 @@ export async function fetchPaymentDetail(
     if (platform === "LH") return { items: await fetchLhDetail(token, paymentNo) };
     if (platform === "RW") return { items: await fetchRwDetail(token, paymentNo) };
     if (platform === "LB") return { items: await fetchLbDetail(token, paymentNo) };
+    if (platform === "SL") return { items: await fetchSlDetail(token, paymentNo) };
     return { items: [] };
   } catch (err) {
     return { items: [], error: err instanceof Error ? err.message : String(err) };

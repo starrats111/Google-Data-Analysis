@@ -180,6 +180,10 @@ const PLATFORM_API_CONFIG: Record<string, PlatformApiConfig> = {
     joinedFilterValue: "active",
     successStatus: 1,
   },
+  // D-387 SL (ShopLooks)：文档唯一的"商家API"是 Amazon 商品信息流（api.shoplooks.com/api/amazon_products，
+  // 返回的是 product_id/asin 级商品行，不是广告主/品牌级列表），与其他平台的通用商家目录接口不是一回事，
+  // 故不接入商家同步（fetchAllMerchants 对 SL 查不到 config，同步会报"不支持的平台"，这是预期）。
+  // SL 商家只能走 url_direct（手动贴联盟追踪链接）接入，交易/点击仍按 m_id 关联。
 };
 
 // ── 统一商家数据结构 ──
@@ -973,6 +977,16 @@ const PLATFORM_TXN_CONFIG: Record<string, PlatformTxnConfig> = {
     maxDateSpanDays: 30,
     successStatus: 1,
   },
+  // D-387 SL (ShopLooks)：mod=medium&op=cashback，与 LH 的 cashback2 同引擎同构
+  // （{status:{code,msg},data:[...]}，status 字段值 untreated/expired/effective/all 与 LH 一致）。
+  // 文档写跨度上限 62 天（非 LH 的 31 天），取 60 天保守切片。
+  SL: {
+    mode: "post_form",
+    url: "https://link.shoplooks.com/api.php?mod=medium&op=cashback",
+    dateFormat: "snake", pageKey: "page", sizeKey: "pageSize", maxSize: 2000,
+    rateLimitMs: 4000,
+    maxDateSpanDays: 60,
+  },
 };
 
 export interface PlatformTransaction {
@@ -1370,6 +1384,14 @@ function parseTransactions(platform: string, data: Record<string, unknown>): Pla
         if (s && /^\d+$/.test(s)) { mid = s; break; }
       }
     }
+    // D-387 SL：cashback 接口（交易）只返回 slug m_id（如 "ratandboa"），不像点击接口
+    // 那样还有数字 mid/mcid 可选——上面的纯数字过滤会让 mid 恒为空，交易永远匹配不到商家。
+    // SL 没有通用商家同步 API（见 PLATFORM_API_CONFIG 注释），商家只能走 url_direct 手填，
+    // 届时 merchant_id 就填这个 slug，故这里直接放行非数字值。
+    if (!mid && platform === "SL") {
+      const slug = String(item.m_id ?? item.mcid ?? "").trim();
+      if (slug) mid = slug;
+    }
 
     const orderAmount = pickNumericField(
       item.sale_amount, item.saleAmount, item.order_amount, item.amount
@@ -1676,6 +1698,10 @@ const PLATFORM_CLICK_CONFIG: Record<string, PlatformClickConfig> = {
   //   PlatformClickCount.click_date 本身就按 UTC+8 口径，故这里不需要再转。
   //   商家 ID 字段叫 mid（商家/交易接口叫 m_id），pickClickMerchantId 的兜底链已覆盖。
   BA:  { mode: "post_json_bearer", url: "https://www.bonusarrive.com/slapi/service/clickreports", dateFormat: "snake", withTime: false, pageKey: "page", sizeKey: "per_page", maxSize: 2000, rateLimitMs: CLICK_RATE_LEGACY, maxWindowHours: 24, listPath: "data", successStatus: 1 },
+  // D-387 SL：mod=medium&op=user_click，与 LH 的 user_click2 同引擎同构
+  // （{status:200,msg,payload:{total,list}}，list 在 payload 下而非根级——与 LH 的 listPath=root 不同）。
+  // 文档窗口上限 1 小时（比 LH 的 24 小时严格得多），withTime=true（示例带时分秒）。
+  SL: { mode: "post_form", url: "https://link.shoplooks.com/api.php?mod=medium&op=user_click", dateFormat: "snake", withTime: true, pageKey: "nowpage", sizeKey: "per_page", maxSize: 2000, rateLimitMs: CLICK_RATE_LEGACY, maxWindowHours: 1, listPath: "payload" },
 };
 
 export interface PlatformClickCount {
@@ -1696,6 +1722,15 @@ function pickClickMerchantId(item: Record<string, unknown>, platform: string): s
       const s = String(c).trim();
       if (s && /^\d+$/.test(s)) return s;
     }
+  }
+  // D-387 SL：点击接口同时有数字 mid（如 "9275"）和 slug mcid（如 "viator"），
+  // 但 SL 的 cashback（交易）接口只返回 slug m_id、没有任何数字字段（见 parseTransactions
+  // 的 SL 分支）。两边必须用同一口径才能 join 到同一个 user_merchants 行，
+  // 否则点击按数字 mid 记、佣金按 slug m_id 记，统计到的是两个不同的"商家"。
+  // 交易侧没有数字可选，只能让点击侧也退让到 slug，以 slug 为 SL 的统一商家口径。
+  if (platform === "SL") {
+    const slug = String(item.mcid ?? item.m_id ?? "").trim();
+    if (slug) return slug;
   }
   return "";
 }

@@ -414,6 +414,79 @@ async function fetchLinkbuxMerchantCommission(
 }
 
 // ─────────────────────────────────────────────────────────────
+// 3b. SL 按商家结算明细（linkpayment&op=summary）
+//     D-387：SL 唯一的打款类接口，字段与 LH 文档里"未上线"的 summary2/LB 的
+//     merchant_commission 同构（m_id/amount/payment_ymd/order_ym/note/payment_sn/
+//     withdrawal_id），同样**没有状态字段**——跟 LB 一样只能靠"打款单日 + N 天确认期"
+//     推断是否真到账。withdrawal_id 示例值为 null，故按 payment_sn 聚合（与
+//     payment-detail-api.ts 的 fetchSlDetail 用同一个 payment_sn 取明细，前后一致）。
+//     文档错误码 1006：跨度不能超过 62 天 → 60 天切片留余量；同 LB 忽略调用方窗口、
+//     强制拉全历史，避免同一笔结算跨月被窗口截断聚合出偏小金额。
+//     ⚠️ 待实测验证：真实账号到账后需核对 payment_ymd 是否确为到账日、
+//     confirm-days 是否需要调整（当前复用 LB_PAYMENT_CONFIRM_DAYS）。
+// ─────────────────────────────────────────────────────────────
+const SL_HISTORY_START = "2025-01-01";
+
+async function fetchShoplooksPayments(
+  token: string,
+  _startDate: string,
+  endDate: string,
+): Promise<PlatformPayment[]> {
+  const agg = new Map<string, { amount: number; paid_date: string | null; rows: number }>();
+
+  const chunks = chunkDateRange(SL_HISTORY_START, endDate, 60);
+  for (const { s, e } of chunks) {
+    const params = new URLSearchParams({ token, payment_begin: s, payment_end: e });
+    let data: Record<string, unknown>;
+    try {
+      data = await fetchWithRetry(
+        `https://link.shoplooks.com/api.php?mod=linkpayment&op=summary&${params}`,
+        { method: "GET" },
+        "SL summary",
+      );
+    } catch {
+      continue; // 单窗失败不影响其他窗
+    }
+    const apiErr = checkApiCode(data);
+    if (apiErr) continue;
+
+    const list = (data.data || []) as Record<string, unknown>[];
+    if (!Array.isArray(list)) continue;
+    for (const it of list) {
+      const paidDate = toISO(it.payment_ymd);
+      const paymentSn = String(it.payment_sn ?? "").trim();
+      if (!paidDate || !paymentSn) continue;
+      const cur = agg.get(paymentSn) ?? { amount: 0, paid_date: paidDate, rows: 0 };
+      cur.amount += parseAmount(it.amount);
+      cur.paid_date = cur.paid_date || paidDate;
+      cur.rows++;
+      agg.set(paymentSn, cur);
+    }
+    await sleep(300);
+  }
+
+  const out: PlatformPayment[] = [];
+  for (const [paymentSn, v] of agg) {
+    const paidTs = v.paid_date ? new Date(v.paid_date).getTime() : 0;
+    const confirmed = paidTs > 0 && Date.now() - paidTs >= LB_PAYMENT_CONFIRM_DAYS * 86400000;
+    out.push({
+      payment_no: paymentSn,
+      source_kind: "merchant_commission",
+      paid_date: v.paid_date,
+      request_date: v.paid_date,
+      amount: Math.round(v.amount * 100) / 100,
+      gross_amount: null,
+      currency: "USD",
+      status: confirmed ? "paid" : "processing",
+      raw_status: confirmed ? "paid" : "pending_review",
+      payment_type: null,
+      raw_json: JSON.stringify({ payment_sn: paymentSn, merchant_rows: v.rows }),
+    });
+  }
+  return out;
+}
+
+// ─────────────────────────────────────────────────────────────
 // 4. PB 打款单（medium&op=payment_summary）
 //    C-183：与 SaaS payment_summary 同名但走 Legacy 引擎（app.partnerboost.com/api.php）。
 //    对齐 kyads 实测适配器（kyads lib/affiliates/partnerboost.ts fetchPaymentSummary）：
@@ -582,7 +655,9 @@ export function platformSupportsPayments(platform: string): boolean {
     // D-349：BA 有提现接口；QUK **没有**任何打款接口（后台只有点击/商家/交易/Postback
     // 四个开发者工具页，api 文档目录下也无 Quk 支付文档），故 QUK 不在此列，
     // 结算报表里 QUK 的「已支付」维度会一直为空。
-    platform === "BA"
+    platform === "BA" ||
+    // D-387：SL 有 linkpayment&op=summary（同 LB merchant_commission 形态）
+    platform === "SL"
   );
 }
 
@@ -605,6 +680,7 @@ export async function fetchPlatformPayments(
     if (platform === "LB") return { payments: await fetchLinkbuxMerchantCommission(token, startDate, endDate) };
     if (platform === "PB") return { payments: await fetchPartnerboostPayments(token, startDate, endDate) };
     if (platform === "BA") return { payments: await fetchBonusarrivePayments(token, startDate, endDate) };
+    if (platform === "SL") return { payments: await fetchShoplooksPayments(token, startDate, endDate) };
     return { payments: [] }; // AD / D-349 QUK 等无支付 API
   } catch (err) {
     return { payments: [], error: err instanceof Error ? err.message : String(err) };

@@ -6,6 +6,7 @@ import { ALL_COUNTRY_ENTRIES, getCountry } from "@/lib/countries";
 // MUI: ultrainfluence.com | EV: engagevantage.com | PB: partnerboost.com
 // FS: famesta.com（D-296：与 CG/CF/BSH/PM 同引擎的 SaaS 形态，四套接口全等价复用）
 // QUK: quk.com | BA: bonusarrive.com（D-349：两者都不是现有两套引擎，各自独立形态，见 platform-api.ts）
+// SL: shoplooks.com（D-387：交易/点击接口与 LH 同引擎同构，换域名复用；无通用商家/打款接口，见 platform-api.ts）
 // D-073：AD (AdsDoubler) 已全线下线，不再支持
 export const PLATFORMS = [
   { code: "CG", name: "CollabGlow", domain: "collabglow.com" },
@@ -21,6 +22,7 @@ export const PLATFORMS = [
   { code: "FS", name: "Famesta", domain: "famesta.com" },
   { code: "QUK", name: "Quk", domain: "quk.com" },
   { code: "BA", name: "BonusArrive", domain: "bonusarrive.com" },
+  { code: "SL", name: "ShopLooks", domain: "shoplooks.com" },
 ] as const;
 
 export type PlatformCode = (typeof PLATFORMS)[number]["code"];
@@ -102,6 +104,12 @@ const _PLATFORM_ALIAS_ENTRIES: [string, PlatformCode][] = [
   ["BonusArrive", "BA"], ["bonusarrive", "BA"], ["Bonusarrive", "BA"],
   ["Bonus Arrive", "BA"], ["bonus arrive", "BA"],
   ["bonusarrive.com", "BA"], ["www.bonusarrive.com", "BA"],
+
+  // SL = ShopLooks (shoplooks.com)
+  ["SL", "SL"], ["sl", "SL"],
+  ["ShopLooks", "SL"], ["shoplooks", "SL"], ["Shoplooks", "SL"],
+  ["Shop Looks", "SL"], ["shop looks", "SL"],
+  ["shoplooks.com", "SL"], ["www.shoplooks.com", "SL"], ["link.shoplooks.com", "SL"],
 ];
 
 export const PLATFORM_ALIASES: ReadonlyMap<string, PlatformCode> = new Map(_PLATFORM_ALIAS_ENTRIES);

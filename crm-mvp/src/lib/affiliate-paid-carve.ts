@@ -22,7 +22,8 @@ import { normalizePlatformCode } from "@/lib/constants";
 import { fetchPaymentDetail } from "@/lib/payment-detail-api";
 
 // RW/LH/LB 交易API 均不返回打款状态，需用支付细节API 剖分回 paid 桶。
-const CARVE_PLATFORMS = new Set(["RW", "LH", "LB"]);
+// D-387：SL 的 cashback 接口同样不带打款状态（status 只有 untreated/expired/effective），加入剖分。
+const CARVE_PLATFORMS = new Set(["RW", "LH", "LB", "SL"]);
 
 /** 该平台的 paid 桶是否由剖分维护（而非平台 API 自报）。 */
 export function isCarvePlatform(platform: string): boolean {
