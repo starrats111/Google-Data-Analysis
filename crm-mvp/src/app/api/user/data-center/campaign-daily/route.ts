@@ -46,6 +46,13 @@ export async function GET(req: NextRequest) {
   });
   if (!campaign) return apiError("广告系列不存在", 404);
 
+  // 拒付佣金列仅对 wjzu（wj 组）全员开放，其他组不展示该可选项
+  const owner = await prisma.users.findUnique({ where: { id: ownerId }, select: { team_id: true } });
+  const ownerTeam = owner?.team_id
+    ? await prisma.teams.findUnique({ where: { id: owner.team_id }, select: { team_code: true } })
+    : null;
+  const showRejectedCommission = ownerTeam?.team_code === "wj";
+
   // D-266 批一：campaigns 存账户币种，弹窗展示折美元
   const { getCampaignUsdRates } = await import("@/lib/campaign-analysis");
   const usdRate = (await getCampaignUsdRates([campaign])).get(String(campaign.id)) ?? 1;
@@ -63,6 +70,7 @@ export async function GET(req: NextRequest) {
     spend: Number(d.spend.toFixed(2)),
     orders: d.orders,
     commission: Number(d.commission.toFixed(2)),
+    rejectedCommission: Number(d.rejectedCommission.toFixed(2)),
     avgCpc: d.clicks > 0 ? Number((d.spend / d.clicks).toFixed(4)) : 0,
     maxCpc: Number(d.maxCpc.toFixed(2)),
     isBudget: d.isBudget,
@@ -82,5 +90,6 @@ export async function GET(req: NextRequest) {
     range: { start: range.startStr, end: range.endStr },
     daily,
     analysis: recommendations[0] || null,
+    showRejectedCommission,
   });
 }

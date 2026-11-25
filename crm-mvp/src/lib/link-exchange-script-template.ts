@@ -90,7 +90,8 @@ var CONFIG = {
 
   // Campaign 名称解析配置
   // D-349：与 api/user/link-exchange/start/route.ts 的 VALID_NETWORKS 必须逐字一致
-  VALID_NETWORKS: ['RW', 'LH', 'PM', 'LB', 'CG', 'CF', 'BSH', 'TJ', 'AW', 'MUI', 'EV', 'FS', 'PB', 'QUK', 'BA'],
+  // D-387：补上 SL
+  VALID_NETWORKS: ['RW', 'LH', 'PM', 'LB', 'CG', 'CF', 'BSH', 'TJ', 'AW', 'MUI', 'EV', 'FS', 'PB', 'QUK', 'BA', 'SL'],
 
   // 时间检查间隔配置
   TIME_CHECK_ACCOUNTS_INTERVAL: 5,
