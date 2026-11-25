@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Modal, Table, Typography, Tag, Button, Space, Spin, Empty, Select, App, Popconfirm } from "antd";
+import { Modal, Table, Typography, Tag, Button, Space, Spin, Empty, Select, App, Popconfirm, Checkbox } from "antd";
 import { RobotOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 
@@ -73,6 +73,7 @@ interface DailyRow {
   spend: number;
   orders: number;
   commission: number;
+  rejectedCommission: number;
   avgCpc: number;
   maxCpc: number;
   isBudget: number;
@@ -86,6 +87,8 @@ interface ModalData {
   range: { start: string; end: string };
   daily: DailyRow[];
   analysis: AnalysisItem | null;
+  /** 拒付佣金列是否可用（目前仅 wj 组全员）；为 false 时不展示「显示拒付佣金」开关 */
+  showRejectedCommission?: boolean;
 }
 
 interface Props {
@@ -111,6 +114,8 @@ export default function CampaignAnalysisModal({
   const [strategy, setStrategy] = useState(initialStrategy);
   const [reanalyzing, setReanalyzing] = useState(false);
   const [applying, setApplying] = useState(false);
+  // 拒付佣金列默认隐藏（仅 wj 组全员可见该开关），避免与「佣金」混淆
+  const [showRejected, setShowRejected] = useState(false);
 
   useEffect(() => { setStrategy(initialStrategy); }, [initialStrategy, campaignId]);
 
@@ -199,6 +204,10 @@ export default function CampaignAnalysisModal({
     { title: "花费", dataIndex: "spend", width: 70, align: "right", render: (v: number) => <Text style={{ fontSize: 12, color: v > 0 ? "#cf1322" : undefined }}>${v.toFixed(2)}</Text> },
     { title: "订单", dataIndex: "orders", width: 50, align: "right", render: (v: number) => <Text style={{ fontSize: 12 }}>{v}</Text> },
     { title: "佣金", dataIndex: "commission", width: 70, align: "right", render: (v: number) => <Text style={{ fontSize: 12, color: v > 0 ? "#389e0d" : undefined }}>${v.toFixed(2)}</Text> },
+    ...(data?.showRejectedCommission && showRejected ? [{
+      title: "拒付佣金", dataIndex: "rejectedCommission", width: 85, align: "right" as const,
+      render: (v: number) => <Text style={{ fontSize: 12, color: v > 0 ? "#cf1322" : undefined }}>${v.toFixed(2)}</Text>,
+    }] : []),
     { title: "ROI", dataIndex: "roi", width: 60, align: "right", render: (v: number | null) => (v == null ? <Text type="secondary" style={{ fontSize: 12 }}>—</Text> : <Text style={{ fontSize: 12, color: v >= 0 ? "#389e0d" : "#cf1322" }}>{v.toFixed(2)}</Text>) },
     { title: "AvgCPC", dataIndex: "avgCpc", width: 75, align: "right", render: (v: number) => <Text style={{ fontSize: 12 }}>${v.toFixed(4)}</Text> },
     { title: "MaxCPC", dataIndex: "maxCpc", width: 70, align: "right", render: (v: number) => <Text style={{ fontSize: 12 }}>{v > 0 ? `$${v.toFixed(2)}` : "—"}</Text> },
@@ -228,13 +237,20 @@ export default function CampaignAnalysisModal({
     >
       <Spin spinning={loading}>
         {/* 逐日明细 */}
+        {data?.showRejectedCommission && (
+          <div style={{ marginBottom: 8, textAlign: "right" }}>
+            <Checkbox checked={showRejected} onChange={(e) => setShowRejected(e.target.checked)}>
+              <Text style={{ fontSize: 12 }}>显示拒付佣金</Text>
+            </Checkbox>
+          </div>
+        )}
         <Table<DailyRow>
           rowKey="date"
           dataSource={data?.daily || []}
           columns={dailyColumns}
           size="small"
           pagination={false}
-          scroll={{ x: 885 }}
+          scroll={{ x: data?.showRejectedCommission && showRejected ? 970 : 885 }}
           locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="区间内无投放数据" /> }}
           style={{ marginBottom: 16 }}
         />

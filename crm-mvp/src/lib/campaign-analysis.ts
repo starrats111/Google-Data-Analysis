@@ -69,6 +69,7 @@ export interface CampaignDailyStat {
   isRank: number; // 0-1 分数
   orders: number;
   commission: number;
+  rejectedCommission: number;
   qualityScore: number;
 }
 
@@ -759,6 +760,7 @@ export async function fetchCampaignDailyStats(
       isRank: Number(s.is_rank || 0),
       orders: Number(s.orders || 0),
       commission: Number(s.commission || 0),
+      rejectedCommission: Number(s.rejected_commission || 0),
       qualityScore: Number(s.quality_score || 0),
     });
   }
